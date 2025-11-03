@@ -27,6 +27,11 @@ func RunParser() error {
     return err
 }
 
+func RunEmbed() error {
+    err := RunEmbedWithStats()
+    return err
+}
+
 // RunParserWithStats executes parser and returns statistics
 func RunParserWithStats() (*ParseStats, error) {
     cfg := config.Load()
@@ -34,7 +39,7 @@ func RunParserWithStats() (*ParseStats, error) {
     // Find parser binary
     parserPath := findParserBinary(cfg.Parser.BinaryPath)
     if parserPath == "" {
-        return nil, fmt.Errorf("eulix-parser binary not found")
+        return nil, fmt.Errorf("eulix_parser binary not found")
     }
 
     // Prepare command
@@ -123,7 +128,7 @@ func loadKBMetadata() (*struct {
     return &kb.Metadata, nil
 }
 
-// findParserBinary locates the eulix-parser executable
+// findParserBinary locates the eulix_parser executable
 func findParserBinary(configPath string) string {
     // 1. Try config path
     if configPath != "" {
@@ -133,16 +138,16 @@ func findParserBinary(configPath string) string {
     }
 
     // 2. Try in PATH
-    if path, err := exec.LookPath("eulix-parser"); err == nil {
+    if path, err := exec.LookPath("eulix_parser"); err == nil {
         return path
     }
 
     // 3. Try common locations
     possiblePaths := []string{
-        "./eulix-parser",
-        "../eulix-parser/target/release/eulix-parser",
-        "/usr/local/bin/eulix-parser",
-        "~/bin/eulix-parser",
+        "~/.local/bin/eulix_parser",
+        "./eulix_parser",
+        "/usr/local/bin/eulix_parser",
+        "~/bin/eulix_parser",
     }
 
     // Add OS-specific extension
@@ -153,6 +158,92 @@ func findParserBinary(configPath string) string {
     }
 
     for _, path := range possiblePaths {
+        // Expand home directory
+        if strings.HasPrefix(path, "~/") {
+            home, err := os.UserHomeDir()
+            if err == nil {
+                path = filepath.Join(home, path[2:])
+            }
+        }
+
+        absPath, err := filepath.Abs(path)
+        if err != nil {
+            continue
+        }
+        if _, err := os.Stat(absPath); err == nil {
+            return absPath
+        }
+    }
+
+    return ""
+}
+
+// RunEmbedWithStats executes embedder and returns statistics
+func RunEmbedWithStats() error {
+    cfg := config.Load()
+
+    // Find embedder binary
+    embedPath := findEmbedBinary(cfg.Parser.BinaryPath)
+    if embedPath == "" {
+        return fmt.Errorf("eulix_embed binary not found")
+    }
+
+    // Prepare command
+    cmd := exec.Command(
+        embedPath,
+        "--input", ".eulix/knowledge_base.json",
+        "--context", ".eulix/context.json",
+        "--embeddings", ".eulix/embeddings.bin",
+        "--precompute-embeddings",
+    )
+
+    // Capture output
+    output, err := cmd.CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("embedder failed: %w\n%s", err, string(output))
+    }
+
+    return nil
+}
+
+// findEmbedBinary locates the eulix_embed executable
+func findEmbedBinary(configPath string) string {
+    // 1. Try config path
+    if configPath != "" {
+        if _, err := os.Stat(configPath); err == nil {
+            return configPath
+        }
+    }
+
+    // 2. Try in PATH
+    if path, err := exec.LookPath("eulix_embed"); err == nil {
+        return path
+    }
+
+    // 3. Try common locations
+    possiblePaths := []string{
+        "~/.local/bin/eulix_embed",
+        "./eulix_embed",
+        "/usr/local/bin/eulix_embed",
+        "~/bin/eulix_embed",
+    }
+
+    // Add OS-specific extension
+    if runtime.GOOS == "windows" {
+        for i, p := range possiblePaths {
+            possiblePaths[i] = p + ".exe"
+        }
+    }
+
+    for _, path := range possiblePaths {
+        // Expand home directory
+        if strings.HasPrefix(path, "~/") {
+            home, err := os.UserHomeDir()
+            if err == nil {
+                path = filepath.Join(home, path[2:])
+            }
+        }
+
         absPath, err := filepath.Abs(path)
         if err != nil {
             continue

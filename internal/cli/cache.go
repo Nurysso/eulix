@@ -1,4 +1,4 @@
-package ui
+package cli
 
 import (
     "fmt"
@@ -57,7 +57,7 @@ func RunCacheClear() error {
     // Clear Redis
     redis, err := storage.NewRedis()
     if err != nil {
-        fmt.Printf("⚠️  Redis not available: %v\n", err)
+        fmt.Printf(":(  Redis not available: %v\n", err)
     } else {
         defer redis.Close()
 

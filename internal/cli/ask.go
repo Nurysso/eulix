@@ -1,4 +1,4 @@
-package ui
+package cli
 
 import (
     "fmt"
@@ -198,16 +198,16 @@ func (m askModel) buildResultView() string {
 
         // Answer
         if m.result.Answer != "" {
-            s.WriteString("📝 Answer:\n")
+            s.WriteString("Answer:\n")
             s.WriteString(answerStyle.Render(m.result.Answer))
             s.WriteString("\n\n")
         } else {
-            s.WriteString(askError.Render("⚠️  Received empty response from LLM\n\n"))
+            s.WriteString(askError.Render(":(  Received empty response from LLM\n\n"))
         }
 
         // Sources
         if len(m.result.Sources) > 0 {
-            s.WriteString(sourceStyle.Render("📚 Sources:\n"))
+            s.WriteString(sourceStyle.Render("≡ Sources:\n"))
             for _, src := range m.result.Sources {
                 s.WriteString(sourceStyle.Render(fmt.Sprintf("  • %s\n", src)))
             }
@@ -215,7 +215,7 @@ func (m askModel) buildResultView() string {
         }
 
         // Timing
-        s.WriteString(sourceStyle.Render(fmt.Sprintf("⏱️  Response time: %.2fs", m.result.Duration.Seconds())))
+        s.WriteString(sourceStyle.Render(fmt.Sprintf("⏱ Response time: %.2fs", m.result.Duration.Seconds())))
 
         // Cache indicator
         if m.result.Source == "redis_cache" {

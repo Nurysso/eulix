@@ -28,21 +28,26 @@ func NewRedis() (*Redis, error) {
     ctx := context.Background()
 
     client := redis.NewClient(&redis.Options{
-        Addr:            redisAddr,
-        Password:        redisPassword,
-        DB:              redisDB,
-        // DisableIndentity: true, // Disable auto mode for older Redis versions
-    
-	})
+        Addr:         redisAddr,
+        Password:     redisPassword,
+        DB:           redisDB,
+        MaxRetries:   3,
+        DialTimeout:  2 * time.Second,
+        ReadTimeout:  2 * time.Second,
+        WriteTimeout: 2 * time.Second,
+    })
 
-    // Test connection
+    // Test connection with timeout
+    ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+    defer cancel()
+
     if err := client.Ping(ctx).Err(); err != nil {
         return nil, fmt.Errorf("failed to connect to Redis: %w", err)
     }
 
     return &Redis{
         client: client,
-        ctx:    ctx,
+        ctx:    context.Background(),
     }, nil
 }
 

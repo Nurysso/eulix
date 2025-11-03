@@ -1,4 +1,4 @@
-package ui
+package cli
 
 import (
     "fmt"
@@ -126,7 +126,7 @@ func runInitSteps() tea.Msg {
 
 func RunInit() error {
     if config.IsInitialized() {
-        fmt.Println("⚠️  Eulix is already initialized in this directory")
+        fmt.Println(":(  Eulix is already initialized in this directory")
         return nil
     }
 
