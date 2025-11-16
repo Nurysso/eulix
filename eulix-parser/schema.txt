@@ -1,0 +1,249 @@
+{
+  "metadata": {
+    "project_name": "string",
+    "version": "string",
+    "parsed_at": "string (ISO 8601 timestamp)",
+    "languages": ["string"],
+    "total_files": "number",
+    "total_loc": "number",
+    "total_functions": "number",
+    "total_classes": "number",
+    "total_methods": "number"
+  },
+  "structure": {
+    "path/to/file.py": {
+      "language": "string",
+      "loc": "number",
+      "imports": [
+        {
+          "module": "string",
+          "items": ["string"],
+          "type": "string (external | internal)"
+        }
+      ],
+      "functions": [
+        {
+          "id": "string (file:function_name)",
+          "name": "string",
+          "signature": "string",
+          "params": [
+            {
+              "name": "string",
+              "type_annotation": "string",
+              "default_value": "string | null"
+            }
+          ],
+          "return_type": "string",
+          "docstring": "string",
+          "line_start": "number",
+          "line_end": "number",
+          "calls": [
+            {
+              "callee": "string",
+              "defined_in": "string (file path) | null",
+              "line": "number",
+              "args": ["string"],
+              "is_conditional": "boolean",
+              "context": "string (if | else | loop | try | unconditional)"
+            }
+          ],
+          "called_by": [
+            {
+              "function": "string",
+              "file": "string",
+              "line": "number"
+            }
+          ],
+          "variables": [
+            {
+              "name": "string",
+              "var_type": "string | null",
+              "scope": "string (param | local | global)",
+              "defined_at": "number | null",
+              "transformations": [
+                {
+                  "line": "number",
+                  "via": "string (function name)",
+                  "becomes": "string (new variable name)"
+                }
+              ],
+              "used_in": ["string (function names)"],
+              "returned": "boolean"
+            }
+          ],
+          "control_flow": {
+            "complexity": "number",
+            "branches": [
+              {
+                "branch_type": "string (if | elif | else | match)",
+                "condition": "string",
+                "line": "number",
+                "true_path": {
+                  "calls": ["string"],
+                  "returns": "string | null",
+                  "raises": "string | null"
+                },
+                "false_path": {
+                  "calls": ["string"],
+                  "returns": "string | null",
+                  "raises": "string | null"
+                } | null
+              }
+            ],
+            "loops": [
+              {
+                "loop_type": "string (for | while)",
+                "condition": "string",
+                "line": "number",
+                "calls": ["string"]
+              }
+            ],
+            "try_blocks": [
+              {
+                "line": "number",
+                "try_calls": ["string"],
+                "except_clauses": [
+                  {
+                    "exception_type": "string",
+                    "line": "number",
+                    "calls": ["string"]
+                  }
+                ],
+                "finally_calls": ["string"]
+              }
+            ]
+          },
+          "exceptions": {
+            "raises": ["string (exception types)"],
+            "propagates": ["string (exception types)"],
+            "handles": ["string (exception types)"]
+          },
+          "complexity": "number",
+          "is_async": "boolean",
+          "decorators": ["string"],
+          "tags": ["string"],
+          "importance_score": "number (0-1)"
+        }
+      ],
+      "classes": [
+        {
+          "id": "string (file:class_name)",
+          "name": "string",
+          "bases": ["string (base class names)"],
+          "docstring": "string",
+          "line_start": "number",
+          "line_end": "number",
+          "methods": ["Function objects (same as functions array)"],
+          "attributes": [
+            {
+              "name": "string",
+              "type_annotation": "string",
+              "value": "string | null"
+            }
+          ],
+          "decorators": ["string"]
+        }
+      ],
+      "global_vars": [
+        {
+          "name": "string",
+          "type_annotation": "string",
+          "value": "string | null",
+          "line": "number"
+        }
+      ],
+      "todos": [
+        {
+          "line": "number",
+          "text": "string",
+          "priority": "string (high | medium | low)"
+        }
+      ],
+      "security_notes": [
+        {
+          "note_type": "string",
+          "line": "number",
+          "description": "string"
+        }
+      ]
+    }
+  },
+  "call_graph": {
+    "nodes": [
+      {
+        "id": "string (file:identifier)",
+        "node_type": "string (function | method | class)",
+        "file": "string",
+        "is_entry_point": "boolean",
+        "call_count_estimate": "number"
+      }
+    ],
+    "edges": [
+      {
+        "from": "string (node id)",
+        "to": "string (node id)",
+        "edge_type": "string (calls | inherits | uses)",
+        "conditional": "boolean",
+        "call_site_line": "number"
+      }
+    ]
+  },
+  "dependency_graph": {
+    "nodes": [
+      {
+        "id": "string",
+        "node_type": "string (file | module | package)",
+        "name": "string"
+      }
+    ],
+    "edges": [
+      {
+        "from": "string (node id)",
+        "to": "string (node id)",
+        "edge_type": "string (imports | depends_on)"
+      }
+    ]
+  },
+  "indices": {
+    "functions_by_name": {
+      "function_name": ["string (file:line)"]
+    },
+    "functions_calling": {
+      "callee_name": ["string (caller identifiers)"]
+    },
+    "functions_by_tag": {
+      "tag_name": ["string (function identifiers)"]
+    },
+    "types_by_name": {
+      "type_name": ["string (file:line)"]
+    },
+    "files_by_category": {
+      "category_name": ["string (file paths)"]
+    }
+  },
+  "entry_points": [
+    {
+      "entry_type": "string (api_endpoint | cli_command | main)",
+      "path": "string | null",
+      "function": "string",
+      "handler": "string",
+      "file": "string",
+      "line": "number",
+      "methods": ["string (HTTP methods)"] | null
+    }
+  ],
+  "external_dependencies": [
+    {
+      "name": "string",
+      "version": "string | null",
+      "source": "string",
+      "used_by": ["string (file paths)"],
+      "import_count": "number"
+    }
+  ],
+  "patterns": {
+    "naming_convention": "string",
+    "structure_type": "string",
+    "architecture_style": "string (layered | microservices | mvc) | null"
+  }
+}
