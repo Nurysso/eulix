@@ -1,0 +1,221 @@
+cargo build --release
+   Compiling eulix-parser v0.1.0 (/home/dawu/Aelune/codes/gitHub/AI/eulix/eulix/eulix-parser)
+warning: unused import: `TreeCursor`
+ --> src/parser/python.rs:6:33
+  |
+6 | use tree_sitter::{Node, Parser, TreeCursor};
+  |                                 ^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `Metadata`
+ --> src/parser/mod.rs:6:39
+  |
+6 | use crate::kb::types::{KnowledgeBase, Metadata, FileData};
+  |                                       ^^^^^^^^
+
+error[E0063]: missing fields `call_graph`, `indices` and `patterns` in initializer of `types::KnowledgeBase`
+  --> src/kb/builder.rs:63:12
+   |
+63 |         Ok(KnowledgeBase {
+   |            ^^^^^^^^^^^^^ missing `call_graph`, `indices` and `patterns`
+
+error[E0063]: missing field `name` in initializer of `GraphNode`
+   --> src/kb/builder.rs:105:28
+    |
+105 |                 nodes.push(GraphNode {
+    |                            ^^^^^^^^^ missing `name`
+
+error[E0277]: the trait bound `std::string::String: Borrow<types::FunctionCall>` is not satisfied
+   --> src/kb/builder.rs:112:63
+    |
+112 |                     if let Some(target_id) = function_map.get(call) {
+    |                                                           --- ^^^^ the trait `Borrow<types::FunctionCall>` is not implemented for `std::string::String`
+    |                                                           |
+    |                                                           required by a bound introduced by this call
+    |
+    = help: the trait `Borrow<types::FunctionCall>` is not implemented for `std::string::String`
+            but trait `Borrow<str>` is implemented for it
+    = help: for that trait implementation, expected `str`, found `types::FunctionCall`
+note: required by a bound in `HashMap::<K, V, S>::get`
+   --> /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc/library/std/src/collections/hash/map.rs:905:5
+
+error[E0063]: missing field `name` in initializer of `GraphNode`
+   --> src/kb/builder.rs:124:28
+    |
+124 |                 nodes.push(GraphNode {
+    |                            ^^^^^^^^^ missing `name`
+
+error[E0063]: missing field `name` in initializer of `GraphNode`
+   --> src/kb/builder.rs:131:32
+    |
+131 |                     nodes.push(GraphNode {
+    |                                ^^^^^^^^^ missing `name`
+
+error[E0277]: the trait bound `std::string::String: Borrow<types::FunctionCall>` is not satisfied
+   --> src/kb/builder.rs:145:67
+    |
+145 |                         if let Some(target_id) = function_map.get(call) {
+    |                                                               --- ^^^^ the trait `Borrow<types::FunctionCall>` is not implemented for `std::string::String`
+    |                                                               |
+    |                                                               required by a bound introduced by this call
+    |
+    = help: the trait `Borrow<types::FunctionCall>` is not implemented for `std::string::String`
+            but trait `Borrow<str>` is implemented for it
+    = help: for that trait implementation, expected `str`, found `types::FunctionCall`
+note: required by a bound in `HashMap::<K, V, S>::get`
+   --> /rustc/6b00bc3880198600130e1cf62b8f8a93494488cc/library/std/src/collections/hash/map.rs:905:5
+
+error[E0063]: missing fields `handler`, `line`, `methods` and 1 other field in initializer of `types::EntryPoint`
+   --> src/kb/builder.rs:167:39
+    |
+167 |                     entry_points.push(EntryPoint {
+    |                                       ^^^^^^^^^^ missing `handler`, `line`, `methods` and 1 other field
+
+error[E0063]: missing fields `handler`, `line`, `methods` and 1 other field in initializer of `types::EntryPoint`
+   --> src/kb/builder.rs:182:43
+    |
+182 |                         entry_points.push(EntryPoint {
+    |                                           ^^^^^^^^^^ missing `handler`, `line`, `methods` and 1 other field
+
+error[E0308]: mismatched types
+   --> src/kb/builder.rs:226:25
+    |
+226 |                         version,
+    |                         ^^^^^^^ expected `Option<String>`, found `String`
+    |
+    = note: expected enum `std::option::Option<std::string::String>`
+             found struct `std::string::String`
+help: try wrapping the expression in `Some`
+    |
+226 |                         version: Some(version),
+    |                         ++++++++++++++       +
+
+error[E0063]: missing fields `import_count` and `used_by` in initializer of `types::ExternalDependency`
+   --> src/kb/builder.rs:224:39
+    |
+224 |                     dependencies.push(ExternalDependency {
+    |                                       ^^^^^^^^^^^^^^^^^^ missing `import_count` and `used_by`
+
+error[E0308]: mismatched types
+   --> src/kb/builder.rs:274:34
+    |
+274 |                         version: "*".to_string(),
+    |                                  ^^^^^^^^^^^^^^^ expected `Option<String>`, found `String`
+    |
+    = note: expected enum `std::option::Option<std::string::String>`
+             found struct `std::string::String`
+help: try wrapping the expression in `Some`
+    |
+274 |                         version: Some("*".to_string()),
+    |                                  +++++               +
+
+error[E0063]: missing fields `import_count` and `used_by` in initializer of `types::ExternalDependency`
+   --> src/kb/builder.rs:272:39
+    |
+272 |                     dependencies.push(ExternalDependency {
+    |                                       ^^^^^^^^^^^^^^^^^^ missing `import_count` and `used_by`
+
+error[E0308]: mismatched types
+   --> src/kb/builder.rs:301:26
+    |
+301 |                 version: version_part.to_string(),
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<String>`, found `String`
+    |
+    = note: expected enum `std::option::Option<std::string::String>`
+             found struct `std::string::String`
+help: try wrapping the expression in `Some`
+    |
+301 |                 version: Some(version_part.to_string()),
+    |                          +++++                        +
+
+error[E0063]: missing fields `import_count` and `used_by` in initializer of `types::ExternalDependency`
+   --> src/kb/builder.rs:299:18
+    |
+299 |             Some(ExternalDependency {
+    |                  ^^^^^^^^^^^^^^^^^^ missing `import_count` and `used_by`
+
+error[E0658]: use of unstable library feature `str_as_str`
+  --> src/parser/python.rs:91:36
+   |
+91 |         if stdlib.contains(&module.as_str()) {
+   |                                    ^^^^^^
+   |
+   = note: see issue #130366 <https://github.com/rust-lang/rust/issues/130366> for more information
+
+error[E0689]: can't call method `max` on ambiguous numeric type `{float}`
+    --> src/parser/python.rs:1087:15
+     |
+1087 |         score.max(0.0).min(1.0)
+     |               ^^^
+     |
+help: you must specify a type for this binding, like `f32`
+     |
+1065 |         let mut score: f32 = 0.5; // Base score
+     |                      +++++
+
+error[E0063]: missing field `function` in initializer of `types::EntryPoint`
+   --> src/parser/analyze.rs:294:39
+    |
+294 |                     entry_points.push(EntryPoint {
+    |                                       ^^^^^^^^^^ missing `function`
+
+error[E0063]: missing field `function` in initializer of `types::EntryPoint`
+   --> src/parser/analyze.rs:312:43
+    |
+312 |                         entry_points.push(EntryPoint {
+    |                                           ^^^^^^^^^^ missing `function`
+
+error[E0063]: missing field `function` in initializer of `types::EntryPoint`
+   --> src/parser/analyze.rs:325:39
+    |
+325 |                     entry_points.push(EntryPoint {
+    |                                       ^^^^^^^^^^ missing `function`
+
+error[E0063]: missing field `source` in initializer of `types::ExternalDependency`
+   --> src/parser/analyze.rs:391:34
+    |
+391 |             .map(|(name, files)| ExternalDependency {
+    |                                  ^^^^^^^^^^^^^^^^^^ missing `source`
+
+error[E0308]: mismatched types
+   --> src/parser/analyze.rs:527:54
+    |
+527 |     fn classify_file(path: &str, data: &FileData) -> String {
+    |        -------------                                 ^^^^^^ expected `String`, found `()`
+    |        |
+    |        implicitly returns `()` as its body has no tail or `return` expression
+...
+556 |         "Other".to_string();
+    |                            - help: remove this semicolon to return this value
+
+error[E0063]: missing fields `total_classes`, `total_functions` and `total_methods` in initializer of `types::Metadata`
+   --> src/main.rs:140:20
+    |
+140 |     let metadata = Metadata {
+    |                    ^^^^^^^^ missing `total_classes`, `total_functions` and `total_methods`
+
+error[E0063]: missing field `dependency_graph` in initializer of `types::KnowledgeBase`
+   --> src/main.rs:149:8
+    |
+149 |     Ok(KnowledgeBase {
+    |        ^^^^^^^^^^^^^ missing `dependency_graph`
+
+warning: unused variable: `file_path`
+   --> src/parser/python.rs:326:60
+    |
+326 |     fn extract_function_calls_detailed(&self, node: &Node, file_path: Option<&str>) -> Vec<FunctionCall> {
+    |                                                            ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_file_path`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `code_lower`
+   --> src/parser/python.rs:985:13
+    |
+985 |         let code_lower = self.source_code.to_lowercase();
+    |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_code_lower`
+
+Some errors have detailed explanations: E0063, E0277, E0308, E0658, E0689.
+For more information about an error, try `rustc --explain E0063`.
+warning: `eulix-parser` (bin "eulix_parser") generated 4 warnings
+error: could not compile `eulix-parser` (bin "eulix_parser") due to 23 previous errors; 4 warnings emitted

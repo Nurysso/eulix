@@ -1,0 +1,14 @@
+/home/dawu/Aelune/codes/gitHub/AI/eulix/eulix/eulix-parser/target/release/deps/serde-0a0e6d09ab24e0f4.d: /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/dawu/Aelune/codes/gitHub/AI/eulix/eulix/eulix-parser/target/release/build/serde-7178c0c31464c7d0/out/private.rs
+
+/home/dawu/Aelune/codes/gitHub/AI/eulix/eulix/eulix-parser/target/release/deps/libserde-0a0e6d09ab24e0f4.rlib: /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/dawu/Aelune/codes/gitHub/AI/eulix/eulix/eulix-parser/target/release/build/serde-7178c0c31464c7d0/out/private.rs
+
+/home/dawu/Aelune/codes/gitHub/AI/eulix/eulix/eulix-parser/target/release/deps/libserde-0a0e6d09ab24e0f4.rmeta: /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/dawu/Aelune/codes/gitHub/AI/eulix/eulix/eulix-parser/target/release/build/serde-7178c0c31464c7d0/out/private.rs
+
+/home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/dawu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/dawu/Aelune/codes/gitHub/AI/eulix/eulix/eulix-parser/target/release/build/serde-7178c0c31464c7d0/out/private.rs:
+
+# env-dep:OUT_DIR=/home/dawu/Aelune/codes/gitHub/AI/eulix/eulix/eulix-parser/target/release/build/serde-7178c0c31464c7d0/out
