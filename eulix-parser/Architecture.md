@@ -111,17 +111,17 @@ Eulix Parser is a static code analysis tool that transforms source code into str
   │ Serializer   │
   └──────┬───────┘
          │
-    ┌────┴─────┐
+    ┌────┴─────┐ // optional
     ↓          ↓
 ┌─────────┐ ┌──────────┐
 │  kb.json│ │Analyzer  │
 └─────────┘ └────┬─────┘
-               ┌──┴───┐
-               ↓      ↓
-         ┌─────────┐ ┌─────────┐
-         │index.json│ │summary  │
-         └─────────┘ │.json    │
-                     └─────────┘
+        ┌────────┴────┬───────────────┐
+        ↓             ↓               ↓
+     ┌──────────┐  ┌─────────┐  ┌──────────┐
+     │index.json│  │summary  │  │Call graph│
+     └──────────┘  │.json    │  └──────────┘
+                   └─────────┘
 ```
 
 ### example kb.json
@@ -377,6 +377,218 @@ Eulix Parser is a static code analysis tool that transforms source code into str
 }
 ```
 
+
+### example index.json
+```json
+{
+  "functions_by_name": {
+    "main": [
+      "src/main.py:10"
+    ],
+    "initialize": [
+      "src/init.py:25"
+    ],
+    "calculate_total": [
+      "src/utils.py:45",
+      "src/helpers.py:23"
+    ],
+    "process_data": [
+      "src/processor.py:100"
+    ]
+  },
+  "functions_calling": {
+    "initialize": [
+      "func_main"
+    ],
+    "calculate_total": [
+      "func_main",
+      "method_process_order"
+    ],
+    "log_message": [
+      "func_main",
+      "func_initialize",
+      "method_process"
+    ]
+  },
+  "functions_by_tag": {
+    "entry-point": [
+      "func_main",
+      "func_run"
+    ],
+    "async": [
+      "func_fetch_data",
+      "method_load_async"
+    ],
+    "deprecated": [
+      "func_old_method"
+    ]
+  },
+  "types_by_name": {
+    "User": [
+      "src/models/user.py:10"
+    ],
+    "Database": [
+      "src/db/connection.py:25"
+    ],
+    "HttpClient": [
+      "src/http/client.py:5"
+    ]
+  },
+  "files_by_category": {
+    "API": [
+      "src/api/routes.py",
+      "src/api/endpoints.py"
+    ],
+    "Authentication": [
+      "src/auth/login.py",
+      "src/auth/tokens.py"
+    ],
+    "Data Models": [
+      "src/models/user.py",
+      "src/models/post.py"
+    ],
+    "Tests": [
+      "tests/test_api.py",
+      "tests/test_utils.py"
+    ],
+    "Utilities": [
+      "src/utils/helpers.py"
+    ],
+    "Other": [
+      "src/main.py",
+      "src/config.py"
+    ]
+  }
+}
+```
+
+### example summary.json
+```json
+{
+  "project_name": "my-web-app",
+  "total_files": 42,
+  "total_loc": 8500,
+  "languages": [
+    "Python",
+    "JavaScript"
+  ],
+  "categories": {
+    "API": [
+      "src/api/routes.py",
+      "src/api/handlers.py"
+    ],
+    "Authentication": [
+      "src/auth/login.py",
+      "src/auth/tokens.py"
+    ],
+    "Data Models": [
+      "src/models/user.py",
+      "src/models/post.py"
+    ],
+    "Tests": [
+      "tests/test_api.py",
+      "tests/test_auth.py"
+    ],
+    "Utilities": [
+      "src/utils/helpers.py"
+    ],
+    "Other": [
+      "src/main.py",
+      "src/config.py"
+    ]
+  },
+  "key_features": [
+    "RESTful API for user management",
+    "JWT-based authentication system",
+    "PostgreSQL database integration",
+    "Async task queue processing"
+  ],
+  "entry_points": [
+    "src/main.py:10",
+    "src/api/app.py:25"
+  ],
+  "dependencies": {
+    "stdlib": [
+      "os",
+      "sys",
+      "json",
+      "datetime",
+      "asyncio"
+    ],
+    "third_party": [
+      "flask",
+      "sqlalchemy",
+      "jwt",
+      "requests"
+    ]
+  },
+  "patterns": {
+    "naming_convention": "snake_case",
+    "structure_type": "Standard (src/ + tests/)",
+    "architecture_style": "layered"
+  }
+}
+```
+
+### example call_graph.json
+```json
+{
+  "nodes": [
+    {
+      "id": "func_main",
+      "node_type": "function",
+      "file": "src/main.py",
+      "is_entry_point": true,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_initialize",
+      "node_type": "function",
+      "file": "src/init.py",
+      "is_entry_point": false,
+      "call_count_estimate": 2
+    },
+    {
+      "id": "class_User",
+      "node_type": "class",
+      "file": "src/models/user.py",
+      "is_entry_point": false,
+      "call_count_estimate": 5
+    },
+    {
+      "id": "method_save",
+      "node_type": "method",
+      "file": "src/models/user.py",
+      "is_entry_point": false,
+      "call_count_estimate": 3
+    }
+  ],
+  "edges": [
+    {
+      "from": "func_main",
+      "to": "func_initialize",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 15
+    },
+    {
+      "from": "func_initialize",
+      "to": "class_User",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 28
+    },
+    {
+      "from": "class_AdminUser",
+      "to": "class_User",
+      "edge_type": "inherits",
+      "conditional": false,
+      "call_site_line": 10
+    }
+  ]
+}
+```
+
 ### Component Overview
 
 | Component | Input | Output | Purpose |
@@ -463,16 +675,22 @@ Vec<PathBuf> (discovered files)
 
 **Ignored by Default:**
 ```rust
-const DEFAULT_IGNORES: &[&str] = &[
-    ".git/",
-    ".eulix/",
-    "__pycache__/",
-    "*.pyc",
-    ".venv/", "venv/", "env/",
-    "node_modules/",
-    ".pytest_cache/", ".mypy_cache/", ".tox/",
-    "dist/", "build/", "*.egg-info/",
-];
+            ".git/",
+            ".eulix/",
+            "node_modules/",
+            "__pycache__/",
+            ".venv/",
+            "venv/",
+            "target/",
+            "dist/",
+            "build/",
+            "*.pyc",
+            "*.pyo",
+            "*.so",
+            "*.dylib",
+            "*.exe",
+            "*.log",
+            ".DS_Store"
 ```
 
 ### Phase 2: Language Detection

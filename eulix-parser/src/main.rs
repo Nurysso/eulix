@@ -376,27 +376,35 @@ fn collect_source_files(
             .collect()
     };
 
-    // Use FileWalker for each supported language
+    // Use FileWalker for all languages
+    let walker = FileWalker::new(root.to_path_buf());
+
     for lang in &lang_filters {
-        match lang {
-            Language::Python => {
-                let walker = FileWalker::new(root.to_path_buf(), euignore_path.map(|p| p.to_path_buf()));
-                match walker.find_python_files() {
-                    Ok(files) => all_files.extend(files),
-                    Err(e) => {
-                        if verbose {
-                            eprintln!("   Warning: Failed to collect Python files: {}", e);
-                        }
-                    }
+        let extension = match lang {
+            Language::Python => "py",
+            Language::JavaScript => "js",
+            Language::TypeScript => "ts",
+            Language::Go => "go",
+            Language::Rust => "rs",
+            _ => continue,
+        };
+
+        match walker.walk_files(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext == extension)
+                .unwrap_or(false)
+        }) {
+            Ok(files) => {
+                if verbose && !files.is_empty() {
+                    println!("   Found {} {} files", files.len(), extension);
                 }
-            }
-            _ => {
-                // For other languages, use generic file collection
-                // TODO: Implement language-specific walkers
+                all_files.extend(files)
+            },
+            Err(e) => {
                 if verbose {
-                    println!("   Note: Using generic file walker for {:?}", lang);
+                    eprintln!("   Warning: Failed to collect {} files: {}", extension, e);
                 }
-                collect_files_by_extension(root, root, &mut all_files, euignore_path, lang)?;
             }
         }
     }

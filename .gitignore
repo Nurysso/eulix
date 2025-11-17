@@ -7,3 +7,4 @@ docs/
 parser/target
 parser/test
 eulix-embed/
+**/target/
