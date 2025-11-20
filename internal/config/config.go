@@ -1,95 +1,120 @@
 package config
 
 import (
-    "os"
-    "github.com/pelletier/go-toml/v2"
-)
+	// "fmt"
+	"os"
 
-const (
-    eulixDir   = ".eulix"
-    configFile = ".eulix/config.toml"
+	"github.com/BurntSushi/toml"
 )
 
 type Config struct {
-    LLM struct {
-        Provider    string `toml:"provider"`    // "ollama" or "openai"
-        Model       string `toml:"model"`       // "llama3.2" or "gpt-4o-mini"
-        Temperature float64 `toml:"temperature"`
-    } `toml:"llm"`
-
-    OpenAI struct {
-        APIKey string `toml:"api_key"`
-    } `toml:"openai"`
-
-    Parser struct {
-        BinaryPath string `toml:"binary_path"`
-        Threads    int    `toml:"threads"`
-    } `toml:"parser"`
-
-    Cache struct {
-        Enabled bool `toml:"enabled"`
-    } `toml:"cache"`
+	Project    ProjectConfig    `toml:"project"`
+	Parser     ParserConfig     `toml:"parser"`
+	Embeddings EmbeddingsConfig `toml:"embeddings"`
+	LLM        LLMConfig        `toml:"llm"`
+	Cache      CacheConfig      `toml:"cache"`
+	Checksum   ChecksumConfig   `toml:"checksum"`
 }
 
-// Load loads configuration from .eulix/config.toml
-func Load() *Config {
-    cfg := defaultConfig()
-
-    data, err := os.ReadFile(configFile)
-    if err != nil {
-        return cfg // Return defaults if config doesn't exist
-    }
-
-    if err := toml.Unmarshal(data, cfg); err != nil {
-        return cfg
-    }
-
-    return cfg
+type ProjectConfig struct {
+	Path string `toml:"path"`
 }
 
-// Save saves configuration to .eulix/config.toml
-func Save(cfg *Config) error {
-    data, err := toml.Marshal(cfg)
-    if err != nil {
-        return err
-    }
-
-    return os.WriteFile(configFile, data, 0644)
+type ParserConfig struct {
+	Threads int `toml:"threads"`
 }
 
-// Set sets a configuration value
-func Set(key, value string) error {
-    cfg := Load()
-
-    switch key {
-    case "llm.provider":
-        cfg.LLM.Provider = value
-    case "llm.model":
-        cfg.LLM.Model = value
-    case "openai.api_key":
-        cfg.OpenAI.APIKey = value
-    case "parser.binary_path":
-        cfg.Parser.BinaryPath = value
-    default:
-        return nil // Ignore unknown keys
-    }
-
-    return Save(cfg)
+type EmbeddingsConfig struct {
+	Model     string `toml:"model"`
+	Backend   string `toml:"backend"`
+	Dimension int    `toml:"dimension"`
 }
 
-// IsInitialized checks if Eulix is initialized in current directory
-func IsInitialized() bool {
-    _, err := os.Stat(eulixDir)
-    return err == nil
+type LLMConfig struct {
+	Local  		bool `toml:"local"`
+	Provider    string  `toml:"provider"`
+	Model       string  `toml:"model"`
+	APIKey      string  `toml:"api_key"`
+	MaxTokens   int     `toml:"max_tokens"`
+	Temperature float64 `toml:"temperature"`
+	BaseURL     string `toml:"baseURL"`
 }
 
-// defaultConfig returns default configuration
+type CacheConfig struct {
+	Redis RedisConfig `toml:"redis"`
+	SQL   SQLConfig   `toml:"sql"`
+}
+
+type RedisConfig struct {
+	Enabled  bool   `toml:"enabled"`
+	URL      string `toml:"url"`
+	TTLHours int    `toml:"ttl_hours"`
+}
+
+type SQLConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Driver  string `toml:"driver"`
+	DSN     string `toml:"dsn"`
+}
+
+type ChecksumConfig struct {
+	ChangeThreshold          float64 `toml:"change_threshold"`
+	ForceReanalyzeThreshold float64 `toml:"force_reanalyze_threshold"`
+}
+
+func Load() (*Config, error) {
+	var cfg Config
+
+	// Try to read from eulix.toml
+	if _, err := toml.DecodeFile("eulix.toml", &cfg); err != nil {
+		// Return default config
+		return defaultConfig(), nil
+	}
+
+	// Override API key from environment if not set
+	if cfg.LLM.APIKey == "" {
+		cfg.LLM.APIKey = os.Getenv("ANTHROPIC_API_KEY")
+	}
+
+	return &cfg, nil
+}
+
 func defaultConfig() *Config {
-    cfg := &Config{}
-    cfg.LLM.Provider = "ollama"
-    cfg.LLM.Model = "llama3.2"
-    cfg.LLM.Temperature = 0.7
-    cfg.Parser.Threads = 4
-    cfg.Cache.Enabled = true
-    return cfg
+	return &Config{
+		Project: ProjectConfig{
+			Path: ".",
+		},
+		Parser: ParserConfig{
+			Threads: 4,
+		},
+		Embeddings: EmbeddingsConfig{
+			Model:     "BAAI/bge-small-en-v1.5",
+			Backend:   "auto",
+			Dimension: 384,
+		},
+		LLM: LLMConfig{
+			Local: 		true,
+			Provider:    "ollama",
+			Model:       "llama3.2:3b",
+			MaxTokens:   8192,
+			Temperature: 0.7,
+			BaseURL: "http://localhost:11434",
+		},
+		Cache: CacheConfig{
+			Redis: RedisConfig{
+				Enabled:  false,
+				URL:      "redis://localhost:6379",
+				TTLHours: 6,
+			},
+			SQL: SQLConfig{
+				Enabled: true,
+				Driver:  "sqlite",
+				DSN:     ".eulix/history.db",
+			},
+		},
+		Checksum: ChecksumConfig{
+			ChangeThreshold:          0.10,
+			ForceReanalyzeThreshold: 0.30,
+		},
+	}
 }
