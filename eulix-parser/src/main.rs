@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 mod kb;
@@ -14,6 +15,23 @@ use parser::analyze::Analyzer;
 use parser::language::Language;
 use parser::python;
 use utils::file_walker::FileWalker;
+
+#[derive(Debug, Clone)]
+struct ParseStats {
+    parsed: Vec<String>,
+    skipped: Vec<String>,
+    failed: Vec<(String, String)>,
+}
+
+impl ParseStats {
+    fn new() -> Self {
+        Self {
+            parsed: Vec::new(),
+            skipped: Vec::new(),
+            failed: Vec::new(),
+        }
+    }
+}
 
 /// Fast multi-language code parser
 #[derive(Parser, Debug)]
@@ -61,69 +79,84 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start_time = Instant::now();
 
     if args.verbose {
-        println!("Parsing codebase: {}", args.root);
-        println!("   Threads: {}", args.threads);
-        println!("   Output: {}", args.output);
-        println!("   Languages: {}", args.languages);
-        println!("   Skip analysis: {}", args.no_analyze);
+        println!("╔════════════════════════════════════════════════════════════════╗");
+        println!("║             EULIX PARSER - Code Analysis Tool                  ║");
+        println!("╚════════════════════════════════════════════════════════════════╝");
         println!();
+        println!("📁 Project Root:    {}", args.root);
+        println!("🧵 Threads:         {}", args.threads);
+        println!("📄 Output:          {}", args.output);
+        println!("🌐 Languages:       {}", args.languages);
+        println!("⚡ Skip Analysis:   {}", args.no_analyze);
+        if let Some(ref ignore) = args.euignore {
+            println!("🚫 Ignore File:     {}", ignore);
+        }
+        println!();
+        println!("{}", "═".repeat(64));
     }
 
     // Phase 1: Parse all files
     if args.verbose {
-        println!("Phase 1: Parsing files...");
+        println!("\n📋 PHASE 1: FILE DISCOVERY & PARSING");
+        println!("{}", "─".repeat(64));
     }
     let parse_start = Instant::now();
-    let mut kb = parse_directory(&args.root, &args.languages, args.euignore.as_deref(), args.verbose)?;
+    let (mut kb, stats) = parse_directory(&args.root, &args.languages, args.euignore.as_deref(), args.verbose)?;
+
     if args.verbose {
-        println!(
-            "   ✓ Parsed {} files in {:.2}s",
-            kb.metadata.total_files,
-            parse_start.elapsed().as_secs_f64()
-        );
+        println!("\n{}", "─".repeat(64));
+        println!("✅ Parsing Complete!");
+        println!("   ⏱️  Time:         {:.2}s", parse_start.elapsed().as_secs_f64());
+        println!("   ✓  Parsed:       {} files", stats.parsed.len());
+        println!("   ⊘  Skipped:      {} files", stats.skipped.len());
+        println!("   ✗  Failed:       {} files", stats.failed.len());
+        println!("{}", "═".repeat(64));
     }
 
     if !args.no_analyze {
         // Phase 2: Analyze and build indices (parallel where possible)
         if args.verbose {
-            println!("Phase 2: Building call graph and indices...");
-            println!("   (This may take a while for large codebases...)");
+            println!("\n🔍 PHASE 2: BUILDING CALL GRAPH & INDICES");
+            println!("{}", "─".repeat(64));
+            println!("   Analyzing relationships and dependencies...");
         }
         let analyze_start = Instant::now();
 
         // Check if codebase is too large for full analysis
         let file_count = kb.structure.len();
         if file_count > 10000 && args.verbose {
-            println!("   ⚠️ Large codebase detected ({} files)", file_count);
-            println!("   Consider using --no-analyze for faster results");
+            println!("   ⚠️  Large codebase detected ({} files)", file_count);
+            println!("   💡 Consider using --no-analyze for faster results");
         }
 
         kb = Analyzer::analyze_and_build(kb, args.verbose);
+
         if args.verbose {
-            println!(
-                "   ✓ Built call graph with {} nodes, {} edges in {:.2}s",
-                kb.call_graph.nodes.len(),
-                kb.call_graph.edges.len(),
-                analyze_start.elapsed().as_secs_f64()
-            );
+            println!("\n{}", "─".repeat(64));
+            println!("✅ Analysis Complete!");
+            println!("   ⏱️  Time:         {:.2}s", analyze_start.elapsed().as_secs_f64());
+            println!("   📊 Graph Nodes:  {}", kb.call_graph.nodes.len());
+            println!("   🔗 Graph Edges:  {}", kb.call_graph.edges.len());
+            println!("{}", "═".repeat(64));
         }
 
         // Phase 3: Generate summary
         if args.verbose {
-            println!(" Phase 3: Generating summary...");
+            println!("\n📝 PHASE 3: GENERATING SUMMARY");
+            println!("{}", "─".repeat(64));
         }
         let summary_start = Instant::now();
         let summary = Analyzer::generate_summary(&kb);
+
         if args.verbose {
-            println!(
-                "   ✓ Generated summary in {:.2}s",
-                summary_start.elapsed().as_secs_f64()
-            );
+            println!("✅ Summary generated in {:.2}s", summary_start.elapsed().as_secs_f64());
+            println!("{}", "═".repeat(64));
         }
 
         // Phase 4: Write outputs
         if args.verbose {
-            println!(" Phase 4: Writing output files...");
+            println!("\n💾 PHASE 4: WRITING OUTPUT FILES");
+            println!("{}", "─".repeat(64));
         }
 
         // Determine output directory and file
@@ -139,11 +172,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let kb_json = serde_json::to_string_pretty(&kb)?;
         fs::write(output_path, kb_json)?;
         if args.verbose {
-            println!(
-                "   ✓ Wrote {} ({} bytes)",
-                args.output,
-                fs::metadata(output_path)?.len()
-            );
+            let size = fs::metadata(output_path)?.len();
+            println!("   ✓ {} ({:.2} KB)", args.output, size as f64 / 1024.0);
         }
 
         // Write additional analysis files in the same directory
@@ -157,7 +187,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let index_json = serde_json::to_string_pretty(&kb.indices)?;
         fs::write(&index_path, index_json)?;
         if args.verbose {
-            println!("   ✓ Wrote {}", index_path.display());
+            let size = fs::metadata(&index_path)?.len();
+            println!("   ✓ {}_index.json ({:.2} KB)", base_name, size as f64 / 1024.0);
         }
 
         // Write summary.json
@@ -165,7 +196,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let summary_json = serde_json::to_string_pretty(&summary)?;
         fs::write(&summary_path, summary_json)?;
         if args.verbose {
-            println!("   ✓ Wrote {}", summary_path.display());
+            let size = fs::metadata(&summary_path)?.len();
+            println!("   ✓ {}_summary.json ({:.2} KB)", base_name, size as f64 / 1024.0);
         }
 
         // Write call_graph.json
@@ -173,22 +205,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let callgraph_json = serde_json::to_string_pretty(&kb.call_graph)?;
         fs::write(&callgraph_path, callgraph_json)?;
         if args.verbose {
-            println!("   ✓ Wrote {}", callgraph_path.display());
+            let size = fs::metadata(&callgraph_path)?.len();
+            println!("   ✓ {}_call_graph.json ({:.2} KB)", base_name, size as f64 / 1024.0);
         }
 
         if args.verbose {
-            println!(
-                "\n✨ Complete! Total time: {:.2}s",
-                start_time.elapsed().as_secs_f64()
-            );
-            println!("\nStatistics:");
-            println!("   Files: {}", kb.metadata.total_files);
-            println!("   Lines of code: {}", kb.metadata.total_loc);
-            println!("   Functions: {}", kb.metadata.total_functions);
-            println!("   Classes: {}", kb.metadata.total_classes);
-            println!("   Methods: {}", kb.metadata.total_methods);
-            println!("   Call graph edges: {}", kb.call_graph.edges.len());
-            println!("   Entry points: {}", kb.entry_points.len());
+            println!("{}", "═".repeat(64));
+            print_final_summary(&kb, &stats, start_time.elapsed().as_secs_f64());
         } else {
             println!(
                 "✓ Parsed {} files ({} LOC) in {:.2}s → {}",
@@ -201,7 +224,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         // Only write basic kb.json without analysis
         if args.verbose {
-            println!("Writing output (analysis skipped)...");
+            println!("\n💾 WRITING OUTPUT (ANALYSIS SKIPPED)");
+            println!("{}", "─".repeat(64));
         }
 
         let output_path = Path::new(&args.output);
@@ -213,21 +237,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fs::write(output_path, kb_json)?;
 
         if args.verbose {
-            println!(
-                "   ✓ Wrote {} ({} bytes)",
-                args.output,
-                fs::metadata(output_path)?.len()
-            );
-            println!(
-                "\n✨ Complete! Total time: {:.2}s",
-                start_time.elapsed().as_secs_f64()
-            );
-            println!("\nStatistics:");
-            println!("   Files: {}", kb.metadata.total_files);
-            println!("   Lines of code: {}", kb.metadata.total_loc);
-            println!("   Functions: {}", kb.metadata.total_functions);
-            println!("   Classes: {}", kb.metadata.total_classes);
-            println!("   Methods: {}", kb.metadata.total_methods);
+            let size = fs::metadata(output_path)?.len();
+            println!("   ✓ {} ({:.2} KB)", args.output, size as f64 / 1024.0);
+            println!("{}", "═".repeat(64));
+            print_final_summary(&kb, &stats, start_time.elapsed().as_secs_f64());
         } else {
             println!(
                 "✓ Parsed {} files ({} LOC) in {:.2}s → {} (no analysis)",
@@ -242,12 +255,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn print_final_summary(kb: &KnowledgeBase, stats: &ParseStats, total_time: f64) {
+    println!("\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║                      FINAL SUMMARY                             ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!();
+
+    println!("⏱️  EXECUTION TIME");
+    println!("   Total:                  {:.2}s", total_time);
+    println!();
+
+    println!("📊 CODE METRICS");
+    println!("   Files Processed:        {}", kb.metadata.total_files);
+    println!("   Total Lines of Code:    {}", kb.metadata.total_loc);
+    println!("   Functions:              {}", kb.metadata.total_functions);
+    println!("   Classes:                {}", kb.metadata.total_classes);
+    println!("   Methods:                {}", kb.metadata.total_methods);
+    println!();
+
+    println!("🌐 LANGUAGES DETECTED");
+    for lang in &kb.metadata.languages {
+        println!("   • {}", lang);
+    }
+    println!();
+
+    println!("🔍 ANALYSIS RESULTS");
+    println!("   Call Graph Nodes:       {}", kb.call_graph.nodes.len());
+    println!("   Call Graph Edges:       {}", kb.call_graph.edges.len());
+    println!("   Entry Points:           {}", kb.entry_points.len());
+    println!("   External Dependencies:  {}", kb.external_dependencies.len());
+    println!();
+
+    println!("📝 PARSING STATISTICS");
+    println!("   ✓ Successfully Parsed:  {} files", stats.parsed.len());
+    println!("   ⊘ Skipped:              {} files", stats.skipped.len());
+    println!("   ✗ Failed:               {} files", stats.failed.len());
+
+    if !stats.failed.is_empty() {
+        println!();
+        println!("⚠️  FAILED FILES:");
+        for (file, reason) in &stats.failed {
+            println!("   • {} - {}", file, reason);
+        }
+    }
+
+    println!();
+    println!("{}",  "═".repeat(64));
+    println!("✨ Analysis complete!");
+    println!("{}", "═".repeat(64));
+}
+
 fn parse_directory(
     dir: &str,
     languages: &str,
     euignore_path: Option<&str>,
     verbose: bool,
-) -> Result<KnowledgeBase, Box<dyn std::error::Error>> {
+) -> Result<(KnowledgeBase, ParseStats), Box<dyn std::error::Error>> {
     let path = PathBuf::from(dir);
 
     // Determine euignore path
@@ -263,29 +326,51 @@ fn parse_directory(
         });
 
     if verbose && euignore.is_some() {
-        println!("   Using .euignore: {:?}", euignore.as_ref().unwrap());
+        println!("   🚫 Using .euignore: {:?}", euignore.as_ref().unwrap());
     }
 
     // Collect all source files based on language filter
     let files = collect_source_files(&path, euignore.as_deref(), languages, verbose)?;
 
     if verbose {
-        println!("   Found {} source files", files.len());
+        println!("   📁 Discovered {} source files", files.len());
+        println!();
     }
+
+    // Thread-safe stats collection
+    let stats = Arc::new(Mutex::new(ParseStats::new()));
 
     // Parse files in parallel using Rayon
     let results: Vec<_> = files
         .par_iter()
-        .filter_map(|file_path| match parse_file(file_path, &path) {
-            Ok(result) => Some(result),
-            Err(e) => {
-                if verbose {
-                    eprintln!("   Warning: Failed to parse {}: {}", file_path.display(), e);
+        .filter_map(|file_path| {
+            let relative_path = file_path
+                .strip_prefix(&path)
+                .unwrap_or(file_path)
+                .to_string_lossy()
+                .to_string();
+
+            match parse_file(file_path, &path) {
+                Ok(result) => {
+                    if verbose {
+                        println!("   ✓ Parsed:  {}", relative_path);
+                    }
+                    stats.lock().unwrap().parsed.push(relative_path.clone());
+                    Some(result)
                 }
-                None
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    if verbose {
+                        println!("   ✗ Failed:  {} - {}", relative_path, error_msg);
+                    }
+                    stats.lock().unwrap().failed.push((relative_path, error_msg));
+                    None
+                }
             }
         })
         .collect();
+
+    let final_stats = Arc::try_unwrap(stats).unwrap().into_inner().unwrap();
 
     // Build knowledge base structure
     let mut structure = HashMap::new();
@@ -327,7 +412,7 @@ fn parse_directory(
         total_methods,
     };
 
-    Ok(KnowledgeBase {
+    let kb = KnowledgeBase {
         metadata,
         structure,
         call_graph: CallGraph::default(),
@@ -336,7 +421,9 @@ fn parse_directory(
         entry_points: vec![],
         external_dependencies: vec![],
         patterns: PatternInfo::default(),
-    })
+    };
+
+    Ok((kb, final_stats))
 }
 
 fn collect_source_files(
@@ -368,13 +455,17 @@ fn collect_source_files(
                 "rust" | "rs" => Some(Language::Rust),
                 _ => {
                     if verbose {
-                        eprintln!("   Warning: Unknown language filter '{}'", lang_str);
+                        eprintln!("   ⚠️  Unknown language filter '{}'", lang_str);
                     }
                     None
                 }
             })
             .collect()
     };
+
+    if verbose {
+        println!("   🔎 Searching for files...");
+    }
 
     // Use FileWalker for all languages
     let walker = FileWalker::new(root.to_path_buf());
@@ -397,13 +488,13 @@ fn collect_source_files(
         }) {
             Ok(files) => {
                 if verbose && !files.is_empty() {
-                    println!("   Found {} {} files", files.len(), extension);
+                    println!("      • Found {} .{} files", files.len(), extension);
                 }
                 all_files.extend(files)
             },
             Err(e) => {
                 if verbose {
-                    eprintln!("   Warning: Failed to collect {} files: {}", extension, e);
+                    eprintln!("      ⚠️  Failed to collect .{} files: {}", extension, e);
                 }
             }
         }
@@ -414,50 +505,6 @@ fn collect_source_files(
     all_files.dedup();
 
     Ok(all_files)
-}
-
-fn collect_files_by_extension(
-    root: &Path,
-    current: &Path,
-    files: &mut Vec<PathBuf>,
-    euignore_path: Option<&Path>,
-    language: &Language,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if !current.is_dir() {
-        return Ok(());
-    }
-
-    // Create ignore filter if euignore exists
-    let ignore_filter = euignore_path.and_then(|p| {
-        if p.exists() {
-            Some(utils::ignore::IgnoreFilter::new(root))
-        } else {
-            None
-        }
-    });
-
-    for entry in fs::read_dir(current)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Check if path should be ignored
-        if let Some(filter) = &ignore_filter {
-            if filter.should_ignore(&path) {
-                continue;
-            }
-        }
-
-        if path.is_dir() {
-            collect_files_by_extension(root, &path, files, euignore_path, language)?;
-        } else if path.is_file() {
-            let detected_lang = Language::detect(&path);
-            if detected_lang == *language {
-                files.push(path);
-            }
-        }
-    }
-
-    Ok(())
 }
 
 fn parse_file(
