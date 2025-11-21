@@ -25,55 +25,32 @@ env_logger = "0.11"
 log = "0.4"
 
 # Tokenizers
-tokenizers = { version = "0.19", optional = true }
-
-# Candle dependencies (optional, enabled by default)
-candle-core = { git = "https://github.com/huggingface/candle", optional = true }
-candle-nn = { git = "https://github.com/huggingface/candle", optional = true }
-candle-transformers = { git = "https://github.com/huggingface/candle", optional = true }
+tokenizers = "0.19"
 
 # HuggingFace Hub for downloading models
-#hf-hub = { version = "0.3", default-features = false, features = ["ureq"], optional = true }
-hf-hub = { version = "0.4", default-features = false, features = ["ureq"], optional = true }
+hf-hub = { version = "0.4", default-features = false, features = ["ureq"] }
+
+# ONNX Runtime - Main inference backend
+ort = { version = "2.0.0-rc.10", default-features = false }
+
+# ndarray for tensor operations with ONNX
+ndarray = "0.16"
 
 [features]
-default = ["candle-cpu"]
+# Default: ONNX with CPU
+default = ["onnx-cpu"]
 
-# Candle backend with CPU only
-candle-cpu = [
-    "candle-core",
-    "candle-nn",
-    "candle-transformers",
-    "tokenizers",
-    "hf-hub"
-]
+# ONNX backends
+onnx-cpu = ["ort/download-binaries"]
+onnx-cuda = ["ort/download-binaries", "ort/cuda"]
+onnx-rocm = ["ort/download-binaries", "ort/rocm"]
+onnx-tensorrt = ["ort/download-binaries", "ort/tensorrt"]
 
-# CUDA support for NVIDIA GPUs
-cuda = [
-    "candle-core",
-    "candle-nn",
-    "candle-transformers",
-    "candle-core/cuda",
-    "candle-nn/cuda",
-    "tokenizers",
-    "hf-hub"
-]
-
-# ROCm support for AMD GPUs
-# Note: Candle uses 'cuda' feature name for both CUDA and ROCm
-# The actual backend is selected at runtime
-rocm = [
-    "candle-core",
-    "candle-nn",
-    "candle-transformers",
-    "candle-core/cuda",  # ROCm uses the cuda feature
-    "candle-nn/cuda",
-    "tokenizers",
-    "hf-hub"
-]
-
-# All GPU features (currently same as CUDA)
-gpu = ["cuda"]
+# Convenience aliases
+cpu = ["onnx-cpu"]
+cuda = ["onnx-cuda"]
+rocm = ["onnx-rocm"]
+gpu = ["onnx-cuda"]
 
 [dev-dependencies]
 criterion = "0.5"

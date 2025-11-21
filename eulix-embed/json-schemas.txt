@@ -1,0 +1,68 @@
+// context.json
+{
+  "metadata": {
+    "project_name": "my-python-project",
+    "total_chunks": 245,
+    "chunk_types": {
+      "function": 120,
+      "class": 35,
+      "method": 65,
+      "module": 15,
+      "comment": 10
+    },
+    "created_at": "2025-11-19T10:30:00Z",
+    "embedding_dimension": 768,
+    "languages": ["python", "javascript"],
+    "architecture_style": "layered"
+  },
+  "chunks": [
+    {
+      "id": "chunk_func_login_user",
+      "chunk_type": "function",
+      "content": "def login_user(username: str, password: str) -> dict:\n    \"\"\"Authenticate user and return session token\"\"\"\n    user = get_user(username)\n    if user and verify_password(password, user.password_hash):\n        session = create_session(user.id)\n        return {\"success\": true, \"token\": session.token}\n    return {\"success\": false, \"error\": \"Invalid credentials\"}",
+      "metadata": {
+        "file_path": "src/api/auth.py",
+        "language": "python",
+        "line_start": 15,
+        "line_end": 45,
+        "name": "login_user",
+        "complexity": 5,
+        "is_entry_point": true
+      },
+      "tags": ["authentication", "api", "entry-point", "security"],
+      "importance_score": 0.95
+    }
+  ],
+  "relationships": [
+    {
+      "from": "chunk_func_login_user",
+      "to": "chunk_func_hash_password",
+      "rel_type": "calls",
+      "conditional": false
+    }
+  ],
+  "tags": {
+    "authentication": [
+      "chunk_func_login_user",
+      "chunk_class_AuthManager",
+      "chunk_method_verify_token",
+      "chunk_func_create_session",
+      "chunk_module_auth"
+    ]
+  },
+  "call_graph_summary": {
+    "total_nodes": 180,
+    "total_edges": 425,
+    "entry_points_count": 12,
+    "max_depth": 8
+  },
+  "entry_points": [
+    {
+      "id": "entry_func_main",
+      "entry_type": "main",
+      "function_name": "main",
+      "file": "src/app.py",
+      "path": null
+    }
+  ]
+}

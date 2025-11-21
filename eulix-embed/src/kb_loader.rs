@@ -1,4 +1,3 @@
-// eulix_embed/src/kb_loader.rs
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -6,7 +5,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-/// Root structure matching the new JSON schema
+/// Root structure matching the JSON schema
 #[derive(Debug, Serialize, Deserialize)]
 pub struct KnowledgeBase {
     pub metadata: Metadata,
@@ -51,7 +50,7 @@ pub struct Import {
     pub module: String,
     pub items: Vec<String>,
     #[serde(rename = "type")]
-    pub import_type: String, // "external" | "internal"
+    pub import_type: String, 
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

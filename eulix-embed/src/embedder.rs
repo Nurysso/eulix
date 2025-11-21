@@ -4,17 +4,17 @@ use std::path::PathBuf;
 
 use crate::chunker::Chunk;
 use crate::context::VectorStore;
-use crate::candle_backend::{CandleBackend, DeviceType};
+use crate::onnx_backend::{OnnxBackend, DeviceType};
 
 /// Embedding backend types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingBackend {
-    /// Candle with CUDA (NVIDIA)
-    CandleCuda,
-    /// Candle with ROCm (AMD)
-    CandleRocm,
-    /// Candle with CPU
-    CandleCpu,
+    /// ONNX with CUDA (NVIDIA)
+    OnnxCuda,
+    /// ONNX with ROCm (AMD)
+    OnnxRocm,
+    /// ONNX with CPU
+    OnnxCpu,
     /// Dummy embeddings (testing only)
     Dummy,
 }
@@ -24,10 +24,10 @@ impl std::str::FromStr for EmbeddingBackend {
 
     fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
-            "candle-cuda" | "cuda" => Ok(Self::CandleCuda),
-            "candle-rocm" | "rocm" => Ok(Self::CandleRocm),
-            "candle-cpu" | "cpu" => Ok(Self::CandleCpu),
-            "candle" | "auto" => Ok(Self::auto_detect()),
+            "onnx-cuda" | "cuda" => Ok(Self::OnnxCuda),
+            "onnx-rocm" | "rocm" => Ok(Self::OnnxRocm),
+            "onnx-cpu" | "cpu" => Ok(Self::OnnxCpu),
+            "onnx" | "auto" => Ok(Self::auto_detect()),
             "dummy" | "test" => Ok(Self::Dummy),
             _ => Err(anyhow!("Unknown backend: {}. Options: auto, cuda, rocm, cpu, dummy", s)),
         }
@@ -37,35 +37,28 @@ impl std::str::FromStr for EmbeddingBackend {
 impl EmbeddingBackend {
     /// Auto-detect the best available backend
     pub fn auto_detect() -> Self {
-        println!("  🔍 Auto-detecting GPU backend...");
+        println!("  Auto-detecting GPU backend...");
 
         // Check for CUDA
-        #[cfg(feature = "cuda")]
-        {
-            if Self::is_cuda_available() {
-                println!("  ✓ NVIDIA GPU detected - using CUDA acceleration");
-                return Self::CandleCuda;
-            }
+        if Self::is_cuda_available() {
+            println!("  ✓ NVIDIA GPU detected - using CUDA acceleration");
+            return Self::OnnxCuda;
         }
 
         // Check for ROCm
-        #[cfg(feature = "rocm")]
-        {
-            if Self::is_rocm_available() {
-                println!("  ✓ AMD GPU detected - using ROCm acceleration");
-                return Self::CandleRocm;
-            }
+        if Self::is_rocm_available() {
+            println!("  ✓ AMD GPU detected - using ROCm acceleration");
+            return Self::OnnxRocm;
         }
 
         println!("  ℹ No GPU detected - using CPU backend");
         println!("    For faster embeddings, consider installing CUDA or ROCm");
-        Self::CandleCpu
+        Self::OnnxCpu
     }
 
-    #[cfg(feature = "cuda")]
     fn is_cuda_available() -> bool {
         // Check multiple indicators for CUDA availability
-        if std::env::var("CUDA_PATH").is_ok() {
+        if std::env::var("CUDA_PATH").is_ok() || std::env::var("CUDA_HOME").is_ok() {
             return true;
         }
 
@@ -75,6 +68,7 @@ impl EmbeddingBackend {
             "/usr/local/cuda-12",
             "/usr/local/cuda-11",
             "/opt/cuda",
+            "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA",
         ];
 
         for path in &cuda_paths {
@@ -91,15 +85,9 @@ impl EmbeddingBackend {
         false
     }
 
-    #[cfg(not(feature = "cuda"))]
-    fn is_cuda_available() -> bool {
-        false
-    }
-
-    #[cfg(feature = "rocm")]
     fn is_rocm_available() -> bool {
         // Check for ROCm installation
-        if std::env::var("ROCM_PATH").is_ok() {
+        if std::env::var("ROCM_PATH").is_ok() || std::env::var("ROCM_HOME").is_ok() {
             return true;
         }
 
@@ -124,16 +112,11 @@ impl EmbeddingBackend {
         false
     }
 
-    #[cfg(not(feature = "rocm"))]
-    fn is_rocm_available() -> bool {
-        false
-    }
-
     pub fn description(&self) -> &str {
         match self {
-            Self::CandleCuda => "Candle with CUDA (NVIDIA GPU)",
-            Self::CandleRocm => "Candle with ROCm (AMD GPU)",
-            Self::CandleCpu => "Candle with CPU",
+            Self::OnnxCuda => "ONNX Runtime with CUDA (NVIDIA GPU)",
+            Self::OnnxRocm => "ONNX Runtime with ROCm (AMD GPU)",
+            Self::OnnxCpu => "ONNX Runtime with CPU",
             Self::Dummy => "Dummy embeddings (testing)",
         }
     }
@@ -151,12 +134,20 @@ pub struct EmbedderConfig {
 
 impl Default for EmbedderConfig {
     fn default() -> Self {
+        let backend = EmbeddingBackend::auto_detect();
+        // Use larger batch size for GPU backends
+        let batch_size = match backend {
+            EmbeddingBackend::OnnxCuda | EmbeddingBackend::OnnxRocm => 128,
+            EmbeddingBackend::OnnxCpu => 32,
+            EmbeddingBackend::Dummy => 32,
+        };
+
         Self {
-            backend: EmbeddingBackend::auto_detect(),
+            backend,
             model_name: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
             model_path: None,
             dimension: 384,
-            batch_size: 32,
+            batch_size,
             normalize: true,
         }
     }
@@ -179,38 +170,20 @@ impl EmbeddingGenerator {
 
     /// Create with explicit configuration
     pub fn with_config(config: EmbedderConfig) -> Result<Self> {
-        println!("  🤖 Initializing embedding generator:");
+        println!("     Initializing embedding generator:");
         println!("     Backend: {}", config.backend.description());
         println!("     Model: {}", config.model_name);
         println!("     Dimension: {}", config.dimension);
 
         let backend_impl: Box<dyn EmbeddingBackendTrait + Send + Sync> = match config.backend {
-            EmbeddingBackend::CandleCuda => {
-                #[cfg(feature = "cuda")]
-                {
-                    Self::try_create_candle_backend(&config, DeviceType::Cuda)?
-                }
-                #[cfg(not(feature = "cuda"))]
-                {
-                    return Err(anyhow!(
-                        "CUDA support not compiled. Rebuild with: cargo build --features cuda"
-                    ));
-                }
+            EmbeddingBackend::OnnxCuda => {
+                Self::try_create_onnx_backend(&config, DeviceType::Cuda)?
             }
-            EmbeddingBackend::CandleRocm => {
-                #[cfg(feature = "rocm")]
-                {
-                    Self::try_create_candle_backend(&config, DeviceType::Rocm)?
-                }
-                #[cfg(not(feature = "rocm"))]
-                {
-                    return Err(anyhow!(
-                        "ROCm support not compiled. Rebuild with: cargo build --features rocm"
-                    ));
-                }
+            EmbeddingBackend::OnnxRocm => {
+                Self::try_create_onnx_backend(&config, DeviceType::Rocm)?
             }
-            EmbeddingBackend::CandleCpu => {
-                Self::try_create_candle_backend(&config, DeviceType::Cpu)?
+            EmbeddingBackend::OnnxCpu => {
+                Self::try_create_onnx_backend(&config, DeviceType::Cpu)?
             }
             EmbeddingBackend::Dummy => {
                 Box::new(DummyBackend::new(&config))
@@ -225,27 +198,28 @@ impl EmbeddingGenerator {
         })
     }
 
-    /// Try to create Candle backend with fallback to dummy
-    fn try_create_candle_backend(
+    /// Try to create ONNX backend with fallback to dummy
+    fn try_create_onnx_backend(
         config: &EmbedderConfig,
         device_type: DeviceType
     ) -> Result<Box<dyn EmbeddingBackendTrait + Send + Sync>> {
-        match CandleBackend::new(config, device_type) {
+        match OnnxBackend::new(config, device_type) {
             Ok(backend) => Ok(Box::new(backend)),
             Err(e) => {
-                eprintln!("\n:(  Failed to initialize Candle backend: {}", e);
+                eprintln!("\n:(  Failed to initialize ONNX backend: {}", e);
                 eprintln!("    Common issues:");
                 eprintln!("    - No internet connection for model download");
                 eprintln!("    - HuggingFace Hub API issues");
-                eprintln!("    - Missing model files");
+                eprintln!("    - Missing ONNX model files");
+                eprintln!("    - GPU driver issues");
                 eprintln!("\n    Solutions:");
                 eprintln!("    1. Check internet connection");
                 eprintln!("    2. Set HF_HOME environment variable");
-                eprintln!("    3. Download model manually and use --model-path");
-                eprintln!("    4. Use dummy backend: --backend dummy");
+                eprintln!("    3. Download ONNX model manually and use --model-path");
+                eprintln!("    4. Try CPU backend: --backend cpu");
+                eprintln!("    5. Use dummy backend: --backend dummy");
                 eprintln!("\n    Falling back to dummy embeddings for now...\n");
 
-                // Return dummy backend as fallback
                 Ok(Box::new(DummyBackend::new(config)))
             }
         }
@@ -255,10 +229,9 @@ impl EmbeddingGenerator {
         let total = chunks.len();
         let mut store = VectorStore::new();
 
-        println!("  📊 Processing {} chunks in batches...", total);
+        println!(" Processing {} chunks in batches...", total);
         let start = std::time::Instant::now();
 
-        // Process in batches for better performance
         let batch_size = self.config.batch_size;
 
         for (batch_idx, chunk_batch) in chunks.chunks(batch_size).enumerate() {
@@ -267,10 +240,11 @@ impl EmbeddingGenerator {
             if batch_start % 100 == 0 && batch_start > 0 {
                 let elapsed = start.elapsed().as_secs_f32();
                 let rate = batch_start as f32 / elapsed;
-                println!("     Progress: {}/{} ({:.1} chunks/sec)", batch_start, total, rate);
+                let eta = ((total - batch_start) as f32 / rate).round();
+                println!("     Progress: {}/{} ({:.1} chunks/sec, ETA: {:.0}s)",
+                         batch_start, total, rate, eta);
             }
 
-            // Process batch
             for chunk in chunk_batch {
                 let embedding = self.backend_impl
                     .generate_embedding(&chunk.content)
@@ -292,10 +266,9 @@ impl EmbeddingGenerator {
         let total = chunks.len();
         let mut store = VectorStore::new();
 
-        println!("  📊 Processing {} chunks in parallel...", total);
+        println!(" Processing {} chunks in parallel...", total);
         let start = std::time::Instant::now();
 
-        // Use rayon for parallel processing
         let results: Vec<(String, Vec<f32>)> = chunks
             .into_par_iter()
             .enumerate()
@@ -318,7 +291,6 @@ impl EmbeddingGenerator {
         println!("  ✓ Completed all embeddings in {:.2}s", elapsed.as_secs_f32());
         println!("     Average: {:.1} chunks/sec", total as f32 / elapsed.as_secs_f32());
 
-        // Add to store
         for (id, vector) in results {
             store.add(id, vector);
         }
@@ -334,7 +306,6 @@ impl EmbeddingGenerator {
         self.config.backend
     }
 
-    /// Get the model name used by this generator
     pub fn model_name(&self) -> &str {
         &self.config.model_name
     }
@@ -346,8 +317,7 @@ trait EmbeddingBackendTrait {
     fn dimension(&self) -> usize;
 }
 
-// Implement trait for CandleBackend
-impl EmbeddingBackendTrait for CandleBackend {
+impl EmbeddingBackendTrait for OnnxBackend {
     fn generate_embedding(&self, text: &str) -> Result<Vec<f32>> {
         self.generate_embedding(text)
     }
@@ -358,7 +328,6 @@ impl EmbeddingBackendTrait for CandleBackend {
 }
 
 // Dummy Backend (for testing)
-
 struct DummyBackend {
     dimension: usize,
     normalize: bool,
@@ -387,7 +356,6 @@ impl EmbeddingBackendTrait for DummyBackend {
 }
 
 // Helper Functions
-
 fn dummy_embedding(text: &str, dimension: usize, normalize: bool) -> Vec<f32> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -444,6 +412,6 @@ mod tests {
     #[test]
     fn test_backend_parsing() {
         assert!(matches!("dummy".parse::<EmbeddingBackend>().unwrap(), EmbeddingBackend::Dummy));
-        assert!(matches!("cpu".parse::<EmbeddingBackend>().unwrap(), EmbeddingBackend::CandleCpu));
+        assert!(matches!("cpu".parse::<EmbeddingBackend>().unwrap(), EmbeddingBackend::OnnxCpu));
     }
 }
