@@ -266,6 +266,7 @@ pub struct EmbeddingPipelineOutput {
     pub context_index: ContextIndex,
 }
 
+// Eulix currently usses query embedings from go code itself below code isnt used and havent been tested nor used anywhere
 pub struct QueryEngine {
     embedding_index: EmbeddingIndex,
     context_index: ContextIndex,
