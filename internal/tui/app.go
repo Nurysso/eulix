@@ -149,6 +149,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = msg.Width
 		m.viewport.Height = msg.Height - 5
 		m.input.Width = msg.Width - 4
+
+		// Re-render messages with new width
+		m.viewport.SetContent(m.renderMessages())
 	}
 
 	if !m.processing {
@@ -202,6 +205,7 @@ func (m Model) View() string {
 	// Help
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	b.WriteString(helpStyle.Render("Enter: Send • Esc/Ctrl+C: Quit"))
+	b.WriteString("\n")
 
 	return b.String()
 }
@@ -231,21 +235,83 @@ func (m Model) renderMessages() string {
 		Foreground(lipgloss.Color("196")).
 		Bold(true)
 
+	// Use viewport width for wrapping (subtract some padding)
+	wrapWidth := m.viewport.Width - 2
+	if wrapWidth < 40 {
+		wrapWidth = 40
+	}
+
 	for _, msg := range m.messages {
+		var prefix, content string
+		var style lipgloss.Style
+
 		switch msg.Role {
 		case "user":
-			b.WriteString(userStyle.Render("You: "))
-			b.WriteString(msg.Content)
+			prefix = "You: "
+			content = msg.Content
+			style = userStyle
 		case "assistant":
-			b.WriteString(assistantStyle.Render("Eulix: "))
-			b.WriteString(msg.Content)
+			prefix = "Eulix: "
+			content = msg.Content
+			style = assistantStyle
 		case "system":
-			b.WriteString(systemStyle.Render("ℹ " + msg.Content))
+			prefix = "ℹ "
+			content = msg.Content
+			style = systemStyle
 		case "error":
-			b.WriteString(errorStyle.Render("❌ " + msg.Content))
+			prefix = "✖ "
+			content = msg.Content
+			style = errorStyle
 		}
+
+		// Render prefix with style
+		b.WriteString(style.Render(prefix))
+
+		// Wrap content to viewport width
+		wrappedContent := wrapText(content, wrapWidth-len(prefix))
+		b.WriteString(wrappedContent)
 		b.WriteString("\n\n")
 	}
 
 	return b.String()
+}
+
+// wrapText wraps text to the specified width
+func wrapText(text string, width int) string {
+	if width <= 0 {
+		width = 80
+	}
+
+	var result strings.Builder
+	var currentLine strings.Builder
+	currentLength := 0
+
+	words := strings.Fields(text)
+	for i, word := range words {
+		wordLen := len(word)
+
+		// If adding this word would exceed width, start new line
+		if currentLength > 0 && currentLength+1+wordLen > width {
+			result.WriteString(currentLine.String())
+			result.WriteString("\n")
+			currentLine.Reset()
+			currentLength = 0
+		}
+
+		// Add space before word if not at line start
+		if currentLength > 0 {
+			currentLine.WriteString(" ")
+			currentLength++
+		}
+
+		currentLine.WriteString(word)
+		currentLength += wordLen
+
+		// If this is the last word, add the line
+		if i == len(words)-1 {
+			result.WriteString(currentLine.String())
+		}
+	}
+
+	return result.String()
 }

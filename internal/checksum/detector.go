@@ -7,6 +7,7 @@ import (
 	// "fmt"
 	"io"
 	"os"
+	// "os/exec"
 	"path/filepath"
 	"time"
 )
@@ -82,7 +83,7 @@ func (d *Detector) Calculate() (*Checksum, error) {
 		Hash:            projectHash,
 		FileHashes:      fileHashes,
 		LastAnalyzed:    time.Now(),
-		AnalysisVersion: "1.0.0",
+		AnalysisVersion: "0.5.3",
 	}, nil
 }
 

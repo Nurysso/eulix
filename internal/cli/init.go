@@ -3,17 +3,9 @@ package cli
 import (
 	"fmt"
 	"os"
-
-	"github.com/spf13/cobra"
 )
 
-var configCmd = &cobra.Command{
-	Use:   "config",
-	Short: "Manage eulix configuration",
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Configuration management coming soon!")
-	},
-}
+
 
 func initializeProject() error {
 	// Create .eulix directory
