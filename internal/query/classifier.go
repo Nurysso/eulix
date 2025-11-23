@@ -40,7 +40,7 @@ type SymbolIndex struct {
 	Symbols []string `json:"symbols"`
 }
 
-func NewClassifier(kbIndexPath string) (*Classifier, error) {
+func QuerySheriff(kbIndexPath string) (*Classifier, error) {
 	c := &Classifier{
 		locationPattern:        regexp.MustCompile(`(?i)^(where|find|show|locate)\s`),
 		usagePattern:          regexp.MustCompile(`(?i)(who|what).*(calls?|uses?|invokes?)`),

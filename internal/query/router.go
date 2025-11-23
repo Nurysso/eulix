@@ -18,17 +18,17 @@ type Router struct {
 	classifier     *Classifier
 	llmClient      *llm.Client
 	cache          *cache.Manager
-	contextBuilder *ContextBuilder
+	contextBuilder *ContextBuilder // Will be initialized lazily
 	kbIndex        *KBIndex
 	callGraph      *CallGraph
 }
 
 // KBIndex represents the parsed kb_index.json
 type KBIndex struct {
-	FunctionsByName map[string][]string            `json:"functions_by_name"`
-	FunctionsCalling map[string][]string           `json:"functions_calling"`
-	FunctionsByTag  map[string][]string            `json:"functions_by_tag"`
-	TypesByName     map[string][]string            `json:"types_by_name"`
+	FunctionsByName  map[string][]string `json:"functions_by_name"`
+	FunctionsCalling map[string][]string `json:"functions_calling"`
+	FunctionsByTag   map[string][]string `json:"functions_by_tag"`
+	TypesByName      map[string][]string `json:"types_by_name"`
 }
 
 // CallGraph represents the parsed kb_call_graph.json
@@ -38,25 +38,20 @@ type CallGraph struct {
 }
 
 type FunctionNode struct {
-	Name      string   `json:"name"`
-	Location  string   `json:"location"`
-	Calls     []string `json:"calls"`
-	CalledBy  []string `json:"called_by"`
+	Name     string   `json:"name"`
+	Location string   `json:"location"`
+	Calls    []string `json:"calls"`
+	CalledBy []string `json:"called_by"`
 }
 
 type TypeNode struct {
-	Name      string   `json:"name"`
-	Location  string   `json:"location"`
-	Methods   []string `json:"methods"`
+	Name     string   `json:"name"`
+	Location string   `json:"location"`
+	Methods  []string `json:"methods"`
 }
 
-// Update the NewRouter function in router.go
-func NewRouter(eulixDir string, cfg *config.Config, llmClient *llm.Client, cacheManager *cache.Manager) (*Router, error) {
-	contextBuilder, err := NewContextBuilder(eulixDir, cfg)
-	if err != nil {
-		return nil, err
-	}
-
+// QueryTrafficController creates router WITHOUT initializing embeddings
+func QueryTrafficController(eulixDir string, cfg *config.Config, llmClient *llm.Client, cacheManager *cache.Manager) (*Router, error) {
 	// Load KB index
 	kbIndex, err := loadKBIndex(eulixDir)
 	if err != nil {
@@ -71,7 +66,7 @@ func NewRouter(eulixDir string, cfg *config.Config, llmClient *llm.Client, cache
 
 	// Create classifier with KB index path for symbol validation
 	kbIndexPath := filepath.Join(eulixDir, "kb_index.json")
-	classifier, err := NewClassifier(kbIndexPath)
+	classifier, err := QuerySheriff(kbIndexPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create classifier: %w", err)
 	}
@@ -82,7 +77,7 @@ func NewRouter(eulixDir string, cfg *config.Config, llmClient *llm.Client, cache
 		classifier:     classifier,
 		llmClient:      llmClient,
 		cache:          cacheManager,
-		contextBuilder: contextBuilder,
+		contextBuilder: nil, // Lazy initialization
 		kbIndex:        kbIndex,
 		callGraph:      callGraph,
 	}, nil
@@ -118,6 +113,24 @@ func loadCallGraph(eulixDir string) (*CallGraph, error) {
 	return &graph, nil
 }
 
+// ensureContextBuilder initializes the context builder if not already done
+func (r *Router) ensureContextBuilder() error {
+	if r.contextBuilder != nil {
+		return nil // Already initialized
+	}
+
+	// fmt.Println("🔧 Initializing embeddings (first LLM query)...")
+
+	contextBuilder, err := ContextWindowCreator(r.eulixDir, r.config, r.llmClient)
+	if err != nil {
+		return fmt.Errorf("failed to initialize context builder: %w", err)
+	}
+
+	r.contextBuilder = contextBuilder
+	// fmt.Println("✅ Embeddings ready")
+	return nil
+}
+
 func (r *Router) Query(query string) (string, error) {
 	// Check cache first
 	if r.cache != nil {
@@ -139,12 +152,25 @@ func (r *Router) Query(query string) (string, error) {
 	case QueryTypeUsage:
 		response, err = r.handleUsage(query, classification)
 	case QueryTypeUnderstanding:
+		// Only NOW initialize embeddings when needed
+		if err := r.ensureContextBuilder(); err != nil {
+			return "", err
+		}
 		response, err = r.handleUnderstanding(query, classification)
 	case QueryTypeImplementation:
+		if err := r.ensureContextBuilder(); err != nil {
+			return "", err
+		}
 		response, err = r.handleImplementation(query, classification)
 	case QueryTypeArchitecture:
+		if err := r.ensureContextBuilder(); err != nil {
+			return "", err
+		}
 		response, err = r.handleArchitecture(query, classification)
 	default:
+		if err := r.ensureContextBuilder(); err != nil {
+			return "", err
+		}
 		response, err = r.handleUnderstanding(query, classification)
 	}
 
@@ -275,7 +301,7 @@ func (r *Router) handleUsage(query string, class *Classification) (string, error
 }
 
 func (r *Router) handleUnderstanding(query string, class *Classification) (string, error) {
-	// Build context window
+	// Build context window (this uses embeddings)
 	context, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -298,13 +324,21 @@ func (r *Router) handleArchitecture(query string, class *Classification) (string
 	return r.handleUnderstanding(query, class)
 }
 
+// Close cleans up resources
+func (r *Router) Close() error {
+	if r.contextBuilder != nil {
+		return r.contextBuilder.Close()
+	}
+	return nil
+}
+
 // extractEntityName extracts function/class name from natural language query
 func extractEntityName(query string) string {
 	// Create a lowercase version for comparison only
 	queryLower := strings.ToLower(query)
 
 	// Remove common question words by their positions
-	words := strings.Fields(query) // Keep original case
+	words := strings.Fields(query)       // Keep original case
 	wordsLower := strings.Fields(queryLower)
 
 	stopWords := map[string]bool{
@@ -330,7 +364,7 @@ func extractEntityName(query string) string {
 	return ""
 }
 
-// Update fuzzySearch to be case-insensitive for matching but preserve original names
+// fuzzySearch performs fuzzy matching on function/class names
 func (r *Router) fuzzySearch(entity string) []string {
 	entityLower := strings.ToLower(entity)
 	var matches []string
@@ -356,30 +390,3 @@ func (r *Router) fuzzySearch(entity string) []string {
 
 	return matches
 }
-
-// fuzzySearch performs fuzzy matching on function/class names
-// func (r *Router) fuzzySearch(entity string) []string {
-// 	entity = strings.ToLower(entity)
-// 	var matches []string
-
-// 	// Search in functions
-// 	for funcName := range r.kbIndex.FunctionsByName {
-// 		if strings.Contains(strings.ToLower(funcName), entity) {
-// 			matches = append(matches, funcName+" (function)")
-// 		}
-// 	}
-
-// 	// Search in types
-// 	for typeName := range r.kbIndex.TypesByName {
-// 		if strings.Contains(strings.ToLower(typeName), entity) {
-// 			matches = append(matches, typeName+" (type)")
-// 		}
-// 	}
-
-// 	// Limit to top 5 matches
-// 	if len(matches) > 5 {
-// 		matches = matches[:5]
-// 	}
-
-// 	return matches
-// }

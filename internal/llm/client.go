@@ -56,7 +56,8 @@ type OllamaResponse struct {
 	Done      bool    `json:"done"`
 }
 
-func NewClient(cfg *config.Config) (*Client, error) {
+// MouthClient cause thats what llm is used for to speak
+func MouthClient(cfg *config.Config) (*Client, error) {
 	return &Client{
 		config:     cfg,
 		httpClient: &http.Client{},

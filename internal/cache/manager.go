@@ -14,7 +14,7 @@ type Manager struct {
 	sqlDB       interface{} // Placeholder for SQL DB
 }
 
-func NewManager(cfg *config.Config) (*Manager, error) {
+func CacheController(cfg *config.Config) (*Manager, error) {
 	m := &Manager{
 		config: cfg,
 	}
