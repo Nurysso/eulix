@@ -12,28 +12,33 @@ import (
 
 	"eulix/internal/config"
 	"eulix/internal/embeddings"
+	"eulix/internal/llm"
 	"eulix/internal/types"
 )
 
 type ContextBuilder struct {
-	eulixDir     string
-	config       *config.Config
-	embedder     *embeddings.Embedder
-	embeddings   [][]float32
-	chunks       []Chunk
-	callGraph    map[string][]Relationship
-	hasCallGraph bool
-	kbData       *KBData
+	eulixDir      string
+	config        *config.Config
+	llmClient     *llm.Client
+	queryEmbedder *embeddings.QueryEmbedder
+	embeddings    [][]float32
+	chunks        []Chunk
+	callGraph     map[string][]Relationship
+	hasCallGraph  bool
+	hasEmbeddings bool
+	kbData        *EmbeddingsData
 }
 
 type Chunk struct {
 	ID         string
+	ChunkType  string
 	File       string
 	StartLine  int
 	EndLine    int
 	Content    string
 	Tokens     int
 	Symbols    []string
+	Name       string
 	Importance float64
 }
 
@@ -45,21 +50,34 @@ type Relationship struct {
 
 type ScoredChunk struct {
 	Chunk
-	Score    float64
-	Distance int
-	FromID   string
+	Score        float64
+	Distance     int
+	FromID       string
+	MatchType    string  // "exact", "symbol", "semantic", "keyword"
+	MatchDetails string  // What matched
 }
 
-type KBData struct {
-	Chunks []struct {
-		ID        string   `json:"id"`
-		File      string   `json:"file"`
-		StartLine int      `json:"start_line"`
-		EndLine   int      `json:"end_line"`
-		Content   string   `json:"content"`
-		Tokens    int      `json:"tokens"`
-		Symbols   []string `json:"symbols"`
-	} `json:"chunks"`
+type EmbeddingsData struct {
+	Model       string           `json:"model"`
+	Dimension   int              `json:"dimension"`
+	TotalChunks int              `json:"total_chunks"`
+	Embeddings  []EmbeddingChunk `json:"embeddings"`
+}
+
+type EmbeddingChunk struct {
+	ID        string   `json:"id"`
+	ChunkType string   `json:"chunk_type"`
+	Content   string   `json:"content"`
+	Metadata  Metadata `json:"metadata"`
+}
+
+type Metadata struct {
+	FilePath   string `json:"file_path"`
+	Language   string `json:"language"`
+	LineStart  int    `json:"line_start"`
+	LineEnd    int    `json:"line_end"`
+	Name       string `json:"name"`
+	Complexity int    `json:"complexity"`
 }
 
 type CallGraphData struct {
@@ -69,29 +87,29 @@ type CallGraphData struct {
 	} `json:"functions"`
 }
 
-func NewContextBuilder(eulixDir string, cfg *config.Config) (*ContextBuilder, error) {
-	// Initialize embedder for query embedding
-	embedder, err := embeddings.NewEmbedder(
-		cfg.Embeddings.Model,
-		cfg.Embeddings.Backend,
-		cfg.Embeddings.Dimension,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create embedder: %w", err)
-	}
-
+func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Client) (*ContextBuilder, error) {
 	cb := &ContextBuilder{
-		eulixDir: eulixDir,
-		config:   cfg,
-		embedder: embedder,
+		eulixDir:  eulixDir,
+		config:    cfg,
+		llmClient: llmClient,
 	}
 
-	// Load pre-computed embeddings from Rust binary
+	// Initialize query embedder
+	eulixBinaryPath := filepath.Join(eulixDir, "..", "eulix_embed")
+	cb.queryEmbedder = embeddings.VectorWeaver(
+		eulixBinaryPath,
+		cfg.Embeddings.Model,
+	)
+
+	// Load pre-computed KB embeddings
 	if err := cb.loadEmbeddings(); err != nil {
-		return nil, fmt.Errorf("failed to load embeddings: %w", err)
+		fmt.Printf("⚠️  Failed to load embeddings: %v\n", err)
+		cb.hasEmbeddings = false
+	} else {
+		cb.hasEmbeddings = true
 	}
 
-	// Load chunks
+	// Load chunks from embeddings.json
 	if err := cb.loadChunks(); err != nil {
 		return nil, fmt.Errorf("failed to load chunks: %w", err)
 	}
@@ -110,12 +128,10 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 		return err
 	}
 
-	// Binary format from Rust: [num_embeddings:u32][dimension:u32][float32...]
 	if len(data) < 8 {
 		return fmt.Errorf("invalid embeddings file: too short")
 	}
 
-	// Read header (little-endian)
 	numEmbeddings := binary.LittleEndian.Uint32(data[0:4])
 	dimension := binary.LittleEndian.Uint32(data[4:8])
 
@@ -123,7 +139,6 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 		return fmt.Errorf("dimension mismatch: expected %d, got %d", cb.config.Embeddings.Dimension, dimension)
 	}
 
-	// Read embeddings
 	cb.embeddings = make([][]float32, numEmbeddings)
 	offset := 8
 
@@ -141,34 +156,92 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 }
 
 func (cb *ContextBuilder) loadChunks() error {
-	kbPath := filepath.Join(cb.eulixDir, "kb.json")
-	data, err := os.ReadFile(kbPath)
+	embJsonPath := filepath.Join(cb.eulixDir, "embeddings.json")
+	data, err := os.ReadFile(embJsonPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read embeddings.json: %w", err)
 	}
 
-	var kbData KBData
-	if err := json.Unmarshal(data, &kbData); err != nil {
-		return err
+	var embData EmbeddingsData
+	if err := json.Unmarshal(data, &embData); err != nil {
+		return fmt.Errorf("failed to parse embeddings.json: %w", err)
 	}
 
-	cb.kbData = &kbData
-	cb.chunks = make([]Chunk, len(kbData.Chunks))
+	cb.kbData = &embData
+	cb.chunks = make([]Chunk, len(embData.Embeddings))
 
-	for i, kbChunk := range kbData.Chunks {
+	for i, embChunk := range embData.Embeddings {
+		symbols := extractSymbolsFromContent(embChunk.Content, embChunk.Metadata.Name)
+		tokens := len(embChunk.Content) / 4
+
 		cb.chunks[i] = Chunk{
-			ID:         kbChunk.ID,
-			File:       kbChunk.File,
-			StartLine:  kbChunk.StartLine,
-			EndLine:    kbChunk.EndLine,
-			Content:    kbChunk.Content,
-			Tokens:     kbChunk.Tokens,
-			Symbols:    kbChunk.Symbols,
-			Importance: 0.5,
+			ID:         embChunk.ID,
+			ChunkType:  embChunk.ChunkType,
+			File:       embChunk.Metadata.FilePath,
+			StartLine:  embChunk.Metadata.LineStart,
+			EndLine:    embChunk.Metadata.LineEnd,
+			Content:    embChunk.Content,
+			Tokens:     tokens,
+			Symbols:    symbols,
+			Name:       embChunk.Metadata.Name,
+			Importance: calculateImportance(embChunk.ChunkType, embChunk.Metadata.Complexity),
 		}
 	}
 
 	return nil
+}
+
+func extractSymbolsFromContent(content, name string) []string {
+	symbols := []string{}
+
+	if name != "" {
+		symbols = append(symbols, name)
+	}
+
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "- ") {
+			parts := strings.Split(line, " (")
+			if len(parts) >= 1 {
+				funcName := strings.TrimPrefix(parts[0], "- ")
+				funcName = strings.TrimSpace(funcName)
+				if funcName != "" && funcName != "..." {
+					symbols = append(symbols, funcName)
+				}
+			}
+		}
+	}
+
+	return symbols
+}
+
+func calculateImportance(chunkType string, complexity int) float64 {
+	baseScore := 0.5
+
+	switch chunkType {
+	case "function":
+		baseScore = 0.7
+	case "class":
+		baseScore = 0.8
+	case "method":
+		baseScore = 0.6
+	case "file":
+		baseScore = 0.4
+	}
+
+	if complexity > 5 {
+		baseScore += 0.1
+	}
+	if complexity > 10 {
+		baseScore += 0.1
+	}
+
+	if baseScore > 1.0 {
+		baseScore = 1.0
+	}
+
+	return baseScore
 }
 
 func (cb *ContextBuilder) loadCallGraph() {
@@ -213,7 +286,6 @@ func (cb *ContextBuilder) loadCallGraph() {
 }
 
 func (cb *ContextBuilder) BuildContext(query string) (*types.ContextWindow, error) {
-	// Calculate token budget
 	systemPromptTokens := 150
 	queryTokens := len(query) / 4
 	safetyBuffer := 200
@@ -222,21 +294,14 @@ func (cb *ContextBuilder) BuildContext(query string) (*types.ContextWindow, erro
 	available := cb.config.LLM.MaxTokens - queryTokens - systemPromptTokens - safetyBuffer - responseReserve
 	tokenBudget := int(float64(available) * 0.85)
 
-	// Embed query using ONNX
-	queryEmbedding, err := cb.embedQuery(query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to embed query: %w", err)
-	}
-
-	// Vector search against pre-computed embeddings
-	candidates := cb.vectorSearch(queryEmbedding, 100, 0.6)
+	candidates := cb.multiStrategySearch(query, 100)
 
 	var scored []ScoredChunk
 
 	if cb.hasCallGraph {
-		scored = cb.buildContextWithGraph(candidates, queryEmbedding, tokenBudget)
+		scored = cb.buildContextWithGraph(candidates, tokenBudget)
 	} else {
-		scored = cb.buildContextWithoutGraph(candidates, queryEmbedding, tokenBudget)
+		scored = cb.buildContextWithoutGraph(candidates, tokenBudget)
 	}
 
 	selected := cb.selectChunks(scored, tokenBudget)
@@ -244,8 +309,268 @@ func (cb *ContextBuilder) BuildContext(query string) (*types.ContextWindow, erro
 	return cb.assembleContext(selected), nil
 }
 
-func (cb *ContextBuilder) embedQuery(query string) ([]float32, error) {
-	return cb.embedder.Embed(query)
+// Multi-strategy search that combines exact match, keyword, and semantic search
+func (cb *ContextBuilder) multiStrategySearch(query string, topK int) []ScoredChunk {
+	allCandidates := make(map[string]ScoredChunk)
+
+	// Strategy 1: Exact symbol match (HIGHEST PRIORITY)
+	exactMatches := cb.exactSymbolSearch(query)
+	for _, match := range exactMatches {
+		match.MatchType = "exact"
+		allCandidates[match.ID] = match
+	}
+
+	// Strategy 2: Keyword search (HIGH PRIORITY)
+	keywordMatches := cb.keywordSearch(query, topK)
+	for _, match := range keywordMatches {
+		if existing, exists := allCandidates[match.ID]; exists {
+			// Boost score if found by multiple strategies
+			match.Score = math.Max(existing.Score, match.Score) + 2.0
+			match.MatchType = "exact+keyword"
+		} else {
+			match.MatchType = "keyword"
+		}
+		allCandidates[match.ID] = match
+	}
+
+	// Strategy 3: Semantic search (if embeddings available)
+	if cb.hasEmbeddings {
+		queryEmbedding, err := cb.queryEmbedder.EmbedQueryBinary(query)
+		if err == nil {
+			semanticMatches := cb.vectorSearch(queryEmbedding, topK, 0.5)
+			for _, match := range semanticMatches {
+				if existing, exists := allCandidates[match.ID]; exists {
+					// Combine scores
+					match.Score = existing.Score + match.Score*0.5
+					if existing.MatchType == "exact" {
+						match.MatchType = "exact+semantic"
+					} else {
+						match.MatchType = "keyword+semantic"
+					}
+				} else {
+					match.MatchType = "semantic"
+				}
+				allCandidates[match.ID] = match
+			}
+		}
+	}
+
+	// Convert map to slice
+	result := make([]ScoredChunk, 0, len(allCandidates))
+	for _, chunk := range allCandidates {
+		result = append(result, chunk)
+	}
+
+	// Sort by score (prioritize exact matches)
+	sort.Slice(result, func(i, j int) bool {
+		// Exact matches always come first
+		if result[i].MatchType == "exact" && result[j].MatchType != "exact" {
+			return true
+		}
+		if result[i].MatchType != "exact" && result[j].MatchType == "exact" {
+			return false
+		}
+		return result[i].Score > result[j].Score
+	})
+
+	if len(result) > topK {
+		result = result[:topK]
+	}
+
+	return result
+}
+
+// Exact symbol search for precise function/class lookups
+func (cb *ContextBuilder) exactSymbolSearch(query string) []ScoredChunk {
+	// queryLower := strings.ToLower(query)
+	potentialSymbols := extractPotentialSymbols(query)
+
+	scored := make([]ScoredChunk, 0)
+
+	for _, chunk := range cb.chunks {
+		nameLower := strings.ToLower(chunk.Name)
+
+		// Check for exact name match
+		for _, querySymbol := range potentialSymbols {
+			querySymbolLower := strings.ToLower(querySymbol)
+
+			if nameLower == querySymbolLower {
+				scored = append(scored, ScoredChunk{
+					Chunk:        chunk,
+					Score:        100.0, // Very high score for exact match
+					Distance:     0,
+					MatchDetails: fmt.Sprintf("Exact match: %s", chunk.Name),
+				})
+				break
+			}
+		}
+
+		// Check symbols
+		for _, symbol := range chunk.Symbols {
+			symbolLower := strings.ToLower(symbol)
+			for _, querySymbol := range potentialSymbols {
+				querySymbolLower := strings.ToLower(querySymbol)
+				if symbolLower == querySymbolLower {
+					scored = append(scored, ScoredChunk{
+						Chunk:        chunk,
+						Score:        90.0,
+						Distance:     0,
+						MatchDetails: fmt.Sprintf("Symbol match: %s", symbol),
+					})
+					break
+				}
+			}
+		}
+	}
+
+	return scored
+}
+
+func (cb *ContextBuilder) keywordSearch(query string, topK int) []ScoredChunk {
+	queryLower := strings.ToLower(query)
+	keywords := extractQueryKeywords(queryLower)
+	potentialSymbols := extractPotentialSymbols(query)
+
+	scored := make([]ScoredChunk, 0)
+
+	for _, chunk := range cb.chunks {
+		score := 0.0
+		contentLower := strings.ToLower(chunk.Content)
+		nameLower := strings.ToLower(chunk.Name)
+		matchDetails := []string{}
+
+		// PRIORITY 1: Name matches
+		for _, querySymbol := range potentialSymbols {
+			querySymbolLower := strings.ToLower(querySymbol)
+			if nameLower == querySymbolLower {
+				score += 20.0
+				matchDetails = append(matchDetails, fmt.Sprintf("name=%s", chunk.Name))
+				break
+			}
+			if strings.Contains(nameLower, querySymbolLower) {
+				score += 10.0
+				matchDetails = append(matchDetails, fmt.Sprintf("name~%s", querySymbol))
+			}
+		}
+
+		// PRIORITY 2: Symbol matches
+		for _, symbol := range chunk.Symbols {
+			symbolLower := strings.ToLower(symbol)
+
+			for _, querySymbol := range potentialSymbols {
+				querySymbolLower := strings.ToLower(querySymbol)
+
+				if symbolLower == querySymbolLower {
+					score += 15.0
+					matchDetails = append(matchDetails, fmt.Sprintf("symbol=%s", symbol))
+					break
+				}
+				if strings.Contains(symbolLower, querySymbolLower) {
+					score += 7.0
+				}
+			}
+
+			for _, keyword := range keywords {
+				if symbolLower == keyword {
+					score += 10.0
+				} else if strings.Contains(symbolLower, keyword) {
+					score += 5.0
+				}
+			}
+		}
+
+		// PRIORITY 3: Content keyword matches
+		for _, keyword := range keywords {
+			if strings.Contains(contentLower, keyword) {
+				score += 2.0
+				matchDetails = append(matchDetails, fmt.Sprintf("keyword=%s", keyword))
+			}
+		}
+
+		// PRIORITY 4: File name relevance
+		fileLower := strings.ToLower(chunk.File)
+		for _, keyword := range keywords {
+			if strings.Contains(fileLower, keyword) {
+				score += 1.0
+			}
+		}
+
+		// PRIORITY 5: Chunk type bonus
+		switch chunk.ChunkType {
+		case "function":
+			score += 1.0
+		case "class":
+			score += 0.8
+		case "method":
+			score += 0.6
+		}
+
+		if score > 0 {
+			scored = append(scored, ScoredChunk{
+				Chunk:        chunk,
+				Score:        score,
+				Distance:     0,
+				MatchDetails: strings.Join(matchDetails, ", "),
+			})
+		}
+	}
+
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].Score > scored[j].Score
+	})
+
+	if len(scored) > topK {
+		scored = scored[:topK]
+	}
+
+	return scored
+}
+
+func extractPotentialSymbols(query string) []string {
+	symbols := make([]string, 0)
+	words := strings.Fields(query)
+
+	for _, word := range words {
+		word = strings.Trim(word, ".,!?;:'\"()[]{}")
+
+		if len(word) > 2 {
+			// Add snake_case and CamelCase identifiers
+			if strings.Contains(word, "_") || hasUpperCase(word) {
+				symbols = append(symbols, word)
+			}
+
+			lowerWord := strings.ToLower(word)
+			// Common function prefixes
+			if strings.HasSuffix(lowerWord, "ed") ||
+				strings.HasPrefix(lowerWord, "get") ||
+				strings.HasPrefix(lowerWord, "set") ||
+				strings.HasPrefix(lowerWord, "create") ||
+				strings.HasPrefix(lowerWord, "delete") ||
+				strings.HasPrefix(lowerWord, "remove") ||
+				strings.HasPrefix(lowerWord, "update") ||
+				strings.HasPrefix(lowerWord, "handle") ||
+				strings.HasPrefix(lowerWord, "init") ||
+				strings.HasPrefix(lowerWord, "download") ||
+				strings.HasPrefix(lowerWord, "upload") ||
+				strings.HasPrefix(lowerWord, "process") ||
+				strings.HasPrefix(lowerWord, "add") ||
+				strings.HasPrefix(lowerWord, "build") ||
+				strings.HasPrefix(lowerWord, "setup") {
+				symbols = append(symbols, word)
+			}
+		}
+	}
+
+	return symbols
+}
+
+func hasUpperCase(s string) bool {
+	for _, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			return true
+		}
+	}
+	return false
 }
 
 func (cb *ContextBuilder) vectorSearch(queryEmb []float32, topK int, threshold float64) []ScoredChunk {
@@ -277,7 +602,7 @@ func (cb *ContextBuilder) vectorSearch(queryEmb []float32, topK int, threshold f
 	return scored
 }
 
-func (cb *ContextBuilder) buildContextWithGraph(candidates []ScoredChunk, queryEmb []float32, budget int) []ScoredChunk {
+func (cb *ContextBuilder) buildContextWithGraph(candidates []ScoredChunk, budget int) []ScoredChunk {
 	expanded := make(map[string]ScoredChunk)
 
 	for _, c := range candidates {
@@ -324,18 +649,6 @@ func (cb *ContextBuilder) buildContextWithGraph(candidates []ScoredChunk, queryE
 		}
 	}
 
-	for id, sc := range expanded {
-		fileBoost := 0.0
-		for i := 0; i < 5 && i < len(candidates); i++ {
-			if sc.File == candidates[i].File {
-				fileBoost += 0.3
-				break
-			}
-		}
-		sc.Score += fileBoost
-		expanded[id] = sc
-	}
-
 	result := make([]ScoredChunk, 0, len(expanded))
 	for _, sc := range expanded {
 		result = append(result, sc)
@@ -348,10 +661,9 @@ func (cb *ContextBuilder) buildContextWithGraph(candidates []ScoredChunk, queryE
 	return result
 }
 
-func (cb *ContextBuilder) buildContextWithoutGraph(candidates []ScoredChunk, queryEmb []float32, budget int) []ScoredChunk {
-	if len(candidates) < 200 {
-		moreCandidates := cb.vectorSearch(queryEmb, 200, 0.5)
-		candidates = moreCandidates
+func (cb *ContextBuilder) buildContextWithoutGraph(candidates []ScoredChunk, budget int) []ScoredChunk {
+	if len(candidates) < 20 {
+		return candidates
 	}
 
 	fileGroups := make(map[string][]ScoredChunk)
@@ -392,20 +704,6 @@ func (cb *ContextBuilder) buildContextWithoutGraph(candidates []ScoredChunk, que
 	for i := range candidates {
 		if _, exists := hotFileMap[candidates[i].File]; exists {
 			candidates[i].Score += 0.2
-
-			fileChunkCount := len(fileGroups[candidates[i].File])
-			if fileChunkCount >= 5 {
-				candidates[i].Score += 0.1
-			}
-		}
-
-		for _, hf := range hotFiles {
-			similarity := pathSimilarity(candidates[i].File, hf.file)
-			if similarity > 0.7 {
-				candidates[i].Score += 0.2
-			} else if similarity > 0.4 {
-				candidates[i].Score += 0.1
-			}
 		}
 	}
 
@@ -444,22 +742,6 @@ func (cb *ContextBuilder) selectChunks(scored []ScoredChunk, budget int) []Chunk
 		coveredFiles[sc.File] = true
 	}
 
-	if len(coveredFiles) < 3 && len(scored) > len(selected) {
-		for _, sc := range scored {
-			if len(coveredFiles) >= 3 {
-				break
-			}
-			if !coveredFiles[sc.File] {
-				chunkTokens := sc.Tokens + headerOverhead
-				if currentTokens+chunkTokens <= budget {
-					selected = append(selected, sc.Chunk)
-					currentTokens += chunkTokens
-					coveredFiles[sc.File] = true
-				}
-			}
-		}
-	}
-
 	return selected
 }
 
@@ -494,13 +776,45 @@ func (cb *ContextBuilder) assembleContext(chunks []Chunk) *types.ContextWindow {
 }
 
 func (cb *ContextBuilder) Close() error {
-	if cb.embedder != nil {
-		return cb.embedder.Close()
-	}
 	return nil
 }
 
 // Helper functions
+func extractQueryKeywords(queryLower string) []string {
+	stopWords := map[string]bool{
+		"how": true, "does": true, "the": true, "a": true, "an": true,
+		"is": true, "are": true, "what": true, "where": true, "when": true,
+		"can": true, "will": true, "should": true, "would": true, "could": true,
+		"this": true, "that": true, "these": true, "those": true, "of": true,
+		"in": true, "on": true, "at": true, "to": true, "for": true, "with": true,
+	}
+
+	words := strings.FieldsFunc(queryLower, func(r rune) bool {
+		return r == ' ' || r == ',' || r == '.' || r == '!' || r == '?' ||
+			r == ';' || r == ':' || r == '(' || r == ')' || r == '[' || r == ']'
+	})
+
+	keywords := make([]string, 0)
+
+	for _, word := range words {
+		word = strings.Trim(word, "\"'")
+
+		if len(word) > 2 && !stopWords[word] {
+			keywords = append(keywords, word)
+
+			if strings.Contains(word, "_") {
+				parts := strings.Split(word, "_")
+				for _, part := range parts {
+					if len(part) > 2 && !stopWords[part] {
+						keywords = append(keywords, part)
+					}
+				}
+			}
+		}
+	}
+
+	return keywords
+}
 
 func cosineSimilarity(a, b []float32) float64 {
 	if len(a) != len(b) {
@@ -571,50 +885,14 @@ func mergeChunks(a, b Chunk) Chunk {
 
 	return Chunk{
 		ID:         a.ID,
+		ChunkType:  a.ChunkType,
 		File:       a.File,
 		StartLine:  startLine,
 		EndLine:    endLine,
 		Content:    content,
 		Tokens:     a.Tokens + b.Tokens,
 		Symbols:    symbols,
+		Name:       a.Name,
 		Importance: math.Max(a.Importance, b.Importance),
 	}
-}
-
-func pathSimilarity(path1, path2 string) float64 {
-	parts1 := strings.Split(filepath.Clean(path1), string(filepath.Separator))
-	parts2 := strings.Split(filepath.Clean(path2), string(filepath.Separator))
-
-	if len(parts1) > 1 && len(parts2) > 1 {
-		dir1 := strings.Join(parts1[:len(parts1)-1], "/")
-		dir2 := strings.Join(parts2[:len(parts2)-1], "/")
-		if dir1 == dir2 {
-			return 1.0
-		}
-	}
-
-	commonParts := 0
-	minLen := len(parts1)
-	if len(parts2) < minLen {
-		minLen = len(parts2)
-	}
-
-	for i := 0; i < minLen; i++ {
-		if parts1[i] == parts2[i] {
-			commonParts++
-		} else {
-			break
-		}
-	}
-
-	if commonParts == 0 {
-		return 0.0
-	}
-
-	maxLen := len(parts1)
-	if len(parts2) > maxLen {
-		maxLen = len(parts2)
-	}
-
-	return float64(commonParts) / float64(maxLen)
 }

@@ -48,7 +48,7 @@ type queryResultMsg struct {
 	err    error
 }
 
-func NewModel(router *query.Router, cfg *config.Config) Model {
+func MainModel(router *query.Router, cfg *config.Config) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Ask a question about your codebase..."
 	ti.Focus()

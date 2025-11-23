@@ -93,7 +93,7 @@ func startChat() error {
 	}
 
 	// Validate checksum
-	detector := checksum.NewDetector(".")
+	detector := checksum.HashHound(".")
 	stored, err := detector.Load()
 	if err != nil {
 		printStatusMessage(
@@ -129,7 +129,7 @@ func startChat() error {
 	// Initialize cache
 	var cacheManager *cache.Manager
 	if cfg.Cache.Redis.Enabled {
-		cacheManager, err = cache.NewManager(cfg)
+		cacheManager, err = cache.CacheController(cfg)
 		if err != nil {
 			printStatusMessage(
 				"⚠️",
@@ -140,14 +140,14 @@ func startChat() error {
 	}
 
 	// Initialize LLM client
-	llmClient, err := llm.NewClient(cfg)
+	llmClient, err := llm.MouthClient(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize LLM: %w", err)
 	}
 
 	// Initialize query router (embeddings will be lazy-loaded)
 	fmt.Println("Initializing query system...")
-	router, err := query.NewRouter(eulixDir, cfg, llmClient, cacheManager)
+	router, err := query.QueryTrafficController(eulixDir, cfg, llmClient, cacheManager)
 	if err != nil {
 		return fmt.Errorf("failed to initialize query router: %w", err)
 	}
@@ -157,7 +157,7 @@ func startChat() error {
 	printSystemDiagnostics(eulixDir)
 
 	// Start TUI
-	model := tui.NewModel(router, cfg)
+	model := tui.MainModel(router, cfg)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI error: %w", err)

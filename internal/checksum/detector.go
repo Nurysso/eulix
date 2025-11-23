@@ -1,14 +1,14 @@
 package checksum
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	// "fmt"
 	"io"
 	"os"
-	// "os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -23,11 +23,79 @@ type Checksum struct {
 }
 
 type Detector struct {
-	projectPath string
+	projectPath   string
+	ignorePatterns []string
 }
 
-func NewDetector(projectPath string) *Detector {
-	return &Detector{projectPath: projectPath}
+func HashHound(projectPath string) *Detector {
+	d := &Detector{projectPath: projectPath}
+	d.loadIgnorePatterns()
+	return d
+}
+
+// loadIgnorePatterns reads .euignore file and loads patterns
+func (d *Detector) loadIgnorePatterns() {
+	ignorePath := filepath.Join(d.projectPath, ".euignore")
+	file, err := os.Open(ignorePath)
+	if err != nil {
+		// .euignore doesn't exist, that's okay
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		d.ignorePatterns = append(d.ignorePatterns, line)
+	}
+}
+
+// shouldIgnore checks if a path should be ignored
+func (d *Detector) shouldIgnore(path string) bool {
+	relPath, err := filepath.Rel(d.projectPath, path)
+	if err != nil {
+		return false
+	}
+
+	// Always ignore .eulix directory
+	if strings.HasPrefix(relPath, ".eulix") || strings.Contains(relPath, string(filepath.Separator)+".eulix") {
+		return true
+	}
+
+	// Check against ignore patterns
+	for _, pattern := range d.ignorePatterns {
+		matched, err := filepath.Match(pattern, relPath)
+		if err == nil && matched {
+			return true
+		}
+
+		// Also check if pattern matches any component of the path
+		pathParts := strings.Split(relPath, string(filepath.Separator))
+		for _, part := range pathParts {
+			matched, err := filepath.Match(pattern, part)
+			if err == nil && matched {
+				return true
+			}
+		}
+
+		// Check for prefix match (directory patterns)
+		if strings.HasSuffix(pattern, "/") {
+			if strings.HasPrefix(relPath, strings.TrimSuffix(pattern, "/")) {
+				return true
+			}
+		}
+
+		// Check for exact match or prefix match
+		if strings.HasPrefix(relPath, pattern) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (d *Detector) Calculate() (*Checksum, error) {
@@ -38,6 +106,14 @@ func (d *Detector) Calculate() (*Checksum, error) {
 	err := filepath.Walk(d.projectPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+
+		// Check if path should be ignored
+		if d.shouldIgnore(path) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 
 		// Skip directories and hidden files
@@ -88,11 +164,17 @@ func (d *Detector) Calculate() (*Checksum, error) {
 }
 
 func (d *Detector) Save(checksum *Checksum) error {
-	checksumPath := filepath.Join(d.projectPath, ".eulix", "checksum.json")
+	eulixDir := filepath.Join(d.projectPath, ".eulix")
+	if err := os.MkdirAll(eulixDir, 0755); err != nil {
+		return err
+	}
+
+	checksumPath := filepath.Join(eulixDir, "checksum.json")
 	data, err := json.MarshalIndent(checksum, "", "  ")
 	if err != nil {
 		return err
 	}
+
 	return os.WriteFile(checksumPath, data, 0644)
 }
 
@@ -152,8 +234,8 @@ func hashFile(path string) (string, int, error) {
 
 	h := sha256.New()
 	lines := 0
-
 	buf := make([]byte, 4096)
+
 	for {
 		n, err := f.Read(buf)
 		if err != nil && err != io.EOF {
@@ -182,11 +264,20 @@ func isSourceFile(ext string) bool {
 		".py":   true,
 		".js":   true,
 		".ts":   true,
+		".tsx":  true,
+		".jsx":  true,
 		".java": true,
 		".c":    true,
 		".cpp":  true,
 		".h":    true,
+		".hpp":  true,
 		".rs":   true,
+		".rb":   true,
+		".php":  true,
+		".cs":   true,
+		".swift": true,
+		".kt":   true,
+		".scala": true,
 	}
 	return sourceExts[ext]
 }

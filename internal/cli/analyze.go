@@ -24,7 +24,7 @@ func analyzeProject(projectPath string) error {
 
 	// Calculate checksum
 	// fmt.Println("Calculating checksum...")
-	detector := checksum.NewDetector(projectPath)
+	detector := checksum.HashHound(projectPath)
 	currentChecksum, err := detector.Calculate()
 	if err != nil {
 		return fmt.Errorf("checksum calculation failed: %w", err)
