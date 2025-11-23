@@ -266,31 +266,20 @@ pub struct EmbeddingPipelineOutput {
     pub context_index: ContextIndex,
 }
 
-// Eulix currently usses query embedings from go code itself below code isnt used and havent been tested nor used anywhere
-pub struct QueryEngine {
-    embedding_index: EmbeddingIndex,
-    context_index: ContextIndex,
+// Query embedding functionality
+pub struct QueryEmbedder {
     generator: EmbeddingGenerator,
 }
 
-impl QueryEngine {
-    pub fn load(output_dir: &Path, model_name: &str) -> Result<Self> {
-        println!("Loading query engine...");
-
-        let embedding_index = EmbeddingIndex::load(&output_dir.join("embeddings.json"))?;
-        let context_index = ContextIndex::load(&output_dir.join("context.json"))?;
+impl QueryEmbedder {
+    pub fn new(model_name: &str) -> Result<Self> {
         let generator = EmbeddingGenerator::new(model_name)?;
-
-        println!("  [OK] Query engine ready\n");
-
-        Ok(Self {
-            embedding_index,
-            context_index,
-            generator,
-        })
+        Ok(Self { generator })
     }
 
-    pub fn query(&self, query: &str, top_k: usize) -> Result<QueryResult> {
+    /// Generate embedding for a query string
+    /// Returns a vector of f32 values
+    pub fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
         // Create a temporary chunk for the query
         let query_chunk = Chunk {
             id: "query".to_string(),
@@ -308,52 +297,53 @@ impl QueryEngine {
             importance_score: 0.0,
         };
 
-        let query_embedding = self.generator.generate_vectors(vec![query_chunk])?;
+        let vector_store = self.generator.generate_vectors(vec![query_chunk])?;
 
-        let query_vec = query_embedding.get("query")
-            .context("Failed to get query embedding")?;
+        let embedding = vector_store.get("query")
+            .context("Failed to get query embedding")?
+            .clone();
 
-        let search_results = self.embedding_index.search(query_vec, top_k);
-
-        let chunk_ids: Vec<String> = search_results
-            .iter()
-            .map(|r| r.id.clone())
-            .collect();
-
-        let context = self.context_index.build_context_window(
-            &chunk_ids,
-            4000,
-            true,
-        );
-
-        Ok(QueryResult {
-            query: query.to_string(),
-            results: search_results,
-            context,
-        })
+        Ok(embedding)
     }
-}
 
-pub struct QueryResult {
-    pub query: String,
-    pub results: Vec<index::SearchResult>,
-    pub context: String,
+    pub fn dimension(&self) -> usize {
+        self.generator.dimension()
+    }
+
+    pub fn model_name(&self) -> &str {
+        self.generator.model_name()
+    }
 }
 
 fn print_help() {
     println!("Eulix Embed - Knowledge Base Embedding Generator\n");
     println!("USAGE:");
-    println!("    eulix_embed [OPTIONS]\n");
-    println!("OPTIONS:");
+    println!("    eulix_embed [COMMAND] [OPTIONS]\n");
+    println!("COMMANDS:");
+    println!("    embed              Generate embeddings for knowledge base (default)");
+    println!("    query              Generate embedding for a query string\n");
+    println!("EMBED OPTIONS:");
     println!("    -k, --kb-path <PATH>     Path to knowledge base JSON file");
     println!("    -o, --output <DIR>       Output directory for embeddings");
-    println!("    -m, --model <NAME>       HuggingFace model name or local path for embeddings");
-    println!("    -h, --help               Show this help message\n");
+    println!("    -m, --model <NAME>       HuggingFace model name or local path\n");
+    println!("QUERY OPTIONS:");
+    println!("    -q, --query <TEXT>       Query text to embed");
+    println!("    -m, --model <NAME>       HuggingFace model name or local path");
+    println!("    -f, --format <FORMAT>    Output format: json (default) or binary\n");
+    println!("GENERAL OPTIONS:");
+    println!("    -h, --help               Show this help message");
+    println!("    -v, --version            Show version\n");
     println!("SUPPORTED MODELS:");
-    println!("    - sentence-transformers/all-MiniLM-L6-v2 (fast, good for developement and testing)");
+    println!("    - sentence-transformers/all-MiniLM-L6-v2 (fast, good for development)");
     println!("    - BAAI/bge-small-en-v1.5 (better quality)");
-    println!("    - BAAI/bge-base-en-v1.5 (high  quality");
-    println!("    - sentence-transformers/all-mpnet-base-v2 (currently doesnt work)");
+    println!("    - BAAI/bge-base-en-v1.5 (high quality)\n");
+    println!("EXAMPLES:");
+    println!("    # Generate embeddings");
+    println!("    eulix_embed embed -k kb.json -o ./embeddings\n");
+    println!("    # Embed a query (JSON output)");
+    println!("    eulix_embed query -q \"how does login work\" -m BAAI/bge-small-en-v1.5\n");
+    println!("    # Embed a query (binary output)");
+    println!("    eulix_embed query -q \"authentication flow\" -f binary > query.bin");
 }
 
 fn main() -> Result<()> {
@@ -365,12 +355,128 @@ fn main() -> Result<()> {
         std::process::exit(0);
     }
 
+    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
+        println!("0.1.3");
+        std::process::exit(0);
+    }
+
+    // Determine command (default to "embed" for backward compatibility)
+    let command = if args.len() > 1 && !args[1].starts_with('-') {
+        args[1].as_str()
+    } else {
+        "embed"
+    };
+
+    match command {
+        "query" => run_query_command(&args),
+        "embed" => run_embed_command(&args),
+        _ => {
+            eprintln!("Error: Unknown command '{}'\n", command);
+            print_help();
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_query_command(args: &[String]) -> Result<()> {
+    let mut query = String::new();
+    let mut model = "sentence-transformers/all-MiniLM-L6-v2".to_string();
+    let mut format = "json".to_string();
+
+    // Parse arguments
+    let mut i = 2; // Skip program name and "query" command
+    while i < args.len() {
+        match args[i].as_str() {
+            "--query" | "-q" => {
+                if i + 1 < args.len() {
+                    query = args[i + 1].clone();
+                    i += 2;
+                } else {
+                    eprintln!("Error: {} requires a value\n", args[i]);
+                    print_help();
+                    std::process::exit(1);
+                }
+            }
+            "--model" | "-m" => {
+                if i + 1 < args.len() {
+                    model = args[i + 1].clone();
+                    i += 2;
+                } else {
+                    eprintln!("Error: {} requires a value\n", args[i]);
+                    print_help();
+                    std::process::exit(1);
+                }
+            }
+            "--format" | "-f" => {
+                if i + 1 < args.len() {
+                    format = args[i + 1].clone();
+                    i += 2;
+                } else {
+                    eprintln!("Error: {} requires a value\n", args[i]);
+                    print_help();
+                    std::process::exit(1);
+                }
+            }
+            _ => {
+                eprintln!("Error: Unknown argument '{}'\n", args[i]);
+                print_help();
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if query.is_empty() {
+        eprintln!("Error: --query is required\n");
+        print_help();
+        std::process::exit(1);
+    }
+
+    eprintln!("Initializing embedding model: {}", model);
+    let embedder = QueryEmbedder::new(&model)?;
+
+    eprintln!("Generating embedding for query...");
+    let embedding = embedder.embed_query(&query)?;
+
+    match format.as_str() {
+        "json" => {
+            let output = serde_json::json!({
+                "query": query,
+                "model": embedder.model_name(),
+                "dimension": embedder.dimension(),
+                "embedding": embedding,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+        "binary" => {
+            // Write dimension first (4 bytes)
+            let dim = embedding.len() as u32;
+            let dim_bytes = dim.to_le_bytes();
+            std::io::Write::write_all(&mut std::io::stdout(), &dim_bytes)?;
+
+            // Write each float32 (4 bytes each)
+            for value in embedding {
+                let bytes = value.to_le_bytes();
+                std::io::Write::write_all(&mut std::io::stdout(), &bytes)?;
+            }
+        }
+        _ => {
+            eprintln!("Error: Unknown format '{}'. Use 'json' or 'binary'\n", format);
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+fn run_embed_command(args: &[String]) -> Result<()> {
     let mut kb_path = "knowledge_base.json".to_string();
     let mut output_dir = "./embeddings".to_string();
     let mut model = "sentence-transformers/all-MiniLM-L6-v2".to_string();
 
-    // Parse arguments
-    let mut i = 1;
+    // Parse arguments (skip "embed" command if present)
+    let start_idx = if args.len() > 1 && args[1] == "embed" { 2 } else { 1 };
+    let mut i = start_idx;
+
     while i < args.len() {
         match args[i].as_str() {
             "--kb-path" | "-k" => {
@@ -403,14 +509,6 @@ fn main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
-            "--help" | "-h" => {
-                print_help();
-                std::process::exit(0);
-            }
-            "--version" | "-v" => {
-                println!("0.1.2");
-                std::process::exit(0);
-            }
             _ => {
                 eprintln!("Error: Unknown argument '{}'\n", args[i]);
                 print_help();
@@ -428,7 +526,6 @@ fn main() -> Result<()> {
     println!("{}", "-".repeat(70));
     println!("  KB Path:         {}", kb_path);
 
-    // Show absolute path for debugging
     let abs_path = std::fs::canonicalize(&kb_path)
         .unwrap_or_else(|_| Path::new(&kb_path).to_path_buf());
     println!("  Absolute Path:   {:?}", abs_path);
@@ -437,7 +534,6 @@ fn main() -> Result<()> {
     println!("  Model:           {}", model);
     println!();
 
-    // Check if KB file exists
     if !Path::new(&kb_path).exists() {
         println!("{}", "=".repeat(70));
         eprintln!("[ERROR] Knowledge base file not found: {}", kb_path);
