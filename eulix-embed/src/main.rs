@@ -370,6 +370,18 @@ fn main() -> Result<()> {
     match command {
         "query" => run_query_command(&args),
         "embed" => run_embed_command(&args),
+        "compare" => {
+    if args.len() < 4 {
+        eprintln!("Usage: {} compare <json_index.json> <index.bin>", args[0]);
+        std::process::exit(1);
+    }
+
+    let json_path = std::path::Path::new(&args[2]);
+    let bin_path  = std::path::Path::new(&args[3]);
+
+    compare_indices(json_path, bin_path)
+}
+
         _ => {
             eprintln!("Error: Unknown command '{}'\n", command);
             print_help();
@@ -377,7 +389,153 @@ fn main() -> Result<()> {
         }
     }
 }
+fn compare_indices(json_path: &Path, bin_path: &Path) -> Result<()> {
+    println!("Comparing index files...\n");
 
+    // Check files exist
+    if !json_path.exists() {
+        anyhow::bail!("JSON file not found: {}", json_path.display());
+    }
+    if !bin_path.exists() {
+        anyhow::bail!("Binary file not found: {}", bin_path.display());
+    }
+
+    // Load JSON
+    println!("Loading JSON: {}", json_path.display());
+    let json_index = EmbeddingIndex::load(json_path)?;
+    println!("✓ Loaded {} embeddings\n", json_index.total_chunks);
+
+    // Load Binary
+    println!("Loading Binary: {}", bin_path.display());
+    let bin_index = EmbeddingIndex::load_binary(bin_path)?;
+    println!("✓ Loaded {} embeddings\n", bin_index.total_chunks);
+
+    println!("{:=<70}", "");
+    println!("{:^70}", "COMPARISON RESULTS");
+    println!("{:=<70}\n", "");
+
+    // Compare metadata
+    let mut issues = Vec::new();
+
+    println!("Model:");
+    println!("  JSON:   '{}'", json_index.model);
+    println!("  Binary: '{}'", bin_index.model);
+    if json_index.model == bin_index.model {
+        println!("✓ Match\n");
+    } else {
+        println!("x MISMATCH!\n");
+        issues.push("Model names don't match");
+    }
+
+    println!("Dimension:");
+    println!("  JSON:   {}", json_index.dimension);
+    println!("  Binary: {}", bin_index.dimension);
+    if json_index.dimension == bin_index.dimension {
+        println!("✓ Match\n");
+    } else {
+        println!("x CRITICAL MISMATCH!\n");
+        issues.push("Dimensions don't match - this is a critical error!");
+    }
+
+    println!("Total Chunks:");
+    println!("  JSON:   {}", json_index.total_chunks);
+    println!("  Binary: {}", bin_index.total_chunks);
+    if json_index.total_chunks == bin_index.total_chunks {
+        println!("✓ Match\n");
+    } else {
+        println!("x MISMATCH!\n");
+        issues.push("Different number of embeddings");
+    }
+
+    // Compare first embedding if both exist
+    if !json_index.embeddings.is_empty() && !bin_index.embeddings.is_empty() {
+        println!("{:-<70}", "");
+        println!("First Embedding Comparison:\n");
+
+        let json_first = &json_index.embeddings[0];
+        let bin_first = &bin_index.embeddings[0];
+
+        println!("  ID:");
+        println!("    JSON:   '{}'", json_first.id);
+        println!("    Binary: '{}'", bin_first.id);
+
+        println!("\n  Vector Dimensions:");
+        println!("    JSON:   {} values", json_first.embedding.len());
+        println!("    Binary: {} values", bin_first.embedding.len());
+
+        if json_first.embedding.len() == bin_first.embedding.len() {
+            println!("    ✓ Same length");
+
+            // Show first 5 and last 5 values
+            println!("\n  First 5 values:");
+            println!("    {:>10} {:>15} {:>15} {:>10}", "Index", "JSON", "Binary", "Diff");
+            println!("    {:-<10} {:-<15} {:-<15} {:-<10}", "", "", "", "");
+
+            for i in 0..5.min(json_first.embedding.len()) {
+                let j = json_first.embedding[i];
+                let b = bin_first.embedding[i];
+                let diff = (j - b).abs();
+                println!("    {:>10} {:>15.6} {:>15.6} {:>10.2e}", i, j, b, diff);
+            }
+
+            if json_first.embedding.len() > 10 {
+                println!("    ...");
+                println!("\n  Last 5 values:");
+                println!("    {:>10} {:>15} {:>15} {:>10}", "Index", "JSON", "Binary", "Diff");
+                println!("    {:-<10} {:-<15} {:-<15} {:-<10}", "", "", "", "");
+
+                let len = json_first.embedding.len();
+                for i in (len - 5)..len {
+                    let j = json_first.embedding[i];
+                    let b = bin_first.embedding[i];
+                    let diff = (j - b).abs();
+                    println!("    {:>10} {:>15.6} {:>15.6} {:>10.2e}", i, j, b, diff);
+                }
+            }
+
+            // Check if vectors match
+            let max_diff = json_first.embedding.iter()
+                .zip(bin_first.embedding.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, |a, b| a.max(b));
+
+            println!("\n  Maximum difference: {:.2e}", max_diff);
+
+            if max_diff < 1e-6 {
+                println!("✓ Vectors match (within tolerance)\n");
+            } else {
+                println!("x Vectors don't match!\n");
+                issues.push("Embedding values are different");
+            }
+        } else {
+            println!("x Different lengths!\n");
+            issues.push("First embedding has different dimensions");
+        }
+    }
+
+    println!("{:=<70}\n", "");
+
+    // Summary
+    if issues.is_empty() {
+        println!("✓ SUCCESS: All checks passed!");
+        println!("\nBoth index files are consistent and can be used interchangeably.");
+    } else {
+        println!("x ISSUES FOUND:\n");
+        for (i, issue) in issues.iter().enumerate() {
+            println!("  {}. {}", i + 1, issue);
+        }
+
+        println!("\n RECOMMENDED FIX:");
+        println!("   1. Delete the corrupted binary file:");
+        println!("      rm {}", bin_path.display());
+        println!("   2. The binary will be regenerated from JSON on next load");
+        println!("   3. Or regenerate both files fresh from your source data");
+
+        anyhow::bail!("Index files are inconsistent");
+    }
+
+    Ok(())
+}
 fn run_query_command(args: &[String]) -> Result<()> {
     let mut query = String::new();
     let mut model = "sentence-transformers/all-MiniLM-L6-v2".to_string();
