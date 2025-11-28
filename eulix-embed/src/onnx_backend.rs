@@ -6,6 +6,7 @@ use ort::value::Value;
 use tokenizers::Tokenizer;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};  // ADD THIS
 
 use crate::embedder::EmbedderConfig;
 
@@ -18,72 +19,66 @@ pub enum DeviceType {
 
 #[derive(Debug, Clone, Copy)]
 enum ModelType {
-    Bert,      // Uses last_hidden_state, requires token_type_ids
-    Sentence,  // Uses token_embeddings, requires token_type_ids
-    MPNet,     // Uses last_hidden_state, NO token_type_ids
+    Bert,
+    Sentence,
+    MPNet,
 }
 
 pub struct OnnxBackend {
     session: Mutex<Session>,
     tokenizer: Tokenizer,
-    dimension: usize,
+    dimension: AtomicUsize,  // CHANGED: was usize, now AtomicUsize
     normalize: bool,
     model_type: ModelType,
 }
 
 impl OnnxBackend {
     pub fn new(config: &EmbedderConfig, device_type: DeviceType) -> Result<Self> {
-        println!("     Loading ONNX model (this may take a moment)...");
+        println!("     Loading ONNX model...");
 
-        // Detect model type from model name
         let model_type = Self::detect_model_type(&config.model_name);
         println!("     Detected model type: {:?}", model_type);
 
-        // Auto-detect dimension if not explicitly set or if it seems wrong
-        let dimension = if config.dimension == 384 {
-            let detected_dim = Self::detect_dimension(&config.model_name);
-            if detected_dim != 384 {
-                println!("     Auto-detected dimension: {} (overriding config: {})", detected_dim, config.dimension);
-                detected_dim
-            } else {
-                config.dimension
-            }
-        } else {
-            config.dimension
-        };
+        // Start with config dimension, but we'll update it on first inference
+        let dimension = config.dimension;
+        println!("     Initial dimension (from config): {}", dimension);
 
-        // Download model first
         let model_path = Self::download_model(&config.model_name)?;
-
-        // Read model file into memory
         let model_bytes = std::fs::read(&model_path)
             .map_err(|e| anyhow!("Failed to read model file: {}", e))?;
 
         println!("     Configuring execution providers for {:?}...", device_type);
 
-        // Configure execution provider based on device type
         let session = match device_type {
             DeviceType::Cuda => {
                 println!("     Initializing CUDA execution provider...");
-                println!("     Note: First run may be slow due to kernel compilation");
                 Session::builder()
                     .map_err(|e| anyhow!("Failed to create session builder: {:?}", e))?
                     .with_optimization_level(GraphOptimizationLevel::Level3)
                     .map_err(|e| anyhow!("Failed to set optimization level: {:?}", e))?
                     .with_intra_threads(4)
                     .map_err(|e| anyhow!("Failed to set intra threads: {:?}", e))?
+                    .with_execution_providers([
+                        ort::execution_providers::CUDAExecutionProvider::default()
+                            .build()
+                    ])
+                    .map_err(|e| anyhow!("Failed to set CUDA execution provider: {:?}", e))?
                     .commit_from_memory(&model_bytes)
                     .map_err(|e| anyhow!("Failed to load model: {:?}", e))?
             }
             DeviceType::Rocm => {
                 println!("     Initializing ROCm execution provider...");
-                println!("     Note: First run may be slow due to kernel compilation");
                 Session::builder()
                     .map_err(|e| anyhow!("Failed to create session builder: {:?}", e))?
                     .with_optimization_level(GraphOptimizationLevel::Level3)
                     .map_err(|e| anyhow!("Failed to set optimization level: {:?}", e))?
                     .with_intra_threads(4)
                     .map_err(|e| anyhow!("Failed to set intra threads: {:?}", e))?
+                    .with_execution_providers([
+                        ort::execution_providers::ROCmExecutionProvider::default()
+                            .build()
+                    ])
+                    .map_err(|e| anyhow!("Failed to set ROCm execution provider: {:?}", e))?
                     .commit_from_memory(&model_bytes)
                     .map_err(|e| anyhow!("Failed to load model: {:?}", e))?
             }
@@ -93,7 +88,7 @@ impl OnnxBackend {
                     .map_err(|e| anyhow!("Failed to create session builder: {:?}", e))?
                     .with_optimization_level(GraphOptimizationLevel::Level3)
                     .map_err(|e| anyhow!("Failed to set optimization level: {:?}", e))?
-                    .with_intra_threads(4)
+                    .with_intra_threads(num_cpus::get())
                     .map_err(|e| anyhow!("Failed to set intra threads: {:?}", e))?
                     .commit_from_memory(&model_bytes)
                     .map_err(|e| anyhow!("Failed to load model: {:?}", e))?
@@ -102,7 +97,6 @@ impl OnnxBackend {
 
         println!("     Device initialized: {:?}", device_type);
 
-        // Load tokenizer
         let tokenizer_path = if let Some(ref local_path) = config.model_path {
             println!("     Using local tokenizer from: {:?}", local_path);
             local_path.join("tokenizer.json")
@@ -120,12 +114,12 @@ impl OnnxBackend {
         let tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|e| anyhow!("Failed to load tokenizer: {}", e))?;
 
-        println!("     ✓ ONNX model loaded successfully!");
+        println!("     ONNX model loaded successfully!");
 
         Ok(Self {
             session: Mutex::new(session),
             tokenizer,
-            dimension,
+            dimension: AtomicUsize::new(dimension),  // CHANGED: wrap in AtomicUsize
             normalize: config.normalize,
             model_type,
         })
@@ -139,22 +133,7 @@ impl OnnxBackend {
         } else if name_lower.contains("minilm") || name_lower.contains("all-minilm") {
             ModelType::Sentence
         } else {
-            // Default to BERT-style (BGE models, etc.)
             ModelType::Bert
-        }
-    }
-
-    fn detect_dimension(model_name: &str) -> usize {
-        let name_lower = model_name.to_lowercase();
-
-        // Explicitly check for known base/large models (768d)
-        if name_lower.contains("base") || name_lower.contains("mpnet") {
-            768
-        } else if name_lower.contains("large") {
-            1024
-        } else {
-            // Default to 384 for small models
-            384
         }
     }
 
@@ -166,17 +145,15 @@ impl OnnxBackend {
 
         let repo_api = api.model(model_name.to_string());
 
-        // Try to get ONNX model
         let model_path = repo_api.get("onnx/model.onnx")
             .or_else(|_| repo_api.get("model.onnx"))
             .map_err(|e| anyhow!("Failed to download ONNX model: {}. Make sure the model has an ONNX version available.", e))?;
 
-        println!("     ✓ Model downloaded successfully");
+        println!("     Model downloaded successfully");
         Ok(model_path)
     }
 
     pub fn generate_embedding(&self, text: &str) -> Result<Vec<f32>> {
-        // Tokenize with truncation
         const MAX_TOKENS: usize = 512;
 
         let encoding = self
@@ -188,7 +165,6 @@ impl OnnxBackend {
         let mut attention_mask = encoding.get_attention_mask().to_vec();
         let mut token_type_ids = encoding.get_type_ids().to_vec();
 
-        // Truncate if necessary
         if input_ids.len() > MAX_TOKENS {
             input_ids.truncate(MAX_TOKENS);
             attention_mask.truncate(MAX_TOKENS);
@@ -197,25 +173,21 @@ impl OnnxBackend {
 
         let seq_len = input_ids.len();
 
-        // Convert to i64 for ONNX
         let input_ids_i64: Vec<i64> = input_ids.iter().map(|&x| x as i64).collect();
         let attention_mask_i64: Vec<i64> = attention_mask.iter().map(|&x| x as i64).collect();
         let token_type_ids_i64: Vec<i64> = token_type_ids.iter().map(|&x| x as i64).collect();
 
-        // Create ONNX tensors
         let input_ids_value = Value::from_array(([1, seq_len], input_ids_i64))
             .map_err(|e| anyhow!("Failed to create input_ids tensor: {:?}", e))?;
 
         let attention_mask_value = Value::from_array(([1, seq_len], attention_mask_i64))
             .map_err(|e| anyhow!("Failed to create attention_mask tensor: {:?}", e))?;
 
-        // Run inference based on model type
         let mut session_guard = self.session.lock()
             .map_err(|e| anyhow!("Failed to lock session: {}", e))?;
 
         let outputs = match self.model_type {
             ModelType::MPNet => {
-                // MPNet doesn't use token_type_ids
                 let inputs = ort::inputs![
                     "input_ids" => input_ids_value,
                     "attention_mask" => attention_mask_value,
@@ -224,7 +196,6 @@ impl OnnxBackend {
                     .map_err(|e| anyhow!("Failed to run inference: {:?}", e))?
             }
             ModelType::Bert | ModelType::Sentence => {
-                // BERT and Sentence models use token_type_ids
                 let token_type_ids_value = Value::from_array(([1, seq_len], token_type_ids_i64))
                     .map_err(|e| anyhow!("Failed to create token_type_ids tensor: {:?}", e))?;
 
@@ -238,17 +209,14 @@ impl OnnxBackend {
             }
         };
 
-        // Extract embeddings based on model type
         let output_name = match self.model_type {
             ModelType::Sentence => "token_embeddings",
             ModelType::Bert | ModelType::MPNet => "last_hidden_state",
         };
 
-        // Try to extract the output
         let (output_shape, embeddings_data) = outputs
             .get(output_name)
             .ok_or_else(|| {
-                // List available outputs for debugging
                 let available: Vec<String> = outputs
                     .iter()
                     .map(|(name, _)| name.to_string())
@@ -262,8 +230,7 @@ impl OnnxBackend {
             .try_extract_tensor::<f32>()
             .map_err(|e| anyhow!("Failed to extract embeddings from '{}': {:?}", output_name, e))?;
 
-        // The output shape should be [batch_size, seq_len, hidden_dim]
-        // Parse the actual dimension from output shape
+        // CRITICAL FIX: Get actual dimension from model output
         let actual_hidden_dim = if output_shape.len() == 3 {
             output_shape[2] as usize
         } else {
@@ -273,61 +240,52 @@ impl OnnxBackend {
             ));
         };
 
-        // Update dimension if different from expected
-        let working_dimension = if actual_hidden_dim != self.dimension {
+        // CRITICAL FIX: Update stored dimension if this is the first time we see the real value
+        let stored_dim = self.dimension.load(Ordering::Relaxed);
+        if actual_hidden_dim != stored_dim {
             println!(
-                "     Note: Model outputs {}d embeddings (expected {}d), using actual dimension",
-                actual_hidden_dim, self.dimension
+                "     ✓ Actual model dimension: {}d (config estimated: {}d)",
+                actual_hidden_dim, stored_dim
             );
-            actual_hidden_dim
-        } else {
-            self.dimension
-        };
+            self.dimension.store(actual_hidden_dim, Ordering::Relaxed);
+        }
 
-        // batch_size = 1, so total elements = seq_len * hidden_dim
-        let expected_elements = seq_len * working_dimension;
+        let expected_elements = seq_len * actual_hidden_dim;
 
         if embeddings_data.len() != expected_elements {
             return Err(anyhow!(
                 "Unexpected embedding shape. Expected {} elements ({}x{}), got {}. Output shape: {:?}",
                 expected_elements,
                 seq_len,
-                working_dimension,
+                actual_hidden_dim,
                 embeddings_data.len(),
                 output_shape
             ));
         }
 
-        // Convert to ndarray for processing
-        let embeddings = Array2::from_shape_vec((seq_len, working_dimension), embeddings_data.to_vec())
+        let embeddings = Array2::from_shape_vec((seq_len, actual_hidden_dim), embeddings_data.to_vec())
             .map_err(|e| anyhow!("Failed to reshape embeddings: {}", e))?;
 
-        // Mean pooling with attention mask
         let attention_mask_f32: Vec<f32> = attention_mask.iter().map(|&x| x as f32).collect();
         let attention_mask_array = Array2::from_shape_vec((seq_len, 1), attention_mask_f32)
             .map_err(|e| anyhow!("Failed to create attention mask array: {}", e))?;
 
-        // Broadcast attention mask to match embeddings shape
         let attention_expanded = attention_mask_array
-            .broadcast((seq_len, working_dimension))
+            .broadcast((seq_len, actual_hidden_dim))
             .ok_or_else(|| anyhow!("Failed to broadcast attention mask"))?;
 
-        // Apply attention mask and compute mean
         let masked_embeddings = &embeddings * &attention_expanded;
         let sum_embeddings = masked_embeddings.sum_axis(Axis(0));
         let sum_mask = attention_expanded.sum_axis(Axis(0));
 
-        // Compute mean embedding
         let mut embedding: Vec<f32> = sum_embeddings
             .iter()
             .zip(sum_mask.iter())
             .map(|(sum, mask)| if *mask > 0.0 { sum / mask } else { 0.0 })
             .collect();
 
-        // Note: We don't truncate anymore since we're using the actual dimension
-        assert_eq!(embedding.len(), working_dimension, "Embedding size mismatch");
+        assert_eq!(embedding.len(), actual_hidden_dim, "Embedding size mismatch");
 
-        // Normalize if requested
         if self.normalize {
             Self::normalize_vector(&mut embedding);
         }
@@ -343,6 +301,6 @@ impl OnnxBackend {
     }
 
     pub fn dimension(&self) -> usize {
-        self.dimension
+        self.dimension.load(Ordering::Relaxed)  // CHANGED: load from atomic
     }
 }

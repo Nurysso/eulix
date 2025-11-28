@@ -35,6 +35,7 @@ ort = { version = "2.0.0-rc.10", default-features = false }
 
 # ndarray for tensor operations with ONNX
 ndarray = "0.16"
+num_cpus = "1.17.0"
 
 [features]
 # Default: ONNX with CPU

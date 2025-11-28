@@ -59,110 +59,93 @@ impl EmbeddingIndex {
 
     /// Save embeddings to binary format (more efficient)
     pub fn save_binary(&self, path: &Path) -> Result<()> {
-        use std::io::Write;
+    use std::io::Write;
 
-        let mut file = File::create(path)?;
+    let mut file = File::create(path)?;
 
-        // Header: version(u32) + model_len(u32) + model(str) + dimension(u32) + count(u64)
-        let version: u32 = 1;
-        file.write_all(&version.to_le_bytes())?;
+    // Write magic bytes "EULX"
+    file.write_all(b"EULX")?;
 
-        let model_bytes = self.model.as_bytes();
-        file.write_all(&(model_bytes.len() as u32).to_le_bytes())?;
-        file.write_all(model_bytes)?;
+    // Write version (must be 2 to match Go's BinaryVersion)
+    let version: u32 = 2;
+    file.write_all(&version.to_le_bytes())?;
 
-        file.write_all(&(self.dimension as u32).to_le_bytes())?;
-        file.write_all(&(self.embeddings.len() as u64).to_le_bytes())?;
+    // Write count and dimension (both u32)
+    file.write_all(&(self.embeddings.len() as u32).to_le_bytes())?;
+    file.write_all(&(self.dimension as u32).to_le_bytes())?;
 
-        // Write each entry
-        for entry in &self.embeddings {
-            // ID
-            let id_bytes = entry.id.as_bytes();
-            file.write_all(&(id_bytes.len() as u32).to_le_bytes())?;
-            file.write_all(id_bytes)?;
-
-            // Embedding vector
-            for &value in &entry.embedding {
-                file.write_all(&value.to_le_bytes())?;
-            }
+    // Write embeddings only (no IDs, no metadata - just vectors)
+    for entry in &self.embeddings {
+        for &value in &entry.embedding {
+            file.write_all(&value.to_le_bytes())?;
         }
-
-        Ok(())
     }
 
-    /// Load from binary format
-    pub fn load_binary(path: &Path) -> Result<Self> {
-        use std::io::Read;
+    Ok(())
+}
 
-        let mut file = File::open(path)?;
+pub fn load_binary(path: &Path) -> Result<Self> {
+    use std::io::Read;
 
-        // Read header
-        let mut version_bytes = [0u8; 4];
-        file.read_exact(&mut version_bytes)?;
-        let _version = u32::from_le_bytes(version_bytes);
+    let mut file = File::open(path)?;
 
-        let mut model_len_bytes = [0u8; 4];
-        file.read_exact(&mut model_len_bytes)?;
-        let model_len = u32::from_le_bytes(model_len_bytes) as usize;
+    // Read and validate magic bytes
+    let mut magic = [0u8; 4];
+    file.read_exact(&mut magic)?;
+    if &magic != b"EULX" {
+        return Err(anyhow::anyhow!("Invalid magic bytes: expected EULX"));
+    }
 
-        let mut model_bytes = vec![0u8; model_len];
-        file.read_exact(&mut model_bytes)?;
-        let model = String::from_utf8(model_bytes)?;
+    // Read version
+    let mut version_bytes = [0u8; 4];
+    file.read_exact(&mut version_bytes)?;
+    let version = u32::from_le_bytes(version_bytes);
+    if version != 2 {
+        return Err(anyhow::anyhow!("Version mismatch: expected 2, got {}", version));
+    }
 
-        let mut dimension_bytes = [0u8; 4];
-        file.read_exact(&mut dimension_bytes)?;
-        let dimension = u32::from_le_bytes(dimension_bytes) as usize;
+    // Read count and dimension
+    let mut count_bytes = [0u8; 4];
+    file.read_exact(&mut count_bytes)?;
+    let count = u32::from_le_bytes(count_bytes) as usize;
 
-        let mut count_bytes = [0u8; 8];
-        file.read_exact(&mut count_bytes)?;
-        let count = u64::from_le_bytes(count_bytes);
+    let mut dimension_bytes = [0u8; 4];
+    file.read_exact(&mut dimension_bytes)?;
+    let dimension = u32::from_le_bytes(dimension_bytes) as usize;
 
-        let mut embeddings = Vec::with_capacity(count as usize);
-
-        // Read entries
-        for _ in 0..count {
-            // Read ID
-            let mut id_len_bytes = [0u8; 4];
-            file.read_exact(&mut id_len_bytes)?;
-            let id_len = u32::from_le_bytes(id_len_bytes) as usize;
-
-            let mut id_bytes = vec![0u8; id_len];
-            file.read_exact(&mut id_bytes)?;
-            let id = String::from_utf8(id_bytes)?;
-
-            // Read embedding
-            let mut embedding = Vec::with_capacity(dimension);
-            for _ in 0..dimension {
-                let mut value_bytes = [0u8; 4];
-                file.read_exact(&mut value_bytes)?;
-                embedding.push(f32::from_le_bytes(value_bytes));
-            }
-
-            // Note: Binary format doesn't store full metadata for efficiency
-            // Load full index from JSON if you need complete metadata
-            embeddings.push(EmbeddingEntry {
-                id,
-                chunk_type: ChunkType::Other,
-                content: String::new(),
-                embedding,
-                metadata: ChunkMetadata {
-                    file_path: None,
-                    language: None,
-                    line_start: None,
-                    line_end: None,
-                    name: String::new(),
-                    complexity: None,
-                },
-            });
+    // Read embeddings
+    let mut embeddings = Vec::with_capacity(count);
+    for i in 0..count {
+        let mut embedding = Vec::with_capacity(dimension);
+        for _ in 0..dimension {
+            let mut value_bytes = [0u8; 4];
+            file.read_exact(&mut value_bytes)?;
+            embedding.push(f32::from_le_bytes(value_bytes));
         }
 
-        Ok(Self {
-            model,
-            dimension,
-            total_chunks: embeddings.len(),
-            embeddings,
-        })
+        embeddings.push(EmbeddingEntry {
+            id: format!("embedding_{}", i), // Placeholder - load from JSON for real IDs
+            chunk_type: ChunkType::Other,
+            content: String::new(),
+            embedding,
+            metadata: ChunkMetadata {
+                file_path: None,
+                language: None,
+                line_start: None,
+                line_end: None,
+                name: String::new(),
+                complexity: None,
+            },
+        });
     }
+
+    Ok(Self {
+        model: "BAAI/bge-small-en-v1.5".to_string(), // Default - store in JSON for accuracy
+        dimension,
+        total_chunks: embeddings.len(),
+        embeddings,
+    })
+}
 
     /// Find the top-k most similar chunks to a query embedding
     pub fn search(&self, query_embedding: &[f32], top_k: usize) -> Vec<SearchResult> {
