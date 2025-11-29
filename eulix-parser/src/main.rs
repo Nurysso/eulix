@@ -14,6 +14,7 @@ use kb::types::*;
 use parser::analyze::Analyzer;
 use parser::language::Language;
 use parser::python;
+use parser::go;
 use utils::file_walker::FileWalker;
 
 #[derive(Debug, Clone)]
@@ -531,7 +532,9 @@ fn parse_file(
             Err("TypeScript parsing not yet implemented".into())
         }
         Language::Go => {
-            Err("Go parsing not yet implemented".into())
+            let (_, file_data) = go::parse_file(file_path)?;
+            Ok((relative_path, file_data))
+            // Err("Go parsing not yet implemented".into())
         }
         Language::Rust => {
             Err("Rust parsing not yet implemented".into())
