@@ -17,17 +17,15 @@ import (
 )
 
 // printStatusMessage prints a formatted status message with consistent spacing
-func printStatusMessage(icon, primaryMsg string, additionalLines ...string) {
-	fmt.Printf("%s %s\n", icon, primaryMsg)
-	for _, line := range additionalLines {
-		if line != "" {
-			fmt.Println(line)
-		}
-	}
-	// Add spacing only if there are additional lines
-	if len(additionalLines) > 0 {
-		fmt.Println()
-	}
+func printStatusMessage(primaryMsg string, additionalLines ...string) {
+    printStatusMessageWithIcon(" ", primaryMsg, additionalLines...)
+}
+
+func printStatusMessageWithIcon(icon, primaryMsg string, additionalLines ...string) {
+    fmt.Printf("%s %s\n", icon, primaryMsg)
+    for _, line := range additionalLines {
+        fmt.Printf("  %s\n", line)
+    }
 }
 
 // promptConfirm asks for user confirmation
@@ -78,7 +76,7 @@ func startChat() error {
 	missing := checkEmbeddingsFiles(eulixDir)
 	if len(missing) > 0 {
 		printStatusMessage(
-			"⚠️",
+			":(",
 			"Missing required files:",
 		)
 		for _, m := range missing {
@@ -86,7 +84,7 @@ func startChat() error {
 		}
 		fmt.Println()
 		printStatusMessage(
-			"💡",
+			"[TIP]",
 			"Run 'eulix analyze' to generate all required files",
 		)
 		return fmt.Errorf("missing required files")
@@ -96,46 +94,67 @@ func startChat() error {
 	detector := checksum.HashHound(".")
 	stored, err := detector.Load()
 	if err != nil {
-		printStatusMessage(
-			"⚠️",
-			"No checksum found.",
+		printStatusMessage("No checksum found.",
 			"Run 'eulix analyze' to generate one.",
 		)
-	} else {
-		current, _ := detector.Calculate()
-		changePercent := detector.CompareChecksums(stored, current)
-
-		if changePercent > 0.30 {
-			printStatusMessage(
-				"❌",
-				fmt.Sprintf("Codebase changed %.1f%%", changePercent*100),
-				"Knowledge base is significantly stale.",
-				"Run 'eulix analyze' to update.",
-			)
-			return fmt.Errorf("analysis required")
-		} else if changePercent > 0.10 {
-			printStatusMessage(
-				"⚠️",
-				fmt.Sprintf("Codebase changed %.1f%%", changePercent*100),
-				"Consider running 'eulix analyze' to update.",
-			)
-			if !promptConfirm("Continue anyway?") {
-				return nil
-			}
-			fmt.Println() // Add spacing after user response
-		}
+		return fmt.Errorf("checksum required")
 	}
 
-	// Initialize cache
+	current, err := detector.Calculate()
+	if err != nil {
+		return fmt.Errorf("failed to calculate checksum: %w", err)
+	}
+
+	changePercent := detector.CompareChecksums(stored, current)
+
+	if changePercent > 0.30 {
+		printStatusMessage(fmt.Sprintf("Codebase changed %.1f%%", changePercent*100),
+			"Knowledge base is significantly stale.",
+			"Run 'eulix analyze' to update.",
+		)
+		return fmt.Errorf("analysis required")
+	} else if changePercent > 0.10 {
+		printStatusMessage(fmt.Sprintf("Codebase changed %.1f%%", changePercent*100),
+			"Consider running 'eulix analyze' to update.",
+		)
+		if !promptConfirm("Continue anyway?") {
+			return nil
+		}
+		fmt.Println() // Add spacing after user response
+	}
+
+	// Initialize cache with checksum
 	var cacheManager *cache.Manager
-	if cfg.Cache.Redis.Enabled {
+	if cfg.Cache.Redis.Enabled || cfg.Cache.SQL.Enabled {
 		cacheManager, err = cache.CacheController(cfg)
 		if err != nil {
-			printStatusMessage(
-				"⚠️",
-				fmt.Sprintf("Redis unavailable: %v", err),
+			printStatusMessage(fmt.Sprintf("Cache initialization failed: %v", err),
 				"Caching disabled, continuing...",
 			)
+		} else {
+			defer cacheManager.Close()
+
+			// Clean expired entries on startup
+			if err := cacheManager.CleanExpired(); err != nil {
+				fmt.Printf("Failed to clean expired cache: %v\n", err)
+			}
+
+			// Invalidate old cache entries if checksum changed
+			if changePercent > 0 {
+				if err := cacheManager.InvalidateByChecksum(current.Hash); err != nil {
+					fmt.Printf("Failed to invalidate old cache: %v\n", err)
+				} else {
+					printStatusMessage("Cache invalidated due to codebase changes",
+					)
+				}
+			}
+
+			// Show cache stats
+			if stats, err := cacheManager.GetStats(); err == nil {
+				if sqlEntries, ok := stats["sql_valid_entries"].(int); ok && sqlEntries > 0 {
+					fmt.Printf("Cache: %d valid entries\n", sqlEntries)
+				}
+			}
 		}
 	}
 
@@ -153,12 +172,23 @@ func startChat() error {
 	}
 	defer router.Close() // Clean up embeddings if they were initialized
 
+	// Store current checksum in router for cache operations
+	router.SetCurrentChecksum(current.Hash)
+
 	// Diagnostic info
 	printSystemDiagnostics(eulixDir)
 
 	// Start TUI
-	model := tui.MainModel(router, cfg)
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	fmt.Println("Starting chat interface...")
+	fmt.Println()
+
+	model := tui.MainModel(router, cfg, cacheManager)
+	p := tea.NewProgram(
+		model,
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
+
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
