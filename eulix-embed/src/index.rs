@@ -58,7 +58,7 @@ impl EmbeddingIndex {
     }
 
     /// Save embeddings to binary format (more efficient)
-    pub fn save_binary(&self, path: &Path) -> Result<()> {
+   pub fn save_binary(&self, path: &Path) -> Result<()> {
     use std::io::Write;
 
     let mut file = File::create(path)?;
