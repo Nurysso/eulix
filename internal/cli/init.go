@@ -80,7 +80,7 @@ force_reanalyze_threshold = 0.30
 		}
 	}
 
-	fmt.Println("✨ Eulix initialized successfully!")
+	fmt.Println("Eulix initialized successfully!")
 	fmt.Println()
 	fmt.Println("Created:")
 	fmt.Println("  - .eulix/       (knowledge base directory)")

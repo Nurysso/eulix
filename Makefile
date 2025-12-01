@@ -34,6 +34,7 @@ endif
 PARSER_DIR := eulix-parser
 EMBED_DIR := eulix-embed
 GO_DIR := .
+BUILD_DIR := build
 
 # Binary names
 PARSER_BIN := eulix_parser$(EXE_EXT)
@@ -43,7 +44,22 @@ CLI_BIN := eulix$(EXE_EXT)
 # Build paths
 PARSER_BUILD := $(PARSER_DIR)$(SEP)target$(SEP)release$(SEP)$(PARSER_BIN)
 EMBED_BUILD := $(EMBED_DIR)$(SEP)target$(SEP)release$(SEP)$(EMBED_BIN)
-CLI_BUILD := $(CLI_BIN)
+CLI_BUILD := $(BUILD_DIR)$(SEP)$(CLI_BIN)
+
+# GPU backend selection (default: cpu)
+# Override with: make GPU=cuda or make GPU=rocm
+GPU ?= cpu
+
+# Feature flags for eulix-embed
+ifeq ($(GPU),cuda)
+    EMBED_FEATURES := --features cuda
+else ifeq ($(GPU),rocm)
+    EMBED_FEATURES := --features rocm
+else ifeq ($(GPU),tensorrt)
+    EMBED_FEATURES := --features onnx-tensorrt
+else
+    EMBED_FEATURES := --features cpu
+endif
 
 # Colors and echo command
 ifeq ($(DETECTED_OS),Windows)
@@ -73,6 +89,7 @@ help:
 	@echo "=================="
 	@echo ""
 	@echo "Detected OS: $(DETECTED_OS)"
+	@echo "GPU Backend: $(GPU)"
 	@echo "Install directory: $(INSTALL_DIR)"
 	@echo ""
 	@echo "Targets:"
@@ -87,6 +104,12 @@ help:
 	@echo "  make parser       - Build eulix-parser only"
 	@echo "  make embed        - Build eulix-embed only"
 	@echo "  make cli          - Build eulix CLI only"
+	@echo ""
+	@echo "GPU Backend Options:"
+	@echo "  make build GPU=cpu        - CPU-only (default)"
+	@echo "  make build GPU=cuda       - NVIDIA CUDA support"
+	@echo "  make build GPU=rocm       - AMD ROCm support"
+	@echo "  make build GPU=tensorrt   - NVIDIA TensorRT support"
 	@echo ""
 	@echo "Installation:"
 	@echo "  make install-parser  - Install parser only"
@@ -108,15 +131,20 @@ parser:
 # Build embedder
 .PHONY: embed
 embed:
-	@$(ECHO) "$(BLUE)Building eulix-embed...$(NC)"
-	cd $(EMBED_DIR) && cargo build --release --features candle-cpu
+	@$(ECHO) "$(BLUE)Building eulix-embed with $(GPU) backend...$(NC)"
+	cd $(EMBED_DIR) && cargo build --release $(EMBED_FEATURES)
 	@$(ECHO) "$(GREEN)✓ Embedder built: $(EMBED_BUILD)$(NC)"
 
 # Build Go CLI
 .PHONY: cli
 cli:
 	@$(ECHO) "$(BLUE)Building eulix CLI...$(NC)"
-	go build -o $(CLI_BIN) ./cmd/eulix/main.go
+ifeq ($(DETECTED_OS),Windows)
+	if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+else
+	mkdir -p $(BUILD_DIR)
+endif
+	go build -o $(CLI_BUILD) ./cmd/eulix/main.go
 	@$(ECHO) "$(GREEN)✓ CLI built: $(CLI_BUILD)$(NC)"
 
 # Install all
@@ -147,7 +175,7 @@ endif
 ifeq ($(DETECTED_OS),Windows)
 	@echo "  setx PATH \"%%PATH%%;$(INSTALL_DIR)\""
 else
-	@echo "  export PATH=\"$(INSTALL_DIR):\$PATH\""
+	@echo "  export PATH=\"$(INSTALL_DIR):\$$PATH\""
 	@echo "  (Add to ~/.bashrc or ~/.zshrc to make permanent)"
 endif
 
@@ -214,8 +242,9 @@ else
 endif
 	@echo ""
 	@echo "Optional (for GPU acceleration):"
-	@echo "  - CUDA Toolkit (NVIDIA)"
-	@echo "  - ROCm (AMD)"
+	@echo "  - CUDA Toolkit (NVIDIA) - for GPU=cuda"
+	@echo "  - ROCm (AMD) - for GPU=rocm"
+	@echo "  - TensorRT (NVIDIA) - for GPU=tensorrt"
 
 # Clean
 .PHONY: clean
@@ -224,11 +253,11 @@ clean:
 ifeq ($(DETECTED_OS),Windows)
 	cd $(PARSER_DIR) && cargo clean 2>$(NULL) || echo ""
 	cd $(EMBED_DIR) && cargo clean 2>$(NULL) || echo ""
-	$(RM) $(CLI_BIN) 2>$(NULL) || echo ""
+	$(RMDIR) $(BUILD_DIR) 2>$(NULL) || echo ""
 else
 	cd $(PARSER_DIR) && cargo clean
 	cd $(EMBED_DIR) && cargo clean
-	$(RM) $(CLI_BIN)
+	$(RMDIR) $(BUILD_DIR)
 endif
 	@$(ECHO) "$(GREEN)✓ Clean complete$(NC)"
 
@@ -256,7 +285,7 @@ test:
 	cd $(PARSER_DIR) && cargo test
 	@echo ""
 	@echo "Testing embedder..."
-	cd $(EMBED_DIR) && cargo test
+	cd $(EMBED_DIR) && cargo test $(EMBED_FEATURES)
 	@echo ""
 	@echo "Testing Go CLI..."
 	go test ./...
@@ -293,9 +322,14 @@ endif
 .PHONY: dev
 dev:
 	@$(ECHO) "$(BLUE)Building in development mode...$(NC)"
+ifeq ($(DETECTED_OS),Windows)
+	if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
+else
+	mkdir -p $(BUILD_DIR)
+endif
 	cd $(PARSER_DIR) && cargo build
-	cd $(EMBED_DIR) && cargo build --features candle-cpu
-	go build -o $(CLI_BIN) ./cmd/eulix/main.go
+	cd $(EMBED_DIR) && cargo build $(EMBED_FEATURES)
+	go build -o $(CLI_BUILD) ./cmd/eulix/main.go
 	@$(ECHO) "$(GREEN)✓ Development build complete$(NC)"
 
 # Show build information
@@ -305,6 +339,8 @@ info:
 	@echo "======================="
 	@echo ""
 	@echo "Operating System: $(DETECTED_OS)"
+	@echo "GPU Backend: $(GPU)"
+	@echo "Embed Features: $(EMBED_FEATURES)"
 	@echo "Install Directory: $(INSTALL_DIR)"
 	@echo "Executable Extension: $(EXE_EXT)"
 	@echo ""
@@ -317,6 +353,12 @@ info:
 	@echo "  Parser: $(PARSER_BUILD)"
 	@echo "  Embedder: $(EMBED_BUILD)"
 	@echo "  CLI: $(CLI_BUILD)"
+	@echo ""
+	@echo "Available GPU Backends:"
+	@echo "  - cpu (default, ONNX CPU)"
+	@echo "  - cuda (NVIDIA CUDA)"
+	@echo "  - rocm (AMD ROCm)"
+	@echo "  - tensorrt (NVIDIA TensorRT)"
 	@echo ""
 	@echo "Features:"
 ifeq ($(DETECTED_OS),Windows)
@@ -338,3 +380,19 @@ rebuild: clean build
 .PHONY: quick-install
 quick-install: build install
 	@$(ECHO) "$(GREEN)✓ Quick install complete$(NC)"
+
+# Build all GPU variants (for testing)
+.PHONY: build-all-backends
+build-all-backends:
+	@$(ECHO) "$(BLUE)Building all GPU backends...$(NC)"
+	@echo ""
+	@echo "Building CPU backend..."
+	$(MAKE) embed GPU=cpu
+	@echo ""
+	@echo "Building CUDA backend..."
+	$(MAKE) embed GPU=cuda
+	@echo ""
+	@echo "Building ROCm backend..."
+	$(MAKE) embed GPU=rocm
+	@echo ""
+	@$(ECHO) "$(GREEN)✓ All backends built$(NC)"
