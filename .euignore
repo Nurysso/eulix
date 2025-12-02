@@ -1,0 +1,8 @@
+# Eulix ignore patterns
+node_modules/
+.git/
+*.test.go
+vendor/
+dist/
+build/
+test/

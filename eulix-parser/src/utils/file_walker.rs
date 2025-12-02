@@ -11,72 +11,6 @@ impl FileWalker {
         Self { root }
     }
 
-    pub fn find_python_files(&self) -> Result<Vec<PathBuf>> {
-        let mut builder = WalkBuilder::new(&self.root);
-        builder.add_ignore(self.root.join(".euignore"));
-        // Only use .euignore, completely ignore .gitignore
-        builder.add_custom_ignore_filename(".euignore");
-        // Disable all gitignore support
-        builder.git_ignore(false);
-        builder.git_global(false);
-        builder.git_exclude(false);
-        // Standard ignored directories (as a fallback)
-        let ignored_dirs = [
-            ".git", ".eulix", "__pycache__",
-            ".venv", "venv", "env", ".env",
-            "node_modules", ".pytest_cache",
-            ".mypy_cache", ".tox", "dist", "build",
-            ".eggs", ".ipynb_checkpoints"
-        ];
-
-        // Filter entries with proper directory handling
-        builder.filter_entry(move |entry| {
-            let path = entry.path();
-
-            // Get the file/directory name
-            let name = path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-
-            // Check if it's a directory
-            let is_dir = entry.file_type()
-                .map(|ft| ft.is_dir())
-                .unwrap_or(false);
-
-            if is_dir {
-                // Skip standard ignored directories
-                if ignored_dirs.contains(&name) {
-                    return false;
-                }
-
-                // Additional check: Skip directories that end with .egg-info
-                if name.ends_with(".egg-info") {
-                    return false;
-                }
-            }
-
-            true
-        });
-
-        let python_files: Vec<PathBuf> = builder
-            .build()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| {
-                entry.file_type().map(|ft| ft.is_file()).unwrap_or(false)
-            })
-            .filter(|entry| {
-                entry.path()
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .map(|ext| ext == "py")
-                    .unwrap_or(false)
-            })
-            .map(|entry| entry.path().to_path_buf())
-            .collect();
-
-        Ok(python_files)
-    }
-
     /// Generic walker that respects .euignore for any file extension
     pub fn walk_files<F>(&self, filter: F) -> Result<Vec<PathBuf>>
     where
@@ -165,8 +99,6 @@ mod tests {
         )?;
 
         let walker = FileWalker::new(root.to_path_buf());
-
-        let files = walker.find_python_files()?;
 
         // Should only find src/main.py
         assert_eq!(files.len(), 1);
