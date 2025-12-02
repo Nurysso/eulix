@@ -158,47 +158,19 @@ impl Language {
         Language::Unknown
     }
 
-    /// Get tree-sitter language parser
-    pub fn tree_sitter_language(&self) -> Option<tree_sitter::Language> {
-        match self {
-            Language::Python => Some(tree_sitter_python::language()),
-            Language::JavaScript => Some(tree_sitter_javascript::language()),
-            Language::TypeScript => Some(tree_sitter_typescript::language_typescript()),
-            Language::Go => Some(tree_sitter_go::language()),
-            Language::Rust => Some(tree_sitter_rust::language()),
-            Language::C => Some(tree_sitter_c::language()),
-            Language::Cpp => Some(tree_sitter_cpp::language()),
-            Language::Unknown => None,
-        }
-    }
-
-    /// Get file extensions for this language
-    pub fn extensions(&self) -> &[&str] {
-        match self {
-            Language::Python => &["py", "pyw", "pyi"],
-            Language::JavaScript => &["js", "jsx", "mjs", "cjs"],
-            Language::TypeScript => &["ts", "tsx"],
-            Language::Go => &["go"],
-            Language::Rust => &["rs"],
-            Language::C => &["c", "h"],
-            Language::Cpp => &["cpp", "cc", "cxx", "hpp", "hxx"],
-            Language::Unknown => &[],
-        }
-    }
-
-    /// Display name for language
-    pub fn display_name(&self) -> &str {
-        match self {
-            Language::Python => "Python",
-            Language::JavaScript => "JavaScript",
-            Language::TypeScript => "TypeScript",
-            Language::Go => "Go",
-            Language::Rust => "Rust",
-            Language::C => "C",
-            Language::Cpp => "C++",
-            Language::Unknown => "Unknown",
-        }
-    }
+    // /// Get tree-sitter language parser
+    // pub fn tree_sitter_language(&self) -> Option<tree_sitter::Language> {
+    //     match self {
+    //         Language::Python => Some(tree_sitter_python::language()),
+    //         Language::JavaScript => Some(tree_sitter_javascript::language()),
+    //         Language::TypeScript => Some(tree_sitter_typescript::language_typescript()),
+    //         Language::Go => Some(tree_sitter_go::language()),
+    //         Language::Rust => Some(tree_sitter_rust::language()),
+    //         Language::C => Some(tree_sitter_c::language()),
+    //         Language::Cpp => Some(tree_sitter_cpp::language()),
+    //         Language::Unknown => None,
+    //     }
+    // }
 }
 
 #[cfg(test)]

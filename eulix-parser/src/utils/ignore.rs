@@ -73,7 +73,7 @@ impl IgnorePattern {
         }
     }
 }
-
+#[allow(dead_code)]
 impl IgnoreFilter {
     /// Load .euignore from project root
     pub fn new(project_root: &Path) -> Self {

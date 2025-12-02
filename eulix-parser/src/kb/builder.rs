@@ -12,6 +12,7 @@ pub struct KnowledgeBaseBuilder {
     root_path: PathBuf,
 }
 
+#[allow(dead_code)]
 impl KnowledgeBaseBuilder {
     pub fn new(root_path: &Path) -> Self {
         Self {
@@ -88,7 +89,7 @@ impl KnowledgeBaseBuilder {
         // Build a lookup map for quick function resolution
         let mut function_map: HashMap<String, String> = HashMap::new();
 
-        for (file_path, data) in file_data {
+        for (_, data) in file_data {
             for func in &data.functions {
                 function_map.insert(func.name.clone(), func.id.clone());
             }
@@ -101,7 +102,7 @@ impl KnowledgeBaseBuilder {
         }
 
         // Collect all functions and classes as nodes
-        for (file_path, data) in file_data {
+        for (_, data) in file_data {
             // Add function nodes
             for func in &data.functions {
                 nodes.push(GraphNode {

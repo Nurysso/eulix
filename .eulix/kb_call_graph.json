@@ -1,0 +1,6495 @@
+{
+  "nodes": [
+    {
+      "id": "func_Aspirine",
+      "node_type": "function",
+      "file": "internal/fixers/Aspirine.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_floatToUint32",
+      "node_type": "function",
+      "file": "internal/fixers/Aspirine.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_CacheController",
+      "node_type": "function",
+      "file": "internal/cache/manager.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_ContextWindowCreator",
+      "node_type": "function",
+      "file": "internal/query/context_builder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_calculateImportance",
+      "node_type": "function",
+      "file": "internal/query/context_builder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_splitIdentifierToTokens",
+      "node_type": "function",
+      "file": "internal/query/context_builder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_uniqueStrings",
+      "node_type": "function",
+      "file": "internal/query/context_builder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_cosineSimilarity",
+      "node_type": "function",
+      "file": "internal/query/context_builder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_contains",
+      "node_type": "function",
+      "file": "internal/query/context_builder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_canMerge",
+      "node_type": "function",
+      "file": "internal/query/context_builder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_mergeChunks",
+      "node_type": "function",
+      "file": "internal/query/context_builder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_printStatusMessage",
+      "node_type": "function",
+      "file": "internal/cli/chat.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_printStatusMessageWithIcon",
+      "node_type": "function",
+      "file": "internal/cli/chat.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_promptConfirm",
+      "node_type": "function",
+      "file": "internal/cli/chat.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_checkEmbeddingsFiles",
+      "node_type": "function",
+      "file": "internal/cli/chat.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_startChat",
+      "node_type": "function",
+      "file": "internal/cli/chat.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_printSystemDiagnostics",
+      "node_type": "function",
+      "file": "internal/cli/chat.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_CacheStats",
+      "node_type": "function",
+      "file": "internal/cli/history.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_CacheClear",
+      "node_type": "function",
+      "file": "internal/cli/history.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_CacheCleanup",
+      "node_type": "function",
+      "file": "internal/cli/history.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_CacheTest",
+      "node_type": "function",
+      "file": "internal/cli/history.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_CacheHistory",
+      "node_type": "function",
+      "file": "internal/cli/history.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_CacheView",
+      "node_type": "function",
+      "file": "internal/cli/history.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_CacheDelete",
+      "node_type": "function",
+      "file": "internal/cli/history.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_HistoryView",
+      "node_type": "function",
+      "file": "internal/tui/history.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_wrapTextCache",
+      "node_type": "function",
+      "file": "internal/tui/history.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_formatDuration",
+      "node_type": "function",
+      "file": "internal/tui/history.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_extractKeywords",
+      "node_type": "function",
+      "file": "internal/query/strings.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_isCommonWord",
+      "node_type": "function",
+      "file": "internal/query/strings.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_containsAny",
+      "node_type": "function",
+      "file": "internal/query/strings.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_extractQueryKeywords",
+      "node_type": "function",
+      "file": "internal/query/strings.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_main",
+      "node_type": "function",
+      "file": "cmd/eulix/main.go",
+      "is_entry_point": true,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_initializeProject",
+      "node_type": "function",
+      "file": "internal/cli/init.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_QueryTrafficController",
+      "node_type": "function",
+      "file": "internal/query/router.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_fuzzyScore",
+      "node_type": "function",
+      "file": "internal/query/router.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_MainModel",
+      "node_type": "function",
+      "file": "internal/tui/app.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_wrapText",
+      "node_type": "function",
+      "file": "internal/tui/app.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_analyzeProject",
+      "node_type": "function",
+      "file": "internal/cli/analyze.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_NewEmbedder",
+      "node_type": "function",
+      "file": "internal/embeddings/embedder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_VectorWeaver",
+      "node_type": "function",
+      "file": "internal/embeddings/embedder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_findEulixBinary",
+      "node_type": "function",
+      "file": "internal/embeddings/embedder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_CosineSimilarity",
+      "node_type": "function",
+      "file": "internal/embeddings/embedder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_NormalizeVector",
+      "node_type": "function",
+      "file": "internal/embeddings/embedder.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_Load",
+      "node_type": "function",
+      "file": "internal/config/config.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_defaultConfig",
+      "node_type": "function",
+      "file": "internal/config/config.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_MouthClient",
+      "node_type": "function",
+      "file": "internal/llm/client.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_QuerySheriff",
+      "node_type": "function",
+      "file": "internal/query/classifier.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_loadCallGraph",
+      "node_type": "function",
+      "file": "internal/query/loader.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_loadKBIndex",
+      "node_type": "function",
+      "file": "internal/query/loader.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_runHistoryCommand",
+      "node_type": "function",
+      "file": "internal/cli/commands.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_runHistoryTUI",
+      "node_type": "function",
+      "file": "internal/cli/commands.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_Execute",
+      "node_type": "function",
+      "file": "internal/cli/commands.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_init",
+      "node_type": "function",
+      "file": "internal/cli/commands.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_checkInitialized",
+      "node_type": "function",
+      "file": "internal/cli/commands.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_isInitialized",
+      "node_type": "function",
+      "file": "internal/cli/commands.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_getKnowledgeBasePath",
+      "node_type": "function",
+      "file": "internal/cli/commands.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_hasKnowledgeBase",
+      "node_type": "function",
+      "file": "internal/cli/commands.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_initCacheManager",
+      "node_type": "function",
+      "file": "internal/cli/commands.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_truncateString",
+      "node_type": "function",
+      "file": "internal/cli/commands.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_HashHound",
+      "node_type": "function",
+      "file": "internal/checksum/detector.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_hashFile",
+      "node_type": "function",
+      "file": "internal/checksum/detector.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_isSourceFile",
+      "node_type": "function",
+      "file": "internal/checksum/detector.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_extractSymbolsFromContent",
+      "node_type": "function",
+      "file": "internal/query/symbols.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_extractPotentialSymbols",
+      "node_type": "function",
+      "file": "internal/query/symbols.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_extractEntityName",
+      "node_type": "function",
+      "file": "internal/query/symbols.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_isLikelySymbol",
+      "node_type": "function",
+      "file": "internal/query/symbols.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_GLaDOS",
+      "node_type": "function",
+      "file": "internal/fixers/GLaDOS.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_loadKB",
+      "node_type": "function",
+      "file": "internal/fixers/GLaDOS.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_loadEmbeddingsJSON",
+      "node_type": "function",
+      "file": "internal/fixers/GLaDOS.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_checkEmbeddingsBin",
+      "node_type": "function",
+      "file": "internal/fixers/GLaDOS.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_checkIndex",
+      "node_type": "function",
+      "file": "internal/fixers/GLaDOS.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_findChunksWithSymbol",
+      "node_type": "function",
+      "file": "internal/fixers/GLaDOS.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_truncate",
+      "node_type": "function",
+      "file": "internal/fixers/GLaDOS.go",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    }
+  ],
+  "edges": [
+    {
+      "from": "func_Aspirine",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 26
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "IsNotExist",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 26
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 27
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 28
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 29
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 32
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 33
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 35
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 36
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 39
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "ReadFile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 40
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 42
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 43
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 44
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Unmarshal",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 48
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 49
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 50
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 51
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 52
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 55
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 56
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 57
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 58
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 59
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 59
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 62
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 63
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 64
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 65
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 66
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 67
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 71
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 72
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 77
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 78
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 80
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 81
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 86
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 87
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 88
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 90
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 91
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 101
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 106
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 108
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 109
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 116
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 118
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 119
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 120
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 124
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 126
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 127
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 131
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 132
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 136
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 137
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Sprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 138
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Getpid",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 138
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Sprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 139
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Rename",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 140
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 141
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 143
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 146
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 149
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 153
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Create",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 154
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 156
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 157
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 159
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "uint32",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 162
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 162
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "uint32",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 163
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 165
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "PutUint32",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 166
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "PutUint32",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 167
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Write",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 169
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 170
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 171
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 174
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 178
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 181
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "PutUint32",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 184
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "floatToUint32",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 184
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Write",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 185
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 186
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 187
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 193
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "float64",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 194
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 195
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 199
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 203
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 204
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 206
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 207
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "int",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 210
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "int",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 211
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Size",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 211
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 213
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "float64",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 214
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 215
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "float64",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 216
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 219
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 220
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 221
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "ReadFile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 225
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 227
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 228
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Uint32",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 231
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Uint32",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 232
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 235
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 236
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 237
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 238
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 241
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "float64",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 245
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 246
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 247
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 248
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 249
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 250
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 251
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 252
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 253
+    },
+    {
+      "from": "func_Aspirine",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 254
+    },
+    {
+      "from": "func_floatToUint32",
+      "to": "(*uint32)",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 261
+    },
+    {
+      "from": "func_floatToUint32",
+      "to": "Pointer",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 261
+    },
+    {
+      "from": "func_CacheController",
+      "to": "Background",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 38
+    },
+    {
+      "from": "func_CacheController",
+      "to": "ParseURL",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 43
+    },
+    {
+      "from": "func_CacheController",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 45
+    },
+    {
+      "from": "func_CacheController",
+      "to": "NewClient",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 48
+    },
+    {
+      "from": "func_CacheController",
+      "to": "Err",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 51
+    },
+    {
+      "from": "func_CacheController",
+      "to": "Ping",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 51
+    },
+    {
+      "from": "func_CacheController",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 52
+    },
+    {
+      "from": "func_CacheController",
+      "to": "Open",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 63
+    },
+    {
+      "from": "func_CacheController",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 65
+    },
+    {
+      "from": "func_CacheController",
+      "to": "initSQLSchema",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 71
+    },
+    {
+      "from": "func_CacheController",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 72
+    },
+    {
+      "from": "func_ContextWindowCreator",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 29
+    },
+    {
+      "from": "func_ContextWindowCreator",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 33
+    },
+    {
+      "from": "func_ContextWindowCreator",
+      "to": "VectorWeaver",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 34
+    },
+    {
+      "from": "func_ContextWindowCreator",
+      "to": "loadEmbeddings",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 40
+    },
+    {
+      "from": "func_ContextWindowCreator",
+      "to": "loadChunks",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 47
+    },
+    {
+      "from": "func_ContextWindowCreator",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 48
+    },
+    {
+      "from": "func_ContextWindowCreator",
+      "to": "loadVectorMap",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 52
+    },
+    {
+      "from": "func_ContextWindowCreator",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 54
+    },
+    {
+      "from": "func_ContextWindowCreator",
+      "to": "loadContexCallGraph",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 58
+    },
+    {
+      "from": "func_ContextWindowCreator",
+      "to": "loadKnowledgeBase",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 59
+    },
+    {
+      "from": "func_splitIdentifierToTokens",
+      "to": "Split",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 898
+    },
+    {
+      "from": "func_splitIdentifierToTokens",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 901
+    },
+    {
+      "from": "func_splitIdentifierToTokens",
+      "to": "IsUpper",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 902
+    },
+    {
+      "from": "func_splitIdentifierToTokens",
+      "to": "rune",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 902
+    },
+    {
+      "from": "func_splitIdentifierToTokens",
+      "to": "ToLower",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 903
+    },
+    {
+      "from": "func_splitIdentifierToTokens",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 904
+    },
+    {
+      "from": "func_splitIdentifierToTokens",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 905
+    },
+    {
+      "from": "func_splitIdentifierToTokens",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 910
+    },
+    {
+      "from": "func_splitIdentifierToTokens",
+      "to": "ToLower",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 911
+    },
+    {
+      "from": "func_splitIdentifierToTokens",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 912
+    },
+    {
+      "from": "func_splitIdentifierToTokens",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 913
+    },
+    {
+      "from": "func_uniqueStrings",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 922
+    },
+    {
+      "from": "func_uniqueStrings",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 923
+    },
+    {
+      "from": "func_uniqueStrings",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 923
+    },
+    {
+      "from": "func_uniqueStrings",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 927
+    },
+    {
+      "from": "func_cosineSimilarity",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 934
+    },
+    {
+      "from": "func_cosineSimilarity",
+      "to": "float64",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 940
+    },
+    {
+      "from": "func_cosineSimilarity",
+      "to": "float64",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 941
+    },
+    {
+      "from": "func_cosineSimilarity",
+      "to": "float64",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 942
+    },
+    {
+      "from": "func_cosineSimilarity",
+      "to": "Sqrt",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 949
+    },
+    {
+      "from": "func_mergeChunks",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 994
+    },
+    {
+      "from": "func_mergeChunks",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 995
+    },
+    {
+      "from": "func_mergeChunks",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 996
+    },
+    {
+      "from": "func_mergeChunks",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 998
+    },
+    {
+      "from": "func_mergeChunks",
+      "to": "Max",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 1013
+    },
+    {
+      "from": "func_printStatusMessage",
+      "to": "printStatusMessageWithIcon",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 21
+    },
+    {
+      "from": "func_printStatusMessageWithIcon",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 25
+    },
+    {
+      "from": "func_printStatusMessageWithIcon",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 27
+    },
+    {
+      "from": "func_promptConfirm",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 33
+    },
+    {
+      "from": "func_promptConfirm",
+      "to": "Scanln",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 35
+    },
+    {
+      "from": "func_promptConfirm",
+      "to": "TrimSpace",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 36
+    },
+    {
+      "from": "func_promptConfirm",
+      "to": "ToLower",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 36
+    },
+    {
+      "from": "func_checkEmbeddingsFiles",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 52
+    },
+    {
+      "from": "func_checkEmbeddingsFiles",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 53
+    },
+    {
+      "from": "func_checkEmbeddingsFiles",
+      "to": "IsNotExist",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 53
+    },
+    {
+      "from": "func_checkEmbeddingsFiles",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 54
+    },
+    {
+      "from": "func_checkEmbeddingsFiles",
+      "to": "Sprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 54
+    },
+    {
+      "from": "func_startChat",
+      "to": "Load",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 63
+    },
+    {
+      "from": "func_startChat",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 65
+    },
+    {
+      "from": "func_startChat",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 70
+    },
+    {
+      "from": "func_startChat",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 71
+    },
+    {
+      "from": "func_startChat",
+      "to": "IsNotExist",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 71
+    },
+    {
+      "from": "func_startChat",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 72
+    },
+    {
+      "from": "func_startChat",
+      "to": "checkEmbeddingsFiles",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 76
+    },
+    {
+      "from": "func_startChat",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 77
+    },
+    {
+      "from": "func_startChat",
+      "to": "printStatusMessage",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 78
+    },
+    {
+      "from": "func_startChat",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 83
+    },
+    {
+      "from": "func_startChat",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 85
+    },
+    {
+      "from": "func_startChat",
+      "to": "printStatusMessage",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 86
+    },
+    {
+      "from": "func_startChat",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 90
+    },
+    {
+      "from": "func_startChat",
+      "to": "HashHound",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 94
+    },
+    {
+      "from": "func_startChat",
+      "to": "Load",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 95
+    },
+    {
+      "from": "func_startChat",
+      "to": "printStatusMessage",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 97
+    },
+    {
+      "from": "func_startChat",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 100
+    },
+    {
+      "from": "func_startChat",
+      "to": "Calculate",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 103
+    },
+    {
+      "from": "func_startChat",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 105
+    },
+    {
+      "from": "func_startChat",
+      "to": "CompareChecksums",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 108
+    },
+    {
+      "from": "func_startChat",
+      "to": "printStatusMessage",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 111
+    },
+    {
+      "from": "func_startChat",
+      "to": "Sprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 111
+    },
+    {
+      "from": "func_startChat",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 115
+    },
+    {
+      "from": "func_startChat",
+      "to": "printStatusMessage",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 117
+    },
+    {
+      "from": "func_startChat",
+      "to": "Sprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 117
+    },
+    {
+      "from": "func_startChat",
+      "to": "promptConfirm",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 120
+    },
+    {
+      "from": "func_startChat",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 123
+    },
+    {
+      "from": "func_startChat",
+      "to": "CacheController",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 129
+    },
+    {
+      "from": "func_startChat",
+      "to": "printStatusMessage",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 131
+    },
+    {
+      "from": "func_startChat",
+      "to": "Sprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 131
+    },
+    {
+      "from": "func_startChat",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 135
+    },
+    {
+      "from": "func_startChat",
+      "to": "CleanExpired",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 138
+    },
+    {
+      "from": "func_startChat",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 139
+    },
+    {
+      "from": "func_startChat",
+      "to": "InvalidateByChecksum",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 144
+    },
+    {
+      "from": "func_startChat",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 145
+    },
+    {
+      "from": "func_startChat",
+      "to": "printStatusMessage",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 147
+    },
+    {
+      "from": "func_startChat",
+      "to": "GetStats",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 153
+    },
+    {
+      "from": "func_startChat",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 155
+    },
+    {
+      "from": "func_startChat",
+      "to": "MouthClient",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 162
+    },
+    {
+      "from": "func_startChat",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 164
+    },
+    {
+      "from": "func_startChat",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 168
+    },
+    {
+      "from": "func_startChat",
+      "to": "QueryTrafficController",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 169
+    },
+    {
+      "from": "func_startChat",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 171
+    },
+    {
+      "from": "func_startChat",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 173
+    },
+    {
+      "from": "func_startChat",
+      "to": "SetCurrentChecksum",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 176
+    },
+    {
+      "from": "func_startChat",
+      "to": "printSystemDiagnostics",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 179
+    },
+    {
+      "from": "func_startChat",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 182
+    },
+    {
+      "from": "func_startChat",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 183
+    },
+    {
+      "from": "func_startChat",
+      "to": "MainModel",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 185
+    },
+    {
+      "from": "func_startChat",
+      "to": "NewProgram",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 186
+    },
+    {
+      "from": "func_startChat",
+      "to": "WithAltScreen",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 188
+    },
+    {
+      "from": "func_startChat",
+      "to": "WithMouseCellMotion",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 189
+    },
+    {
+      "from": "func_startChat",
+      "to": "Run",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 192
+    },
+    {
+      "from": "func_startChat",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 193
+    },
+    {
+      "from": "func_printSystemDiagnostics",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 201
+    },
+    {
+      "from": "func_printSystemDiagnostics",
+      "to": "ReadFile",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 202
+    },
+    {
+      "from": "func_printSystemDiagnostics",
+      "to": "Count",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 204
+    },
+    {
+      "from": "func_printSystemDiagnostics",
+      "to": "string",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 204
+    },
+    {
+      "from": "func_printSystemDiagnostics",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 206
+    },
+    {
+      "from": "func_printSystemDiagnostics",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 211
+    },
+    {
+      "from": "func_printSystemDiagnostics",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 212
+    },
+    {
+      "from": "func_printSystemDiagnostics",
+      "to": "float64",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 213
+    },
+    {
+      "from": "func_printSystemDiagnostics",
+      "to": "Size",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 213
+    },
+    {
+      "from": "func_printSystemDiagnostics",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 214
+    },
+    {
+      "from": "func_printSystemDiagnostics",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 217
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Load",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 17
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 19
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 23
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 24
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "CacheController",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 28
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 30
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 32
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "GetStats",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 34
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 36
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 39
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 40
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 43
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 44
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 46
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 49
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 54
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 55
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 57
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 59
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 61
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "HashHound",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 65
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Calculate",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 66
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 67
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 68
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 69
+    },
+    {
+      "from": "func_CacheStats",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 70
+    },
+    {
+      "from": "func_CacheClear",
+      "to": "Load",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 78
+    },
+    {
+      "from": "func_CacheClear",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 80
+    },
+    {
+      "from": "func_CacheClear",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 84
+    },
+    {
+      "from": "func_CacheClear",
+      "to": "Print",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 88
+    },
+    {
+      "from": "func_CacheClear",
+      "to": "Scanln",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 90
+    },
+    {
+      "from": "func_CacheClear",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 93
+    },
+    {
+      "from": "func_CacheClear",
+      "to": "CacheController",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 97
+    },
+    {
+      "from": "func_CacheClear",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 99
+    },
+    {
+      "from": "func_CacheClear",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 101
+    },
+    {
+      "from": "func_CacheClear",
+      "to": "InvalidateByChecksum",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 104
+    },
+    {
+      "from": "func_CacheClear",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 105
+    },
+    {
+      "from": "func_CacheClear",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 108
+    },
+    {
+      "from": "func_CacheCleanup",
+      "to": "Load",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 114
+    },
+    {
+      "from": "func_CacheCleanup",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 116
+    },
+    {
+      "from": "func_CacheCleanup",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 120
+    },
+    {
+      "from": "func_CacheCleanup",
+      "to": "CacheController",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 124
+    },
+    {
+      "from": "func_CacheCleanup",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 126
+    },
+    {
+      "from": "func_CacheCleanup",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 128
+    },
+    {
+      "from": "func_CacheCleanup",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 130
+    },
+    {
+      "from": "func_CacheCleanup",
+      "to": "CleanExpired",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 132
+    },
+    {
+      "from": "func_CacheCleanup",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 133
+    },
+    {
+      "from": "func_CacheCleanup",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 136
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Load",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 142
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 144
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 148
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "CacheController",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 152
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 154
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 156
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "HashHound",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 159
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Calculate",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 160
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 162
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 165
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Print",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 171
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Set",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 172
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 173
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 176
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Print",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 179
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Get",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 180
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 182
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 186
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 187
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 190
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 191
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 193
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Print",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 196
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Get",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 197
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 199
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 200
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 202
+    },
+    {
+      "from": "func_CacheTest",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 204
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Load",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 210
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 212
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 216
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "CacheController",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 220
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 222
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 224
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "ListAll",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 227
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 229
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 232
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 233
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 237
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 237
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 238
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "After",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 241
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Now",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 241
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 249
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 253
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 254
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Format",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 254
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 255
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Format",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 255
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 256
+    },
+    {
+      "from": "func_CacheHistory",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 259
+    },
+    {
+      "from": "func_CacheView",
+      "to": "Load",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 266
+    },
+    {
+      "from": "func_CacheView",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 268
+    },
+    {
+      "from": "func_CacheView",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 272
+    },
+    {
+      "from": "func_CacheView",
+      "to": "CacheController",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 276
+    },
+    {
+      "from": "func_CacheView",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 278
+    },
+    {
+      "from": "func_CacheView",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 280
+    },
+    {
+      "from": "func_CacheView",
+      "to": "ListAll",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 283
+    },
+    {
+      "from": "func_CacheView",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 285
+    },
+    {
+      "from": "func_CacheView",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 288
+    },
+    {
+      "from": "func_CacheView",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 289
+    },
+    {
+      "from": "func_CacheView",
+      "to": "HistoryView",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 294
+    },
+    {
+      "from": "func_CacheView",
+      "to": "NewProgram",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 295
+    },
+    {
+      "from": "func_CacheView",
+      "to": "WithAltScreen",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 295
+    },
+    {
+      "from": "func_CacheView",
+      "to": "Run",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 297
+    },
+    {
+      "from": "func_CacheView",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 298
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Load",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 306
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 308
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 312
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "CacheController",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 316
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 318
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 320
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "ListAll",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 323
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 325
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 328
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 329
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Sscanf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 336
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 339
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 340
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 340
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 358
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 362
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 363
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 364
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Format",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 364
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 365
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 366
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Print",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 368
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Scanln",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 370
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 373
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Delete",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 378
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 379
+    },
+    {
+      "from": "func_CacheDelete",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 382
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 95
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 95
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "NewDefaultDelegate",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 100
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "BorderForeground",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 101
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "Foreground",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 101
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "BorderForeground",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 104
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "Foreground",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 104
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "New",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 108
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "SetShowStatusBar",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 110
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "SetFilteringEnabled",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 111
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "Padding",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 112
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "Background",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 112
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "Foreground",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 112
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "Bold",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 112
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "NewStyle",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 112
+    },
+    {
+      "from": "func_HistoryView",
+      "to": "New",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 118
+    },
+    {
+      "from": "func_wrapTextCache",
+      "to": "Fields",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 355
+    },
+    {
+      "from": "func_wrapTextCache",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 357
+    },
+    {
+      "from": "func_wrapTextCache",
+      "to": "WriteString",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 360
+    },
+    {
+      "from": "func_wrapTextCache",
+      "to": "String",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 360
+    },
+    {
+      "from": "func_wrapTextCache",
+      "to": "WriteString",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 361
+    },
+    {
+      "from": "func_wrapTextCache",
+      "to": "Reset",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 362
+    },
+    {
+      "from": "func_wrapTextCache",
+      "to": "WriteString",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 367
+    },
+    {
+      "from": "func_wrapTextCache",
+      "to": "WriteString",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 371
+    },
+    {
+      "from": "func_wrapTextCache",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 374
+    },
+    {
+      "from": "func_wrapTextCache",
+      "to": "WriteString",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 375
+    },
+    {
+      "from": "func_wrapTextCache",
+      "to": "String",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 375
+    },
+    {
+      "from": "func_wrapTextCache",
+      "to": "String",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 379
+    },
+    {
+      "from": "func_formatDuration",
+      "to": "Sprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 384
+    },
+    {
+      "from": "func_formatDuration",
+      "to": "int",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 384
+    },
+    {
+      "from": "func_formatDuration",
+      "to": "Seconds",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 384
+    },
+    {
+      "from": "func_formatDuration",
+      "to": "Sprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 387
+    },
+    {
+      "from": "func_formatDuration",
+      "to": "int",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 387
+    },
+    {
+      "from": "func_formatDuration",
+      "to": "Minutes",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 387
+    },
+    {
+      "from": "func_formatDuration",
+      "to": "Sprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 390
+    },
+    {
+      "from": "func_formatDuration",
+      "to": "int",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 390
+    },
+    {
+      "from": "func_formatDuration",
+      "to": "Hours",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 390
+    },
+    {
+      "from": "func_formatDuration",
+      "to": "Sprintf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 392
+    },
+    {
+      "from": "func_formatDuration",
+      "to": "int",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 392
+    },
+    {
+      "from": "func_formatDuration",
+      "to": "Hours",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 392
+    },
+    {
+      "from": "func_extractKeywords",
+      "to": "FieldsFunc",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 17
+    },
+    {
+      "from": "func_extractKeywords",
+      "to": "IsLetter",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 18
+    },
+    {
+      "from": "func_extractKeywords",
+      "to": "IsNumber",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 18
+    },
+    {
+      "from": "func_extractKeywords",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 23
+    },
+    {
+      "from": "func_extractKeywords",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 24
+    },
+    {
+      "from": "func_containsAny",
+      "to": "Contains",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 43
+    },
+    {
+      "from": "func_extractQueryKeywords",
+      "to": "FieldsFunc",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 59
+    },
+    {
+      "from": "func_extractQueryKeywords",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 64
+    },
+    {
+      "from": "func_extractQueryKeywords",
+      "to": "Trim",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 66
+    },
+    {
+      "from": "func_extractQueryKeywords",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 67
+    },
+    {
+      "from": "func_extractQueryKeywords",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 68
+    },
+    {
+      "from": "func_extractQueryKeywords",
+      "to": "Contains",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 69
+    },
+    {
+      "from": "func_extractQueryKeywords",
+      "to": "Split",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 70
+    },
+    {
+      "from": "func_extractQueryKeywords",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 72
+    },
+    {
+      "from": "func_extractQueryKeywords",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 73
+    },
+    {
+      "from": "func_main",
+      "to": "Execute",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 11
+    },
+    {
+      "from": "func_main",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 12
+    },
+    {
+      "from": "func_main",
+      "to": "Exit",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 13
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "MkdirAll",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 13
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 14
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 19
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "IsNotExist",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 19
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "WriteFile",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 28
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 29
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 35
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "IsNotExist",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 35
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "WriteFile",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 78
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 79
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 83
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 84
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 85
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 86
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 87
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 88
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 89
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 90
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 91
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 92
+    },
+    {
+      "from": "func_initializeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 93
+    },
+    {
+      "from": "func_QueryTrafficController",
+      "to": "loadKBIndex",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 22
+    },
+    {
+      "from": "func_QueryTrafficController",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 24
+    },
+    {
+      "from": "func_QueryTrafficController",
+      "to": "loadCallGraph",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 27
+    },
+    {
+      "from": "func_QueryTrafficController",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 29
+    },
+    {
+      "from": "func_QueryTrafficController",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 32
+    },
+    {
+      "from": "func_QueryTrafficController",
+      "to": "QuerySheriff",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 33
+    },
+    {
+      "from": "func_QueryTrafficController",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 35
+    },
+    {
+      "from": "func_fuzzyScore",
+      "to": "Contains",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 809
+    },
+    {
+      "from": "func_fuzzyScore",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 814
+    },
+    {
+      "from": "func_fuzzyScore",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 820
+    },
+    {
+      "from": "func_fuzzyScore",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 832
+    },
+    {
+      "from": "func_MainModel",
+      "to": "New",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 68
+    },
+    {
+      "from": "func_MainModel",
+      "to": "Focus",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 70
+    },
+    {
+      "from": "func_MainModel",
+      "to": "Bold",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 73
+    },
+    {
+      "from": "func_MainModel",
+      "to": "Foreground",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 73
+    },
+    {
+      "from": "func_MainModel",
+      "to": "NewStyle",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 73
+    },
+    {
+      "from": "func_MainModel",
+      "to": "Foreground",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 74
+    },
+    {
+      "from": "func_MainModel",
+      "to": "NewStyle",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 74
+    },
+    {
+      "from": "func_MainModel",
+      "to": "New",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 76
+    },
+    {
+      "from": "func_MainModel",
+      "to": "Foreground",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 78
+    },
+    {
+      "from": "func_MainModel",
+      "to": "NewStyle",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 78
+    },
+    {
+      "from": "func_MainModel",
+      "to": "New",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 80
+    },
+    {
+      "from": "func_wrapText",
+      "to": "Fields",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 464
+    },
+    {
+      "from": "func_wrapText",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 466
+    },
+    {
+      "from": "func_wrapText",
+      "to": "WriteString",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 469
+    },
+    {
+      "from": "func_wrapText",
+      "to": "String",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 469
+    },
+    {
+      "from": "func_wrapText",
+      "to": "WriteString",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 470
+    },
+    {
+      "from": "func_wrapText",
+      "to": "Reset",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 471
+    },
+    {
+      "from": "func_wrapText",
+      "to": "WriteString",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 476
+    },
+    {
+      "from": "func_wrapText",
+      "to": "WriteString",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 480
+    },
+    {
+      "from": "func_wrapText",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 483
+    },
+    {
+      "from": "func_wrapText",
+      "to": "WriteString",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 484
+    },
+    {
+      "from": "func_wrapText",
+      "to": "String",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 484
+    },
+    {
+      "from": "func_wrapText",
+      "to": "String",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 488
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Now",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 15
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Load",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 18
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 20
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 23
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "HashHound",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 27
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Calculate",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 28
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 30
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 36
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 37
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Command",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 39
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Sprintf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 42
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Run",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 47
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 48
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 50
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 51
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 55
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 56
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Command",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 58
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Run",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 66
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 67
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 69
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 70
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 73
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Save",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 74
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 75
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 77
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 78
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Since",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 80
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 81
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Round",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 81
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 83
+    },
+    {
+      "from": "func_analyzeProject",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 84
+    },
+    {
+      "from": "func_NewEmbedder",
+      "to": "findEulixBinary",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 40
+    },
+    {
+      "from": "func_NewEmbedder",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 42
+    },
+    {
+      "from": "func_NewEmbedder",
+      "to": "Command",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 46
+    },
+    {
+      "from": "func_NewEmbedder",
+      "to": "Run",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 47
+    },
+    {
+      "from": "func_NewEmbedder",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 48
+    },
+    {
+      "from": "func_findEulixBinary",
+      "to": "LookPath",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 183
+    },
+    {
+      "from": "func_findEulixBinary",
+      "to": "Command",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 190
+    },
+    {
+      "from": "func_findEulixBinary",
+      "to": "Output",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 192
+    },
+    {
+      "from": "func_findEulixBinary",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 192
+    },
+    {
+      "from": "func_findEulixBinary",
+      "to": "string",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 193
+    },
+    {
+      "from": "func_findEulixBinary",
+      "to": "TrimSpace",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 193
+    },
+    {
+      "from": "func_findEulixBinary",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 196
+    },
+    {
+      "from": "func_CosineSimilarity",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 202
+    },
+    {
+      "from": "func_CosineSimilarity",
+      "to": "float64",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 208
+    },
+    {
+      "from": "func_NormalizeVector",
+      "to": "float32",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 221
+    },
+    {
+      "from": "func_NormalizeVector",
+      "to": "Sqrt",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 221
+    },
+    {
+      "from": "func_NormalizeVector",
+      "to": "float64",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 221
+    },
+    {
+      "from": "func_NormalizeVector",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 227
+    },
+    {
+      "from": "func_NormalizeVector",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 227
+    },
+    {
+      "from": "func_Load",
+      "to": "DecodeFile",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 69
+    },
+    {
+      "from": "func_Load",
+      "to": "defaultConfig",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 71
+    },
+    {
+      "from": "func_Load",
+      "to": "Getenv",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 76
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 97
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 98
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 99
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 100
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 103
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 104
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 105
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 106
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 107
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 108
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 109
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 110
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 111
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 112
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "MustCompile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 114
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 115
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 116
+    },
+    {
+      "from": "func_QuerySheriff",
+      "to": "loadSymbols",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 120
+    },
+    {
+      "from": "func_loadCallGraph",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 216
+    },
+    {
+      "from": "func_loadCallGraph",
+      "to": "ReadFile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 217
+    },
+    {
+      "from": "func_loadCallGraph",
+      "to": "Unmarshal",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 223
+    },
+    {
+      "from": "func_loadKBIndex",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 231
+    },
+    {
+      "from": "func_loadKBIndex",
+      "to": "ReadFile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 232
+    },
+    {
+      "from": "func_loadKBIndex",
+      "to": "Unmarshal",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 238
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "initCacheManager",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 344
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 346
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Exit",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 347
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 349
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "ListAll",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 351
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 353
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Exit",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 354
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 357
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 358
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 362
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 362
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 363
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Repeat",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 363
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 366
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 367
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 368
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Format",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 368
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 369
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Format",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 369
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "After",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 371
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Now",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 371
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 372
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Until",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 374
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 375
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Round",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 375
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 378
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "wrapText",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 378
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 379
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "wrapText",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 379
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 380
+    },
+    {
+      "from": "func_runHistoryCommand",
+      "to": "Repeat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 380
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "initCacheManager",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 386
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 388
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "Exit",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 389
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 391
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "ListAll",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 393
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 395
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "Exit",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 396
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 399
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 400
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "HistoryView",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 405
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "NewProgram",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 406
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "WithAltScreen",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 406
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "Run",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 408
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 409
+    },
+    {
+      "from": "func_runHistoryTUI",
+      "to": "Exit",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 410
+    },
+    {
+      "from": "func_Execute",
+      "to": "Execute",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 415
+    },
+    {
+      "from": "func_init",
+      "to": "Bool",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 420
+    },
+    {
+      "from": "func_init",
+      "to": "Flags",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 420
+    },
+    {
+      "from": "func_init",
+      "to": "Bool",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 421
+    },
+    {
+      "from": "func_init",
+      "to": "Flags",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 421
+    },
+    {
+      "from": "func_init",
+      "to": "BoolP",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 424
+    },
+    {
+      "from": "func_init",
+      "to": "Flags",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 424
+    },
+    {
+      "from": "func_init",
+      "to": "BoolP",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 427
+    },
+    {
+      "from": "func_init",
+      "to": "Flags",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 427
+    },
+    {
+      "from": "func_init",
+      "to": "Bool",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 430
+    },
+    {
+      "from": "func_init",
+      "to": "Flags",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 430
+    },
+    {
+      "from": "func_init",
+      "to": "Bool",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 431
+    },
+    {
+      "from": "func_init",
+      "to": "Flags",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 431
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 434
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 435
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 436
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 437
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 438
+    },
+    {
+      "from": "func_init",
+      "to": "SetHelpCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 441
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 447
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 448
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 449
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 450
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 451
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 452
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 453
+    },
+    {
+      "from": "func_init",
+      "to": "AddCommand",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 454
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 461
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "IsNotExist",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 461
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 462
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 463
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Exit",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 464
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 468
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "IsNotExist",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 468
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 469
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 470
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Exit",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 471
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 475
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "IsNotExist",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 475
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 476
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 477
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Fprintf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 478
+    },
+    {
+      "from": "func_checkInitialized",
+      "to": "Exit",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 479
+    },
+    {
+      "from": "func_isInitialized",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 489
+    },
+    {
+      "from": "func_isInitialized",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 490
+    },
+    {
+      "from": "func_getKnowledgeBasePath",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 496
+    },
+    {
+      "from": "func_hasKnowledgeBase",
+      "to": "getKnowledgeBasePath",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 500
+    },
+    {
+      "from": "func_hasKnowledgeBase",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 501
+    },
+    {
+      "from": "func_initCacheManager",
+      "to": "Load",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 507
+    },
+    {
+      "from": "func_initCacheManager",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 509
+    },
+    {
+      "from": "func_initCacheManager",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 513
+    },
+    {
+      "from": "func_initCacheManager",
+      "to": "CacheController",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 516
+    },
+    {
+      "from": "func_initCacheManager",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 518
+    },
+    {
+      "from": "func_truncateString",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 526
+    },
+    {
+      "from": "func_wrapText",
+      "to": "Fields",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 534
+    },
+    {
+      "from": "func_wrapText",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 535
+    },
+    {
+      "from": "func_wrapText",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 543
+    },
+    {
+      "from": "func_wrapText",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 545
+    },
+    {
+      "from": "func_wrapText",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 548
+    },
+    {
+      "from": "func_wrapText",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 560
+    },
+    {
+      "from": "func_wrapText",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 563
+    },
+    {
+      "from": "func_HashHound",
+      "to": "loadIgnorePatterns",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 32
+    },
+    {
+      "from": "func_hashFile",
+      "to": "Open",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 229
+    },
+    {
+      "from": "func_hashFile",
+      "to": "Close",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 233
+    },
+    {
+      "from": "func_hashFile",
+      "to": "New",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 235
+    },
+    {
+      "from": "func_hashFile",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 237
+    },
+    {
+      "from": "func_hashFile",
+      "to": "Read",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 240
+    },
+    {
+      "from": "func_hashFile",
+      "to": "Write",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 248
+    },
+    {
+      "from": "func_hashFile",
+      "to": "EncodeToString",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 258
+    },
+    {
+      "from": "func_hashFile",
+      "to": "Sum",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 258
+    },
+    {
+      "from": "func_extractSymbolsFromContent",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 25
+    },
+    {
+      "from": "func_extractSymbolsFromContent",
+      "to": "Split",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 28
+    },
+    {
+      "from": "func_extractSymbolsFromContent",
+      "to": "TrimSpace",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 30
+    },
+    {
+      "from": "func_extractSymbolsFromContent",
+      "to": "HasPrefix",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 31
+    },
+    {
+      "from": "func_extractSymbolsFromContent",
+      "to": "Split",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 32
+    },
+    {
+      "from": "func_extractSymbolsFromContent",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 33
+    },
+    {
+      "from": "func_extractSymbolsFromContent",
+      "to": "TrimPrefix",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 34
+    },
+    {
+      "from": "func_extractSymbolsFromContent",
+      "to": "TrimSpace",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 35
+    },
+    {
+      "from": "func_extractSymbolsFromContent",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 37
+    },
+    {
+      "from": "func_extractPotentialSymbols",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 48
+    },
+    {
+      "from": "func_extractPotentialSymbols",
+      "to": "Fields",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 49
+    },
+    {
+      "from": "func_extractPotentialSymbols",
+      "to": "Trim",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 52
+    },
+    {
+      "from": "func_extractPotentialSymbols",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 53
+    },
+    {
+      "from": "func_extractPotentialSymbols",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 54
+    },
+    {
+      "from": "func_extractPotentialSymbols",
+      "to": "splitIdentifierToTokens",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 57
+    },
+    {
+      "from": "func_extractPotentialSymbols",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 58
+    },
+    {
+      "from": "func_extractPotentialSymbols",
+      "to": "uniqueStrings",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 62
+    },
+    {
+      "from": "func_extractEntityName",
+      "to": "Fields",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 66
+    },
+    {
+      "from": "func_extractEntityName",
+      "to": "ToLower",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 78
+    },
+    {
+      "from": "func_extractEntityName",
+      "to": "isLikelySymbol",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 82
+    },
+    {
+      "from": "func_extractEntityName",
+      "to": "ToLower",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 88
+    },
+    {
+      "from": "func_isLikelySymbol",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 96
+    },
+    {
+      "from": "func_isLikelySymbol",
+      "to": "Contains",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 109
+    },
+    {
+      "from": "func_isLikelySymbol",
+      "to": "ToUpper",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 113
+    },
+    {
+      "from": "func_isLikelySymbol",
+      "to": "Contains",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 113
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 20
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "IsNotExist",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 20
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 21
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 22
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 23
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 26
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 27
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 28
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 31
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 32
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "loadKB",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 33
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 35
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 37
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 38
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 39
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 40
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 41
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 43
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 43
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 44
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 44
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 47
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 48
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 48
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 49
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 49
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 50
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 50
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 51
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 51
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 55
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 56
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "loadEmbeddingsJSON",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 57
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 59
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 61
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 62
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 63
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 64
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 65
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 65
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 67
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 68
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 69
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 74
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 76
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 76
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 78
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 82
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 83
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 85
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 86
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 87
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 88
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 90
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 92
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "truncate",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 92
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 94
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 95
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 100
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "make",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 101
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 106
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "float64",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 107
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 107
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 111
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 115
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 117
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 122
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 124
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 127
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 131
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 132
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "findChunksWithSymbol",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 135
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 136
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 137
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 137
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 139
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 145
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 146
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "checkEmbeddingsBin",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 147
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 149
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 151
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 152
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 153
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 156
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 157
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 158
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 159
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 161
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 165
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 168
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 174
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 175
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "checkIndex",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 176
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 178
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 180
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 181
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 182
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 186
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Join",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 189
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Stat",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 190
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "float64",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 191
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Size",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 191
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 192
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Printf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 194
+    },
+    {
+      "from": "func_GLaDOS",
+      "to": "Println",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 197
+    },
+    {
+      "from": "func_loadKB",
+      "to": "ReadFile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 203
+    },
+    {
+      "from": "func_loadKB",
+      "to": "Unmarshal",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 209
+    },
+    {
+      "from": "func_loadEmbeddingsJSON",
+      "to": "ReadFile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 217
+    },
+    {
+      "from": "func_loadEmbeddingsJSON",
+      "to": "Unmarshal",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 223
+    },
+    {
+      "from": "func_checkEmbeddingsBin",
+      "to": "ReadFile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 231
+    },
+    {
+      "from": "func_checkEmbeddingsBin",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 236
+    },
+    {
+      "from": "func_checkEmbeddingsBin",
+      "to": "Errorf",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 237
+    },
+    {
+      "from": "func_checkEmbeddingsBin",
+      "to": "Uint32",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 240
+    },
+    {
+      "from": "func_checkEmbeddingsBin",
+      "to": "Uint32",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 241
+    },
+    {
+      "from": "func_checkEmbeddingsBin",
+      "to": "int",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 243
+    },
+    {
+      "from": "func_checkIndex",
+      "to": "ReadFile",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 247
+    },
+    {
+      "from": "func_checkIndex",
+      "to": "Unmarshal",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 253
+    },
+    {
+      "from": "func_checkIndex",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 257
+    },
+    {
+      "from": "func_findChunksWithSymbol",
+      "to": "ToLower",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 262
+    },
+    {
+      "from": "func_findChunksWithSymbol",
+      "to": "Contains",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 266
+    },
+    {
+      "from": "func_findChunksWithSymbol",
+      "to": "ToLower",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 266
+    },
+    {
+      "from": "func_findChunksWithSymbol",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 267
+    },
+    {
+      "from": "func_findChunksWithSymbol",
+      "to": "Contains",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 272
+    },
+    {
+      "from": "func_findChunksWithSymbol",
+      "to": "ToLower",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 272
+    },
+    {
+      "from": "func_findChunksWithSymbol",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 273
+    },
+    {
+      "from": "func_findChunksWithSymbol",
+      "to": "Contains",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 278
+    },
+    {
+      "from": "func_findChunksWithSymbol",
+      "to": "ToLower",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 278
+    },
+    {
+      "from": "func_findChunksWithSymbol",
+      "to": "append",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 279
+    },
+    {
+      "from": "func_truncate",
+      "to": "ReplaceAll",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 287
+    },
+    {
+      "from": "func_truncate",
+      "to": "TrimSpace",
+      "edge_type": "calls",
+      "conditional": false,
+      "call_site_line": 288
+    },
+    {
+      "from": "func_truncate",
+      "to": "len",
+      "edge_type": "calls",
+      "conditional": true,
+      "call_site_line": 289
+    }
+  ]
+}

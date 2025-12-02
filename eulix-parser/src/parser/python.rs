@@ -2,17 +2,16 @@ use crate::kb::types::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use tree_sitter::{Node, Parser, TreeCursor};
+use tree_sitter::{Node, Parser};
 
 pub struct PythonParser {
     source_code: String,
-    lines: Vec<String>,
 }
 
 impl PythonParser {
     pub fn new(source_code: String) -> Self {
-        let lines = source_code.lines().map(|s| s.to_string()).collect();
-        Self { source_code, lines }
+        // let lines: Vec<String> = source_code.lines().map(|s| s.to_string()).collect();
+        Self { source_code }
     }
 
     pub fn parse(&self) -> Result<FileData, String> {
@@ -126,7 +125,7 @@ impl PythonParser {
 
         for child in root.children(&mut cursor) {
             if child.kind() == "function_definition" {
-                if let Some(func) = self.parse_function(&child, "", None) {
+                if let Some(func) = self.parse_function(&child, "") {
                     functions.push(func);
                 }
             }
@@ -135,7 +134,7 @@ impl PythonParser {
         functions
     }
 
-    fn parse_function(&self, node: &Node, class_context: &str, file_path: Option<&str>) -> Option<Function> {
+    fn parse_function(&self, node: &Node, class_context: &str) -> Option<Function> {
         let mut cursor = node.walk();
         let mut name = String::new();
         let mut is_async = false;
@@ -176,7 +175,7 @@ impl PythonParser {
         let signature = self.build_signature(&name, &params, &return_type, is_async);
 
         // Extract function calls with context
-        let calls = self.extract_function_calls_detailed(node, file_path);
+        let calls = self.extract_function_calls_detailed(node);
 
         // Extract variables and data flow
         let variables = self.extract_variables(node, &params);
@@ -322,7 +321,7 @@ impl PythonParser {
     }
 
     // Extract function calls with detailed context
-    fn extract_function_calls_detailed(&self, node: &Node, file_path: Option<&str>) -> Vec<FunctionCall> {
+    fn extract_function_calls_detailed(&self, node: &Node) -> Vec<FunctionCall> {
         let mut calls = Vec::new();
         let mut seen = HashSet::new();
 
@@ -722,7 +721,7 @@ impl PythonParser {
 
         for child in root.children(&mut cursor) {
             if child.kind() == "class_definition" {
-                if let Some(class) = self.parse_class(&child, None) {
+                if let Some(class) = self.parse_class(&child) {
                     classes.push(class);
                 }
             }
@@ -731,7 +730,7 @@ impl PythonParser {
         classes
     }
 
-    fn parse_class(&self, node: &Node, file_path: Option<&str>) -> Option<Class> {
+    fn parse_class(&self, node: &Node) -> Option<Class> {
         let mut cursor = node.walk();
         let mut name = String::new();
         let mut bases = Vec::new();
@@ -759,7 +758,7 @@ impl PythonParser {
                     bases = self.extract_base_classes(&child);
                 }
                 "block" => {
-                    let (class_methods, class_attrs) = self.parse_class_body(&child, &name, file_path);
+                    let (class_methods, class_attrs) = self.parse_class_body(&child, &name);
                     methods = class_methods;
                     attributes = class_attrs;
                 }
@@ -797,7 +796,7 @@ impl PythonParser {
             .collect()
     }
 
-    fn parse_class_body(&self, node: &Node, class_name: &str, file_path: Option<&str>) -> (Vec<Function>, Vec<Attribute>) {
+    fn parse_class_body(&self, node: &Node, class_name: &str) -> (Vec<Function>, Vec<Attribute>) {
         let mut methods = Vec::new();
         let mut attributes = Vec::new();
         let mut cursor = node.walk();
@@ -805,7 +804,7 @@ impl PythonParser {
         for child in node.children(&mut cursor) {
             match child.kind() {
                 "function_definition" => {
-                    if let Some(method) = self.parse_function(&child, class_name, file_path) {
+                    if let Some(method) = self.parse_function(&child, class_name) {
                         methods.push(method);
                     }
                 }
@@ -981,7 +980,7 @@ impl PythonParser {
 
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
-        let code_lower = self.source_code.to_lowercase();
+        // let code_lower = self.source_code.to_lowercase();
 
         let patterns = vec![
             (r"password", "password_handling", "Handles passwords"),
@@ -1016,46 +1015,178 @@ impl PythonParser {
         let name_lower = name.to_lowercase();
         let doc_lower = docstring.to_lowercase();
 
-        // Entry point detection
-        if name == "main" || name == "run" || name == "start" {
+        // Entry point
+        if name == "main" || name == "run" || name == "start" || name == "__main__" {
             tags.push("entry-point".to_string());
         }
 
-        // Authentication/Security
+        // Initialization
+        if name_lower.contains("init") || name_lower.contains("setup") ||
+            name_lower.contains("initialize") || name_lower.contains("bootstrap") {
+            tags.push("initialization".to_string());
+        }
+
+        // Cleanup
+        if name_lower.contains("cleanup") || name_lower.contains("close") ||
+            name_lower.contains("shutdown") || name_lower.contains("dispose") {
+            tags.push("cleanup".to_string());
+        }
+
+        // Authentication & Security
         if name_lower.contains("auth") || name_lower.contains("login") ||
-           name_lower.contains("password") || name_lower.contains("hash") {
+            name_lower.contains("logout") || name_lower.contains("password") ||
+            name_lower.contains("hash") || name_lower.contains("encrypt") ||
+            name_lower.contains("decrypt") || name_lower.contains("token") ||
+            doc_lower.contains("authentication") {
             tags.push("authentication".to_string());
             tags.push("security".to_string());
         }
 
-        // API/HTTP
+        // API & HTTP
         if name_lower.contains("api") || name_lower.contains("endpoint") ||
-           name_lower.contains("route") || doc_lower.contains("http") {
+            name_lower.contains("route") || name_lower.contains("handler") ||
+            name_lower.contains("view") || doc_lower.contains("http") ||
+            doc_lower.contains("endpoint") {
             tags.push("api".to_string());
+        }
+
+        if name_lower.contains("handler") || name_lower.contains("view") ||
+            name_lower.contains("controller") {
+            tags.push("http-handler".to_string());
         }
 
         // Database
         if name_lower.contains("db") || name_lower.contains("database") ||
-           name_lower.contains("query") || name_lower.contains("save") {
+            name_lower.contains("query") || name_lower.contains("select") ||
+            name_lower.contains("insert") || name_lower.contains("update") ||
+            name_lower.contains("delete") || name_lower.contains("save") ||
+            name_lower.contains("fetch") || name_lower.contains("find") {
             tags.push("database".to_string());
-        }
-
-        // Async
-        if calls.iter().any(|c| c.callee.contains("await") || c.callee.contains("async")) {
-            tags.push("async".to_string());
         }
 
         // Validation
         if name_lower.contains("validate") || name_lower.contains("check") ||
-           name_lower.contains("verify") {
+            name_lower.contains("verify") || name_lower.contains("sanitize") {
             tags.push("validation".to_string());
         }
 
-        // Utils
+        // Error handling
+        if name_lower.contains("error") || name_lower.contains("exception") ||
+            name_lower.contains("handle") && (doc_lower.contains("error") || doc_lower.contains("exception")) {
+            tags.push("error-handling".to_string());
+        }
+
+        // Utilities
         if name_lower.contains("util") || name_lower.contains("helper") {
             tags.push("utility".to_string());
         }
 
+        // Testing
+        if name_lower.starts_with("test_") || name_lower.starts_with("test") {
+            tags.push("testing".to_string());
+        }
+
+        // File I/O
+        if name_lower.contains("read") || name_lower.contains("write") ||
+            name_lower.contains("file") || name_lower.contains("open") ||
+            name_lower.contains("load") {
+            tags.push("file-io".to_string());
+        }
+
+        // Network
+        if name_lower.contains("socket") || name_lower.contains("connect") ||
+            name_lower.contains("request") || name_lower.contains("response") {
+            tags.push("network".to_string());
+        }
+
+        // Configuration
+        if name_lower.contains("config") || name_lower.contains("setting") ||
+            name_lower.contains("option") {
+            tags.push("configuration".to_string());
+        }
+
+        // Logging
+        if name_lower.contains("log") || name_lower.contains("debug") {
+            tags.push("logging".to_string());
+        }
+
+        // Parsing
+        if name_lower.contains("parse") || name_lower.contains("decode") {
+            tags.push("parsing".to_string());
+        }
+
+        // Serialization
+        if name_lower.contains("serialize") || name_lower.contains("encode") {
+            tags.push("serialization".to_string());
+        }
+
+        // Async/Await
+        if calls.iter().any(|c| c.callee.contains("await") || c.callee.contains("async")) ||
+            name_lower.contains("async") {
+            tags.push("async".to_string());
+            tags.push("coroutine".to_string());
+        }
+
+        // Dunder methods
+        if name.starts_with("__") && name.ends_with("__") {
+            tags.push("dunder-method".to_string());
+
+            match name {
+                "__init__" => tags.push("constructor".to_string()),
+                "__del__" => tags.push("destructor".to_string()),
+                "__str__" | "__repr__" => tags.push("string-representation".to_string()),
+                "__enter__" | "__exit__" => tags.push("context-manager".to_string()),
+                "__call__" => tags.push("callable".to_string()),
+                "__iter__" | "__next__" => tags.push("iterator".to_string()),
+                "__getitem__" | "__setitem__" | "__delitem__" => tags.push("subscriptable".to_string()),
+                "__len__" => tags.push("sized".to_string()),
+                "__eq__" | "__ne__" | "__lt__" | "__le__" | "__gt__" | "__ge__" => tags.push("comparison".to_string()),
+                "__add__" | "__sub__" | "__mul__" | "__div__" => tags.push("arithmetic".to_string()),
+                _ => {}
+            }
+        }
+
+        // Private/Protected methods (naming convention)
+        if name.starts_with("_") && !name.starts_with("__") {
+            tags.push("protected".to_string());
+        }
+        if name.starts_with("__") && !name.ends_with("__") {
+            tags.push("private".to_string());
+        }
+
+        // Property decorator
+        if name_lower.contains("property") || doc_lower.contains("@property") {
+            tags.push("property".to_string());
+        }
+
+        // Threading
+        if calls.iter().any(|c| c.callee.contains("Thread") || c.callee.contains("threading")) {
+            tags.push("threading".to_string());
+            tags.push("concurrent".to_string());
+        }
+
+        // Multiprocessing
+        if calls.iter().any(|c| c.callee.contains("Process") || c.callee.contains("multiprocessing")) {
+            tags.push("multiprocessing".to_string());
+            tags.push("concurrent".to_string());
+        }
+
+        // Generators
+        if calls.iter().any(|c| c.callee == "yield") {
+            tags.push("generator".to_string());
+        }
+
+        // Decorators (common patterns)
+        if name_lower.contains("classmethod") || doc_lower.contains("@classmethod") {
+            tags.push("class-method".to_string());
+        }
+        if name_lower.contains("staticmethod") || doc_lower.contains("@staticmethod") {
+            tags.push("static-method".to_string());
+        }
+
+        // Remove duplicates and sort
+        tags.sort();
+        tags.dedup();
         tags
     }
 

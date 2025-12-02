@@ -1,0 +1,90 @@
+{
+  "project_name": "unknown",
+  "total_files": 24,
+  "total_loc": 7348,
+  "languages": [
+    "go"
+  ],
+  "categories": {
+    "Security": [
+      "internal/checksum/detector.go"
+    ],
+    "Other": [
+      "internal/fixers/Aspirine.go",
+      "internal/cache/manager.go",
+      "internal/cli/chat.go",
+      "internal/cli/history.go",
+      "internal/query/strings.go",
+      "internal/types/context.go",
+      "cmd/eulix/main.go",
+      "internal/cli/init.go",
+      "internal/cli/analyze.go",
+      "internal/query/contextTypes.go",
+      "internal/embeddings/embedder.go",
+      "internal/config/config.go",
+      "internal/llm/client.go",
+      "internal/query/classifier.go",
+      "internal/fixers/types.go",
+      "internal/query/loader.go",
+      "internal/cli/commands.go",
+      "internal/query/symbols.go",
+      "internal/fixers/GLaDOS.go"
+    ],
+    "User Interface": [
+      "internal/query/context_builder.go",
+      "internal/tui/history.go",
+      "internal/tui/app.go"
+    ],
+    "API": [
+      "internal/query/router.go"
+    ]
+  },
+  "key_features": [
+    "CacheClear clears all cache entries",
+    "CacheDelete deletes a specific cache entry by index or hash",
+    "MouthClient cause thats what llm is used for to speak",
+    "truncateString truncates a string to maxLen characters",
+    "- dimension: expected embedding dimension",
+    "Helper function to find the eulix_embed binary",
+    "GLaDOS checks for knowledge base outputs and checks for embeddings size and other errors",
+    "Returns a new normalized vector",
+    "CacheView launches interactive TUI cache viewer",
+    "Split identifiers into tokens for matching"
+  ],
+  "entry_points": [
+    "cmd/eulix/main.go:10"
+  ],
+  "dependencies": {
+    "stdlib": [],
+    "third_party": [
+      "eulix/internal/types",
+      "github.com/charmbracelet/bubbletea",
+      "github.com/charmbracelet/bubbles/viewport",
+      "github.com/charmbracelet/bubbles/key",
+      "github.com/charmbracelet/bubbles/textinput",
+      "eulix/internal/config",
+      "github.com/mattn/go-sqlite3",
+      "eulix/internal/llm",
+      "eulix/internal/checksum",
+      "eulix/internal/embeddings",
+      "github.com/charmbracelet/lipgloss",
+      "eulix/internal/cache",
+      "encoding/binary",
+      "eulix/internal/query",
+      "github.com/spf13/cobra",
+      "eulix/internal/tui",
+      "eulix/internal/cli",
+      "github.com/charmbracelet/bubbles/spinner",
+      "github.com/charmbracelet/bubbles/list",
+      "github.com/redis/go-redis/v9",
+      "eulix/internal/fixers",
+      "github.com/BurntSushi/toml",
+      "encoding/hex"
+    ]
+  },
+  "patterns": {
+    "naming_convention": "camelCase",
+    "structure_type": "Flat",
+    "architecture_style": null
+  }
+}

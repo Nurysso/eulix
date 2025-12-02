@@ -15,6 +15,7 @@ use parser::analyze::Analyzer;
 use parser::language::Language;
 use parser::python;
 use parser::go;
+use parser::c;
 use utils::file_walker::FileWalker;
 
 #[derive(Debug, Clone)]
@@ -84,13 +85,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("║             EULIX PARSER - Code Analysis Tool                  ║");
         println!("╚════════════════════════════════════════════════════════════════╝");
         println!();
-        println!("📁 Project Root:    {}", args.root);
-        println!("🧵 Threads:         {}", args.threads);
-        println!("📄 Output:          {}", args.output);
-        println!("🌐 Languages:       {}", args.languages);
-        println!("⚡ Skip Analysis:   {}", args.no_analyze);
+        println!("Project Root:    {}", args.root);
+        println!("Threads:         {}", args.threads);
+        println!("Output:          {}", args.output);
+        println!("Languages:       {}", args.languages);
+        println!("Skip Analysis:   {}", args.no_analyze);
         if let Some(ref ignore) = args.euignore {
-            println!("🚫 Ignore File:     {}", ignore);
+            println!("[x] Ignore File:     {}", ignore);
         }
         println!();
         println!("{}", "═".repeat(64));
@@ -98,7 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Phase 1: Parse all files
     if args.verbose {
-        println!("\n📋 PHASE 1: FILE DISCOVERY & PARSING");
+        println!("\n PHASE 1: FILE DISCOVERY & PARSING");
         println!("{}", "─".repeat(64));
     }
     let parse_start = Instant::now();
@@ -106,18 +107,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.verbose {
         println!("\n{}", "─".repeat(64));
-        println!("✅ Parsing Complete!");
-        println!("   ⏱️  Time:         {:.2}s", parse_start.elapsed().as_secs_f64());
-        println!("   ✓  Parsed:       {} files", stats.parsed.len());
-        println!("   ⊘  Skipped:      {} files", stats.skipped.len());
-        println!("   ✗  Failed:       {} files", stats.failed.len());
+        println!("Parsing Complete!");
+        println!("     Time:         {:.2}s", parse_start.elapsed().as_secs_f64());
+        println!("     Parsed:       {} files", stats.parsed.len());
+        println!("     Skipped:      {} files", stats.skipped.len());
+        println!("     Failed:       {} files", stats.failed.len());
         println!("{}", "═".repeat(64));
     }
 
     if !args.no_analyze {
         // Phase 2: Analyze and build indices (parallel where possible)
         if args.verbose {
-            println!("\n🔍 PHASE 2: BUILDING CALL GRAPH & INDICES");
+            println!("\n PHASE 2: BUILDING CALL GRAPH & INDICES");
             println!("{}", "─".repeat(64));
             println!("   Analyzing relationships and dependencies...");
         }
@@ -126,37 +127,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Check if codebase is too large for full analysis
         let file_count = kb.structure.len();
         if file_count > 10000 && args.verbose {
-            println!("   ⚠️  Large codebase detected ({} files)", file_count);
-            println!("   💡 Consider using --no-analyze for faster results");
+            println!("   [!]  Large codebase detected ({} files)", file_count);
+            println!("    Consider using --no-analyze for faster results");
         }
 
         kb = Analyzer::analyze_and_build(kb, args.verbose);
 
         if args.verbose {
             println!("\n{}", "─".repeat(64));
-            println!("✅ Analysis Complete!");
-            println!("   ⏱️  Time:         {:.2}s", analyze_start.elapsed().as_secs_f64());
-            println!("   📊 Graph Nodes:  {}", kb.call_graph.nodes.len());
-            println!("   🔗 Graph Edges:  {}", kb.call_graph.edges.len());
+            println!(" Analysis Complete!");
+            println!("  Time:         {:.2}s", analyze_start.elapsed().as_secs_f64());
+            println!("  Graph Nodes:  {}", kb.call_graph.nodes.len());
+            println!("  Graph Edges:  {}", kb.call_graph.edges.len());
             println!("{}", "═".repeat(64));
         }
 
         // Phase 3: Generate summary
         if args.verbose {
-            println!("\n📝 PHASE 3: GENERATING SUMMARY");
+            println!("\n PHASE 3: GENERATING SUMMARY");
             println!("{}", "─".repeat(64));
         }
         let summary_start = Instant::now();
         let summary = Analyzer::generate_summary(&kb);
 
         if args.verbose {
-            println!("✅ Summary generated in {:.2}s", summary_start.elapsed().as_secs_f64());
+            println!(" Summary generated in {:.2}s", summary_start.elapsed().as_secs_f64());
             println!("{}", "═".repeat(64));
         }
 
         // Phase 4: Write outputs
         if args.verbose {
-            println!("\n💾 PHASE 4: WRITING OUTPUT FILES");
+            println!("\n PHASE 4: WRITING OUTPUT FILES");
             println!("{}", "─".repeat(64));
         }
 
@@ -225,7 +226,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         // Only write basic kb.json without analysis
         if args.verbose {
-            println!("\n💾 WRITING OUTPUT (ANALYSIS SKIPPED)");
+            println!("\n WRITING OUTPUT (ANALYSIS SKIPPED)");
             println!("{}", "─".repeat(64));
         }
 
@@ -257,16 +258,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_final_summary(kb: &KnowledgeBase, stats: &ParseStats, total_time: f64) {
-    println!("\n╔════════════════════════════════════════════════════════════════╗");
-    println!("║                      FINAL SUMMARY                             ║");
-    println!("╚════════════════════════════════════════════════════════════════╝");
-    println!();
-
-    println!("⏱️  EXECUTION TIME");
+    println!("EXECUTION TIME");
     println!("   Total:                  {:.2}s", total_time);
     println!();
 
-    println!("📊 CODE METRICS");
+    println!("CODE METRICS");
     println!("   Files Processed:        {}", kb.metadata.total_files);
     println!("   Total Lines of Code:    {}", kb.metadata.total_loc);
     println!("   Functions:              {}", kb.metadata.total_functions);
@@ -274,36 +270,32 @@ fn print_final_summary(kb: &KnowledgeBase, stats: &ParseStats, total_time: f64) 
     println!("   Methods:                {}", kb.metadata.total_methods);
     println!();
 
-    println!("🌐 LANGUAGES DETECTED");
+    println!("LANGUAGES DETECTED");
     for lang in &kb.metadata.languages {
         println!("   • {}", lang);
     }
     println!();
 
-    println!("🔍 ANALYSIS RESULTS");
+    println!(" ANALYSIS RESULTS");
     println!("   Call Graph Nodes:       {}", kb.call_graph.nodes.len());
     println!("   Call Graph Edges:       {}", kb.call_graph.edges.len());
     println!("   Entry Points:           {}", kb.entry_points.len());
     println!("   External Dependencies:  {}", kb.external_dependencies.len());
     println!();
 
-    println!("📝 PARSING STATISTICS");
-    println!("   ✓ Successfully Parsed:  {} files", stats.parsed.len());
-    println!("   ⊘ Skipped:              {} files", stats.skipped.len());
-    println!("   ✗ Failed:               {} files", stats.failed.len());
-
     if !stats.failed.is_empty() {
         println!();
-        println!("⚠️  FAILED FILES:");
+        println!("[!]  FAILED FILES:");
         for (file, reason) in &stats.failed {
             println!("   • {} - {}", file, reason);
         }
     }
 
-    println!();
-    println!("{}",  "═".repeat(64));
-    println!("✨ Analysis complete!");
-    println!("{}", "═".repeat(64));
+    println!(" PARSING STATISTICS");
+    println!("   ✓ Successfully Parsed:  {} files", stats.parsed.len());
+    println!("   ⊘ Skipped:              {} files", stats.skipped.len());
+    println!("   ✗ Failed:               {} files", stats.failed.len());
+    println!(" Analysis complete!");
 }
 
 fn parse_directory(
@@ -327,14 +319,14 @@ fn parse_directory(
         });
 
     if verbose && euignore.is_some() {
-        println!("   🚫 Using .euignore: {:?}", euignore.as_ref().unwrap());
+        println!("   [!] Using .euignore: {:?}", euignore.as_ref().unwrap());
     }
 
     // Collect all source files based on language filter
-    let files = collect_source_files(&path, euignore.as_deref(), languages, verbose)?;
+    let files = collect_source_files(&path, languages, verbose)?;
 
     if verbose {
-        println!("   📁 Discovered {} source files", files.len());
+        println!("    Discovered {} source files", files.len());
         println!();
     }
 
@@ -427,9 +419,10 @@ fn parse_directory(
     Ok((kb, final_stats))
 }
 
+#[allow(dead_code)]
 fn collect_source_files(
     root: &Path,
-    euignore_path: Option<&Path>,
+    // euignore_path: Option<&Path>,
     languages: &str,
     verbose: bool,
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
@@ -438,6 +431,7 @@ fn collect_source_files(
     // Parse language filter
     let lang_filters: Vec<Language> = if languages == "all" {
         vec![
+            Language::C,
             Language::Python,
             Language::JavaScript,
             Language::TypeScript,
@@ -449,6 +443,7 @@ fn collect_source_files(
             .split(',')
             .map(|s| s.trim())
             .filter_map(|lang_str| match lang_str.to_lowercase().as_str() {
+                "c" | "C" => Some(Language::C),
                 "python" | "py" => Some(Language::Python),
                 "javascript" | "js" => Some(Language::JavaScript),
                 "typescript" | "ts" => Some(Language::TypeScript),
@@ -456,7 +451,7 @@ fn collect_source_files(
                 "rust" | "rs" => Some(Language::Rust),
                 _ => {
                     if verbose {
-                        eprintln!("   ⚠️  Unknown language filter '{}'", lang_str);
+                        eprintln!("     Unknown language filter '{}'", lang_str);
                     }
                     None
                 }
@@ -465,7 +460,7 @@ fn collect_source_files(
     };
 
     if verbose {
-        println!("   🔎 Searching for files...");
+        println!("    Searching for files...");
     }
 
     // Use FileWalker for all languages
@@ -473,6 +468,7 @@ fn collect_source_files(
 
     for lang in &lang_filters {
         let extension = match lang {
+            Language::C => "c",
             Language::Python => "py",
             Language::JavaScript => "js",
             Language::TypeScript => "ts",
@@ -495,7 +491,7 @@ fn collect_source_files(
             },
             Err(e) => {
                 if verbose {
-                    eprintln!("      ⚠️  Failed to collect .{} files: {}", extension, e);
+                    eprintln!("        Failed to collect .{} files: {}", extension, e);
                 }
             }
         }
@@ -534,7 +530,10 @@ fn parse_file(
         Language::Go => {
             let (_, file_data) = go::parse_file(file_path)?;
             Ok((relative_path, file_data))
-            // Err("Go parsing not yet implemented".into())
+        }
+        Language::C => {
+            let (_, file_data) = c::parse_file(file_path)?;
+            Ok((relative_path, file_data))
         }
         Language::Rust => {
             Err("Rust parsing not yet implemented".into())

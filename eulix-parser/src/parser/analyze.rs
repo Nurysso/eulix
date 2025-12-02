@@ -15,7 +15,7 @@ impl Analyzer {
         let is_large = file_count > 20000;
 
         if verbose && is_large {
-            println!("   ⚠️  Enabling memory-efficient mode for {} files", file_count);
+            println!("   [!]  Enabling memory-efficient mode for {} files", file_count);
         }
 
         // Build call graph (skip for very large repos to save memory)
@@ -23,7 +23,7 @@ impl Analyzer {
             if verbose { println!("   → Building call graph..."); }
             kb.call_graph = Self::build_call_graph(&kb.structure);
         } else if verbose {
-            println!("   ⚠️  Skipping call graph (too large, would use excessive memory)");
+            println!("   [!]  Skipping call graph (too large, would use excessive memory)");
         }
 
         // Build reverse call graph (populate called_by)

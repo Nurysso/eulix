@@ -119,7 +119,7 @@ Eulix Parser is a static code analysis tool that transforms source code into str
         ┌────────┴────┬───────────────┐
         ↓             ↓               ↓
      ┌──────────┐  ┌─────────┐  ┌──────────┐
-     │index.json│  │summary  │  │Call graph│
+     │index.json│  │summary  │  │Call graph│ //stops at 20k file to save memory and analysis faster
      └──────────┘  │.json    │  └──────────┘
                    └─────────┘
 ```

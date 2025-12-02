@@ -1,0 +1,41 @@
+# Eulix Configuration
+
+[project]
+path = "."
+
+[parser]
+threads = 4
+
+[embeddings]
+model = "BAAI/bge-small-en-v1.5"
+backend = "auto"
+dimension = 384
+
+[llm]
+local = true
+provider = "ollama"
+model = "llama3.2:3b"
+max_tokens = 8192
+temperature = 0.7
+baseURL = "http://localhost:11434"
+
+# To use Anthropic Claude instead, change to:
+# local = false
+# provider = "anthropic"
+# model = "claude-3-5-sonnet-20241022"
+# api_key = ""  # or set ANTHROPIC_API_KEY environment variable
+
+[cache]
+[cache.redis]
+enabled = false
+url = "redis://localhost:6379"
+ttl_hours = 6
+
+[cache.sql]
+enabled = true
+driver = "sqlite"
+dsn = ".eulix/history.db"
+
+[checksum]
+change_threshold = 0.10
+force_reanalyze_threshold = 0.30
