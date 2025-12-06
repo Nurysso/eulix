@@ -19,8 +19,9 @@ pub enum DeviceType {
 
 #[derive(Debug, Clone, Copy)]
 enum ModelType {
-    Bert,
-    Sentence,
+    // Bert,
+    // Sentence,
+    Standard,
     MPNet,
 }
 
@@ -130,11 +131,14 @@ impl OnnxBackend {
 
         if name_lower.contains("mpnet") {
             ModelType::MPNet
-        } else if name_lower.contains("minilm") || name_lower.contains("all-minilm") {
-            ModelType::Sentence
         } else {
-            ModelType::Bert
+            ModelType::Standard
         }
+        // } else if name_lower.contains("minilm") || name_lower.contains("all-minilm") {
+            // ModelType::Sentence
+        // } else {
+            // ModelType::Bert
+        // }
     }
 
     fn download_model(model_name: &str) -> Result<PathBuf> {
@@ -188,6 +192,7 @@ impl OnnxBackend {
 
         let outputs = match self.model_type {
             ModelType::MPNet => {
+                // MPNet: only needs input_ids and attention_mask
                 let inputs = ort::inputs![
                     "input_ids" => input_ids_value,
                     "attention_mask" => attention_mask_value,
@@ -195,7 +200,8 @@ impl OnnxBackend {
                 session_guard.run(inputs)
                     .map_err(|e| anyhow!("Failed to run inference: {:?}", e))?
             }
-            ModelType::Bert | ModelType::Sentence => {
+            ModelType::Standard => {
+                // Standard BERT-like models: need token_type_ids too
                 let token_type_ids_value = Value::from_array(([1, seq_len], token_type_ids_i64))
                     .map_err(|e| anyhow!("Failed to create token_type_ids tensor: {:?}", e))?;
 
@@ -209,12 +215,9 @@ impl OnnxBackend {
             }
         };
 
-        let output_name = match self.model_type {
-            ModelType::Sentence => "token_embeddings",
-            ModelType::Bert | ModelType::MPNet => "last_hidden_state",
-        };
+        let output_name = "last_hidden_state";
 
-        let (output_shape, embeddings_data) = outputs
+        let Ok((output_shape, embeddings_data)) = outputs
             .get(output_name)
             .ok_or_else(|| {
                 let available: Vec<String> = outputs
@@ -227,10 +230,10 @@ impl OnnxBackend {
                     available
                 )
             })?
-            .try_extract_tensor::<f32>()
-            .map_err(|e| anyhow!("Failed to extract embeddings from '{}': {:?}", output_name, e))?;
+            .try_extract_tensor::<f32>() else { todo!() };
 
-        // CRITICAL FIX: Get actual dimension from model output
+
+            // Get actual dimension from model output
         let actual_hidden_dim = if output_shape.len() == 3 {
             output_shape[2] as usize
         } else {
@@ -240,7 +243,7 @@ impl OnnxBackend {
             ));
         };
 
-        // CRITICAL FIX: Update stored dimension if this is the first time we see the real value
+        // Update stored dimension if this is the first time we see the real value
         let stored_dim = self.dimension.load(Ordering::Relaxed);
         if actual_hidden_dim != stored_dim {
             println!(
@@ -291,6 +294,168 @@ impl OnnxBackend {
         }
 
         Ok(embedding)
+    }
+
+    pub fn generate_embeddings_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        const MAX_TOKENS: usize = 512;
+        let batch_size = texts.len();
+
+        // Tokenize all texts
+        let encodings: Vec<_> = texts
+            .iter()
+            .map(|text| {
+                self.tokenizer
+                    .encode(*text, true)
+                    .map_err(|e| anyhow!("Tokenization failed: {}", e))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Find max sequence length in batch (for padding)
+        let max_seq_len = encodings
+            .iter()
+            .map(|enc| enc.get_ids().len().min(MAX_TOKENS))
+            .max()
+            .unwrap_or(0);
+
+        // Prepare batched tensors with padding
+        let mut batch_input_ids = Vec::with_capacity(batch_size * max_seq_len);
+        let mut batch_attention_mask = Vec::with_capacity(batch_size * max_seq_len);
+        let mut batch_token_type_ids = Vec::with_capacity(batch_size * max_seq_len);
+
+        for encoding in &encodings {
+            let mut input_ids = encoding.get_ids().to_vec();
+            let mut attention_mask = encoding.get_attention_mask().to_vec();
+            let mut token_type_ids = encoding.get_type_ids().to_vec();
+
+            // Truncate if needed
+            if input_ids.len() > MAX_TOKENS {
+                input_ids.truncate(MAX_TOKENS);
+                attention_mask.truncate(MAX_TOKENS);
+                token_type_ids.truncate(MAX_TOKENS);
+            }
+
+            let _seq_len = input_ids.len();
+
+            // Pad to max_seq_len
+            input_ids.resize(max_seq_len, 0);
+            attention_mask.resize(max_seq_len, 0);
+            token_type_ids.resize(max_seq_len, 0);
+
+            // Add to batch
+            batch_input_ids.extend(input_ids.iter().map(|&x| x as i64));
+            batch_attention_mask.extend(attention_mask.iter().map(|&x| x as i64));
+            batch_token_type_ids.extend(token_type_ids.iter().map(|&x| x as i64));
+        }
+
+        // Create tensors
+        let input_ids_value = Value::from_array(([batch_size, max_seq_len], batch_input_ids))
+            .map_err(|e| anyhow!("Failed to create input_ids tensor: {:?}", e))?;
+
+        let attention_mask_value = Value::from_array(([batch_size, max_seq_len], batch_attention_mask.clone()))
+            .map_err(|e| anyhow!("Failed to create attention_mask tensor: {:?}", e))?;
+
+        let mut session_guard = self.session.lock()
+            .map_err(|e| anyhow!("Failed to lock session: {}", e))?;
+
+        // Run inference
+        let outputs = match self.model_type {
+            ModelType::MPNet => {
+                let inputs = ort::inputs![
+                    "input_ids" => input_ids_value,
+                    "attention_mask" => attention_mask_value,
+                ];
+                session_guard.run(inputs)
+                    .map_err(|e| anyhow!("Failed to run inference: {:?}", e))?
+            }
+            ModelType::Standard => {
+                let token_type_ids_value = Value::from_array(([batch_size, max_seq_len], batch_token_type_ids))
+                    .map_err(|e| anyhow!("Failed to create token_type_ids tensor: {:?}", e))?;
+
+                let inputs = ort::inputs![
+                    "input_ids" => input_ids_value,
+                    "attention_mask" => attention_mask_value,
+                    "token_type_ids" => token_type_ids_value,
+                ];
+                session_guard.run(inputs)
+                    .map_err(|e| anyhow!("Failed to run inference: {:?}", e))?
+            }
+        };
+
+        let output_name = "last_hidden_state";
+        let Ok((output_shape, embeddings_data)) = outputs
+            .get(output_name)
+            .ok_or_else(|| anyhow!("No output named '{}'", output_name))?
+            .try_extract_tensor::<f32>() else {
+                return Err(anyhow!("Failed to extract tensor"));
+            };
+
+        // Get actual dimension from model output
+        let actual_hidden_dim = if output_shape.len() == 3 {
+            output_shape[2] as usize
+        } else {
+            return Err(anyhow!("Unexpected output shape: {:?}", output_shape));
+        };
+
+        // Update stored dimension if needed
+        let stored_dim = self.dimension.load(Ordering::Relaxed);
+        if actual_hidden_dim != stored_dim {
+            println!(
+                "     ✓ Actual model dimension: {}d (config estimated: {}d)",
+                actual_hidden_dim, stored_dim
+            );
+            self.dimension.store(actual_hidden_dim, Ordering::Relaxed);
+        }
+
+        // Process each item in the batch
+        let mut result = Vec::with_capacity(batch_size);
+
+        for i in 0..batch_size {
+            let start_idx = i * max_seq_len * actual_hidden_dim;
+            let end_idx = start_idx + (max_seq_len * actual_hidden_dim);
+            let item_embeddings = &embeddings_data[start_idx..end_idx];
+
+            // Reshape to [seq_len, hidden_dim]
+            let embeddings = Array2::from_shape_vec((max_seq_len, actual_hidden_dim), item_embeddings.to_vec())
+                .map_err(|e| anyhow!("Failed to reshape embeddings: {}", e))?;
+
+            // Get attention mask for this item
+            let attention_start = i * max_seq_len;
+            let attention_end = attention_start + max_seq_len;
+            let attention_mask_f32: Vec<f32> = batch_attention_mask[attention_start..attention_end]
+                .iter()
+                .map(|&x| x as f32)
+                .collect();
+
+            let attention_mask_array = Array2::from_shape_vec((max_seq_len, 1), attention_mask_f32)
+                .map_err(|e| anyhow!("Failed to create attention mask array: {}", e))?;
+
+            let attention_expanded = attention_mask_array
+                .broadcast((max_seq_len, actual_hidden_dim))
+                .ok_or_else(|| anyhow!("Failed to broadcast attention mask"))?;
+
+            // Mean pooling
+            let masked_embeddings = &embeddings * &attention_expanded;
+            let sum_embeddings = masked_embeddings.sum_axis(Axis(0));
+            let sum_mask = attention_expanded.sum_axis(Axis(0));
+
+            let mut embedding: Vec<f32> = sum_embeddings
+                .iter()
+                .zip(sum_mask.iter())
+                .map(|(sum, mask)| if *mask > 0.0 { sum / mask } else { 0.0 })
+                .collect();
+
+            if self.normalize {
+                Self::normalize_vector(&mut embedding);
+            }
+
+            result.push(embedding);
+        }
+
+        Ok(result)
     }
 
     fn normalize_vector(vec: &mut [f32]) {

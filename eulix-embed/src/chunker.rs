@@ -157,7 +157,7 @@ pub fn chunk_knowledge_base(kb: &KnowledgeBase, max_size: usize) -> Vec<Chunk> {
 fn format_function_with_context(
     func: &crate::kb_loader::Function,
     file_path: &str,
-    kb: &KnowledgeBase,
+    _kb: &KnowledgeBase,
 ) -> String {
     let mut content = String::new();
 
