@@ -705,7 +705,7 @@ func wrapText(text string, width int) string {
 
 	words := strings.Fields(text)
 	for i, word := range words {
-		wordLen := lipgloss.Width(word) // Use lipgloss.Width to account for ANSI codes
+		wordLen := lipgloss.Width(word) 
 
 		if currentLength > 0 && currentLength+1+wordLen > width {
 			result.WriteString(currentLine.String())

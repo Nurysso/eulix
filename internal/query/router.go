@@ -333,26 +333,37 @@ func (r *Router) handleImplementation(query string, class *Classification) (stri
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`TASK: Provide implementation guidance for: %s
+	prompt := fmt.Sprintf(`You have AST and semantic information, NOT source code.
 
-INSTRUCTIONS:
-1. ONLY reference code that is explicitly shown in the provided context
-2. If the context doesn't contain the necessary code, say "The relevant code is not in the current context"
-3. Focus on implementation details, key functions, and control flow
-4. Cite specific line numbers or function names from the context
-5. Do NOT invent or assume code that isn't shown
+AST/SEMANTIC DATA:
+%s
 
-SYMBOLS MENTIONED: %v
-RELEVANT FILES: %v
+QUESTION: %s
 
-Question: %s`, query, class.Symbols, relevantFiles, query)
+WHAT YOU HAVE:
+- Function signatures, types, relationships
+- Call graphs, dependencies
+- Symbol locations
 
-	response, err := r.llmClient.Query(context, prompt)
-	if err != nil {
-		return "", fmt.Errorf("LLM query failed: %w", err)
-	}
+WHAT YOU DON'T HAVE:
+- Actual implementation logic
+- Variable values or control flow details
+- Complete business logic
 
-	return response, nil
+ANSWER USING:
+- Function names and signatures from the data
+- Type information and relationships
+- Call patterns and dependencies
+
+SAY CLEARLY:
+- "The AST shows function X calls Y"
+- "I cannot see the implementation details"
+- "Based on the signature, this function..."
+
+SYMBOLS: %v
+FILES: %v`, context, query, class.Symbols, relevantFiles)
+
+	return r.llmClient.Query(context, prompt)
 }
 
 func (r *Router) handleArchitecture(query string, class *Classification) (string, error) {
@@ -376,27 +387,31 @@ func (r *Router) handleArchitecture(query string, class *Classification) (string
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`TASK: Explain the architecture for: %s
+	prompt := fmt.Sprintf(`Analyze architecture using call graph and AST data.
 
 CALL GRAPH:
 %s
 
-INSTRUCTIONS:
-1. Base your analysis ONLY on the code shown in the context and call graph above
-2. Identify architectural patterns (MVC, layering, dependency injection, etc.)
-3. Describe component relationships and data flow
-4. Highlight design decisions evident from the code structure
-5. If you cannot determine something from the context, explicitly state that
-6. Do NOT make assumptions about code you cannot see
+AST DATA:
+%s
 
-Question: %s`, query, architectureInfo.String(), query)
+QUESTION: %s
 
-	response, err := r.llmClient.Query(context, prompt)
-	if err != nil {
-		return "", fmt.Errorf("LLM query failed: %w", err)
-	}
+YOU CAN DESCRIBE:
+- Which functions call which (from call graph)
+- Module/package structure (from AST)
+- Type relationships and dependencies
+- Layer separation (if evident from calls)
 
-	return response, nil
+YOU CANNOT DESCRIBE:
+- Why functions are called (no logic visible)
+- Implementation patterns inside functions
+- Specific algorithms used
+
+Focus on structural relationships visible in the graph and AST.`,
+		architectureInfo.String(), context, query)
+
+	return r.llmClient.Query(context, prompt)
 }
 
 func (r *Router) handleDebug(query string, class *Classification) (string, error) {
@@ -405,26 +420,29 @@ func (r *Router) handleDebug(query string, class *Classification) (string, error
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`TASK: Debug analysis for: %s
+	prompt := fmt.Sprintf(`Debug using AST/semantic information only.
 
-INSTRUCTIONS:
-1. Analyze the code in the context for potential issues related to the query
-2. Look for common error patterns: null checks, off-by-one errors, race conditions, etc.
-3. Suggest specific fixes with exact function/variable names from the context
-4. If the problematic code isn't in the context, say so explicitly
-5. Provide step-by-step debugging approach
-6. Do NOT speculate about code you cannot see
+AST DATA:
+%s
 
-SYMBOLS: %v
+PROBLEM: %s
 
-Question: %s`, query, class.Symbols, query)
+YOU CAN CHECK:
+- Type mismatches (from AST)
+- Missing error handling (if return types show errors)
+- Unused variables/functions
+- Circular dependencies (from call graph)
 
-	response, err := r.llmClient.Query(context, prompt)
-	if err != nil {
-		return "", fmt.Errorf("LLM query failed: %w", err)
-	}
+YOU CANNOT CHECK:
+- Logic errors (need actual code)
+- Runtime behavior
+- Specific error conditions
 
-	return response, nil
+Be honest: "I can see X might return an error but cannot verify handling without code"
+
+SYMBOLS: %v`, context, query, class.Symbols)
+
+	return r.llmClient.Query(context, prompt)
 }
 
 func (r *Router) handleComparison(query string, class *Classification) (string, error) {
@@ -437,28 +455,26 @@ func (r *Router) handleComparison(query string, class *Classification) (string, 
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`TASK: Compare: %v
+	prompt := fmt.Sprintf(`Compare using AST/type information.
 
-INSTRUCTIONS:
-1. Compare ONLY based on code visible in the provided context
-2. Highlight similarities and differences in:
-   - Purpose and functionality
-   - Implementation approach
-   - Parameters and return types
-   - Error handling
-   - Performance characteristics (if evident)
-3. Use specific examples from the context
-4. If either entity is not fully visible in the context, state what information is missing
-5. Do NOT make assumptions about unseen code
+AST DATA:
+%s
 
-Question: %s`, class.Symbols, query)
+COMPARE: %v
 
-	response, err := r.llmClient.Query(context, prompt)
-	if err != nil {
-		return "", fmt.Errorf("LLM query failed: %w", err)
-	}
+QUESTION: %s
 
-	return response, nil
+COMPARE BY:
+- Function signatures (parameters, returns)
+- Types used
+- Dependencies and calls
+- Package/module location
+
+State clearly: "Signature-wise they differ in..." or "Cannot compare logic without source code"
+
+Use actual symbols from the AST data.`, context, class.Symbols, query)
+
+	return r.llmClient.Query(context, prompt)
 }
 
 func (r *Router) handleDependency(query string, class *Classification) (string, error) {
@@ -514,28 +530,32 @@ func (r *Router) handleRefactoring(query string, class *Classification) (string,
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`TASK: Refactoring suggestions for: %s
+	prompt := fmt.Sprintf(`Suggest refactoring from AST structure.
 
-INSTRUCTIONS:
-1. Analyze the code in the context for refactoring opportunities
-2. Look for: code duplication, long functions, deep nesting, unclear naming, tight coupling
-3. Suggest specific improvements with reference to actual code in the context
-4. Explain the benefits of each suggestion
-5. Prioritize suggestions by impact
-6. Base suggestions ONLY on visible code - if context is insufficient, say so
-7. Do NOT invent problems that don't exist in the shown code
+AST DATA:
+%s
 
-SYMBOLS: %v
+QUESTION: %s
 
-Question: %s`, query, class.Symbols, query)
+YOU CAN DETECT:
+- Functions with many dependencies (from call graph)
+- Large parameter lists (from signatures)
+- Duplicate type definitions
+- Deep call chains
+- Circular dependencies
 
-	response, err := r.llmClient.Query(context, prompt)
-	if err != nil {
-		return "", fmt.Errorf("LLM query failed: %w", err)
-	}
+YOU CANNOT DETECT:
+- Code duplication (need source)
+- Complex logic (need implementation)
+- Naming quality inside functions
 
-	return response, nil
+Focus on structural issues visible in AST/call graph.
+
+SYMBOLS: %v`, context, query, class.Symbols)
+
+	return r.llmClient.Query(context, prompt)
 }
+
 
 func (r *Router) handlePerformance(query string, class *Classification) (string, error) {
 	context, err := r.contextBuilder.BuildContext(query)
@@ -543,27 +563,29 @@ func (r *Router) handlePerformance(query string, class *Classification) (string,
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`TASK: Performance analysis for: %s
+	prompt := fmt.Sprintf(`Performance analysis from AST data.
 
-INSTRUCTIONS:
-1. Analyze the code in context for performance characteristics
-2. Look for: loops with nested operations, repeated allocations, unnecessary copies, inefficient algorithms
-3. Consider: time complexity, space complexity, I/O operations, concurrency
-4. Suggest specific optimizations referencing actual code
-5. Explain trade-offs (readability vs performance)
-6. Base analysis ONLY on visible code
-7. Do NOT speculate about performance without seeing the actual implementation
+AST DATA:
+%s
 
-SYMBOLS: %v
+QUESTION: %s
 
-Question: %s`, query, class.Symbols, query)
+YOU CAN INFER:
+- Call depth and complexity (from call graph)
+- Allocation patterns (from type info: slices, maps)
+- Potential N+1 issues (from repeated calls in loops - if visible)
+- Interface vs concrete types
 
-	response, err := r.llmClient.Query(context, prompt)
-	if err != nil {
-		return "", fmt.Errorf("LLM query failed: %w", err)
-	}
+YOU CANNOT DETERMINE:
+- Actual algorithm complexity (need code)
+- Loop behavior
+- Memory usage patterns
 
-	return response, nil
+Be explicit: "The call graph suggests..." or "Without seeing loops, I cannot assess..."
+
+SYMBOLS: %v`, context, query, class.Symbols)
+
+	return r.llmClient.Query(context, prompt)
 }
 
 func (r *Router) handleDataFlow(query string, class *Classification) (string, error) {
@@ -583,30 +605,34 @@ func (r *Router) handleDataFlow(query string, class *Classification) (string, er
 		callGraphInfo = builder.String()
 	}
 
-	prompt := fmt.Sprintf(`TASK: Trace data flow for: %s
+	prompt := fmt.Sprintf(`Trace data flow using call graph and types.
 
-CALL FLOW:
+CALL GRAPH:
 %s
 
-INSTRUCTIONS:
-1. Trace how data flows through the functions in the context
-2. Identify transformations, validations, and state changes
-3. Note where data enters and exits the system
-4. Highlight any data validation or sanitization
-5. Use actual variable/parameter names from the context
-6. If the full data path isn't visible, clearly state what's missing
-7. Do NOT invent data flow that isn't shown
+AST DATA:
+%s
 
-SYMBOLS: %v
+QUESTION: %s
 
-Question: %s`, query, callGraphInfo, class.Symbols, query)
+TRACE BY:
+- Parameter types flowing through calls
+- Return values passed to next function
+- Type transformations (input type -> output type)
 
-	response, err := r.llmClient.Query(context, prompt)
-	if err != nil {
-		return "", fmt.Errorf("LLM query failed: %w", err)
-	}
+EXAMPLE FORMAT:
+"Function A returns *User -> passed to B -> B returns []UserDTO"
 
-	return response, nil
+YOU CANNOT SEE:
+- Data transformations inside functions
+- Validation logic
+- State mutations
+
+Focus on type flow through the call chain.
+
+SYMBOLS: %v`, callGraphInfo, context, query, class.Symbols)
+
+	return r.llmClient.Query(context, prompt)
 }
 
 func (r *Router) handleSecurity(query string, class *Classification) (string, error) {
@@ -615,27 +641,32 @@ func (r *Router) handleSecurity(query string, class *Classification) (string, er
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`TASK: Security analysis for: %s
+	prompt := fmt.Sprintf(`Security analysis from AST/types.
 
-INSTRUCTIONS:
-1. Analyze code in context for security concerns
-2. Check for: input validation, injection vulnerabilities, authentication/authorization, sensitive data handling
-3. Identify specific security issues with line references
-4. Suggest concrete fixes using actual code structure
-5. Prioritize by severity
-6. Base analysis ONLY on visible code
-7. Do NOT flag issues that don't exist in the shown code
+AST DATA:
+%s
 
-SYMBOLS: %v
+QUESTION: %s
 
-Question: %s`, query, class.Symbols, query)
+CHECK:
+- Exported vs unexported functions (from AST)
+- Error return types (functions that might fail)
+- Pointer vs value types (mutation risk)
+- Interface usage (abstraction)
 
-	response, err := r.llmClient.Query(context, prompt)
-	if err != nil {
-		return "", fmt.Errorf("LLM query failed: %w", err)
-	}
+BE HONEST:
+"I see function X takes user input (string parameter) but cannot verify validation without code"
 
-	return response, nil
+YOU CANNOT CHECK:
+- Input sanitization (need code)
+- Actual auth logic
+- SQL/XSS vulnerabilities
+
+Focus on API surface and type safety.
+
+SYMBOLS: %v`, context, query, class.Symbols)
+
+	return r.llmClient.Query(context, prompt)
 }
 
 func (r *Router) handleDocumentation(query string, class *Classification) (string, error) {
@@ -644,26 +675,29 @@ func (r *Router) handleDocumentation(query string, class *Classification) (strin
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`TASK: Document the code for: %s
+	prompt := fmt.Sprintf(`Document from AST/signatures.
 
-INSTRUCTIONS:
-1. Explain the purpose and behavior based ONLY on code in the context
-2. Document parameters, return values, and side effects
-3. Note any important edge cases or error handling
-4. Use clear, concise language
-5. If the full implementation isn't visible, note what documentation is incomplete
-6. Do NOT document behavior you cannot verify from the code
+AST DATA:
+%s
 
-SYMBOLS: %v
+QUESTION: %s
 
-Question: %s`, query, class.Symbols, query)
+DOCUMENT:
+- Function name and purpose (from name + signature)
+- Parameters: names, types, meanings
+- Return values: types, error conditions
+- Relationships: what it calls, what calls it
 
-	response, err := r.llmClient.Query(context, prompt)
-	if err != nil {
-		return "", fmt.Errorf("LLM query failed: %w", err)
-	}
+EXAMPLE:
+"ProcessUser takes a *User and returns (*ProcessedUser, error)
+Calls: ValidateUser, TransformUser
+Called by: HandleRequest"
 
-	return response, nil
+Cannot document: actual behavior, edge cases, implementation details
+
+SYMBOLS: %v`, context, query, class.Symbols)
+
+	return r.llmClient.Query(context, prompt)
 }
 
 func (r *Router) handleExample(query string, class *Classification) (string, error) {
@@ -672,27 +706,28 @@ func (r *Router) handleExample(query string, class *Classification) (string, err
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`TASK: Provide usage examples for: %s
+	prompt := fmt.Sprintf(`Create examples from function signatures.
 
-INSTRUCTIONS:
-1. Create examples based on the actual function signatures in the context
-2. Show typical use cases with realistic parameters
-3. Include error handling examples if relevant
-4. Explain what each example demonstrates
-5. Use actual types and function names from the context
-6. If the function signature isn't fully visible, state what information is needed
-7. Do NOT create examples for functions you cannot see
+AST DATA:
+%s
 
-SYMBOLS: %v
+QUESTION: %s
 
-Question: %s`, query, class.Symbols, query)
+CREATE EXAMPLES FOR:
+- Function calls with correct types
+- Error handling (if returns error)
+- Type construction
 
-	response, err := r.llmClient.Query(context, prompt)
-	if err != nil {
-		return "", fmt.Errorf("LLM query failed: %w", err)
-	}
+EXAMPLE FORMAT:
+user := &User{Name: "test"}
+result, err := ProcessUser(user)
+if err != nil { ... }
 
-	return response, nil
+Be clear: "This example shows correct types but I cannot verify the actual behavior"
+
+SYMBOLS: %v`, context, query, class.Symbols)
+
+	return r.llmClient.Query(context, prompt)
 }
 
 func (r *Router) handleTesting(query string, class *Classification) (string, error) {
@@ -724,7 +759,7 @@ Question: %s`, query, class.Symbols, query)
 	return response, nil
 }
 
-// Anti-hallucination prompt builder 
+// Anti-hallucination prompt builder
 func (r *Router) buildAntiHallucinationPrompt(query string, class *Classification, context *types.ContextWindow) string {
 	var promptBuilder strings.Builder
 
