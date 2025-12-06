@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"eulix/internal/cache"
@@ -52,17 +53,36 @@ type queryResultMsg struct {
 
 type switchToCacheViewerMsg struct{}
 
+// Color scheme
+var (
+	primaryColor   = lipgloss.Color("#00D9FF")
+	secondaryColor = lipgloss.Color("#7C3AED")
+	successColor   = lipgloss.Color("#10B981")
+	errorColor     = lipgloss.Color("#EF4444")
+	warningColor   = lipgloss.Color("#F59E0B")
+	mutedColor     = lipgloss.Color("#6B7280")
+	textColor      = lipgloss.Color("#F9FAFB")
+	borderColor    = lipgloss.Color("#374151")
+	codeColor      = lipgloss.Color("#FCD34D")
+	highlightColor = lipgloss.Color("#8B5CF6")
+)
+
 func MainModel(router *query.Router, cfg *config.Config, cacheManager *cache.Manager) Model {
 	ti := textinput.New()
-	ti.Placeholder = "Ask a question... (type /help for commands)"
+	ti.Placeholder = "Ask a question or type /help for commands"
 	ti.Focus()
 	ti.CharLimit = 500
 	ti.Width = 80
+	ti.PromptStyle = lipgloss.NewStyle().Foreground(primaryColor).Bold(true)
+	ti.TextStyle = lipgloss.NewStyle().Foreground(textColor)
 
 	s := spinner.New()
-	s.Spinner = spinner.Dot
+	s.Spinner = spinner.Points
+	s.Style = lipgloss.NewStyle().Foreground(primaryColor)
 
 	vp := viewport.New(80, 20)
+	// Disable mouse in viewport to allow text selection
+	vp.MouseWheelEnabled = false
 
 	return Model{
 		state:        StateIdle,
@@ -73,13 +93,16 @@ func MainModel(router *query.Router, cfg *config.Config, cacheManager *cache.Man
 		config:       cfg,
 		cacheManager: cacheManager,
 		messages: []Message{
-			{Role: "system", Content: "Welcome to Eulix AI Code Assistant! \n\nIt can help you understand and navigate your codebase. Try typing:\n  • \"What does this function do?\"\n  • \"Explain the authentication flow\"\n\nType /help to see available commands."},
+			{Role: "system", Content: "Welcome to Eulix AI Code Assistant\n\nI can help you understand and navigate your codebase.\n\nTry asking:\n  - What does this function do?\n  - Explain the authentication flow\n  - Show me error handling patterns\n\nType /help to see available commands"},
 		},
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(
+		textinput.Blink,
+		tea.DisableMouse, // Disable mouse capture to allow text selection
+	)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -101,21 +124,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// Handle commands
 			if strings.HasPrefix(query, "/") {
 				return m.handleCommand(query)
 			}
 
-			// Add user message
 			m.messages = append(m.messages, Message{
 				Role:    "user",
 				Content: query,
 			})
 
-			// Clear input
 			m.input.SetValue("")
-
-			// Start processing
 			m.processing = true
 			m.state = StateProcessing
 
@@ -160,11 +178,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Height = msg.Height - 10
 		m.input.Width = msg.Width - 8
 
-		// Re-render messages with new width
 		m.viewport.SetContent(m.renderMessages())
 
 	case switchToCacheViewerMsg:
-		// Switch to cache viewer
 		if m.cacheManager == nil {
 			m.messages = append(m.messages, Message{
 				Role:    "error",
@@ -175,7 +191,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Get cache entries
 		entries, err := m.cacheManager.ListAll()
 		if err != nil {
 			m.messages = append(m.messages, Message{
@@ -197,14 +212,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Create cache viewer and pass current window size
 		cacheModel := HistoryView(entries, m.cacheManager)
-
-		// Initialize with current window dimensions
 		cacheModel.width = m.width
 		cacheModel.height = m.height
 
-		// Set sizes for list and viewport
 		h, v := lipgloss.NewStyle().GetFrameSize()
 		cacheModel.list.SetSize(m.width-h, m.height-v-4)
 		cacheModel.viewport.Width = m.width - 4
@@ -232,7 +243,7 @@ func (m Model) handleCommand(command string) (tea.Model, tea.Cmd) {
 	case "/help":
 		m.messages = append(m.messages, Message{
 			Role:    "system",
-			Content: "Available Commands:\n\n  /help     - Show this help message\n  /history  - View cached queries and responses\n  /clear    - Clear conversation history\n  /stats    - Show system statistics\n  /quit     - Exit the application\n\nKeyboard Shortcuts:\n  Enter     - Send message,\n  Esc       - Exit application\n  Ctrl+C    - Exit application",
+			Content: "AVAILABLE COMMANDS\n\n  /help     Show this help message\n  /history  View cached queries and responses\n  /clear    Clear conversation history\n  /stats    Show system statistics\n  /quit     Exit the application\n\nKEYBOARD SHORTCUTS\n\n  Enter     Send message\n  Esc       Exit application\n  Ctrl+C    Force exit",
 		})
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
@@ -270,7 +281,7 @@ func (m Model) handleCommand(command string) (tea.Model, tea.Cmd) {
 	default:
 		m.messages = append(m.messages, Message{
 			Role:    "error",
-			Content: fmt.Sprintf("Unknown command: %s\nType /help to see available commands.", parts[0]),
+			Content: fmt.Sprintf("Unknown command: %s\n\nType /help to see available commands.", parts[0]),
 		})
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
@@ -293,7 +304,7 @@ func (m Model) getSystemStats() string {
 		cacheStatus = "Enabled"
 	}
 
-	return fmt.Sprintf("System Statistics:\n\n Total Messages: %d\n  Your Questions: %d\n  AI Responses: %d\n State: %s\n  Cache: %s",
+	return fmt.Sprintf("SYSTEM STATISTICS\n\n  Total Messages    %d\n  Your Questions    %d\n  AI Responses      %d\n  Current State     %s\n  Cache Status      %s",
 		conversationLength,
 		userMessages,
 		userMessages,
@@ -325,65 +336,61 @@ func (m Model) View() string {
 
 	var b strings.Builder
 
+	// Header
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("#FAFAFA")).
-		Background(lipgloss.Color("#7D56F4")).
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#7D56F4")).
+		Foreground(textColor).
+		Background(secondaryColor).
 		Padding(0, 2).
-		Width(m.width - 2).
+		Width(m.width).
 		Align(lipgloss.Center)
 
-	b.WriteString(headerStyle.Render("Eulix AI Codebase Assistant"))
-	b.WriteString("\n\n")
+	b.WriteString(headerStyle.Render("EULIX AI CODEBASE ASSISTANT"))
+	b.WriteString("\n")
 
+	// Viewport with messages
 	viewportStyle := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#7D56F4")).
-		Padding(0, 1).
-		Width(m.width - 2)
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(borderColor).
+		Padding(1, 2).
+		Width(m.width - 2).
+		Height(m.viewport.Height)
 
 	b.WriteString(viewportStyle.Render(m.viewport.View()))
 	b.WriteString("\n")
 
+	// Processing indicator
 	if m.processing {
-		spinnerStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF6B9D")).
+		processingStyle := lipgloss.NewStyle().
+			Foreground(primaryColor).
 			Bold(true).
-			Padding(0, 1)
-		b.WriteString(spinnerStyle.Render(fmt.Sprintf("%s Thinking...", m.spinner.View())))
+			Padding(0, 2)
+		b.WriteString(processingStyle.Render(fmt.Sprintf("%s Processing your request...", m.spinner.View())))
 		b.WriteString("\n")
 	}
 
-	inputBoxStyle := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#04B575")).
+	// Input box
+	inputContainerStyle := lipgloss.NewStyle().
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(primaryColor).
 		Padding(0, 1).
-		Width(m.width - 4)
+		Width(m.width - 2)
 
-	inputLabel := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#04B575")).
+	inputPrefix := lipgloss.NewStyle().
+		Foreground(primaryColor).
 		Bold(true).
-		Render(" ")
+		Render("")
 
-	b.WriteString(inputBoxStyle.Render(inputLabel + m.input.View()))
+	b.WriteString(inputContainerStyle.Render(inputPrefix + m.input.View()))
 	b.WriteString("\n")
 
+	// Footer help
 	helpStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#626262")).
-		Padding(0, 1)
+		Foreground(mutedColor).
+		Padding(0, 2)
 
-	helpParts := []string{
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Render("Enter"),
-		"send",
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Render("Esc"),
-		"quit",
-		lipgloss.NewStyle().Foreground(lipgloss.Color("#7D56F4")).Render("/help"),
-		"commands",
-	}
-
-	b.WriteString(helpStyle.Render(strings.Join(helpParts, " • ")))
+	helpText := "Enter: send | Esc: quit | /help: commands | Mouse selection enabled"
+	b.WriteString(helpStyle.Render(helpText))
 
 	return b.String()
 }
@@ -399,22 +406,20 @@ func (m Model) renderMessages() string {
 	var b strings.Builder
 
 	userStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#04B575")).
+		Foreground(primaryColor).
 		Bold(true)
 
 	assistantStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#7D56F4"))
+		Foreground(successColor)
 
 	systemStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#626262")).
-		Italic(true)
+		Foreground(mutedColor)
 
 	errorStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FF6B9D")).
+		Foreground(errorColor).
 		Bold(true)
 
-	messageBubble := lipgloss.NewStyle().
-		Padding(0, 1).
+	messagePadding := lipgloss.NewStyle().
 		MarginBottom(1)
 
 	wrapWidth := m.viewport.Width - 6
@@ -423,34 +428,270 @@ func (m Model) renderMessages() string {
 	}
 
 	for _, msg := range m.messages {
-		var prefix, content string
+		var prefix string
 		var style lipgloss.Style
 
 		switch msg.Role {
 		case "user":
-			prefix = "You: "
-			content = msg.Content
+			prefix = "[YOU]"
 			style = userStyle
 		case "assistant":
-			prefix = "Eulix: "
-			content = msg.Content
+			prefix = "[EULIX]"
 			style = assistantStyle
 		case "system":
-			prefix = "[!] "
-			content = msg.Content
+			prefix = "[SYSTEM]"
 			style = systemStyle
 		case "error":
-			prefix = "[x] "
-			content = msg.Content
+			prefix = "[ERROR]"
 			style = errorStyle
 		}
 
-		fullMessage := style.Render(prefix) + wrapText(content, wrapWidth-len(prefix))
-		b.WriteString(messageBubble.Render(fullMessage))
+		header := style.Render(prefix)
+
+		// Format content based on role
+		var content string
+		if msg.Role == "assistant" {
+			content = formatMarkdownResponse(msg.Content, wrapWidth)
+		} else {
+			content = formatSimpleText(msg.Content, wrapWidth)
+		}
+
+		fullMessage := fmt.Sprintf("%s\n%s", header, content)
+		b.WriteString(messagePadding.Render(fullMessage))
 		b.WriteString("\n")
 	}
 
 	return b.String()
+}
+
+// formatMarkdownResponse formats LLM responses with markdown-like styling
+func formatMarkdownResponse(text string, width int) string {
+	var result strings.Builder
+
+	// Normalize line breaks - preserve intentional double newlines, convert single to space
+	text = normalizeLineBreaks(text)
+
+	lines := strings.Split(text, "\n")
+	inCodeBlock := false
+	inList := false
+
+	codeBlockStyle := lipgloss.NewStyle().
+		Foreground(codeColor).
+		Background(lipgloss.Color("#1F2937")).
+		Padding(0, 1)
+
+	codeInlineStyle := lipgloss.NewStyle().
+		Foreground(codeColor)
+
+	boldStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(textColor)
+
+	listStyle := lipgloss.NewStyle().
+		Foreground(highlightColor)
+
+	headingStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(primaryColor).
+		Underline(true)
+
+	for i, line := range lines {
+		line = strings.TrimRight(line, " \t")
+
+		// Empty line handling
+		if line == "" {
+			if inCodeBlock {
+				result.WriteString("\n")
+			} else if i > 0 && i < len(lines)-1 {
+				result.WriteString("\n")
+			}
+			inList = false
+			continue
+		}
+
+		// Code blocks (``` or ~~~)
+		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
+			inCodeBlock = !inCodeBlock
+			if inCodeBlock {
+				// Starting code block
+				lang := strings.TrimPrefix(line, "```")
+				lang = strings.TrimPrefix(lang, "~~~")
+				lang = strings.TrimSpace(lang)
+				if lang != "" {
+					result.WriteString(headingStyle.Render(fmt.Sprintf("[%s]", strings.ToUpper(lang))))
+					result.WriteString("\n")
+				}
+			} else {
+				// Ending code block - add spacing
+				result.WriteString("\n")
+			}
+			continue
+		}
+
+		if inCodeBlock {
+			// Inside code block - preserve formatting
+			result.WriteString(codeBlockStyle.Render(line))
+			result.WriteString("\n")
+			continue
+		}
+
+		// Headings (##, ###, etc)
+		if match := regexp.MustCompile(`^(#{1,6})\s+(.+)$`).FindStringSubmatch(line); match != nil {
+			heading := strings.TrimSpace(match[2])
+			result.WriteString(headingStyle.Render(heading))
+			result.WriteString("\n")
+			continue
+		}
+
+		// Lists (-, *, +, or numbered)
+		if isListItem(line) {
+			formatted := formatListItem(line, width-4, listStyle, codeInlineStyle, boldStyle)
+			result.WriteString("  " + formatted)
+			result.WriteString("\n")
+			inList = true
+			continue
+		}
+
+		// Regular paragraph
+		if inList && !isListItem(line) {
+			result.WriteString("\n")
+			inList = false
+		}
+
+		// Process inline markdown (bold, code, etc)
+		formatted := processInlineMarkdown(line, width, codeInlineStyle, boldStyle)
+		result.WriteString(formatted)
+		result.WriteString("\n")
+	}
+
+	return strings.TrimRight(result.String(), "\n")
+}
+
+// normalizeLineBreaks intelligently handles line breaks
+func normalizeLineBreaks(text string) string {
+	// Replace CRLF with LF
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+
+	// Preserve double newlines (paragraph breaks)
+	text = strings.ReplaceAll(text, "\n\n", "<<PARAGRAPH_BREAK>>")
+
+	// Replace single newlines with spaces (unless before list items, headings, or code blocks)
+	lines := strings.Split(text, "\n")
+	var normalized []string
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+
+		// Check if next line is special (list, heading, code)
+		if i < len(lines)-1 {
+			nextLine := strings.TrimSpace(lines[i+1])
+			if nextLine == "" || strings.HasPrefix(nextLine, "#") ||
+			   strings.HasPrefix(nextLine, "```") || strings.HasPrefix(nextLine, "~~~") ||
+			   isListItem(nextLine) {
+				normalized = append(normalized, line)
+				continue
+			}
+		}
+
+		// Check if current line is special
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") ||
+		   strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") ||
+		   isListItem(trimmed) {
+			normalized = append(normalized, line)
+			continue
+		}
+
+		// Regular line - join with next
+		if i < len(lines)-1 {
+			normalized = append(normalized, line+" ")
+		} else {
+			normalized = append(normalized, line)
+		}
+	}
+
+	text = strings.Join(normalized, "")
+	text = strings.ReplaceAll(text, "<<PARAGRAPH_BREAK>>", "\n\n")
+
+	return text
+}
+
+// isListItem checks if a line is a list item
+func isListItem(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+
+	// Unordered lists: -, *, +
+	if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "+ ") {
+		return true
+	}
+
+	// Numbered lists: 1., 2., etc
+	if matched, _ := regexp.MatchString(`^\d+\.\s`, line); matched {
+		return true
+	}
+
+	return false
+}
+
+// formatListItem formats a list item with proper indentation
+func formatListItem(line string, width int, listStyle, codeStyle, boldStyle lipgloss.Style) string {
+	line = strings.TrimSpace(line)
+
+	// Extract bullet/number and content
+	var bullet, content string
+	if strings.HasPrefix(line, "- ") {
+		bullet = "•"
+		content = strings.TrimPrefix(line, "- ")
+	} else if strings.HasPrefix(line, "* ") {
+		bullet = "•"
+		content = strings.TrimPrefix(line, "* ")
+	} else if strings.HasPrefix(line, "+ ") {
+		bullet = "•"
+		content = strings.TrimPrefix(line, "+ ")
+	} else if match := regexp.MustCompile(`^(\d+)\.\s+(.+)$`).FindStringSubmatch(line); match != nil {
+		bullet = match[1] + "."
+		content = match[2]
+	}
+
+	content = processInlineMarkdown(content, width-4, codeStyle, boldStyle)
+
+	return listStyle.Render(bullet) + " " + content
+}
+
+// processInlineMarkdown handles inline markdown like **bold** and `code`
+func processInlineMarkdown(text string, width int, codeStyle, boldStyle lipgloss.Style) string {
+	// Handle inline code first (`code`)
+	codeRegex := regexp.MustCompile("`([^`]+)`")
+	text = codeRegex.ReplaceAllStringFunc(text, func(match string) string {
+		code := strings.Trim(match, "`")
+		return codeStyle.Render(code)
+	})
+
+	// Handle bold (**text** or __text__)
+	boldRegex := regexp.MustCompile(`(\*\*|__)([^*_]+)(\*\*|__)`)
+	text = boldRegex.ReplaceAllStringFunc(text, func(match string) string {
+		// Extract text between markers
+		inner := regexp.MustCompile(`(\*\*|__)([^*_]+)(\*\*|__)`).FindStringSubmatch(match)
+		if len(inner) > 2 {
+			return boldStyle.Render(inner[2])
+		}
+		return match
+	})
+
+	// Wrap text
+	return wrapText(text, width)
+}
+
+// formatSimpleText formats non-assistant messages (system, user, error)
+func formatSimpleText(text string, width int) string {
+	textStyle := lipgloss.NewStyle().Foreground(textColor)
+
+	// Just wrap and style, no special formatting
+	wrapped := wrapText(text, width)
+	return textStyle.Render(wrapped)
 }
 
 func wrapText(text string, width int) string {
@@ -464,7 +705,7 @@ func wrapText(text string, width int) string {
 
 	words := strings.Fields(text)
 	for i, word := range words {
-		wordLen := len(word)
+		wordLen := lipgloss.Width(word) // Use lipgloss.Width to account for ANSI codes
 
 		if currentLength > 0 && currentLength+1+wordLen > width {
 			result.WriteString(currentLine.String())

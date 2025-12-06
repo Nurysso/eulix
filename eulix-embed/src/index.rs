@@ -36,10 +36,34 @@ impl EmbeddingIndex {
     }
 
     /// Add an embedding entry
-    pub fn add_entry(&mut self, entry: EmbeddingEntry) {
-        self.embeddings.push(entry);
-        self.total_chunks += 1;
+
+pub fn add_entry(&mut self, entry: EmbeddingEntry) -> Result<()> {
+    // Validate and auto-correct dimension
+    let entry_dim = entry.embedding.len();
+
+    if self.embeddings.is_empty() {
+        // First entry - update dimension if different from config
+        if entry_dim != self.dimension {
+            println!("      Auto-correcting dimension from {} to {} based on actual embeddings",
+                     self.dimension, entry_dim);
+            self.dimension = entry_dim;
+        }
+    } else {
+        // Subsequent entries - validate dimension matches
+        if entry_dim != self.dimension {
+            return Err(anyhow::anyhow!(
+                "Embedding dimension mismatch: expected {}, got {}. Entry ID: {}",
+                self.dimension,
+                entry_dim,
+                entry.id
+            ));
+        }
     }
+
+    self.embeddings.push(entry);
+    self.total_chunks += 1;
+    Ok(())
+}
 
     /// Save to JSON file
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -56,9 +80,8 @@ impl EmbeddingIndex {
         let index = serde_json::from_reader(reader)?;
         Ok(index)
     }
-
-    /// Save embeddings to binary format (more efficient)
-   pub fn save_binary(&self, path: &Path) -> Result<()> {
+/// Save embeddings to binary format
+pub fn save_binary(&self, path: &Path) -> Result<()> {
     use std::io::Write;
 
     let mut file = File::create(path)?;
@@ -66,13 +89,37 @@ impl EmbeddingIndex {
     // Write magic bytes "EULX"
     file.write_all(b"EULX")?;
 
-    // Write version (must be 2 to match Go's BinaryVersion)
+    // Write version 2 (includes model name)
     let version: u32 = 2;
     file.write_all(&version.to_le_bytes())?;
 
-    // Write count and dimension (both u32)
+    // Write model name length and model name
+    let model_bytes = self.model.as_bytes();
+    file.write_all(&(model_bytes.len() as u32).to_le_bytes())?;
+    file.write_all(model_bytes)?;
+
+    // Write count
     file.write_all(&(self.embeddings.len() as u32).to_le_bytes())?;
-    file.write_all(&(self.dimension as u32).to_le_bytes())?;
+
+    // Get actual dimension from first embedding
+    let actual_dimension = if let Some(first) = self.embeddings.first() {
+        first.embedding.len()
+    } else {
+        self.dimension
+    };
+
+    // Validate all embeddings have the same dimension
+    for (i, entry) in self.embeddings.iter().enumerate() {
+        if entry.embedding.len() != actual_dimension {
+            return Err(anyhow::anyhow!(
+                "Embedding {} has dimension {} but expected {}. All embeddings must have the same dimension.",
+                i, entry.embedding.len(), actual_dimension
+            ));
+        }
+    }
+
+    // Write actual dimension
+    file.write_all(&(actual_dimension as u32).to_le_bytes())?;
 
     // Write embeddings only (no IDs, no metadata - just vectors)
     for entry in &self.embeddings {
@@ -100,15 +147,34 @@ pub fn load_binary(path: &Path) -> Result<Self> {
     let mut version_bytes = [0u8; 4];
     file.read_exact(&mut version_bytes)?;
     let version = u32::from_le_bytes(version_bytes);
-    if version != 2 {
-        return Err(anyhow::anyhow!("Version mismatch: expected 2, got {}", version));
-    }
 
-    // Read count and dimension
+    let model = match version {
+        2 => {
+            //  Read model name
+            let mut model_len_bytes = [0u8; 4];
+            file.read_exact(&mut model_len_bytes)?;
+            let model_len = u32::from_le_bytes(model_len_bytes) as usize;
+
+            let mut model_bytes = vec![0u8; model_len];
+            file.read_exact(&mut model_bytes)?;
+            String::from_utf8(model_bytes)
+                .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in model name: {}", e))?
+        }
+        1 => {
+            // No model name stored, use placeholder
+            "unknown-model (v2 format)".to_string()
+        }
+        _ => {
+            return Err(anyhow::anyhow!("Unsupported binary version: {}. Expected 2 or 3", version));
+        }
+    };
+
+    // Read count
     let mut count_bytes = [0u8; 4];
     file.read_exact(&mut count_bytes)?;
     let count = u32::from_le_bytes(count_bytes) as usize;
 
+    // Read dimension
     let mut dimension_bytes = [0u8; 4];
     file.read_exact(&mut dimension_bytes)?;
     let dimension = u32::from_le_bytes(dimension_bytes) as usize;
@@ -124,7 +190,7 @@ pub fn load_binary(path: &Path) -> Result<Self> {
         }
 
         embeddings.push(EmbeddingEntry {
-            id: format!("embedding_{}", i), // Placeholder - load from JSON for real IDs
+            id: format!("embedding_{}", i), // Placeholder ID
             chunk_type: ChunkType::Other,
             content: String::new(),
             embedding,
@@ -140,7 +206,7 @@ pub fn load_binary(path: &Path) -> Result<Self> {
     }
 
     Ok(Self {
-        model: "BAAI/bge-small-en-v1.5".to_string(), // Default - store in JSON for accuracy
+        model,
         dimension,
         total_chunks: embeddings.len(),
         embeddings,
