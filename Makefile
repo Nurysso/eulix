@@ -6,7 +6,7 @@ ifeq ($(OS),Windows_NT)
     DETECTED_OS := Windows
     EXE_EXT := .exe
     INSTALL_DIR := $(LOCALAPPDATA)\eulix\bin
-    MKDIR := if not exist "$(INSTALL_DIR)" mkdir "$(INSTALL_DIR)"
+    MKDIR := if not exist
     CP := copy /Y
     RM := del /F /Q
     RMDIR := rmdir /S /Q
@@ -22,7 +22,7 @@ else
     endif
     EXE_EXT :=
     INSTALL_DIR := $(HOME)/.local/bin
-    MKDIR := mkdir -p $(INSTALL_DIR)
+    MKDIR := mkdir -p
     CP := cp -f
     RM := rm -f
     RMDIR := rm -rf
@@ -45,6 +45,11 @@ CLI_BIN := eulix$(EXE_EXT)
 PARSER_BUILD := $(PARSER_DIR)$(SEP)target$(SEP)release$(SEP)$(PARSER_BIN)
 EMBED_BUILD := $(EMBED_DIR)$(SEP)target$(SEP)release$(SEP)$(EMBED_BIN)
 CLI_BUILD := $(BUILD_DIR)$(SEP)$(CLI_BIN)
+
+# Final build directory paths
+BUILD_PARSER := $(BUILD_DIR)$(SEP)$(PARSER_BIN)
+BUILD_EMBED := $(BUILD_DIR)$(SEP)$(EMBED_BIN)
+BUILD_CLI := $(BUILD_DIR)$(SEP)$(CLI_BIN)
 
 # GPU backend selection (default: cpu)
 # Override with: make GPU=cuda or make GPU=rocm
@@ -91,9 +96,10 @@ help:
 	@echo "Detected OS: $(DETECTED_OS)"
 	@echo "GPU Backend: $(GPU)"
 	@echo "Install directory: $(INSTALL_DIR)"
+	@echo "Build directory: $(BUILD_DIR)"
 	@echo ""
 	@echo "Targets:"
-	@echo "  make build        - Build all binaries (parser, embed, CLI)"
+	@echo "  make build        - Build all binaries and copy to build/"
 	@echo "  make install      - Build and install to $(INSTALL_DIR)"
 	@echo "  make install-deps - Install build dependencies"
 	@echo "  make clean        - Clean build artifacts"
@@ -116,10 +122,35 @@ help:
 	@echo "  make install-embed   - Install embedder only"
 	@echo "  make install-cli     - Install CLI only"
 
-# Build all
+# Create build directory
+.PHONY: build-dir
+build-dir:
+ifeq ($(DETECTED_OS),Windows)
+	@$(MKDIR) "$(BUILD_DIR)" $(NULL) 2>&1 || echo. >$(NULL)
+else
+	@$(MKDIR) $(BUILD_DIR)
+endif
+
+# Build all and copy to build/
 .PHONY: build
-build: parser embed cli
-	@$(ECHO) "$(GREEN)✓ All binaries built successfully$(NC)"
+build: build-dir parser embed cli
+	@$(ECHO) "$(BLUE)Copying binaries to $(BUILD_DIR)...$(NC)"
+ifeq ($(DETECTED_OS),Windows)
+	$(CP) "$(PARSER_BUILD)" "$(BUILD_PARSER)" >$(NULL) 2>&1
+	$(CP) "$(EMBED_BUILD)" "$(BUILD_EMBED)" >$(NULL) 2>&1
+else
+	$(CP) $(PARSER_BUILD) $(BUILD_PARSER)
+	$(CP) $(EMBED_BUILD) $(BUILD_EMBED)
+	chmod +x $(BUILD_PARSER)
+	chmod +x $(BUILD_EMBED)
+	chmod +x $(BUILD_CLI)
+endif
+	@$(ECHO) "$(GREEN)✓ All binaries built and copied to $(BUILD_DIR)$(NC)"
+	@echo ""
+	@echo "Binaries available in $(BUILD_DIR):"
+	@echo "  - $(PARSER_BIN)"
+	@echo "  - $(EMBED_BIN)"
+	@echo "  - $(CLI_BIN)"
 
 # Build parser
 .PHONY: parser
@@ -137,29 +168,25 @@ embed:
 
 # Build Go CLI
 .PHONY: cli
-cli:
+cli: build-dir
 	@$(ECHO) "$(BLUE)Building eulix CLI...$(NC)"
-ifeq ($(DETECTED_OS),Windows)
-	if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
-else
-	mkdir -p $(BUILD_DIR)
-endif
 	go build -o $(CLI_BUILD) ./cmd/eulix/main.go
 	@$(ECHO) "$(GREEN)✓ CLI built: $(CLI_BUILD)$(NC)"
 
 # Install all
 .PHONY: install
-install: build install-dirs
+install: build
 	@$(ECHO) "$(BLUE)Installing binaries to $(INSTALL_DIR)...$(NC)"
-	$(MKDIR)
 ifeq ($(DETECTED_OS),Windows)
-	$(CP) "$(PARSER_BUILD)" "$(INSTALL_DIR)$(SEP)$(PARSER_BIN)" >$(NULL) 2>&1
-	$(CP) "$(EMBED_BUILD)" "$(INSTALL_DIR)$(SEP)$(EMBED_BIN)" >$(NULL) 2>&1
-	$(CP) "$(CLI_BUILD)" "$(INSTALL_DIR)$(SEP)$(CLI_BIN)" >$(NULL) 2>&1
+	$(MKDIR) "$(INSTALL_DIR)" $(NULL) 2>&1 || echo. >$(NULL)
+	$(CP) "$(BUILD_PARSER)" "$(INSTALL_DIR)$(SEP)$(PARSER_BIN)" >$(NULL) 2>&1
+	$(CP) "$(BUILD_EMBED)" "$(INSTALL_DIR)$(SEP)$(EMBED_BIN)" >$(NULL) 2>&1
+	$(CP) "$(BUILD_CLI)" "$(INSTALL_DIR)$(SEP)$(CLI_BIN)" >$(NULL) 2>&1
 else
-	$(CP) $(PARSER_BUILD) $(INSTALL_DIR)/$(PARSER_BIN)
-	$(CP) $(EMBED_BUILD) $(INSTALL_DIR)/$(EMBED_BIN)
-	$(CP) $(CLI_BUILD) $(INSTALL_DIR)/$(CLI_BIN)
+	$(MKDIR) $(INSTALL_DIR)
+	$(CP) $(BUILD_PARSER) $(INSTALL_DIR)/$(PARSER_BIN)
+	$(CP) $(BUILD_EMBED) $(INSTALL_DIR)/$(EMBED_BIN)
+	$(CP) $(BUILD_CLI) $(INSTALL_DIR)/$(CLI_BIN)
 	chmod +x $(INSTALL_DIR)/$(PARSER_BIN)
 	chmod +x $(INSTALL_DIR)/$(EMBED_BIN)
 	chmod +x $(INSTALL_DIR)/$(CLI_BIN)
@@ -181,45 +208,43 @@ endif
 
 # Install individual components
 .PHONY: install-parser
-install-parser: parser install-dirs
+install-parser: parser
 	@$(ECHO) "$(BLUE)Installing eulix-parser...$(NC)"
-	$(MKDIR)
 ifeq ($(DETECTED_OS),Windows)
+	$(MKDIR) "$(INSTALL_DIR)" $(NULL) 2>&1 || echo. >$(NULL)
 	$(CP) "$(PARSER_BUILD)" "$(INSTALL_DIR)$(SEP)$(PARSER_BIN)"
 else
+	$(MKDIR) $(INSTALL_DIR)
 	$(CP) $(PARSER_BUILD) $(INSTALL_DIR)/$(PARSER_BIN)
 	chmod +x $(INSTALL_DIR)/$(PARSER_BIN)
 endif
 	@$(ECHO) "$(GREEN)✓ Parser installed$(NC)"
 
 .PHONY: install-embed
-install-embed: embed install-dirs
+install-embed: embed
 	@$(ECHO) "$(BLUE)Installing eulix-embed...$(NC)"
-	$(MKDIR)
 ifeq ($(DETECTED_OS),Windows)
+	$(MKDIR) "$(INSTALL_DIR)" $(NULL) 2>&1 || echo. >$(NULL)
 	$(CP) "$(EMBED_BUILD)" "$(INSTALL_DIR)$(SEP)$(EMBED_BIN)"
 else
+	$(MKDIR) $(INSTALL_DIR)
 	$(CP) $(EMBED_BUILD) $(INSTALL_DIR)/$(EMBED_BIN)
 	chmod +x $(INSTALL_DIR)/$(EMBED_BIN)
 endif
 	@$(ECHO) "$(GREEN)✓ Embedder installed$(NC)"
 
 .PHONY: install-cli
-install-cli: cli install-dirs
+install-cli: cli
 	@$(ECHO) "$(BLUE)Installing eulix CLI...$(NC)"
-	$(MKDIR)
 ifeq ($(DETECTED_OS),Windows)
-	$(CP) "$(CLI_BUILD)" "$(INSTALL_DIR)$(SEP)$(CLI_BIN)"
+	$(MKDIR) "$(INSTALL_DIR)" $(NULL) 2>&1 || echo. >$(NULL)
+	$(CP) "$(BUILD_CLI)" "$(INSTALL_DIR)$(SEP)$(CLI_BIN)"
 else
-	$(CP) $(CLI_BUILD) $(INSTALL_DIR)/$(CLI_BIN)
+	$(MKDIR) $(INSTALL_DIR)
+	$(CP) $(BUILD_CLI) $(INSTALL_DIR)/$(CLI_BIN)
 	chmod +x $(INSTALL_DIR)/$(CLI_BIN)
 endif
 	@$(ECHO) "$(GREEN)✓ CLI installed$(NC)"
-
-# Create install directory
-.PHONY: install-dirs
-install-dirs:
-	$(MKDIR)
 
 # Install dependencies
 .PHONY: install-deps
@@ -253,7 +278,7 @@ clean:
 ifeq ($(DETECTED_OS),Windows)
 	cd $(PARSER_DIR) && cargo clean 2>$(NULL) || echo ""
 	cd $(EMBED_DIR) && cargo clean 2>$(NULL) || echo ""
-	$(RMDIR) $(BUILD_DIR) 2>$(NULL) || echo ""
+	$(RMDIR) "$(BUILD_DIR)" 2>$(NULL) || echo ""
 else
 	cd $(PARSER_DIR) && cargo clean
 	cd $(EMBED_DIR) && cargo clean
@@ -320,17 +345,22 @@ endif
 
 # Development builds (faster, with debug symbols)
 .PHONY: dev
-dev:
+dev: build-dir
 	@$(ECHO) "$(BLUE)Building in development mode...$(NC)"
-ifeq ($(DETECTED_OS),Windows)
-	if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
-else
-	mkdir -p $(BUILD_DIR)
-endif
 	cd $(PARSER_DIR) && cargo build
 	cd $(EMBED_DIR) && cargo build $(EMBED_FEATURES)
 	go build -o $(CLI_BUILD) ./cmd/eulix/main.go
-	@$(ECHO) "$(GREEN)✓ Development build complete$(NC)"
+ifeq ($(DETECTED_OS),Windows)
+	$(CP) "$(PARSER_DIR)$(SEP)target$(SEP)debug$(SEP)$(PARSER_BIN)" "$(BUILD_PARSER)" >$(NULL) 2>&1
+	$(CP) "$(EMBED_DIR)$(SEP)target$(SEP)debug$(SEP)$(EMBED_BIN)" "$(BUILD_EMBED)" >$(NULL) 2>&1
+else
+	$(CP) $(PARSER_DIR)/target/debug/$(PARSER_BIN) $(BUILD_PARSER)
+	$(CP) $(EMBED_DIR)/target/debug/$(EMBED_BIN) $(BUILD_EMBED)
+	chmod +x $(BUILD_PARSER)
+	chmod +x $(BUILD_EMBED)
+	chmod +x $(BUILD_CLI)
+endif
+	@$(ECHO) "$(GREEN)✓ Development build complete in $(BUILD_DIR)$(NC)"
 
 # Show build information
 .PHONY: info
@@ -341,6 +371,7 @@ info:
 	@echo "Operating System: $(DETECTED_OS)"
 	@echo "GPU Backend: $(GPU)"
 	@echo "Embed Features: $(EMBED_FEATURES)"
+	@echo "Build Directory: $(BUILD_DIR)"
 	@echo "Install Directory: $(INSTALL_DIR)"
 	@echo "Executable Extension: $(EXE_EXT)"
 	@echo ""
@@ -353,6 +384,11 @@ info:
 	@echo "  Parser: $(PARSER_BUILD)"
 	@echo "  Embedder: $(EMBED_BUILD)"
 	@echo "  CLI: $(CLI_BUILD)"
+	@echo ""
+	@echo "Build Directory Paths:"
+	@echo "  Parser: $(BUILD_PARSER)"
+	@echo "  Embedder: $(BUILD_EMBED)"
+	@echo "  CLI: $(BUILD_CLI)"
 	@echo ""
 	@echo "Available GPU Backends:"
 	@echo "  - cpu (default, ONNX CPU)"
@@ -383,16 +419,31 @@ quick-install: build install
 
 # Build all GPU variants (for testing)
 .PHONY: build-all-backends
-build-all-backends:
+build-all-backends: build-dir
 	@$(ECHO) "$(BLUE)Building all GPU backends...$(NC)"
 	@echo ""
 	@echo "Building CPU backend..."
 	$(MAKE) embed GPU=cpu
+ifeq ($(DETECTED_OS),Windows)
+	$(CP) "$(EMBED_BUILD)" "$(BUILD_DIR)$(SEP)eulix_embed_cpu$(EXE_EXT)"
+else
+	$(CP) $(EMBED_BUILD) $(BUILD_DIR)/eulix_embed_cpu$(EXE_EXT)
+endif
 	@echo ""
 	@echo "Building CUDA backend..."
 	$(MAKE) embed GPU=cuda
+ifeq ($(DETECTED_OS),Windows)
+	$(CP) "$(EMBED_BUILD)" "$(BUILD_DIR)$(SEP)eulix_embed_cuda$(EXE_EXT)"
+else
+	$(CP) $(EMBED_BUILD) $(BUILD_DIR)/eulix_embed_cuda$(EXE_EXT)
+endif
 	@echo ""
 	@echo "Building ROCm backend..."
 	$(MAKE) embed GPU=rocm
+ifeq ($(DETECTED_OS),Windows)
+	$(CP) "$(EMBED_BUILD)" "$(BUILD_DIR)$(SEP)eulix_embed_rocm$(EXE_EXT)"
+else
+	$(CP) $(EMBED_BUILD) $(BUILD_DIR)/eulix_embed_rocm$(EXE_EXT)
+endif
 	@echo ""
-	@$(ECHO) "$(GREEN)✓ All backends built$(NC)"
+	@$(ECHO) "$(GREEN)✓ All backends built in $(BUILD_DIR)$(NC)"
