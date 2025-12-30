@@ -23,6 +23,7 @@ node_modules/
 *.test.go
 vendor/
 dist/
+test/
 build/
 `
 		if err := os.WriteFile(euignorePath, []byte(defaultIgnore), 0644); err != nil {
@@ -43,8 +44,6 @@ threads = 4
 
 [embeddings]
 model = "BAAI/bge-small-en-v1.5"
-backend = "auto"
-dimension = 384
 
 [llm]
 local = true
