@@ -1,55 +1,52 @@
 {
   "project_name": "unknown",
-  "total_files": 24,
-  "total_loc": 7348,
+  "total_files": 21,
+  "total_loc": 7559,
   "languages": [
     "go"
   ],
   "categories": {
-    "Security": [
-      "internal/checksum/detector.go"
-    ],
     "Other": [
-      "internal/fixers/Aspirine.go",
-      "internal/cache/manager.go",
-      "internal/cli/chat.go",
+      "internal/config/config.go",
       "internal/cli/history.go",
-      "internal/query/strings.go",
+      "internal/fixers/types.go",
       "internal/types/context.go",
       "cmd/eulix/main.go",
-      "internal/cli/init.go",
-      "internal/cli/analyze.go",
-      "internal/query/contextTypes.go",
-      "internal/embeddings/embedder.go",
-      "internal/config/config.go",
-      "internal/llm/client.go",
       "internal/query/classifier.go",
-      "internal/fixers/types.go",
-      "internal/query/loader.go",
+      "internal/cli/analyze.go",
+      "internal/fixers/Aspirine.go",
+      "internal/llm/client.go",
+      "internal/cache/manager.go",
+      "internal/query/contextTypes.go",
+      "internal/cli/init.go",
+      "internal/cli/chat.go",
       "internal/cli/commands.go",
-      "internal/query/symbols.go",
+      "internal/embeddings/embedder.go",
       "internal/fixers/GLaDOS.go"
-    ],
-    "User Interface": [
-      "internal/query/context_builder.go",
-      "internal/tui/history.go",
-      "internal/tui/app.go"
     ],
     "API": [
       "internal/query/router.go"
+    ],
+    "User Interface": [
+      "internal/tui/history.go",
+      "internal/tui/app.go",
+      "internal/query/context_builder.go"
+    ],
+    "Security": [
+      "internal/checksum/detector.go"
     ]
   },
   "key_features": [
-    "CacheClear clears all cache entries",
-    "CacheDelete deletes a specific cache entry by index or hash",
+    "CacheCleanup removes expired entries",
+    "Convert float32 to uint32 bits (for binary",
+    "initCacheManager initializes and returns a cache manager",
+    "TUI implementation for history",
+    "isListItem checks if a line is a list item",
+    "CacheTest tests cache functionality",
+    "wrapText wraps text at the specified width",
+    "formatMarkdownResponse formats LLM responses with markdown-like styling",
     "MouthClient cause thats what llm is used for to speak",
-    "truncateString truncates a string to maxLen characters",
-    "- dimension: expected embedding dimension",
-    "Helper function to find the eulix_embed binary",
-    "GLaDOS checks for knowledge base outputs and checks for embeddings size and other errors",
-    "Returns a new normalized vector",
-    "CacheView launches interactive TUI cache viewer",
-    "Split identifiers into tokens for matching"
+    "formatListItem formats a list item with proper indentation"
   ],
   "entry_points": [
     "cmd/eulix/main.go:10"
@@ -57,29 +54,29 @@
   "dependencies": {
     "stdlib": [],
     "third_party": [
-      "eulix/internal/types",
-      "github.com/charmbracelet/bubbletea",
-      "github.com/charmbracelet/bubbles/viewport",
-      "github.com/charmbracelet/bubbles/key",
-      "github.com/charmbracelet/bubbles/textinput",
-      "eulix/internal/config",
       "github.com/mattn/go-sqlite3",
-      "eulix/internal/llm",
-      "eulix/internal/checksum",
-      "eulix/internal/embeddings",
       "github.com/charmbracelet/lipgloss",
-      "eulix/internal/cache",
-      "encoding/binary",
-      "eulix/internal/query",
-      "github.com/spf13/cobra",
-      "eulix/internal/tui",
-      "eulix/internal/cli",
+      "eulix/internal/config",
+      "github.com/charmbracelet/bubbletea",
       "github.com/charmbracelet/bubbles/spinner",
       "github.com/charmbracelet/bubbles/list",
+      "eulix/internal/llm",
+      "encoding/binary",
+      "eulix/internal/cli",
       "github.com/redis/go-redis/v9",
+      "eulix/internal/query",
+      "eulix/internal/tui",
+      "eulix/internal/types",
+      "github.com/charmbracelet/bubbles/textinput",
+      "github.com/charmbracelet/bubbles/key",
       "eulix/internal/fixers",
       "github.com/BurntSushi/toml",
-      "encoding/hex"
+      "github.com/spf13/cobra",
+      "eulix/internal/embeddings",
+      "encoding/hex",
+      "eulix/internal/checksum",
+      "eulix/internal/cache",
+      "github.com/charmbracelet/bubbles/viewport"
     ]
   },
   "patterns": {

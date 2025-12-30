@@ -81,7 +81,6 @@ func MainModel(router *query.Router, cfg *config.Config, cacheManager *cache.Man
 	s.Style = lipgloss.NewStyle().Foreground(primaryColor)
 
 	vp := viewport.New(80, 20)
-	// Disable mouse in viewport to allow text selection
 	vp.MouseWheelEnabled = false
 
 	return Model{
@@ -389,7 +388,7 @@ func (m Model) View() string {
 		Foreground(mutedColor).
 		Padding(0, 2)
 
-	helpText := "Enter: send | Esc: quit | /help: commands | Mouse selection enabled"
+	helpText := "Enter: send | Esc: quit | /help: commands"
 	b.WriteString(helpStyle.Render(helpText))
 
 	return b.String()
@@ -705,7 +704,7 @@ func wrapText(text string, width int) string {
 
 	words := strings.Fields(text)
 	for i, word := range words {
-		wordLen := lipgloss.Width(word) 
+		wordLen := lipgloss.Width(word)
 
 		if currentLength > 0 && currentLength+1+wordLen > width {
 			result.WriteString(currentLine.String())

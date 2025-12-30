@@ -89,8 +89,6 @@ func defaultConfig() *Config {
 		},
 		Embeddings: EmbeddingsConfig{
 			Model:     "BAAI/bge-small-en-v1.5",
-			Backend:   "auto",
-			Dimension: 384,
 		},
 		LLM: LLMConfig{
 			Local: 		true,

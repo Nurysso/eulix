@@ -3,7 +3,9 @@ examples/
 scripts/
 test_project/
 test/
-docs/
+build/
 parser/target
 parser/test
 **/target/
+.eulix/
+eulix

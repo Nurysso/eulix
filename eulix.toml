@@ -8,14 +8,14 @@ threads = 4
 
 [embeddings]
 model = "BAAI/bge-small-en-v1.5"
-backend = "auto"
-dimension = 384
+backend = "rocm"
+#dimension = 384
 
 [llm]
 local = true
 provider = "ollama"
-model = "llama3.2:3b"
-max_tokens = 8192
+model = "qwen2.5-coder:7b"
+max_tokens = 15000
 temperature = 0.7
 baseURL = "http://localhost:11434"
 

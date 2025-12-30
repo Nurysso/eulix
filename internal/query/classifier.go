@@ -94,13 +94,10 @@ type SymbolIndex struct {
 
 func QuerySheriff(kbIndexPath string) (*Classifier, error) {
 	c := &Classifier{
-		// Existing patterns - more specific
 		locationPattern:        regexp.MustCompile(`(?i)^(where\s+(is|are|can\s+i\s+find)|find\s+the|show\s+me|locate)\s`),
 		usagePattern:          regexp.MustCompile(`(?i)(who|what|which).*(calls?|uses?|invokes?|depends\s+on|references?)`),
 		architecturePattern:   regexp.MustCompile(`(?i)(architecture|overall\s+structure|high[\s-]level|system\s+design|component\s+diagram|module\s+organization)`),
 		implementationPattern: regexp.MustCompile(`(?i)(implement|add\s+feature|create\s+new|build\s+a)`),
-
-		// New patterns
 		debugPattern:          regexp.MustCompile(`(?i)(why\s+(is|does|doesn't)|debug|error|bug|issue|problem|not\s+working|fails?|crash|exception)`),
 		comparisonPattern:     regexp.MustCompile(`(?i)(difference\s+between|compare|vs\.?|versus|similar\s+to|differs?\s+from|what's\s+the\s+difference)`),
 		dependencyPattern:     regexp.MustCompile(`(?i)(depends?\s+on|dependencies|required\s+by|imports?|external|third[\s-]party)`),

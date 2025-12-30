@@ -1,46 +1,125 @@
 {
   "functions_by_name": {
-    "truncate": [
-      "internal/fixers/GLaDOS.go:286"
+    "formatSimpleText": [
+      "internal/tui/app.go:688"
+    ],
+    "runHistoryCommand": [
+      "internal/cli/commands.go:343"
+    ],
+    "isCommonWord": [
+      "internal/query/classifier.go:594"
+    ],
+    "NewEmbedder": [
+      "internal/embeddings/embedder.go:38"
+    ],
+    "Load": [
+      "internal/config/config.go:65"
+    ],
+    "printStatusMessageWithIcon": [
+      "internal/cli/chat.go:24"
+    ],
+    "CacheController": [
+      "internal/cache/manager.go:35"
+    ],
+    "HashHound": [
+      "internal/checksum/detector.go:30"
+    ],
+    "MainModel": [
+      "internal/tui/app.go:70"
+    ],
+    "analyzeProject": [
+      "internal/cli/analyze.go:14"
+    ],
+    "cosineSimilarity": [
+      "internal/query/context_builder.go:1217"
+    ],
+    "CacheTest": [
+      "internal/cli/history.go:141"
+    ],
+    "init": [
+      "internal/cli/commands.go:418"
+    ],
+    "canMerge": [
+      "internal/query/context_builder.go:1245"
+    ],
+    "main": [
+      "cmd/eulix/main.go:10"
+    ],
+    "CosineSimilarity": [
+      "internal/embeddings/embedder.go:201"
+    ],
+    "processInlineMarkdown": [
+      "internal/tui/app.go:664"
+    ],
+    "containsAny": [
+      "internal/query/classifier.go:604"
+    ],
+    "extractEntityName": [
+      "internal/query/router.go:826"
+    ],
+    "checkInitialized": [
+      "internal/cli/commands.go:459"
+    ],
+    "truncateString": [
+      "internal/cli/commands.go:525"
+    ],
+    "loadKBIndex": [
+      "internal/query/router.go:52"
+    ],
+    "HistoryView": [
+      "internal/tui/history.go:93"
+    ],
+    "getKnowledgeBasePath": [
+      "internal/cli/commands.go:495"
+    ],
+    "extractPotentialSymbols": [
+      "internal/query/context_builder.go:1187"
+    ],
+    "isLikelySymbol": [
+      "internal/query/router.go:857"
+    ],
+    "runHistoryTUI": [
+      "internal/cli/commands.go:385"
+    ],
+    "isInitialized": [
+      "internal/cli/commands.go:485"
+    ],
+    "checkEmbeddingsBin": [
+      "internal/fixers/GLaDOS.go:230"
+    ],
+    "promptConfirm": [
+      "internal/cli/chat.go:32"
     ],
     "Aspirine": [
       "internal/fixers/Aspirine.go:19"
     ],
+    "formatMarkdownResponse": [
+      "internal/tui/app.go:467"
+    ],
+    "truncate": [
+      "internal/fixers/GLaDOS.go:286"
+    ],
+    "hasKnowledgeBase": [
+      "internal/cli/commands.go:499"
+    ],
+    "printStatusMessage": [
+      "internal/cli/chat.go:20"
+    ],
+    "CacheDelete": [
+      "internal/cli/history.go:305"
+    ],
+    "extractKeywords": [
+      "internal/query/classifier.go:571"
+    ],
+    "floatToUint32": [
+      "internal/fixers/Aspirine.go:260"
+    ],
     "initCacheManager": [
       "internal/cli/commands.go:506"
     ],
-    "CacheCleanup": [
-      "internal/cli/history.go:113"
-    ],
-    "MainModel": [
-      "internal/tui/app.go:67"
-    ],
-    "CacheStats": [
-      "internal/cli/history.go:16"
-    ],
-    "isCommonWord": [
-      "internal/query/strings.go:31"
-    ],
-    "HistoryView": [
-      "internal/tui/history.go:94"
-    ],
-    "CacheView": [
-      "internal/cli/history.go:265"
-    ],
-    "loadKBIndex": [
-      "internal/query/loader.go:230"
-    ],
-    "canMerge": [
-      "internal/query/context_builder.go:961"
-    ],
-    "isSourceFile": [
-      "internal/checksum/detector.go:261"
-    ],
-    "hashFile": [
-      "internal/checksum/detector.go:228"
-    ],
-    "initializeProject": [
-      "internal/cli/init.go:10"
+    "wrapText": [
+      "internal/tui/app.go:696",
+      "internal/cli/commands.go:533"
     ],
     "defaultConfig": [
       "internal/config/config.go:82"
@@ -48,184 +127,120 @@
     "checkIndex": [
       "internal/fixers/GLaDOS.go:246"
     ],
-    "extractSymbolsFromContent": [
-      "internal/query/symbols.go:22"
+    "QuerySheriff": [
+      "internal/query/classifier.go:95"
     ],
-    "mergeChunks": [
-      "internal/query/context_builder.go:976"
+    "formatDuration": [
+      "internal/tui/history.go:337"
     ],
-    "GLaDOS": [
-      "internal/fixers/GLaDOS.go:13"
-    ],
-    "extractEntityName": [
-      "internal/query/symbols.go:65"
-    ],
-    "main": [
-      "cmd/eulix/main.go:10"
-    ],
-    "CacheHistory": [
-      "internal/cli/history.go:209"
-    ],
-    "splitIdentifierToTokens": [
-      "internal/query/context_builder.go:894"
-    ],
-    "NormalizeVector": [
-      "internal/embeddings/embedder.go:216"
-    ],
-    "isLikelySymbol": [
-      "internal/query/symbols.go:95"
-    ],
-    "wrapTextCache": [
-      "internal/tui/history.go:346"
+    "hashFile": [
+      "internal/checksum/detector.go:228"
     ],
     "loadKB": [
       "internal/fixers/GLaDOS.go:202"
     ],
-    "CacheClear": [
-      "internal/cli/history.go:77"
-    ],
-    "extractKeywords": [
-      "internal/query/strings.go:8"
-    ],
-    "Load": [
-      "internal/config/config.go:65"
-    ],
-    "CacheDelete": [
-      "internal/cli/history.go:305"
-    ],
-    "cosineSimilarity": [
-      "internal/query/context_builder.go:933"
-    ],
-    "CacheTest": [
-      "internal/cli/history.go:141"
-    ],
-    "uniqueStrings": [
-      "internal/query/context_builder.go:921"
-    ],
-    "extractQueryKeywords": [
-      "internal/query/strings.go:50"
-    ],
-    "ContextWindowCreator": [
-      "internal/query/context_builder.go:24"
-    ],
-    "containsAny": [
-      "internal/query/strings.go:41"
-    ],
-    "wrapText": [
-      "internal/tui/app.go:455",
-      "internal/cli/commands.go:533"
-    ],
-    "NewEmbedder": [
-      "internal/embeddings/embedder.go:38"
-    ],
-    "checkInitialized": [
-      "internal/cli/commands.go:459"
+    "Execute": [
+      "internal/cli/commands.go:414"
     ],
     "VectorWeaver": [
       "internal/embeddings/embedder.go:60"
     ],
-    "checkEmbeddingsFiles": [
-      "internal/cli/chat.go:41"
+    "initializeProject": [
+      "internal/cli/init.go:10"
     ],
-    "findEulixBinary": [
-      "internal/embeddings/embedder.go:169"
-    ],
-    "MouthClient": [
-      "internal/llm/client.go:60"
-    ],
-    "loadCallGraph": [
-      "internal/query/loader.go:215"
-    ],
-    "contains": [
-      "internal/query/context_builder.go:952"
-    ],
-    "printStatusMessageWithIcon": [
-      "internal/cli/chat.go:24"
-    ],
-    "truncateString": [
-      "internal/cli/commands.go:525"
-    ],
-    "HashHound": [
-      "internal/checksum/detector.go:30"
-    ],
-    "checkEmbeddingsBin": [
-      "internal/fixers/GLaDOS.go:230"
-    ],
-    "startChat": [
-      "internal/cli/chat.go:61"
-    ],
-    "runHistoryTUI": [
-      "internal/cli/commands.go:385"
-    ],
-    "extractPotentialSymbols": [
-      "internal/query/symbols.go:47"
-    ],
-    "promptConfirm": [
-      "internal/cli/chat.go:32"
-    ],
-    "formatDuration": [
-      "internal/tui/history.go:382"
-    ],
-    "runHistoryCommand": [
-      "internal/cli/commands.go:343"
+    "wrapTextCache": [
+      "internal/tui/history.go:301"
     ],
     "printSystemDiagnostics": [
       "internal/cli/chat.go:199"
     ],
+    "QueryTrafficController": [
+      "internal/query/router.go:23"
+    ],
+    "isListItem": [
+      "internal/tui/app.go:619"
+    ],
+    "findEulixBinary": [
+      "internal/embeddings/embedder.go:169"
+    ],
+    "CacheStats": [
+      "internal/cli/history.go:16"
+    ],
+    "CacheClear": [
+      "internal/cli/history.go:77"
+    ],
+    "checkEmbeddingsFiles": [
+      "internal/cli/chat.go:41"
+    ],
+    "extractSymbolsFromContent": [
+      "internal/query/context_builder.go:1070"
+    ],
+    "MouthClient": [
+      "internal/llm/client.go:60"
+    ],
+    "splitIdentifierToTokens": [
+      "internal/query/context_builder.go:1159"
+    ],
+    "mergeChunks": [
+      "internal/query/context_builder.go:1260"
+    ],
+    "CacheView": [
+      "internal/cli/history.go:265"
+    ],
+    "uniqueStrings": [
+      "internal/query/context_builder.go:1205"
+    ],
+    "isSourceFile": [
+      "internal/checksum/detector.go:261"
+    ],
+    "fuzzyScore": [
+      "internal/query/router.go:925"
+    ],
+    "extractQueryKeywords": [
+      "internal/query/context_builder.go:1122"
+    ],
+    "formatListItem": [
+      "internal/tui/app.go:639"
+    ],
+    "CacheHistory": [
+      "internal/cli/history.go:209"
+    ],
+    "GLaDOS": [
+      "internal/fixers/GLaDOS.go:13"
+    ],
+    "normalizeLineBreaks": [
+      "internal/tui/app.go:570"
+    ],
+    "calculateImportance": [
+      "internal/query/context_builder.go:1094"
+    ],
+    "CacheCleanup": [
+      "internal/cli/history.go:113"
+    ],
+    "contains": [
+      "internal/query/context_builder.go:1236"
+    ],
+    "NormalizeVector": [
+      "internal/embeddings/embedder.go:216"
+    ],
+    "ContextWindowCreator": [
+      "internal/query/context_builder.go:27"
+    ],
     "findChunksWithSymbol": [
       "internal/fixers/GLaDOS.go:260"
     ],
-    "fuzzyScore": [
-      "internal/query/router.go:804"
-    ],
-    "QueryTrafficController": [
-      "internal/query/router.go:21"
-    ],
-    "QuerySheriff": [
-      "internal/query/classifier.go:94"
-    ],
-    "init": [
-      "internal/cli/commands.go:418"
-    ],
-    "Execute": [
-      "internal/cli/commands.go:414"
-    ],
-    "hasKnowledgeBase": [
-      "internal/cli/commands.go:499"
-    ],
-    "CacheController": [
-      "internal/cache/manager.go:35"
-    ],
-    "calculateImportance": [
-      "internal/query/context_builder.go:863"
+    "startChat": [
+      "internal/cli/chat.go:61"
     ],
     "loadEmbeddingsJSON": [
       "internal/fixers/GLaDOS.go:216"
     ],
-    "getKnowledgeBasePath": [
-      "internal/cli/commands.go:495"
-    ],
-    "analyzeProject": [
-      "internal/cli/analyze.go:14"
-    ],
-    "isInitialized": [
-      "internal/cli/commands.go:485"
-    ],
-    "printStatusMessage": [
-      "internal/cli/chat.go:20"
-    ],
-    "floatToUint32": [
-      "internal/fixers/Aspirine.go:260"
-    ],
-    "CosineSimilarity": [
-      "internal/embeddings/embedder.go:201"
+    "loadCallGraph": [
+      "internal/query/router.go:67"
     ]
   },
   "functions_calling": {
-    "Close": [
-      "func_Aspirine",
-      "func_startChat",
-      "func_startChat",
+    "Load": [
       "func_CacheStats",
       "func_CacheClear",
       "func_CacheCleanup",
@@ -233,217 +248,830 @@
       "func_CacheHistory",
       "func_CacheView",
       "func_CacheDelete",
+      "func_analyzeProject",
+      "func_startChat",
+      "func_startChat",
+      "func_initCacheManager"
+    ],
+    "Contains": [
+      "func_containsAny",
+      "func_isLikelySymbol",
+      "func_isLikelySymbol",
+      "func_fuzzyScore",
+      "func_extractQueryKeywords",
+      "func_findChunksWithSymbol",
+      "func_findChunksWithSymbol",
+      "func_findChunksWithSymbol"
+    ],
+    "Fields": [
+      "func_wrapTextCache",
+      "func_wrapText",
+      "func_extractEntityName",
+      "func_wrapText",
+      "func_extractPotentialSymbols"
+    ],
+    "Minutes": [
+      "func_formatDuration"
+    ],
+    "Open": [
+      "func_CacheController",
+      "func_hashFile"
+    ],
+    "Underline": [
+      "func_formatMarkdownResponse"
+    ],
+    "Calculate": [
+      "func_CacheStats",
+      "func_CacheTest",
+      "func_analyzeProject",
+      "func_startChat"
+    ],
+    "QuerySheriff": [
+      "func_QueryTrafficController"
+    ],
+    "Count": [
+      "func_printSystemDiagnostics"
+    ],
+    "IsUpper": [
+      "func_splitIdentifierToTokens"
+    ],
+    "Sscanf": [
+      "func_CacheDelete"
+    ],
+    "Hours": [
+      "func_formatDuration",
+      "func_formatDuration"
+    ],
+    "IsNotExist": [
+      "func_Aspirine",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_checkEmbeddingsFiles",
+      "func_startChat",
+      "func_checkInitialized",
+      "func_checkInitialized",
+      "func_checkInitialized",
+      "func_GLaDOS"
+    ],
+    "New": [
+      "func_HistoryView",
+      "func_HistoryView",
+      "func_MainModel",
+      "func_MainModel",
+      "func_MainModel",
+      "func_hashFile"
+    ],
+    "findEulixBinary": [
+      "func_NewEmbedder"
+    ],
+    "Flags": [
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init"
+    ],
+    "isListItem": [
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_normalizeLineBreaks",
+      "func_normalizeLineBreaks"
+    ],
+    "Close": [
+      "func_CacheStats",
+      "func_CacheClear",
+      "func_CacheCleanup",
+      "func_CacheTest",
+      "func_CacheHistory",
+      "func_CacheView",
+      "func_CacheDelete",
+      "func_Aspirine",
+      "func_startChat",
+      "func_startChat",
       "func_runHistoryCommand",
       "func_runHistoryTUI",
       "func_hashFile"
+    ],
+    "normalizeLineBreaks": [
+      "func_formatMarkdownResponse"
+    ],
+    "make": [
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_HistoryView",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_fuzzyScore",
+      "func_ContextWindowCreator",
+      "func_ContextWindowCreator",
+      "func_extractQueryKeywords",
+      "func_extractPotentialSymbols",
+      "func_uniqueStrings",
+      "func_uniqueStrings",
+      "func_mergeChunks",
+      "func_mergeChunks",
+      "func_hashFile",
+      "func_NormalizeVector",
+      "func_GLaDOS"
+    ],
+    "Color": [
+      "func_formatMarkdownResponse"
+    ],
+    "Seconds": [
+      "func_formatDuration"
+    ],
+    "Exit": [
+      "func_main",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand",
+      "func_runHistoryTUI",
+      "func_runHistoryTUI",
+      "func_runHistoryTUI",
+      "func_checkInitialized",
+      "func_checkInitialized",
+      "func_checkInitialized"
+    ],
+    "MustCompile": [
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_QuerySheriff",
+      "func_formatMarkdownResponse",
+      "func_formatListItem",
+      "func_processInlineMarkdown",
+      "func_processInlineMarkdown",
+      "func_processInlineMarkdown"
+    ],
+    "TrimSpace": [
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_normalizeLineBreaks",
+      "func_normalizeLineBreaks",
+      "func_isListItem",
+      "func_formatListItem",
+      "func_promptConfirm",
+      "func_extractSymbolsFromContent",
+      "func_extractSymbolsFromContent",
+      "func_findEulixBinary",
+      "func_truncate"
+    ],
+    "Ping": [
+      "func_CacheController"
+    ],
+    "loadVectorMap": [
+      "func_ContextWindowCreator"
+    ],
+    "ToLower": [
+      "func_extractEntityName",
+      "func_extractEntityName",
+      "func_promptConfirm",
+      "func_splitIdentifierToTokens",
+      "func_splitIdentifierToTokens",
+      "func_findChunksWithSymbol",
+      "func_findChunksWithSymbol",
+      "func_findChunksWithSymbol",
+      "func_findChunksWithSymbol"
+    ],
+    "Printf": [
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheHistory",
+      "func_CacheHistory",
+      "func_CacheHistory",
+      "func_CacheHistory",
+      "func_CacheHistory",
+      "func_CacheDelete",
+      "func_CacheDelete",
+      "func_CacheDelete",
+      "func_analyzeProject",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_printStatusMessageWithIcon",
+      "func_printStatusMessageWithIcon",
+      "func_promptConfirm",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat",
+      "func_printSystemDiagnostics",
+      "func_printSystemDiagnostics",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS"
+    ],
+    "loadKBIndex": [
+      "func_QueryTrafficController"
+    ],
+    "truncate": [
+      "func_GLaDOS"
+    ],
+    "Fprintf": [
+      "func_main",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand",
+      "func_runHistoryTUI",
+      "func_runHistoryTUI",
+      "func_runHistoryTUI",
+      "func_checkInitialized",
+      "func_checkInitialized",
+      "func_checkInitialized",
+      "func_checkInitialized",
+      "func_checkInitialized",
+      "func_checkInitialized",
+      "func_checkInitialized"
+    ],
+    "SetHelpCommand": [
+      "func_init"
+    ],
+    "Until": [
+      "func_runHistoryCommand"
+    ],
+    "Scanln": [
+      "func_CacheClear",
+      "func_CacheDelete",
+      "func_promptConfirm"
+    ],
+    "NewClient": [
+      "func_CacheController"
+    ],
+    "GetStats": [
+      "func_CacheStats",
+      "func_startChat"
+    ],
+    "BoolP": [
+      "func_init",
+      "func_init"
+    ],
+    "Max": [
+      "func_mergeChunks"
+    ],
+    "ReplaceAllStringFunc": [
+      "func_processInlineMarkdown",
+      "func_processInlineMarkdown"
+    ],
+    "FieldsFunc": [
+      "func_extractKeywords",
+      "func_extractQueryKeywords"
+    ],
+    "(*uint32)": [
+      "func_floatToUint32"
+    ],
+    "CompareChecksums": [
+      "func_startChat"
+    ],
+    "printSystemDiagnostics": [
+      "func_startChat"
+    ],
+    "Create": [
+      "func_Aspirine"
+    ],
+    "WriteFile": [
+      "func_initializeProject",
+      "func_initializeProject"
+    ],
+    "Rename": [
+      "func_Aspirine"
+    ],
+    "TrimRight": [
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse"
+    ],
+    "wrapText": [
+      "func_processInlineMarkdown",
+      "func_formatSimpleText",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand"
+    ],
+    "Reset": [
+      "func_wrapTextCache",
+      "func_wrapText"
+    ],
+    "floatToUint32": [
+      "func_Aspirine"
+    ],
+    "string": [
+      "func_printSystemDiagnostics",
+      "func_findEulixBinary"
+    ],
+    "findChunksWithSymbol": [
+      "func_GLaDOS"
+    ],
+    "SetFilteringEnabled": [
+      "func_HistoryView"
+    ],
+    "Get": [
+      "func_CacheTest",
+      "func_CacheTest"
+    ],
+    "ToUpper": [
+      "func_formatMarkdownResponse",
+      "func_isLikelySymbol"
+    ],
+    "loadChunks": [
+      "func_ContextWindowCreator"
+    ],
+    "uniqueStrings": [
+      "func_extractPotentialSymbols"
+    ],
+    "ReplaceAll": [
+      "func_normalizeLineBreaks",
+      "func_normalizeLineBreaks",
+      "func_normalizeLineBreaks",
+      "func_truncate"
+    ],
+    "Bool": [
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init"
+    ],
+    "Read": [
+      "func_hashFile"
+    ],
+    "Err": [
+      "func_CacheController"
+    ],
+    "Repeat": [
+      "func_runHistoryCommand",
+      "func_runHistoryCommand"
+    ],
+    "Background": [
+      "func_CacheController",
+      "func_formatMarkdownResponse"
+    ],
+    "Save": [
+      "func_analyzeProject"
+    ],
+    "Focus": [
+      "func_MainModel"
+    ],
+    "Pointer": [
+      "func_floatToUint32"
+    ],
+    "Format": [
+      "func_CacheHistory",
+      "func_CacheHistory",
+      "func_CacheDelete",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand"
+    ],
+    "Errorf": [
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheClear",
+      "func_CacheClear",
+      "func_CacheClear",
+      "func_CacheCleanup",
+      "func_CacheCleanup",
+      "func_CacheCleanup",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheHistory",
+      "func_CacheHistory",
+      "func_CacheHistory",
+      "func_CacheView",
+      "func_CacheView",
+      "func_CacheView",
+      "func_CacheView",
+      "func_CacheDelete",
+      "func_CacheDelete",
+      "func_CacheDelete",
+      "func_CacheDelete",
+      "func_CacheDelete",
+      "func_CacheDelete",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_CacheController",
+      "func_CacheController",
+      "func_CacheController",
+      "func_CacheController",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_QueryTrafficController",
+      "func_QueryTrafficController",
+      "func_QueryTrafficController",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat",
+      "func_initCacheManager",
+      "func_initCacheManager",
+      "func_initCacheManager",
+      "func_ContextWindowCreator",
+      "func_NewEmbedder",
+      "func_NewEmbedder",
+      "func_findEulixBinary",
+      "func_GLaDOS",
+      "func_checkEmbeddingsBin"
+    ],
+    "IsLetter": [
+      "func_extractKeywords"
+    ],
+    "Trim": [
+      "func_processInlineMarkdown",
+      "func_extractQueryKeywords",
+      "func_extractPotentialSymbols"
+    ],
+    "AddCommand": [
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init",
+      "func_init"
+    ],
+    "loadCallGraph": [
+      "func_QueryTrafficController",
+      "func_ContextWindowCreator"
+    ],
+    "Sprintf": [
+      "func_formatDuration",
+      "func_formatDuration",
+      "func_formatDuration",
+      "func_formatDuration",
+      "func_analyzeProject",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_formatMarkdownResponse",
+      "func_checkEmbeddingsFiles",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat"
+    ],
+    "Sqrt": [
+      "func_cosineSimilarity",
+      "func_NormalizeVector"
+    ],
+    "splitIdentifierToTokens": [
+      "func_extractPotentialSymbols"
+    ],
+    "processInlineMarkdown": [
+      "func_formatMarkdownResponse",
+      "func_formatListItem"
+    ],
+    "WithMouseCellMotion": [
+      "func_startChat"
+    ],
+    "PutUint32": [
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine"
+    ],
+    "Write": [
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_hashFile"
+    ],
+    "loadSymbols": [
+      "func_QuerySheriff"
+    ],
+    "IsNumber": [
+      "func_extractKeywords"
+    ],
+    "HistoryView": [
+      "func_CacheView",
+      "func_runHistoryTUI"
+    ],
+    "ListAll": [
+      "func_CacheHistory",
+      "func_CacheView",
+      "func_CacheDelete",
+      "func_runHistoryCommand",
+      "func_runHistoryTUI"
+    ],
+    "float32": [
+      "func_NormalizeVector"
+    ],
+    "After": [
+      "func_CacheHistory",
+      "func_runHistoryCommand"
+    ],
+    "getKnowledgeBasePath": [
+      "func_hasKnowledgeBase"
+    ],
+    "Since": [
+      "func_analyzeProject"
+    ],
+    "Foreground": [
+      "func_MainModel",
+      "func_MainModel",
+      "func_MainModel",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatSimpleText"
+    ],
+    "Getenv": [
+      "func_Load"
+    ],
+    "Execute": [
+      "func_main",
+      "func_Execute"
+    ],
+    "Getpid": [
+      "func_Aspirine"
+    ],
+    "promptConfirm": [
+      "func_startChat"
+    ],
+    "loadKnowledgeBase": [
+      "func_ContextWindowCreator"
+    ],
+    "initSQLSchema": [
+      "func_CacheController"
+    ],
+    "Width": [
+      "func_wrapText"
+    ],
+    "Print": [
+      "func_CacheClear",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheDelete"
+    ],
+    "loadKB": [
+      "func_GLaDOS"
+    ],
+    "CacheController": [
+      "func_CacheStats",
+      "func_CacheClear",
+      "func_CacheCleanup",
+      "func_CacheTest",
+      "func_CacheHistory",
+      "func_CacheView",
+      "func_CacheDelete",
+      "func_startChat",
+      "func_initCacheManager"
+    ],
+    "HashHound": [
+      "func_CacheStats",
+      "func_CacheTest",
+      "func_analyzeProject",
+      "func_startChat"
+    ],
+    "Round": [
+      "func_analyzeProject",
+      "func_runHistoryCommand"
     ],
     "float64": [
       "func_Aspirine",
       "func_Aspirine",
       "func_Aspirine",
       "func_Aspirine",
-      "func_cosineSimilarity",
-      "func_cosineSimilarity",
-      "func_cosineSimilarity",
       "func_printSystemDiagnostics",
+      "func_cosineSimilarity",
+      "func_cosineSimilarity",
+      "func_cosineSimilarity",
       "func_CosineSimilarity",
       "func_NormalizeVector",
       "func_GLaDOS",
       "func_GLaDOS"
     ],
-    "Sprintf": [
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_checkEmbeddingsFiles",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
+    "int": [
       "func_formatDuration",
       "func_formatDuration",
       "func_formatDuration",
       "func_formatDuration",
-      "func_analyzeProject"
-    ],
-    "Getpid": [
-      "func_Aspirine"
-    ],
-    "QueryTrafficController": [
-      "func_startChat"
-    ],
-    "ToLower": [
-      "func_splitIdentifierToTokens",
-      "func_splitIdentifierToTokens",
-      "func_promptConfirm",
-      "func_extractEntityName",
-      "func_extractEntityName",
-      "func_findChunksWithSymbol",
-      "func_findChunksWithSymbol",
-      "func_findChunksWithSymbol",
-      "func_findChunksWithSymbol"
-    ],
-    "defaultConfig": [
-      "func_Load"
-    ],
-    "Pointer": [
-      "func_floatToUint32"
-    ],
-    "QuerySheriff": [
-      "func_QueryTrafficController"
-    ],
-    "Output": [
-      "func_findEulixBinary"
-    ],
-    "checkEmbeddingsBin": [
-      "func_GLaDOS"
-    ],
-    "Padding": [
-      "func_HistoryView"
-    ],
-    "SetHelpCommand": [
-      "func_init"
-    ],
-    "loadIgnorePatterns": [
-      "func_HashHound"
-    ],
-    "BorderForeground": [
-      "func_HistoryView",
-      "func_HistoryView"
-    ],
-    "loadKnowledgeBase": [
-      "func_ContextWindowCreator"
-    ],
-    "Calculate": [
-      "func_startChat",
-      "func_CacheStats",
-      "func_CacheTest",
-      "func_analyzeProject"
-    ],
-    "Load": [
-      "func_startChat",
-      "func_startChat",
-      "func_CacheStats",
-      "func_CacheClear",
-      "func_CacheCleanup",
-      "func_CacheTest",
-      "func_CacheHistory",
-      "func_CacheView",
-      "func_CacheDelete",
-      "func_analyzeProject",
-      "func_initCacheManager"
-    ],
-    "Errorf": [
       "func_Aspirine",
       "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_CacheController",
-      "func_CacheController",
-      "func_CacheController",
-      "func_CacheController",
-      "func_ContextWindowCreator",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheClear",
-      "func_CacheClear",
-      "func_CacheClear",
-      "func_CacheCleanup",
-      "func_CacheCleanup",
-      "func_CacheCleanup",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheHistory",
-      "func_CacheHistory",
-      "func_CacheHistory",
-      "func_CacheView",
-      "func_CacheView",
-      "func_CacheView",
-      "func_CacheView",
-      "func_CacheDelete",
-      "func_CacheDelete",
-      "func_CacheDelete",
-      "func_CacheDelete",
-      "func_CacheDelete",
-      "func_CacheDelete",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_QueryTrafficController",
-      "func_QueryTrafficController",
-      "func_QueryTrafficController",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_NewEmbedder",
-      "func_NewEmbedder",
-      "func_findEulixBinary",
-      "func_initCacheManager",
-      "func_initCacheManager",
-      "func_initCacheManager",
-      "func_GLaDOS",
       "func_checkEmbeddingsBin"
     ],
-    "NewProgram": [
-      "func_startChat",
+    "Uint32": [
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_checkEmbeddingsBin",
+      "func_checkEmbeddingsBin"
+    ],
+    "ParseURL": [
+      "func_CacheController"
+    ],
+    "Run": [
       "func_CacheView",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_startChat",
+      "func_runHistoryTUI",
+      "func_NewEmbedder"
+    ],
+    "Split": [
+      "func_formatMarkdownResponse",
+      "func_normalizeLineBreaks",
+      "func_extractSymbolsFromContent",
+      "func_extractSymbolsFromContent",
+      "func_extractQueryKeywords",
+      "func_splitIdentifierToTokens"
+    ],
+    "WithAltScreen": [
+      "func_CacheView",
+      "func_startChat",
       "func_runHistoryTUI"
     ],
-    "Sum": [
-      "func_hashFile"
+    "NewStyle": [
+      "func_MainModel",
+      "func_MainModel",
+      "func_MainModel",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatSimpleText"
     ],
-    "Round": [
-      "func_analyzeProject",
-      "func_runHistoryCommand"
+    "WriteString": [
+      "func_wrapTextCache",
+      "func_wrapTextCache",
+      "func_wrapTextCache",
+      "func_wrapTextCache",
+      "func_wrapTextCache",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_wrapText",
+      "func_wrapText",
+      "func_wrapText",
+      "func_wrapText",
+      "func_wrapText"
     ],
-    "uint32": [
-      "func_Aspirine",
-      "func_Aspirine"
+    "Bold": [
+      "func_MainModel",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse"
+    ],
+    "TrimPrefix": [
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatListItem",
+      "func_formatListItem",
+      "func_formatListItem",
+      "func_extractSymbolsFromContent"
     ],
     "len": [
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_splitIdentifierToTokens",
-      "func_splitIdentifierToTokens",
-      "func_splitIdentifierToTokens",
-      "func_splitIdentifierToTokens",
-      "func_uniqueStrings",
-      "func_cosineSimilarity",
-      "func_startChat",
       "func_CacheHistory",
       "func_CacheHistory",
       "func_CacheHistory",
@@ -451,19 +1079,30 @@
       "func_CacheDelete",
       "func_CacheDelete",
       "func_CacheDelete",
+      "func_extractKeywords",
       "func_HistoryView",
       "func_wrapTextCache",
       "func_wrapTextCache",
-      "func_extractKeywords",
-      "func_extractQueryKeywords",
-      "func_extractQueryKeywords",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_formatMarkdownResponse",
+      "func_normalizeLineBreaks",
+      "func_normalizeLineBreaks",
+      "func_normalizeLineBreaks",
+      "func_processInlineMarkdown",
+      "func_wrapText",
+      "func_isLikelySymbol",
       "func_fuzzyScore",
       "func_fuzzyScore",
-      "func_wrapText",
-      "func_wrapText",
-      "func_findEulixBinary",
-      "func_CosineSimilarity",
-      "func_NormalizeVector",
+      "func_startChat",
       "func_runHistoryCommand",
       "func_runHistoryCommand",
       "func_runHistoryTUI",
@@ -471,8 +1110,18 @@
       "func_wrapText",
       "func_wrapText",
       "func_extractSymbolsFromContent",
+      "func_extractQueryKeywords",
+      "func_extractQueryKeywords",
+      "func_splitIdentifierToTokens",
+      "func_splitIdentifierToTokens",
+      "func_splitIdentifierToTokens",
+      "func_splitIdentifierToTokens",
       "func_extractPotentialSymbols",
-      "func_isLikelySymbol",
+      "func_uniqueStrings",
+      "func_cosineSimilarity",
+      "func_findEulixBinary",
+      "func_CosineSimilarity",
+      "func_NormalizeVector",
       "func_GLaDOS",
       "func_GLaDOS",
       "func_GLaDOS",
@@ -498,790 +1147,33 @@
       "func_checkIndex",
       "func_truncate"
     ],
-    "checkIndex": [
-      "func_GLaDOS"
-    ],
-    "Bold": [
-      "func_HistoryView",
-      "func_MainModel"
-    ],
-    "findChunksWithSymbol": [
-      "func_GLaDOS"
-    ],
-    "Delete": [
-      "func_CacheDelete"
-    ],
-    "Trim": [
-      "func_extractQueryKeywords",
-      "func_extractPotentialSymbols"
-    ],
-    "Max": [
-      "func_mergeChunks"
-    ],
-    "Ping": [
-      "func_CacheController"
-    ],
-    "printSystemDiagnostics": [
-      "func_startChat"
-    ],
-    "Reset": [
-      "func_wrapTextCache",
-      "func_wrapText"
-    ],
-    "HasPrefix": [
-      "func_extractSymbolsFromContent"
-    ],
-    "WriteString": [
-      "func_wrapTextCache",
-      "func_wrapTextCache",
-      "func_wrapTextCache",
-      "func_wrapTextCache",
-      "func_wrapTextCache",
-      "func_wrapText",
-      "func_wrapText",
-      "func_wrapText",
-      "func_wrapText",
-      "func_wrapText"
-    ],
-    "Execute": [
-      "func_main",
-      "func_Execute"
-    ],
-    "Fprintf": [
-      "func_main",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand",
-      "func_runHistoryTUI",
-      "func_runHistoryTUI",
-      "func_runHistoryTUI",
-      "func_checkInitialized",
-      "func_checkInitialized",
-      "func_checkInitialized",
-      "func_checkInitialized",
-      "func_checkInitialized",
-      "func_checkInitialized",
-      "func_checkInitialized"
-    ],
-    "NewStyle": [
-      "func_HistoryView",
-      "func_MainModel",
-      "func_MainModel",
-      "func_MainModel"
-    ],
-    "SetShowStatusBar": [
-      "func_HistoryView"
-    ],
-    "Run": [
-      "func_startChat",
-      "func_CacheView",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_NewEmbedder",
-      "func_runHistoryTUI"
-    ],
-    "Unmarshal": [
-      "func_Aspirine",
-      "func_loadCallGraph",
-      "func_loadKBIndex",
-      "func_loadKB",
-      "func_loadEmbeddingsJSON",
-      "func_checkIndex"
-    ],
-    "loadEmbeddingsJSON": [
-      "func_GLaDOS"
-    ],
-    "floatToUint32": [
-      "func_Aspirine"
-    ],
-    "Printf": [
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_printStatusMessageWithIcon",
-      "func_printStatusMessageWithIcon",
-      "func_promptConfirm",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
-      "func_printSystemDiagnostics",
-      "func_printSystemDiagnostics",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheHistory",
-      "func_CacheHistory",
-      "func_CacheHistory",
-      "func_CacheHistory",
-      "func_CacheHistory",
-      "func_CacheDelete",
-      "func_CacheDelete",
-      "func_CacheDelete",
-      "func_analyzeProject",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS"
-    ],
-    "Until": [
-      "func_runHistoryCommand"
-    ],
-    "uniqueStrings": [
-      "func_extractPotentialSymbols"
-    ],
-    "Uint32": [
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_checkEmbeddingsBin",
-      "func_checkEmbeddingsBin"
-    ],
-    "IsNotExist": [
-      "func_Aspirine",
-      "func_checkEmbeddingsFiles",
-      "func_startChat",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_checkInitialized",
-      "func_checkInitialized",
-      "func_checkInitialized",
-      "func_GLaDOS"
-    ],
-    "Hours": [
-      "func_formatDuration",
-      "func_formatDuration"
-    ],
-    "Command": [
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_NewEmbedder",
-      "func_findEulixBinary"
-    ],
-    "CacheController": [
-      "func_startChat",
-      "func_CacheStats",
-      "func_CacheClear",
-      "func_CacheCleanup",
-      "func_CacheTest",
-      "func_CacheHistory",
-      "func_CacheView",
-      "func_CacheDelete",
-      "func_initCacheManager"
-    ],
-    "WithAltScreen": [
-      "func_startChat",
-      "func_CacheView",
-      "func_runHistoryTUI"
-    ],
-    "Since": [
-      "func_analyzeProject"
-    ],
-    "Write": [
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_hashFile"
-    ],
-    "Println": [
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
-      "func_startChat",
-      "func_printSystemDiagnostics",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheStats",
-      "func_CacheClear",
-      "func_CacheClear",
-      "func_CacheClear",
-      "func_CacheCleanup",
-      "func_CacheCleanup",
-      "func_CacheCleanup",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheHistory",
-      "func_CacheHistory",
-      "func_CacheHistory",
-      "func_CacheHistory",
-      "func_CacheView",
-      "func_CacheView",
-      "func_CacheDelete",
-      "func_CacheDelete",
-      "func_CacheDelete",
-      "func_CacheDelete",
-      "func_CacheDelete",
-      "func_CacheDelete",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand",
-      "func_runHistoryTUI",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS"
-    ],
-    "Flags": [
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init"
-    ],
-    "isLikelySymbol": [
-      "func_extractEntityName"
-    ],
-    "WithMouseCellMotion": [
-      "func_startChat"
-    ],
-    "make": [
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_ContextWindowCreator",
-      "func_ContextWindowCreator",
-      "func_uniqueStrings",
-      "func_uniqueStrings",
-      "func_mergeChunks",
-      "func_mergeChunks",
-      "func_HistoryView",
-      "func_extractQueryKeywords",
-      "func_fuzzyScore",
-      "func_NormalizeVector",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_hashFile",
-      "func_extractPotentialSymbols",
-      "func_GLaDOS"
-    ],
-    "Background": [
-      "func_CacheController",
-      "func_HistoryView"
-    ],
-    "Split": [
-      "func_splitIdentifierToTokens",
-      "func_extractQueryKeywords",
-      "func_extractSymbolsFromContent",
-      "func_extractSymbolsFromContent"
-    ],
-    "HistoryView": [
-      "func_CacheView",
-      "func_runHistoryTUI"
-    ],
-    "int": [
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_formatDuration",
-      "func_formatDuration",
-      "func_formatDuration",
-      "func_formatDuration",
-      "func_checkEmbeddingsBin"
-    ],
-    "checkEmbeddingsFiles": [
-      "func_startChat"
-    ],
-    "Err": [
-      "func_CacheController"
-    ],
-    "ReadFile": [
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_printSystemDiagnostics",
-      "func_loadCallGraph",
-      "func_loadKBIndex",
-      "func_loadKB",
-      "func_loadEmbeddingsJSON",
-      "func_checkEmbeddingsBin",
-      "func_checkIndex"
-    ],
-    "loadChunks": [
-      "func_ContextWindowCreator"
-    ],
-    "Count": [
-      "func_printSystemDiagnostics"
-    ],
-    "SetCurrentChecksum": [
-      "func_startChat"
-    ],
-    "AddCommand": [
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init"
-    ],
-    "(*uint32)": [
-      "func_floatToUint32"
-    ],
-    "Sqrt": [
-      "func_cosineSimilarity",
-      "func_NormalizeVector"
-    ],
-    "Get": [
-      "func_CacheTest",
-      "func_CacheTest"
-    ],
-    "Minutes": [
-      "func_formatDuration"
-    ],
-    "LookPath": [
-      "func_findEulixBinary"
-    ],
-    "MainModel": [
-      "func_startChat"
-    ],
-    "TrimPrefix": [
-      "func_extractSymbolsFromContent"
-    ],
-    "string": [
-      "func_printSystemDiagnostics",
-      "func_findEulixBinary"
-    ],
-    "wrapText": [
-      "func_runHistoryCommand",
-      "func_runHistoryCommand"
-    ],
-    "Create": [
-      "func_Aspirine"
-    ],
-    "Contains": [
-      "func_containsAny",
-      "func_extractQueryKeywords",
-      "func_fuzzyScore",
-      "func_isLikelySymbol",
-      "func_isLikelySymbol",
-      "func_findChunksWithSymbol",
-      "func_findChunksWithSymbol",
-      "func_findChunksWithSymbol"
-    ],
-    "Join": [
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_ContextWindowCreator",
-      "func_checkEmbeddingsFiles",
-      "func_startChat",
-      "func_printSystemDiagnostics",
-      "func_printSystemDiagnostics",
-      "func_QueryTrafficController",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_analyzeProject",
-      "func_loadCallGraph",
-      "func_loadKBIndex",
-      "func_getKnowledgeBasePath",
-      "func_wrapText",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS",
-      "func_GLaDOS"
-    ],
-    "initSQLSchema": [
-      "func_CacheController"
-    ],
-    "Fields": [
-      "func_wrapTextCache",
-      "func_wrapText",
-      "func_wrapText",
-      "func_extractPotentialSymbols",
-      "func_extractEntityName"
-    ],
-    "PutUint32": [
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine"
-    ],
-    "Repeat": [
-      "func_runHistoryCommand",
-      "func_runHistoryCommand"
-    ],
-    "loadCallGraph": [
-      "func_QueryTrafficController"
-    ],
-    "loadEmbeddings": [
-      "func_ContextWindowCreator"
-    ],
-    "CompareChecksums": [
-      "func_startChat"
-    ],
-    "findEulixBinary": [
-      "func_NewEmbedder"
-    ],
-    "SetFilteringEnabled": [
-      "func_HistoryView"
-    ],
-    "Read": [
-      "func_hashFile"
-    ],
-    "New": [
-      "func_HistoryView",
-      "func_HistoryView",
-      "func_MainModel",
-      "func_MainModel",
-      "func_MainModel",
-      "func_hashFile"
-    ],
-    "MustCompile": [
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff",
-      "func_QuerySheriff"
-    ],
-    "NewClient": [
-      "func_CacheController"
-    ],
-    "Format": [
-      "func_CacheHistory",
-      "func_CacheHistory",
-      "func_CacheDelete",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand"
-    ],
-    "ParseURL": [
-      "func_CacheController"
-    ],
-    "IsNumber": [
-      "func_extractKeywords"
-    ],
     "Now": [
       "func_CacheHistory",
       "func_analyzeProject",
       "func_runHistoryCommand"
     ],
-    "append": [
-      "func_splitIdentifierToTokens",
-      "func_splitIdentifierToTokens",
-      "func_uniqueStrings",
-      "func_mergeChunks",
-      "func_mergeChunks",
-      "func_checkEmbeddingsFiles",
-      "func_extractKeywords",
-      "func_extractQueryKeywords",
-      "func_extractQueryKeywords",
-      "func_wrapText",
-      "func_wrapText",
-      "func_wrapText",
-      "func_extractSymbolsFromContent",
-      "func_extractSymbolsFromContent",
-      "func_extractPotentialSymbols",
-      "func_extractPotentialSymbols",
-      "func_findChunksWithSymbol",
-      "func_findChunksWithSymbol",
-      "func_findChunksWithSymbol"
+    "Render": [
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatMarkdownResponse",
+      "func_formatListItem",
+      "func_processInlineMarkdown",
+      "func_processInlineMarkdown",
+      "func_formatSimpleText"
     ],
-    "DecodeFile": [
-      "func_Load"
-    ],
-    "initCacheManager": [
-      "func_runHistoryCommand",
-      "func_runHistoryTUI"
-    ],
-    "VectorWeaver": [
-      "func_ContextWindowCreator"
-    ],
-    "TrimSpace": [
-      "func_promptConfirm",
-      "func_findEulixBinary",
-      "func_extractSymbolsFromContent",
-      "func_extractSymbolsFromContent",
-      "func_truncate"
-    ],
-    "Rename": [
-      "func_Aspirine"
-    ],
-    "Focus": [
-      "func_MainModel"
-    ],
-    "Stat": [
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_Aspirine",
-      "func_checkEmbeddingsFiles",
-      "func_startChat",
-      "func_printSystemDiagnostics",
-      "func_initializeProject",
-      "func_initializeProject",
-      "func_checkInitialized",
-      "func_checkInitialized",
-      "func_checkInitialized",
-      "func_isInitialized",
-      "func_isInitialized",
-      "func_hasKnowledgeBase",
-      "func_GLaDOS",
-      "func_GLaDOS"
+    "formatListItem": [
+      "func_formatMarkdownResponse"
     ],
     "printStatusMessageWithIcon": [
       "func_printStatusMessage"
     ],
-    "Print": [
-      "func_CacheClear",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheTest",
-      "func_CacheDelete"
+    "checkEmbeddingsFiles": [
+      "func_startChat"
     ],
-    "Sscanf": [
-      "func_CacheDelete"
-    ],
-    "FieldsFunc": [
-      "func_extractKeywords",
-      "func_extractQueryKeywords"
-    ],
-    "Exit": [
-      "func_main",
-      "func_runHistoryCommand",
-      "func_runHistoryCommand",
-      "func_runHistoryTUI",
-      "func_runHistoryTUI",
-      "func_runHistoryTUI",
-      "func_checkInitialized",
-      "func_checkInitialized",
-      "func_checkInitialized"
-    ],
-    "truncate": [
-      "func_GLaDOS"
-    ],
-    "Bool": [
-      "func_init",
-      "func_init",
-      "func_init",
-      "func_init"
-    ],
-    "ReplaceAll": [
-      "func_truncate"
-    ],
-    "CleanExpired": [
-      "func_startChat",
-      "func_CacheCleanup"
-    ],
-    "loadKBIndex": [
-      "func_QueryTrafficController"
-    ],
-    "InvalidateByChecksum": [
-      "func_startChat",
-      "func_CacheClear"
-    ],
-    "IsUpper": [
-      "func_splitIdentifierToTokens"
-    ],
-    "Set": [
-      "func_CacheTest"
-    ],
-    "MkdirAll": [
-      "func_initializeProject"
-    ],
-    "BoolP": [
-      "func_init",
-      "func_init"
-    ],
-    "getKnowledgeBasePath": [
-      "func_hasKnowledgeBase"
-    ],
-    "splitIdentifierToTokens": [
-      "func_extractPotentialSymbols"
-    ],
-    "ListAll": [
-      "func_CacheHistory",
+    "NewProgram": [
       "func_CacheView",
-      "func_CacheDelete",
-      "func_runHistoryCommand",
+      "func_startChat",
       "func_runHistoryTUI"
-    ],
-    "Seconds": [
-      "func_formatDuration"
-    ],
-    "IsLetter": [
-      "func_extractKeywords"
-    ],
-    "NewDefaultDelegate": [
-      "func_HistoryView"
     ],
     "printStatusMessage": [
       "func_startChat",
@@ -1292,99 +1184,414 @@
       "func_startChat",
       "func_startChat"
     ],
-    "loadVectorMap": [
-      "func_ContextWindowCreator"
-    ],
-    "After": [
-      "func_CacheHistory",
-      "func_runHistoryCommand"
-    ],
-    "HashHound": [
-      "func_startChat",
-      "func_CacheStats",
-      "func_CacheTest",
-      "func_analyzeProject"
-    ],
-    "ToUpper": [
-      "func_isLikelySymbol"
-    ],
-    "rune": [
-      "func_splitIdentifierToTokens"
-    ],
-    "Save": [
-      "func_analyzeProject"
-    ],
-    "promptConfirm": [
+    "SetCurrentChecksum": [
       "func_startChat"
     ],
-    "Foreground": [
-      "func_HistoryView",
-      "func_HistoryView",
-      "func_HistoryView",
-      "func_MainModel",
-      "func_MainModel",
-      "func_MainModel"
+    "VectorWeaver": [
+      "func_ContextWindowCreator"
     ],
-    "EncodeToString": [
-      "func_hashFile"
+    "Output": [
+      "func_findEulixBinary"
+    ],
+    "LookPath": [
+      "func_findEulixBinary"
+    ],
+    "NewDefaultDelegate": [
+      "func_HistoryView"
+    ],
+    "loadIgnorePatterns": [
+      "func_HashHound"
+    ],
+    "Join": [
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_normalizeLineBreaks",
+      "func_QueryTrafficController",
+      "func_loadKBIndex",
+      "func_loadCallGraph",
+      "func_checkEmbeddingsFiles",
+      "func_startChat",
+      "func_printSystemDiagnostics",
+      "func_printSystemDiagnostics",
+      "func_getKnowledgeBasePath",
+      "func_wrapText",
+      "func_ContextWindowCreator",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS"
+    ],
+    "ReadFile": [
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_loadKBIndex",
+      "func_loadCallGraph",
+      "func_printSystemDiagnostics",
+      "func_loadKB",
+      "func_loadEmbeddingsJSON",
+      "func_checkEmbeddingsBin",
+      "func_checkIndex"
+    ],
+    "Stat": [
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_checkEmbeddingsFiles",
+      "func_startChat",
+      "func_printSystemDiagnostics",
+      "func_checkInitialized",
+      "func_checkInitialized",
+      "func_checkInitialized",
+      "func_isInitialized",
+      "func_isInitialized",
+      "func_hasKnowledgeBase",
+      "func_GLaDOS",
+      "func_GLaDOS"
+    ],
+    "isLikelySymbol": [
+      "func_extractEntityName"
+    ],
+    "Println": [
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheStats",
+      "func_CacheClear",
+      "func_CacheClear",
+      "func_CacheClear",
+      "func_CacheCleanup",
+      "func_CacheCleanup",
+      "func_CacheCleanup",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheTest",
+      "func_CacheHistory",
+      "func_CacheHistory",
+      "func_CacheHistory",
+      "func_CacheHistory",
+      "func_CacheView",
+      "func_CacheView",
+      "func_CacheDelete",
+      "func_CacheDelete",
+      "func_CacheDelete",
+      "func_CacheDelete",
+      "func_CacheDelete",
+      "func_CacheDelete",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_Aspirine",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_initializeProject",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat",
+      "func_startChat",
+      "func_printSystemDiagnostics",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand",
+      "func_runHistoryCommand",
+      "func_runHistoryTUI",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS",
+      "func_GLaDOS"
+    ],
+    "Padding": [
+      "func_formatMarkdownResponse"
+    ],
+    "SetShowStatusBar": [
+      "func_HistoryView"
+    ],
+    "initCacheManager": [
+      "func_runHistoryCommand",
+      "func_runHistoryTUI"
+    ],
+    "DecodeFile": [
+      "func_Load"
+    ],
+    "uint32": [
+      "func_Aspirine",
+      "func_Aspirine"
+    ],
+    "loadEmbeddings": [
+      "func_ContextWindowCreator"
+    ],
+    "HasPrefix": [
+      "func_formatMarkdownResponse",
+      "func_normalizeLineBreaks",
+      "func_normalizeLineBreaks",
+      "func_normalizeLineBreaks",
+      "func_normalizeLineBreaks",
+      "func_isListItem",
+      "func_formatListItem",
+      "func_formatListItem",
+      "func_formatListItem",
+      "func_extractSymbolsFromContent"
+    ],
+    "Set": [
+      "func_CacheTest"
     ],
     "MouthClient": [
       "func_startChat"
     ],
-    "loadContexCallGraph": [
-      "func_ContextWindowCreator"
+    "EncodeToString": [
+      "func_hashFile"
     ],
-    "loadSymbols": [
-      "func_QuerySheriff"
+    "Delete": [
+      "func_CacheDelete"
     ],
-    "WriteFile": [
-      "func_initializeProject",
-      "func_initializeProject"
+    "loadEmbeddingsJSON": [
+      "func_GLaDOS"
+    ],
+    "CleanExpired": [
+      "func_CacheCleanup",
+      "func_startChat"
+    ],
+    "QueryTrafficController": [
+      "func_startChat"
+    ],
+    "Sum": [
+      "func_hashFile"
+    ],
+    "Unmarshal": [
+      "func_Aspirine",
+      "func_loadKBIndex",
+      "func_loadCallGraph",
+      "func_loadKB",
+      "func_loadEmbeddingsJSON",
+      "func_checkIndex"
+    ],
+    "defaultConfig": [
+      "func_Load"
+    ],
+    "append": [
+      "func_extractKeywords",
+      "func_normalizeLineBreaks",
+      "func_normalizeLineBreaks",
+      "func_normalizeLineBreaks",
+      "func_normalizeLineBreaks",
+      "func_checkEmbeddingsFiles",
+      "func_wrapText",
+      "func_wrapText",
+      "func_wrapText",
+      "func_extractSymbolsFromContent",
+      "func_extractSymbolsFromContent",
+      "func_extractQueryKeywords",
+      "func_extractQueryKeywords",
+      "func_splitIdentifierToTokens",
+      "func_splitIdentifierToTokens",
+      "func_extractPotentialSymbols",
+      "func_extractPotentialSymbols",
+      "func_uniqueStrings",
+      "func_mergeChunks",
+      "func_mergeChunks",
+      "func_findChunksWithSymbol",
+      "func_findChunksWithSymbol",
+      "func_findChunksWithSymbol"
+    ],
+    "MatchString": [
+      "func_isListItem"
+    ],
+    "String": [
+      "func_wrapTextCache",
+      "func_wrapTextCache",
+      "func_wrapTextCache",
+      "func_formatMarkdownResponse",
+      "func_wrapText",
+      "func_wrapText",
+      "func_wrapText"
     ],
     "Size": [
       "func_Aspirine",
       "func_printSystemDiagnostics",
       "func_GLaDOS"
     ],
-    "String": [
-      "func_wrapTextCache",
-      "func_wrapTextCache",
-      "func_wrapTextCache",
-      "func_wrapText",
-      "func_wrapText",
-      "func_wrapText"
-    ],
-    "float32": [
-      "func_NormalizeVector"
-    ],
-    "Open": [
-      "func_CacheController",
-      "func_hashFile"
-    ],
-    "Getenv": [
-      "func_Load"
-    ],
-    "Scanln": [
-      "func_promptConfirm",
-      "func_CacheClear",
-      "func_CacheDelete"
-    ],
-    "GetStats": [
-      "func_startChat",
-      "func_CacheStats"
-    ],
-    "loadKB": [
+    "checkEmbeddingsBin": [
       "func_GLaDOS"
+    ],
+    "MainModel": [
+      "func_startChat"
+    ],
+    "checkIndex": [
+      "func_GLaDOS"
+    ],
+    "rune": [
+      "func_splitIdentifierToTokens"
+    ],
+    "FindStringSubmatch": [
+      "func_formatMarkdownResponse",
+      "func_formatListItem",
+      "func_processInlineMarkdown"
+    ],
+    "MkdirAll": [
+      "func_initializeProject"
+    ],
+    "Command": [
+      "func_analyzeProject",
+      "func_analyzeProject",
+      "func_NewEmbedder",
+      "func_findEulixBinary"
+    ],
+    "InvalidateByChecksum": [
+      "func_CacheClear",
+      "func_startChat"
     ]
   },
   "functions_by_tag": {
+    "cleanup": [
+      "func_CacheCleanup"
+    ],
+    "network": [
+      "func_formatMarkdownResponse"
+    ],
+    "context": [
+      "func_ContextWindowCreator"
+    ],
+    "authentication": [
+      "func_splitIdentifierToTokens",
+      "func_HashHound",
+      "func_hashFile"
+    ],
+    "security": [
+      "func_splitIdentifierToTokens",
+      "func_HashHound",
+      "func_hashFile"
+    ],
+    "exported": [
+      "func_Load",
+      "func_CacheStats",
+      "func_CacheClear",
+      "func_CacheCleanup",
+      "func_CacheTest",
+      "func_CacheHistory",
+      "func_CacheView",
+      "func_CacheDelete",
+      "func_QuerySheriff",
+      "func_HistoryView",
+      "func_Aspirine",
+      "func_MouthClient",
+      "func_CacheController",
+      "func_MainModel",
+      "func_QueryTrafficController",
+      "func_Execute",
+      "func_ContextWindowCreator",
+      "func_HashHound",
+      "func_NewEmbedder",
+      "func_VectorWeaver",
+      "func_CosineSimilarity",
+      "func_NormalizeVector",
+      "func_GLaDOS"
+    ],
+    "initialization": [
+      "func_initializeProject",
+      "func_init",
+      "func_checkInitialized",
+      "func_isInitialized",
+      "func_initCacheManager"
+    ],
+    "file-io": [
+      "func_Load",
+      "func_loadKBIndex",
+      "func_loadCallGraph",
+      "func_checkEmbeddingsFiles",
+      "func_hashFile",
+      "func_isSourceFile",
+      "func_loadKB",
+      "func_loadEmbeddingsJSON"
+    ],
+    "http-handler": [
+      "func_CacheController",
+      "func_QueryTrafficController"
+    ],
+    "configuration": [
+      "func_defaultConfig"
+    ],
+    "database": [
+      "func_CacheDelete",
+      "func_QuerySheriff",
+      "func_QueryTrafficController",
+      "func_extractQueryKeywords",
+      "func_findEulixBinary",
+      "func_findChunksWithSymbol"
+    ],
     "entry-point": [
       "func_main"
     ],
-    "database": [
-      "func_extractQueryKeywords",
-      "func_QueryTrafficController",
-      "func_QuerySheriff"
+    "validation": [
+      "func_checkEmbeddingsFiles",
+      "func_checkInitialized",
+      "func_checkEmbeddingsBin",
+      "func_checkIndex"
     ]
   },
   "types_by_name": {},
