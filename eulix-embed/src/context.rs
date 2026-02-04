@@ -1,3 +1,8 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -14,7 +19,7 @@ pub struct ContextIndex {
     pub metadata: ContextMetadata,
     pub chunks: Vec<ContextChunk>,
     pub relationships: Vec<Relationship>,
-    pub tags: HashMap<String, Vec<String>>, 
+    pub tags: HashMap<String, Vec<String>>,
     pub call_graph_summary: CallGraphSummary,
     pub entry_points: Vec<EntryPointInfo>,
 }
@@ -89,7 +94,11 @@ pub struct EntryPointInfo {
 }
 
 impl ContextIndex {
-    pub fn from_kb_and_chunks(kb: &KnowledgeBase, chunks: Vec<Chunk>, embedding_dimension: usize) -> Self {
+    pub fn from_kb_and_chunks(
+        kb: &KnowledgeBase,
+        chunks: Vec<Chunk>,
+        embedding_dimension: usize,
+    ) -> Self {
         let mut chunk_types = HashMap::new();
         let mut tags = HashMap::new();
 
@@ -203,14 +212,16 @@ impl ContextIndex {
         use std::collections::{HashMap, VecDeque};
 
         let mut max_depth = 0;
-        let adjacency: HashMap<String, Vec<String>> = kb.call_graph.edges
-            .iter()
-            .fold(HashMap::new(), |mut acc, edge| {
-                acc.entry(edge.from.clone())
-                    .or_insert_with(Vec::new)
-                    .push(edge.to.clone());
-                acc
-            });
+        let adjacency: HashMap<String, Vec<String>> =
+            kb.call_graph
+                .edges
+                .iter()
+                .fold(HashMap::new(), |mut acc, edge| {
+                    acc.entry(edge.from.clone())
+                        .or_insert_with(Vec::new)
+                        .push(edge.to.clone());
+                    acc
+                });
 
         for entry_point in &kb.entry_points {
             let mut queue = VecDeque::new();
@@ -277,7 +288,8 @@ impl ContextIndex {
 
     /// Get related chunks (via relationships)
     pub fn get_related(&self, chunk_id: &str) -> Vec<&ContextChunk> {
-        let related_ids: Vec<String> = self.relationships
+        let related_ids: Vec<String> = self
+            .relationships
             .iter()
             .filter(|r| r.from == chunk_id)
             .map(|r| r.to.clone())
@@ -291,7 +303,8 @@ impl ContextIndex {
 
     /// Get chunks that reference this chunk (incoming relationships)
     pub fn get_referencing_chunks(&self, chunk_id: &str) -> Vec<&ContextChunk> {
-        let referencing_ids: Vec<String> = self.relationships
+        let referencing_ids: Vec<String> = self
+            .relationships
             .iter()
             .filter(|r| r.to == chunk_id)
             .map(|r| r.from.clone())
@@ -372,10 +385,18 @@ impl ContextIndex {
     fn format_chunk_for_context(&self, chunk: &ContextChunk) -> String {
         format!(
             "// File: {}\n// Type: {:?}\n// Name: {}\n{}\n\n{}",
-            chunk.metadata.file_path.as_ref().unwrap_or(&"unknown".to_string()),
+            chunk
+                .metadata
+                .file_path
+                .as_ref()
+                .unwrap_or(&"unknown".to_string()),
             chunk.chunk_type,
             chunk.metadata.name,
-            if chunk.metadata.is_entry_point { "// [ENTRY POINT]" } else { "" },
+            if chunk.metadata.is_entry_point {
+                "// [ENTRY POINT]"
+            } else {
+                ""
+            },
             chunk.content
         )
     }
@@ -440,18 +461,13 @@ impl VectorStore {
         }
 
         // Get dimension from first vector
-        let dimension = self.vectors.values()
-            .next()
-            .map(|v| v.len())
-            .unwrap_or(0);
+        let dimension = self.vectors.values().next().map(|v| v.len()).unwrap_or(0);
 
         // Each f32 is 4 bytes
         let bytes_per_vector = dimension * 4;
 
         // ID strings (approximate average of 50 bytes per ID)
-        let id_bytes: usize = self.vectors.keys()
-            .map(|id| id.len())
-            .sum();
+        let id_bytes: usize = self.vectors.keys().map(|id| id.len()).sum();
 
         let total_bytes = (vector_count * bytes_per_vector) + id_bytes;
         total_bytes as f64 / (1024.0 * 1024.0)
@@ -476,7 +492,9 @@ impl VectorStore {
         // Write header: [version: u32, count: u64, dimension: u32]
         let version: u32 = 1;
         let count = self.vectors.len() as u64;
-        let dimension = self.vectors.values()
+        let dimension = self
+            .vectors
+            .values()
             .next()
             .map(|v| v.len() as u32)
             .unwrap_or(0);
@@ -548,7 +566,8 @@ impl VectorStore {
 
     /// Search for top-k similar vectors
     pub fn search(&self, query_vector: &[f32], top_k: usize) -> Vec<SearchResult> {
-        let mut results: Vec<SearchResult> = self.vectors
+        let mut results: Vec<SearchResult> = self
+            .vectors
             .iter()
             .map(|(id, vector)| {
                 let similarity = cosine_similarity(query_vector, vector);

@@ -1,3 +1,8 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use crate::kb_loader::KnowledgeBase;
 use serde::{Deserialize, Serialize};
 
@@ -167,7 +172,10 @@ fn format_function_with_context(
     if !func.docstring.is_empty() {
         content.push_str(&format!("// Description: {}\n", func.docstring));
     }
-    content.push_str(&format!("// Lines: {}-{}\n", func.line_start, func.line_end));
+    content.push_str(&format!(
+        "// Lines: {}-{}\n",
+        func.line_start, func.line_end
+    ));
     content.push_str(&format!("// Complexity: {}\n", func.complexity));
     content.push_str("\n");
 
@@ -183,7 +191,11 @@ fn format_function_with_context(
                 "  - {}: {} {}\n",
                 param.name,
                 param.type_annotation,
-                param.default_value.as_ref().map(|v| format!("= {}", v)).unwrap_or_default()
+                param
+                    .default_value
+                    .as_ref()
+                    .map(|v| format!("= {}", v))
+                    .unwrap_or_default()
             ));
         }
         content.push_str("\n");
@@ -231,10 +243,16 @@ fn format_function_with_context(
     if !func.exceptions.raises.is_empty() || !func.exceptions.handles.is_empty() {
         content.push_str("Exceptions:\n");
         if !func.exceptions.raises.is_empty() {
-            content.push_str(&format!("  Raises: {}\n", func.exceptions.raises.join(", ")));
+            content.push_str(&format!(
+                "  Raises: {}\n",
+                func.exceptions.raises.join(", ")
+            ));
         }
         if !func.exceptions.handles.is_empty() {
-            content.push_str(&format!("  Handles: {}\n", func.exceptions.handles.join(", ")));
+            content.push_str(&format!(
+                "  Handles: {}\n",
+                func.exceptions.handles.join(", ")
+            ));
         }
         content.push_str("\n");
     }
@@ -277,7 +295,10 @@ fn format_class_overview(class: &crate::kb_loader::Class, file_path: &str) -> St
     if !class.docstring.is_empty() {
         content.push_str(&format!("// Description: {}\n", class.docstring));
     }
-    content.push_str(&format!("// Lines: {}-{}\n", class.line_start, class.line_end));
+    content.push_str(&format!(
+        "// Lines: {}-{}\n",
+        class.line_start, class.line_end
+    ));
     content.push_str("\n");
 
     // Base classes
@@ -289,11 +310,7 @@ fn format_class_overview(class: &crate::kb_loader::Class, file_path: &str) -> St
     if !class.attributes.is_empty() {
         content.push_str("Attributes:\n");
         for attr in &class.attributes {
-            content.push_str(&format!(
-                "  - {}: {}\n",
-                attr.name,
-                attr.type_annotation
-            ));
+            content.push_str(&format!("  - {}: {}\n", attr.name, attr.type_annotation));
         }
         content.push_str("\n");
     }
@@ -302,8 +319,11 @@ fn format_class_overview(class: &crate::kb_loader::Class, file_path: &str) -> St
     if !class.methods.is_empty() {
         content.push_str(&format!("Methods ({}):\n", class.methods.len()));
         for method in &class.methods {
-            content.push_str(&format!("  - {}{}\n", method.name,
-                if method.is_async { " (async)" } else { "" }));
+            content.push_str(&format!(
+                "  - {}{}\n",
+                method.name,
+                if method.is_async { " (async)" } else { "" }
+            ));
         }
         content.push_str("\n");
     }
@@ -338,7 +358,10 @@ fn format_file_summary(
             content.push_str(&format!("  - {}\n", func.name));
         }
         if file_struct.functions.len() > 10 {
-            content.push_str(&format!("  ... and {} more\n", file_struct.functions.len() - 10));
+            content.push_str(&format!(
+                "  ... and {} more\n",
+                file_struct.functions.len() - 10
+            ));
         }
         content.push_str("\n");
     }

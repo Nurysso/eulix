@@ -1,14 +1,19 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::time::Instant;
 
 // Module declarations
-mod onnx_backend;
 mod chunker;
 mod context;
 mod embedder;
 mod index;
 mod kb_loader;
+mod onnx_backend;
 
 use chunker::{chunk_knowledge_base, Chunk, ChunkMetadata, ChunkType};
 use context::{ContextIndex, VectorStore};
@@ -35,11 +40,7 @@ impl EmbeddingPipeline {
         self
     }
 
-    pub fn process(
-        &self,
-        kb_path: &Path,
-        output_dir: &Path,
-    ) -> Result<EmbeddingPipelineOutput> {
+    pub fn process(&self, kb_path: &Path, output_dir: &Path) -> Result<EmbeddingPipelineOutput> {
         let total_start = Instant::now();
 
         println!("\n{}", "=".repeat(70));
@@ -51,17 +52,14 @@ impl EmbeddingPipeline {
         println!("{}", "-".repeat(70));
         let step_start = Instant::now();
 
-        let kb = load_knowledge_base(kb_path)
-            .context("Failed to load knowledge base")?;
+        let kb = load_knowledge_base(kb_path).context("Failed to load knowledge base")?;
 
         // Calculate total items from the new structure
-        let total_functions: usize = kb.structure.values()
-            .map(|f| f.functions.len())
-            .sum();
-        let total_classes: usize = kb.structure.values()
-            .map(|f| f.classes.len())
-            .sum();
-        let total_methods: usize = kb.structure.values()
+        let total_functions: usize = kb.structure.values().map(|f| f.functions.len()).sum();
+        let total_classes: usize = kb.structure.values().map(|f| f.classes.len()).sum();
+        let total_methods: usize = kb
+            .structure
+            .values()
             .flat_map(|f| &f.classes)
             .map(|c| c.methods.len())
             .sum();
@@ -72,7 +70,10 @@ impl EmbeddingPipeline {
         println!("       Classes:      {}", total_classes);
         println!("       Methods:      {}", total_methods);
         println!("       Entry Points: {}", kb.entry_points.len());
-        println!("       Time:         {:.2}s", step_start.elapsed().as_secs_f64());
+        println!(
+            "       Time:         {:.2}s",
+            step_start.elapsed().as_secs_f64()
+        );
         println!();
 
         // Step 2: Chunk processing
@@ -85,7 +86,9 @@ impl EmbeddingPipeline {
         // Show chunk type breakdown
         let mut chunk_type_counts = std::collections::HashMap::new();
         for chunk in &chunks {
-            *chunk_type_counts.entry(format!("{:?}", chunk.chunk_type)).or_insert(0) += 1;
+            *chunk_type_counts
+                .entry(format!("{:?}", chunk.chunk_type))
+                .or_insert(0) += 1;
         }
 
         println!("  [OK] Chunking completed");
@@ -96,7 +99,10 @@ impl EmbeddingPipeline {
         for (chunk_type, count) in &chunk_type_counts {
             println!("         {:20} {}", format!("{}:", chunk_type), count);
         }
-        println!("       Time:         {:.2}s", step_start.elapsed().as_secs_f64());
+        println!(
+            "       Time:         {:.2}s",
+            step_start.elapsed().as_secs_f64()
+        );
         println!();
 
         // Step 3: Generate embeddings
@@ -111,7 +117,10 @@ impl EmbeddingPipeline {
         println!("       Vector Size:    {:.2} MB", vector_store.size_mb());
         println!("       Model:          {}", self.generator.model_name());
         println!("       Dimension:      {}", self.generator.dimension());
-        println!("       Time:           {:.2}s", step_start.elapsed().as_secs_f64());
+        println!(
+            "       Time:           {:.2}s",
+            step_start.elapsed().as_secs_f64()
+        );
         println!();
 
         // Step 4: Build index
@@ -138,7 +147,10 @@ impl EmbeddingPipeline {
 
         println!("  [OK] Index built successfully");
         println!("       Total Entries:  {}", embedding_index.total_chunks);
-        println!("       Time:           {:.2}s", step_start.elapsed().as_secs_f64());
+        println!(
+            "       Time:           {:.2}s",
+            step_start.elapsed().as_secs_f64()
+        );
         println!();
 
         // Step 5: Create context index
@@ -146,12 +158,19 @@ impl EmbeddingPipeline {
         println!("{}", "-".repeat(70));
         let step_start = Instant::now();
 
-        let context_index = ContextIndex::from_kb_and_chunks(&kb, chunks, self.generator.dimension());
+        let context_index =
+            ContextIndex::from_kb_and_chunks(&kb, chunks, self.generator.dimension());
 
         println!("  [OK] Context index created");
         println!("       Tags:           {}", context_index.tags.len());
-        println!("       Relationships:  {}", context_index.relationships.len());
-        println!("       Time:           {:.2}s", step_start.elapsed().as_secs_f64());
+        println!(
+            "       Relationships:  {}",
+            context_index.relationships.len()
+        );
+        println!(
+            "       Time:           {:.2}s",
+            step_start.elapsed().as_secs_f64()
+        );
         println!();
 
         // Step 6: Save outputs
@@ -164,31 +183,52 @@ impl EmbeddingPipeline {
         let embeddings_json = output_dir.join("embeddings.json");
         embedding_index.save(&embeddings_json)?;
         let json_size = std::fs::metadata(&embeddings_json)?.len();
-        println!("  [OK] embeddings.json ({:.2} MB)", json_size as f64 / 1_048_576.0);
+        println!(
+            "  [OK] embeddings.json ({:.2} MB)",
+            json_size as f64 / 1_048_576.0
+        );
 
         let embeddings_bin = output_dir.join("embeddings.bin");
         embedding_index.save_binary(&embeddings_bin)?;
         let bin_size = std::fs::metadata(&embeddings_bin)?.len();
-        println!("  [OK] embeddings.bin  ({:.2} MB)", bin_size as f64 / 1_048_576.0);
+        println!(
+            "  [OK] embeddings.bin  ({:.2} MB)",
+            bin_size as f64 / 1_048_576.0
+        );
 
         let vectors_bin = output_dir.join("vectors.bin");
         vector_store.save_binary(&vectors_bin)?;
         let vec_size = std::fs::metadata(&vectors_bin)?.len();
-        println!("  [OK] vectors.bin     ({:.2} MB)", vec_size as f64 / 1_048_576.0);
+        println!(
+            "  [OK] vectors.bin     ({:.2} MB)",
+            vec_size as f64 / 1_048_576.0
+        );
 
         let context_json = output_dir.join("context.json");
         context_index.save(&context_json)?;
         let ctx_size = std::fs::metadata(&context_json)?.len();
-        println!("  [OK] context.json    ({:.2} MB)", ctx_size as f64 / 1_048_576.0);
+        println!(
+            "  [OK] context.json    ({:.2} MB)",
+            ctx_size as f64 / 1_048_576.0
+        );
 
         println!();
-        println!("       Total Size:     {:.2} MB",
-            (json_size + bin_size + vec_size + ctx_size) as f64 / 1_048_576.0);
-        println!("       Time:           {:.2}s", step_start.elapsed().as_secs_f64());
+        println!(
+            "       Total Size:     {:.2} MB",
+            (json_size + bin_size + vec_size + ctx_size) as f64 / 1_048_576.0
+        );
+        println!(
+            "       Time:           {:.2}s",
+            step_start.elapsed().as_secs_f64()
+        );
         println!();
 
         // Final summary
-        print_pipeline_summary(&embedding_index, &context_index, total_start.elapsed().as_secs_f64());
+        print_pipeline_summary(
+            &embedding_index,
+            &context_index,
+            total_start.elapsed().as_secs_f64(),
+        );
 
         Ok(EmbeddingPipelineOutput {
             embedding_index,
@@ -223,8 +263,12 @@ fn print_pipeline_summary(
         sorted_types.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         for (chunk_type, count) in sorted_types {
             let percentage = (*count as f64 / stats.total_chunks as f64) * 100.0;
-            println!("    {:20} {:6} ({:5.1}%)",
-                format!("{}:", chunk_type), count, percentage);
+            println!(
+                "    {:20} {:6} ({:5.1}%)",
+                format!("{}:", chunk_type),
+                count,
+                percentage
+            );
         }
         println!();
     }
@@ -235,8 +279,12 @@ fn print_pipeline_summary(
         sorted_langs.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         for (lang, count) in sorted_langs {
             let percentage = (*count as f64 / stats.total_chunks as f64) * 100.0;
-            println!("    {:20} {:6} ({:5.1}%)",
-                format!("{}:", lang), count, percentage);
+            println!(
+                "    {:20} {:6} ({:5.1}%)",
+                format!("{}:", lang),
+                count,
+                percentage
+            );
         }
         println!();
     }
@@ -244,7 +292,10 @@ fn print_pipeline_summary(
     let context_stats = context_index.stats();
     println!("CONTEXT INDEX STATISTICS");
     println!("{}", "-".repeat(70));
-    println!("  Relationships:      {}", context_stats.total_relationships);
+    println!(
+        "  Relationships:      {}",
+        context_stats.total_relationships
+    );
     println!("  Entry Points:       {}", context_stats.entry_points);
     println!("  Call Graph Depth:   {}", context_stats.call_graph_depth);
     println!();
@@ -299,7 +350,8 @@ impl QueryEmbedder {
 
         let vector_store = self.generator.generate_vectors(vec![query_chunk])?;
 
-        let embedding = vector_store.get("query")
+        let embedding = vector_store
+            .get("query")
             .context("Failed to get query embedding")?
             .clone();
 
@@ -371,16 +423,16 @@ fn main() -> Result<()> {
         "query" => run_query_command(&args),
         "embed" => run_embed_command(&args),
         "compare" => {
-    if args.len() < 4 {
-        eprintln!("Usage: {} compare <json_index.json> <index.bin>", args[0]);
-        std::process::exit(1);
-    }
+            if args.len() < 4 {
+                eprintln!("Usage: {} compare <json_index.json> <index.bin>", args[0]);
+                std::process::exit(1);
+            }
 
-    let json_path = std::path::Path::new(&args[2]);
-    let bin_path  = std::path::Path::new(&args[3]);
+            let json_path = std::path::Path::new(&args[2]);
+            let bin_path = std::path::Path::new(&args[3]);
 
-    compare_indices(json_path, bin_path)
-}
+            compare_indices(json_path, bin_path)
+        }
 
         _ => {
             eprintln!("Error: Unknown command '{}'\n", command);
@@ -468,7 +520,10 @@ fn compare_indices(json_path: &Path, bin_path: &Path) -> Result<()> {
 
             // Show first 5 and last 5 values
             println!("\n  First 5 values:");
-            println!("    {:>10} {:>15} {:>15} {:>10}", "Index", "JSON", "Binary", "Diff");
+            println!(
+                "    {:>10} {:>15} {:>15} {:>10}",
+                "Index", "JSON", "Binary", "Diff"
+            );
             println!("    {:-<10} {:-<15} {:-<15} {:-<10}", "", "", "", "");
 
             for i in 0..5.min(json_first.embedding.len()) {
@@ -481,7 +536,10 @@ fn compare_indices(json_path: &Path, bin_path: &Path) -> Result<()> {
             if json_first.embedding.len() > 10 {
                 println!("    ...");
                 println!("\n  Last 5 values:");
-                println!("    {:>10} {:>15} {:>15} {:>10}", "Index", "JSON", "Binary", "Diff");
+                println!(
+                    "    {:>10} {:>15} {:>15} {:>10}",
+                    "Index", "JSON", "Binary", "Diff"
+                );
                 println!("    {:-<10} {:-<15} {:-<15} {:-<10}", "", "", "", "");
 
                 let len = json_first.embedding.len();
@@ -494,7 +552,9 @@ fn compare_indices(json_path: &Path, bin_path: &Path) -> Result<()> {
             }
 
             // Check if vectors match
-            let max_diff = json_first.embedding.iter()
+            let max_diff = json_first
+                .embedding
+                .iter()
                 .zip(bin_first.embedding.iter())
                 .map(|(a, b)| (a - b).abs())
                 .fold(0.0f32, |a, b| a.max(b));
@@ -618,7 +678,10 @@ fn run_query_command(args: &[String]) -> Result<()> {
             }
         }
         _ => {
-            eprintln!("Error: Unknown format '{}'. Use 'json' or 'binary'\n", format);
+            eprintln!(
+                "Error: Unknown format '{}'. Use 'json' or 'binary'\n",
+                format
+            );
             std::process::exit(1);
         }
     }
@@ -632,7 +695,11 @@ fn run_embed_command(args: &[String]) -> Result<()> {
     let mut model = "sentence-transformers/all-MiniLM-L6-v2".to_string();
 
     // Parse arguments (skip "embed" command if present)
-    let start_idx = if args.len() > 1 && args[1] == "embed" { 2 } else { 1 };
+    let start_idx = if args.len() > 1 && args[1] == "embed" {
+        2
+    } else {
+        1
+    };
     let mut i = start_idx;
 
     while i < args.len() {
@@ -684,8 +751,8 @@ fn run_embed_command(args: &[String]) -> Result<()> {
     println!("{}", "-".repeat(70));
     println!("  KB Path:         {}", kb_path);
 
-    let abs_path = std::fs::canonicalize(&kb_path)
-        .unwrap_or_else(|_| Path::new(&kb_path).to_path_buf());
+    let abs_path =
+        std::fs::canonicalize(&kb_path).unwrap_or_else(|_| Path::new(&kb_path).to_path_buf());
     println!("  Absolute Path:   {:?}", abs_path);
 
     println!("  Output Dir:      {}", output_dir);
@@ -695,7 +762,10 @@ fn run_embed_command(args: &[String]) -> Result<()> {
     if !Path::new(&kb_path).exists() {
         println!("{}", "=".repeat(70));
         eprintln!("[ERROR] Knowledge base file not found: {}", kb_path);
-        eprintln!("        Current directory: {:?}", std::env::current_dir().unwrap());
+        eprintln!(
+            "        Current directory: {:?}",
+            std::env::current_dir().unwrap()
+        );
         eprintln!();
         eprintln!("[TIP]   Create a knowledge base file or specify the correct path");
         eprintln!("        using --kb-path option");

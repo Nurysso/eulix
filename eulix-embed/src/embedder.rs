@@ -1,10 +1,15 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use anyhow::{anyhow, Context, Result};
 use rayon::prelude::*;
 use std::path::PathBuf;
 
 use crate::chunker::Chunk;
 use crate::context::VectorStore;
-use crate::onnx_backend::{OnnxBackend, DeviceType};
+use crate::onnx_backend::{DeviceType, OnnxBackend};
 
 /// Embedding backend types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +34,10 @@ impl std::str::FromStr for EmbeddingBackend {
             "onnx-cpu" | "cpu" => Ok(Self::OnnxCpu),
             "onnx" | "auto" => Ok(Self::auto_detect()),
             "dummy" | "test" => Ok(Self::Dummy),
-            _ => Err(anyhow!("Unknown backend: {}. Options: auto, cuda, rocm, cpu, dummy", s)),
+            _ => Err(anyhow!(
+                "Unknown backend: {}. Options: auto, cuda, rocm, cpu, dummy",
+                s
+            )),
         }
     }
 }
@@ -92,11 +100,7 @@ impl EmbeddingBackend {
         }
 
         // Common ROCm installation paths
-        let rocm_paths = [
-            "/opt/rocm",
-            "/opt/rocm-5",
-            "/opt/rocm-6",
-        ];
+        let rocm_paths = ["/opt/rocm", "/opt/rocm-5", "/opt/rocm-6"];
 
         for path in &rocm_paths {
             if std::path::Path::new(path).exists() {
@@ -176,18 +180,10 @@ impl EmbeddingGenerator {
         println!("     Dimension: {}", config.dimension);
 
         let backend_impl: Box<dyn EmbeddingBackendTrait + Send + Sync> = match config.backend {
-            EmbeddingBackend::OnnxCuda => {
-                Self::try_create_onnx_backend(&config, DeviceType::Cuda)?
-            }
-            EmbeddingBackend::OnnxRocm => {
-                Self::try_create_onnx_backend(&config, DeviceType::Rocm)?
-            }
-            EmbeddingBackend::OnnxCpu => {
-                Self::try_create_onnx_backend(&config, DeviceType::Cpu)?
-            }
-            EmbeddingBackend::Dummy => {
-                Box::new(DummyBackend::new(&config))
-            }
+            EmbeddingBackend::OnnxCuda => Self::try_create_onnx_backend(&config, DeviceType::Cuda)?,
+            EmbeddingBackend::OnnxRocm => Self::try_create_onnx_backend(&config, DeviceType::Rocm)?,
+            EmbeddingBackend::OnnxCpu => Self::try_create_onnx_backend(&config, DeviceType::Cpu)?,
+            EmbeddingBackend::Dummy => Box::new(DummyBackend::new(&config)),
         };
 
         println!("  ✓ Embedding generator ready!");
@@ -201,7 +197,7 @@ impl EmbeddingGenerator {
     /// Try to create ONNX backend with fallback to dummy
     fn try_create_onnx_backend(
         config: &EmbedderConfig,
-        device_type: DeviceType
+        device_type: DeviceType,
     ) -> Result<Box<dyn EmbeddingBackendTrait + Send + Sync>> {
         match OnnxBackend::new(config, device_type) {
             Ok(backend) => Ok(Box::new(backend)),
@@ -241,22 +237,34 @@ impl EmbeddingGenerator {
                 let elapsed = start.elapsed().as_secs_f32();
                 let rate = batch_start as f32 / elapsed;
                 let eta = ((total - batch_start) as f32 / rate).round();
-                println!("     Progress: {}/{} ({:.1} chunks/sec, ETA: {:.0}s)",
-                         batch_start, total, rate, eta);
+                println!(
+                    "     Progress: {}/{} ({:.1} chunks/sec, ETA: {:.0}s)",
+                    batch_start, total, rate, eta
+                );
             }
 
             for chunk in chunk_batch {
-                let embedding = self.backend_impl
+                let embedding = self
+                    .backend_impl
                     .generate_embedding(&chunk.content)
-                    .context(format!("Failed to generate embedding for chunk: {}", chunk.id))?;
+                    .context(format!(
+                        "Failed to generate embedding for chunk: {}",
+                        chunk.id
+                    ))?;
 
                 store.add(chunk.id.clone(), embedding);
             }
         }
 
         let elapsed = start.elapsed();
-        println!("  ✓ Completed all embeddings in {:.2}s", elapsed.as_secs_f32());
-        println!("     Average: {:.1} chunks/sec", total as f32 / elapsed.as_secs_f32());
+        println!(
+            "  ✓ Completed all embeddings in {:.2}s",
+            elapsed.as_secs_f32()
+        );
+        println!(
+            "     Average: {:.1} chunks/sec",
+            total as f32 / elapsed.as_secs_f32()
+        );
 
         Ok(store)
     }
@@ -279,7 +287,8 @@ impl EmbeddingGenerator {
                     println!("     Progress: {}/{} ({:.1} chunks/sec)", idx, total, rate);
                 }
 
-                let embedding = self.backend_impl
+                let embedding = self
+                    .backend_impl
                     .generate_embedding(&chunk.content)
                     .expect("Failed to generate embedding");
 
@@ -288,8 +297,14 @@ impl EmbeddingGenerator {
             .collect();
 
         let elapsed = start.elapsed();
-        println!("  ✓ Completed all embeddings in {:.2}s", elapsed.as_secs_f32());
-        println!("     Average: {:.1} chunks/sec", total as f32 / elapsed.as_secs_f32());
+        println!(
+            "  ✓ Completed all embeddings in {:.2}s",
+            elapsed.as_secs_f32()
+        );
+        println!(
+            "     Average: {:.1} chunks/sec",
+            total as f32 / elapsed.as_secs_f32()
+        );
 
         for (id, vector) in results {
             store.add(id, vector);
@@ -411,7 +426,13 @@ mod tests {
 
     #[test]
     fn test_backend_parsing() {
-        assert!(matches!("dummy".parse::<EmbeddingBackend>().unwrap(), EmbeddingBackend::Dummy));
-        assert!(matches!("cpu".parse::<EmbeddingBackend>().unwrap(), EmbeddingBackend::OnnxCpu));
+        assert!(matches!(
+            "dummy".parse::<EmbeddingBackend>().unwrap(),
+            EmbeddingBackend::Dummy
+        ));
+        assert!(matches!(
+            "cpu".parse::<EmbeddingBackend>().unwrap(),
+            EmbeddingBackend::OnnxCpu
+        ));
     }
 }
