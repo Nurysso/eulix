@@ -1,3 +1,8 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -50,7 +55,7 @@ pub struct Import {
     pub module: String,
     pub items: Vec<String>,
     #[serde(rename = "type")]
-    pub import_type: String, 
+    pub import_type: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -355,7 +360,10 @@ impl KnowledgeBase {
         self.structure
             .iter()
             .flat_map(|(file_path, file_struct)| {
-                file_struct.functions.iter().map(move |func| (file_path, func))
+                file_struct
+                    .functions
+                    .iter()
+                    .map(move |func| (file_path, func))
             })
             .collect()
     }
@@ -365,7 +373,10 @@ impl KnowledgeBase {
         self.structure
             .iter()
             .flat_map(|(file_path, file_struct)| {
-                file_struct.classes.iter().map(move |class| (file_path, class))
+                file_struct
+                    .classes
+                    .iter()
+                    .map(move |class| (file_path, class))
             })
             .collect()
     }
@@ -376,7 +387,10 @@ impl KnowledgeBase {
             .iter()
             .flat_map(|(file_path, file_struct)| {
                 file_struct.classes.iter().flat_map(move |class| {
-                    class.methods.iter().map(move |method| (file_path, class, method))
+                    class
+                        .methods
+                        .iter()
+                        .map(move |method| (file_path, class, method))
                 })
             })
             .collect()
@@ -384,12 +398,16 @@ impl KnowledgeBase {
 
     /// Get function by ID
     pub fn get_function(&self, id: &str) -> Option<(&String, &Function)> {
-        self.all_functions().into_iter().find(|(_, func)| func.id == id)
+        self.all_functions()
+            .into_iter()
+            .find(|(_, func)| func.id == id)
     }
 
     /// Get class by ID
     pub fn get_class(&self, id: &str) -> Option<(&String, &Class)> {
-        self.all_classes().into_iter().find(|(_, class)| class.id == id)
+        self.all_classes()
+            .into_iter()
+            .find(|(_, class)| class.id == id)
     }
 
     /// Get functions by name from indices
@@ -437,7 +455,11 @@ impl KnowledgeBase {
 
     /// Get all entry point functions
     pub fn get_entry_point_functions(&self) -> Vec<&Function> {
-        let entry_point_ids: Vec<String> = self.entry_points.iter().map(|ep| ep.function.clone()).collect();
+        let entry_point_ids: Vec<String> = self
+            .entry_points
+            .iter()
+            .map(|ep| ep.function.clone())
+            .collect();
 
         self.all_functions()
             .into_iter()

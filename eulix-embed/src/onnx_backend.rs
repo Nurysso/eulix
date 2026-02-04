@@ -1,12 +1,17 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use anyhow::{anyhow, Result};
 use ndarray::{Array2, Axis};
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Value;
-use tokenizers::Tokenizer;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};  // ADD THIS
+use tokenizers::Tokenizer; // ADD THIS
 
 use crate::embedder::EmbedderConfig;
 
@@ -28,7 +33,7 @@ enum ModelType {
 pub struct OnnxBackend {
     session: Mutex<Session>,
     tokenizer: Tokenizer,
-    dimension: AtomicUsize,  // CHANGED: was usize, now AtomicUsize
+    dimension: AtomicUsize, // CHANGED: was usize, now AtomicUsize
     normalize: bool,
     model_type: ModelType,
 }
@@ -45,10 +50,13 @@ impl OnnxBackend {
         println!("     Initial dimension (from config): {}", dimension);
 
         let model_path = Self::download_model(&config.model_name)?;
-        let model_bytes = std::fs::read(&model_path)
-            .map_err(|e| anyhow!("Failed to read model file: {}", e))?;
+        let model_bytes =
+            std::fs::read(&model_path).map_err(|e| anyhow!("Failed to read model file: {}", e))?;
 
-        println!("     Configuring execution providers for {:?}...", device_type);
+        println!(
+            "     Configuring execution providers for {:?}...",
+            device_type
+        );
 
         let session = match device_type {
             DeviceType::Cuda => {
@@ -60,8 +68,7 @@ impl OnnxBackend {
                     .with_intra_threads(4)
                     .map_err(|e| anyhow!("Failed to set intra threads: {:?}", e))?
                     .with_execution_providers([
-                        ort::execution_providers::CUDAExecutionProvider::default()
-                            .build()
+                        ort::execution_providers::CUDAExecutionProvider::default().build(),
                     ])
                     .map_err(|e| anyhow!("Failed to set CUDA execution provider: {:?}", e))?
                     .commit_from_memory(&model_bytes)
@@ -76,8 +83,7 @@ impl OnnxBackend {
                     .with_intra_threads(4)
                     .map_err(|e| anyhow!("Failed to set intra threads: {:?}", e))?
                     .with_execution_providers([
-                        ort::execution_providers::ROCmExecutionProvider::default()
-                            .build()
+                        ort::execution_providers::ROCmExecutionProvider::default().build(),
                     ])
                     .map_err(|e| anyhow!("Failed to set ROCm execution provider: {:?}", e))?
                     .commit_from_memory(&model_bytes)
@@ -103,11 +109,16 @@ impl OnnxBackend {
             local_path.join("tokenizer.json")
         } else {
             println!("     Downloading tokenizer from HuggingFace Hub...");
-            let api = hf_hub::api::sync::Api::new()
-                .map_err(|e| anyhow!("Failed to initialize HuggingFace API: {}. Try setting HF_HOME env variable", e))?;
+            let api = hf_hub::api::sync::Api::new().map_err(|e| {
+                anyhow!(
+                    "Failed to initialize HuggingFace API: {}. Try setting HF_HOME env variable",
+                    e
+                )
+            })?;
 
             let repo_api = api.model(config.model_name.clone());
-            repo_api.get("tokenizer.json")
+            repo_api
+                .get("tokenizer.json")
                 .map_err(|e| anyhow!("Failed to download tokenizer.json: {}", e))?
         };
 
@@ -120,7 +131,7 @@ impl OnnxBackend {
         Ok(Self {
             session: Mutex::new(session),
             tokenizer,
-            dimension: AtomicUsize::new(dimension),  // CHANGED: wrap in AtomicUsize
+            dimension: AtomicUsize::new(dimension), // CHANGED: wrap in AtomicUsize
             normalize: config.normalize,
             model_type,
         })
@@ -135,9 +146,9 @@ impl OnnxBackend {
             ModelType::Standard
         }
         // } else if name_lower.contains("minilm") || name_lower.contains("all-minilm") {
-            // ModelType::Sentence
+        // ModelType::Sentence
         // } else {
-            // ModelType::Bert
+        // ModelType::Bert
         // }
     }
 
@@ -187,7 +198,9 @@ impl OnnxBackend {
         let attention_mask_value = Value::from_array(([1, seq_len], attention_mask_i64))
             .map_err(|e| anyhow!("Failed to create attention_mask tensor: {:?}", e))?;
 
-        let mut session_guard = self.session.lock()
+        let mut session_guard = self
+            .session
+            .lock()
             .map_err(|e| anyhow!("Failed to lock session: {}", e))?;
 
         let outputs = match self.model_type {
@@ -197,7 +210,8 @@ impl OnnxBackend {
                     "input_ids" => input_ids_value,
                     "attention_mask" => attention_mask_value,
                 ];
-                session_guard.run(inputs)
+                session_guard
+                    .run(inputs)
                     .map_err(|e| anyhow!("Failed to run inference: {:?}", e))?
             }
             ModelType::Standard => {
@@ -210,7 +224,8 @@ impl OnnxBackend {
                     "attention_mask" => attention_mask_value,
                     "token_type_ids" => token_type_ids_value,
                 ];
-                session_guard.run(inputs)
+                session_guard
+                    .run(inputs)
                     .map_err(|e| anyhow!("Failed to run inference: {:?}", e))?
             }
         };
@@ -220,20 +235,20 @@ impl OnnxBackend {
         let Ok((output_shape, embeddings_data)) = outputs
             .get(output_name)
             .ok_or_else(|| {
-                let available: Vec<String> = outputs
-                    .iter()
-                    .map(|(name, _)| name.to_string())
-                    .collect();
+                let available: Vec<String> =
+                    outputs.iter().map(|(name, _)| name.to_string()).collect();
                 anyhow!(
                     "No output named '{}'. Available outputs: {:?}",
                     output_name,
                     available
                 )
             })?
-            .try_extract_tensor::<f32>() else { todo!() };
+            .try_extract_tensor::<f32>()
+        else {
+            todo!()
+        };
 
-
-            // Get actual dimension from model output
+        // Get actual dimension from model output
         let actual_hidden_dim = if output_shape.len() == 3 {
             output_shape[2] as usize
         } else {
@@ -266,8 +281,9 @@ impl OnnxBackend {
             ));
         }
 
-        let embeddings = Array2::from_shape_vec((seq_len, actual_hidden_dim), embeddings_data.to_vec())
-            .map_err(|e| anyhow!("Failed to reshape embeddings: {}", e))?;
+        let embeddings =
+            Array2::from_shape_vec((seq_len, actual_hidden_dim), embeddings_data.to_vec())
+                .map_err(|e| anyhow!("Failed to reshape embeddings: {}", e))?;
 
         let attention_mask_f32: Vec<f32> = attention_mask.iter().map(|&x| x as f32).collect();
         let attention_mask_array = Array2::from_shape_vec((seq_len, 1), attention_mask_f32)
@@ -287,7 +303,11 @@ impl OnnxBackend {
             .map(|(sum, mask)| if *mask > 0.0 { sum / mask } else { 0.0 })
             .collect();
 
-        assert_eq!(embedding.len(), actual_hidden_dim, "Embedding size mismatch");
+        assert_eq!(
+            embedding.len(),
+            actual_hidden_dim,
+            "Embedding size mismatch"
+        );
 
         if self.normalize {
             Self::normalize_vector(&mut embedding);
@@ -355,10 +375,13 @@ impl OnnxBackend {
         let input_ids_value = Value::from_array(([batch_size, max_seq_len], batch_input_ids))
             .map_err(|e| anyhow!("Failed to create input_ids tensor: {:?}", e))?;
 
-        let attention_mask_value = Value::from_array(([batch_size, max_seq_len], batch_attention_mask.clone()))
-            .map_err(|e| anyhow!("Failed to create attention_mask tensor: {:?}", e))?;
+        let attention_mask_value =
+            Value::from_array(([batch_size, max_seq_len], batch_attention_mask.clone()))
+                .map_err(|e| anyhow!("Failed to create attention_mask tensor: {:?}", e))?;
 
-        let mut session_guard = self.session.lock()
+        let mut session_guard = self
+            .session
+            .lock()
             .map_err(|e| anyhow!("Failed to lock session: {}", e))?;
 
         // Run inference
@@ -368,19 +391,22 @@ impl OnnxBackend {
                     "input_ids" => input_ids_value,
                     "attention_mask" => attention_mask_value,
                 ];
-                session_guard.run(inputs)
+                session_guard
+                    .run(inputs)
                     .map_err(|e| anyhow!("Failed to run inference: {:?}", e))?
             }
             ModelType::Standard => {
-                let token_type_ids_value = Value::from_array(([batch_size, max_seq_len], batch_token_type_ids))
-                    .map_err(|e| anyhow!("Failed to create token_type_ids tensor: {:?}", e))?;
+                let token_type_ids_value =
+                    Value::from_array(([batch_size, max_seq_len], batch_token_type_ids))
+                        .map_err(|e| anyhow!("Failed to create token_type_ids tensor: {:?}", e))?;
 
                 let inputs = ort::inputs![
                     "input_ids" => input_ids_value,
                     "attention_mask" => attention_mask_value,
                     "token_type_ids" => token_type_ids_value,
                 ];
-                session_guard.run(inputs)
+                session_guard
+                    .run(inputs)
                     .map_err(|e| anyhow!("Failed to run inference: {:?}", e))?
             }
         };
@@ -389,9 +415,10 @@ impl OnnxBackend {
         let Ok((output_shape, embeddings_data)) = outputs
             .get(output_name)
             .ok_or_else(|| anyhow!("No output named '{}'", output_name))?
-            .try_extract_tensor::<f32>() else {
-                return Err(anyhow!("Failed to extract tensor"));
-            };
+            .try_extract_tensor::<f32>()
+        else {
+            return Err(anyhow!("Failed to extract tensor"));
+        };
 
         // Get actual dimension from model output
         let actual_hidden_dim = if output_shape.len() == 3 {
@@ -419,8 +446,9 @@ impl OnnxBackend {
             let item_embeddings = &embeddings_data[start_idx..end_idx];
 
             // Reshape to [seq_len, hidden_dim]
-            let embeddings = Array2::from_shape_vec((max_seq_len, actual_hidden_dim), item_embeddings.to_vec())
-                .map_err(|e| anyhow!("Failed to reshape embeddings: {}", e))?;
+            let embeddings =
+                Array2::from_shape_vec((max_seq_len, actual_hidden_dim), item_embeddings.to_vec())
+                    .map_err(|e| anyhow!("Failed to reshape embeddings: {}", e))?;
 
             // Get attention mask for this item
             let attention_start = i * max_seq_len;
@@ -466,6 +494,6 @@ impl OnnxBackend {
     }
 
     pub fn dimension(&self) -> usize {
-        self.dimension.load(Ordering::Relaxed)  // CHANGED: load from atomic
+        self.dimension.load(Ordering::Relaxed) // CHANGED: load from atomic
     }
 }
