@@ -1,11 +1,16 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use anyhow::Result;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::kb::types::{
-    KnowledgeBase, Metadata, FileData, DependencyGraph, GraphNode, GraphEdge,
-    EntryPoint, ExternalDependency, CallGraph, Indices, PatternInfo,
+    CallGraph, DependencyGraph, EntryPoint, ExternalDependency, FileData, GraphEdge, GraphNode,
+    Indices, KnowledgeBase, Metadata, PatternInfo,
 };
 
 pub struct KnowledgeBaseBuilder {
@@ -33,9 +38,7 @@ impl KnowledgeBaseBuilder {
         for (_, data) in &file_data {
             total_functions += data.functions.len();
             total_classes += data.classes.len();
-            total_methods += data.classes.iter()
-                .map(|c| c.methods.len())
-                .sum::<usize>();
+            total_methods += data.classes.iter().map(|c| c.methods.len()).sum::<usize>();
             languages_set.insert(data.language.clone());
         }
 
@@ -54,7 +57,8 @@ impl KnowledgeBaseBuilder {
         // Extract external dependencies
         let external_dependencies = self.extract_external_dependencies(&self.root_path)?;
 
-        let project_name = self.root_path
+        let project_name = self
+            .root_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
@@ -186,9 +190,10 @@ impl KnowledgeBaseBuilder {
             for var in &data.global_vars {
                 if let Some(value) = &var.value {
                     let value_lower = value.to_lowercase();
-                    if value_lower.contains("flask(") ||
-                       value_lower.contains("fastapi(") ||
-                       value_lower.contains("express(") {
+                    if value_lower.contains("flask(")
+                        || value_lower.contains("fastapi(")
+                        || value_lower.contains("express(")
+                    {
                         entry_points.push(EntryPoint {
                             entry_type: "api_endpoint".to_string(),
                             path: None,
@@ -224,13 +229,22 @@ impl KnowledgeBaseBuilder {
 
                     let (name, version) = if cleaned.contains("==") {
                         let parts: Vec<&str> = cleaned.split("==").collect();
-                        (parts[0].to_string(), parts.get(1).unwrap_or(&"*").to_string())
+                        (
+                            parts[0].to_string(),
+                            parts.get(1).unwrap_or(&"*").to_string(),
+                        )
                     } else if cleaned.contains(">=") {
                         let parts: Vec<&str> = cleaned.split(">=").collect();
-                        (parts[0].to_string(), format!(">={}", parts.get(1).unwrap_or(&"*")))
+                        (
+                            parts[0].to_string(),
+                            format!(">={}", parts.get(1).unwrap_or(&"*")),
+                        )
                     } else if cleaned.contains("~=") {
                         let parts: Vec<&str> = cleaned.split("~=").collect();
-                        (parts[0].to_string(), format!("~={}", parts.get(1).unwrap_or(&"*")))
+                        (
+                            parts[0].to_string(),
+                            format!("~={}", parts.get(1).unwrap_or(&"*")),
+                        )
                     } else {
                         (cleaned.to_string(), "*".to_string())
                     };
@@ -256,9 +270,10 @@ impl KnowledgeBaseBuilder {
                 for line in lines {
                     let trimmed = line.trim();
 
-                    if trimmed.contains("[dependencies]") ||
-                       trimmed.contains("[tool.poetry.dependencies]") ||
-                       trimmed.contains("[project.dependencies]") {
+                    if trimmed.contains("[dependencies]")
+                        || trimmed.contains("[tool.poetry.dependencies]")
+                        || trimmed.contains("[project.dependencies]")
+                    {
                         in_deps = true;
                         continue;
                     }

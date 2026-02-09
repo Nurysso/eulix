@@ -1,3 +1,8 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -10,9 +15,9 @@ pub struct IgnoreFilter {
 #[derive(Debug, Clone)]
 struct IgnorePattern {
     pattern: String,
-    is_directory: bool,      // Ends with /
-    is_anchored: bool,       // Starts with /
-    is_negation: bool,       // Starts with !
+    is_directory: bool, // Ends with /
+    is_anchored: bool,  // Starts with /
+    is_negation: bool,  // Starts with !
 }
 
 impl IgnorePattern {
@@ -30,7 +35,7 @@ impl IgnorePattern {
 
         let is_directory = pattern.ends_with('/');
         if is_directory {
-            pattern = pattern[..pattern.len()-1].to_string();
+            pattern = pattern[..pattern.len() - 1].to_string();
         }
 
         Self {
@@ -51,12 +56,10 @@ impl IgnorePattern {
             // Anchored patterns match from root
             if self.is_directory {
                 // For directory patterns, check if path starts with pattern
-                path_str.starts_with(&self.pattern)
-                    || path_str == self.pattern
+                path_str.starts_with(&self.pattern) || path_str == self.pattern
             } else {
                 // Exact match or as a component
-                path_str == self.pattern
-                    || path_str.starts_with(&format!("{}/", self.pattern))
+                path_str == self.pattern || path_str.starts_with(&format!("{}/", self.pattern))
             }
         } else {
             // Non-anchored patterns match anywhere
@@ -67,8 +70,7 @@ impl IgnorePattern {
                 components.iter().any(|&comp| comp == self.pattern)
             } else {
                 // Match component or full path
-                components.contains(&self.pattern.as_str())
-                    || path_str.ends_with(&self.pattern)
+                components.contains(&self.pattern.as_str()) || path_str.ends_with(&self.pattern)
             }
         }
     }

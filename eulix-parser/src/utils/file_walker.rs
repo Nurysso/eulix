@@ -1,3 +1,8 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use anyhow::Result;
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
@@ -28,22 +33,29 @@ impl FileWalker {
 
         // Standard ignored directories
         let ignored_dirs = [
-            ".git", ".eulix", "__pycache__",
-            ".venv", "venv", "env", ".env",
-            "node_modules", ".pytest_cache",
-            ".mypy_cache", ".tox", "dist", "build",
-            ".eggs", ".ipynb_checkpoints", "target"
+            ".git",
+            ".eulix",
+            "__pycache__",
+            ".venv",
+            "venv",
+            "env",
+            ".env",
+            "node_modules",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".tox",
+            "dist",
+            "build",
+            ".eggs",
+            ".ipynb_checkpoints",
+            "target",
         ];
 
         builder.filter_entry(move |entry| {
             let path = entry.path();
-            let name = path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-            let is_dir = entry.file_type()
-                .map(|ft| ft.is_dir())
-                .unwrap_or(false);
+            let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
 
             if is_dir {
                 if ignored_dirs.contains(&name) {
@@ -60,9 +72,7 @@ impl FileWalker {
         let files: Vec<PathBuf> = builder
             .build()
             .filter_map(|entry| entry.ok())
-            .filter(|entry| {
-                entry.file_type().map(|ft| ft.is_file()).unwrap_or(false)
-            })
+            .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
             .filter(|entry| filter(entry.path()))
             .map(|entry| entry.path().to_path_buf())
             .collect();
@@ -93,10 +103,7 @@ mod tests {
         fs::write(root.join("docs/guide.py"), "# docs")?;
 
         // Create .euignore
-        fs::write(
-            root.join(".euignore"),
-            "tests/\ndocs/\n"
-        )?;
+        fs::write(root.join(".euignore"), "tests/\ndocs/\n")?;
 
         let walker = FileWalker::new(root.to_path_buf());
 

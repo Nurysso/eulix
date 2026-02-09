@@ -1,3 +1,8 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use std::fs;
 use std::path::Path;
 
@@ -97,59 +102,56 @@ impl Language {
 
         // Python indicators
         if lines.iter().any(|l| {
-            l.contains("def ") ||
-            l.contains("import ") ||
-            l.contains("from ") ||
-            l.trim_start().starts_with("class ")
+            l.contains("def ")
+                || l.contains("import ")
+                || l.contains("from ")
+                || l.trim_start().starts_with("class ")
         }) {
             return Language::Python;
         }
 
         // JavaScript/TypeScript indicators
         if lines.iter().any(|l| {
-            l.contains("const ") ||
-            l.contains("let ") ||
-            l.contains("var ") ||
-            l.contains("function ") ||
-            l.contains("=>")
+            l.contains("const ")
+                || l.contains("let ")
+                || l.contains("var ")
+                || l.contains("function ")
+                || l.contains("=>")
         }) {
             // Check for TypeScript-specific syntax
-            if content_lower.contains("interface ") ||
-               content_lower.contains(": string") ||
-               content_lower.contains(": number") {
+            if content_lower.contains("interface ")
+                || content_lower.contains(": string")
+                || content_lower.contains(": number")
+            {
                 return Language::TypeScript;
             }
             return Language::JavaScript;
         }
 
         // Go indicators
-        if lines.iter().any(|l| {
-            l.contains("package ") ||
-            l.contains("func ") ||
-            l.contains("import (")
-        }) {
+        if lines
+            .iter()
+            .any(|l| l.contains("package ") || l.contains("func ") || l.contains("import ("))
+        {
             return Language::Go;
         }
 
         // Rust indicators
         if lines.iter().any(|l| {
-            l.contains("fn ") ||
-            l.contains("let mut ") ||
-            l.contains("impl ") ||
-            l.contains("use ")
+            l.contains("fn ") || l.contains("let mut ") || l.contains("impl ") || l.contains("use ")
         }) {
             return Language::Rust;
         }
 
         // C/C++ indicators
-        if lines.iter().any(|l| {
-            l.contains("#include") ||
-            l.contains("int main(") ||
-            l.contains("void ")
-        }) {
-            if content_lower.contains("std::") ||
-               content_lower.contains("namespace ") ||
-               content_lower.contains("class ") {
+        if lines
+            .iter()
+            .any(|l| l.contains("#include") || l.contains("int main(") || l.contains("void "))
+        {
+            if content_lower.contains("std::")
+                || content_lower.contains("namespace ")
+                || content_lower.contains("class ")
+            {
                 return Language::Cpp;
             }
             return Language::C;
@@ -189,10 +191,16 @@ mod tests {
     #[test]
     fn test_shebang_detection() {
         let python_content = "#!/usr/bin/env python3\nprint('hello')";
-        assert_eq!(Language::from_shebang(python_content), Some(Language::Python));
+        assert_eq!(
+            Language::from_shebang(python_content),
+            Some(Language::Python)
+        );
 
         let node_content = "#!/usr/bin/env node\nconsole.log('hello')";
-        assert_eq!(Language::from_shebang(node_content), Some(Language::JavaScript));
+        assert_eq!(
+            Language::from_shebang(node_content),
+            Some(Language::JavaScript)
+        );
     }
 
     #[test]
