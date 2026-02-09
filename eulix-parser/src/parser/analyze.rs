@@ -1,3 +1,8 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use crate::kb::types::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -15,12 +20,17 @@ impl Analyzer {
         let is_large = file_count > 20000;
 
         if verbose && is_large {
-            println!("   [!]  Enabling memory-efficient mode for {} files", file_count);
+            println!(
+                "   [!]  Enabling memory-efficient mode for {} files",
+                file_count
+            );
         }
 
         // Build call graph (skip for very large repos to save memory)
         if !is_large {
-            if verbose { println!("   → Building call graph..."); }
+            if verbose {
+                println!("   → Building call graph...");
+            }
             kb.call_graph = Self::build_call_graph(&kb.structure);
         } else if verbose {
             println!("   [!]  Skipping call graph (too large, would use excessive memory)");
@@ -28,30 +38,42 @@ impl Analyzer {
 
         // Build reverse call graph (populate called_by)
         if !is_large {
-            if verbose { println!("   → Building reverse call graph..."); }
+            if verbose {
+                println!("   → Building reverse call graph...");
+            }
             Self::populate_called_by(&mut kb);
         }
 
         // Resolve function call locations
         if !is_large {
-            if verbose { println!("   → Resolving call locations..."); }
+            if verbose {
+                println!("   → Resolving call locations...");
+            }
             Self::resolve_call_locations(&mut kb);
         }
 
         // Build indices (always do this, it's useful)
-        if verbose { println!("   → Generating indices..."); }
+        if verbose {
+            println!("   → Generating indices...");
+        }
         kb.indices = Self::generate_indices(&kb);
 
         // Detect patterns (lightweight)
-        if verbose { println!("   → Detecting patterns..."); }
+        if verbose {
+            println!("   → Detecting patterns...");
+        }
         kb.patterns = Self::detect_patterns(&kb);
 
         // Find entry points (lightweight)
-        if verbose { println!("   → Finding entry points..."); }
+        if verbose {
+            println!("   → Finding entry points...");
+        }
         kb.entry_points = Self::find_entry_points(&kb);
 
         // Analyze external dependencies (lightweight)
-        if verbose { println!("   → Analyzing dependencies..."); }
+        if verbose {
+            println!("   → Analyzing dependencies...");
+        }
         kb.external_dependencies = Self::analyze_external_deps(&kb);
 
         kb
@@ -321,7 +343,12 @@ impl Analyzer {
                     }
                 }
 
-                (local_fn_by_name, local_fn_by_tag, local_fn_calling, local_types)
+                (
+                    local_fn_by_name,
+                    local_fn_by_tag,
+                    local_fn_calling,
+                    local_types,
+                )
             })
             .collect();
 
@@ -376,8 +403,11 @@ impl Analyzer {
 
                 // Check for API endpoints (Flask/FastAPI decorators)
                 for decorator in &func.decorators {
-                    if decorator.contains("route") || decorator.contains("get") ||
-                       decorator.contains("post") || decorator.contains("api") {
+                    if decorator.contains("route")
+                        || decorator.contains("get")
+                        || decorator.contains("post")
+                        || decorator.contains("api")
+                    {
                         // Try to extract route path
                         let route_path = Self::extract_route_path(decorator);
                         let http_methods = Self::extract_http_methods(decorator);
@@ -395,7 +425,11 @@ impl Analyzer {
                 }
 
                 // Check for CLI commands (click/argparse)
-                if func.decorators.iter().any(|d| d.contains("command") || d.contains("click")) {
+                if func
+                    .decorators
+                    .iter()
+                    .any(|d| d.contains("command") || d.contains("click"))
+                {
                     entry_points.push(EntryPoint {
                         entry_type: "cli_command".to_string(),
                         path: Some(func.name.clone()),
@@ -447,7 +481,8 @@ impl Analyzer {
     /// Analyze external dependencies - OPTIMIZED
     fn analyze_external_deps(kb: &KnowledgeBase) -> Vec<ExternalDependency> {
         // Collect all dependencies in parallel without locks
-        let all_deps: Vec<_> = kb.structure
+        let all_deps: Vec<_> = kb
+            .structure
             .par_iter()
             .flat_map(|(filepath, filedata)| {
                 let mut local_deps = Vec::new();
@@ -529,9 +564,15 @@ impl Analyzer {
         let file_paths: Vec<&String> = kb.structure.keys().collect();
 
         // Check for layered architecture
-        let has_api = file_paths.iter().any(|p| p.contains("api") || p.contains("routes"));
-        let has_service = file_paths.iter().any(|p| p.contains("service") || p.contains("business"));
-        let has_data = file_paths.iter().any(|p| p.contains("model") || p.contains("repository") || p.contains("dao"));
+        let has_api = file_paths
+            .iter()
+            .any(|p| p.contains("api") || p.contains("routes"));
+        let has_service = file_paths
+            .iter()
+            .any(|p| p.contains("service") || p.contains("business"));
+        let has_data = file_paths
+            .iter()
+            .any(|p| p.contains("model") || p.contains("repository") || p.contains("dao"));
 
         if has_api && has_service && has_data {
             return Some("layered".to_string());
@@ -539,7 +580,9 @@ impl Analyzer {
 
         // Check for MVC
         let has_model = file_paths.iter().any(|p| p.contains("model"));
-        let has_view = file_paths.iter().any(|p| p.contains("view") || p.contains("template"));
+        let has_view = file_paths
+            .iter()
+            .any(|p| p.contains("view") || p.contains("template"));
         let has_controller = file_paths.iter().any(|p| p.contains("controller"));
 
         if has_model && has_view && has_controller {
@@ -566,16 +609,20 @@ impl Analyzer {
 
         summary.categories = Self::categorize_files(&kb.structure);
         summary.key_features = Self::extract_key_features(kb);
-        summary.entry_points = kb.entry_points.iter().map(|ep| {
-            format!("{}:{}", ep.file, ep.line)
-        }).collect();
+        summary.entry_points = kb
+            .entry_points
+            .iter()
+            .map(|ep| format!("{}:{}", ep.file, ep.line))
+            .collect();
         summary.dependencies = DependencyInfo {
-            stdlib: kb.external_dependencies
+            stdlib: kb
+                .external_dependencies
                 .iter()
                 .filter(|d| Self::is_stdlib(&d.name))
                 .map(|d| d.name.clone())
                 .collect(),
-            third_party: kb.external_dependencies
+            third_party: kb
+                .external_dependencies
                 .iter()
                 .filter(|d| !Self::is_stdlib(&d.name))
                 .map(|d| d.name.clone())
@@ -588,9 +635,24 @@ impl Analyzer {
 
     fn is_stdlib(module: &str) -> bool {
         let stdlib = [
-            "os", "sys", "re", "json", "datetime", "time", "collections",
-            "itertools", "functools", "pathlib", "subprocess", "threading",
-            "asyncio", "typing", "math", "random", "hashlib", "uuid",
+            "os",
+            "sys",
+            "re",
+            "json",
+            "datetime",
+            "time",
+            "collections",
+            "itertools",
+            "functools",
+            "pathlib",
+            "subprocess",
+            "threading",
+            "asyncio",
+            "typing",
+            "math",
+            "random",
+            "hashlib",
+            "uuid",
         ];
         stdlib.contains(&module)
     }
@@ -618,7 +680,10 @@ impl Analyzer {
         if path_lower.contains("auth") || path_lower.contains("login") {
             return "Authentication".to_string();
         }
-        if path_lower.contains("api") || path_lower.contains("endpoint") || path_lower.contains("route") {
+        if path_lower.contains("api")
+            || path_lower.contains("endpoint")
+            || path_lower.contains("route")
+        {
             return "API".to_string();
         }
         if path_lower.contains("util") || path_lower.contains("helper") {
@@ -633,7 +698,10 @@ impl Analyzer {
 
         for func in &data.functions {
             let name_lower = func.name.to_lowercase();
-            if name_lower.contains("crypt") || name_lower.contains("hash") || name_lower.contains("encrypt") {
+            if name_lower.contains("crypt")
+                || name_lower.contains("hash")
+                || name_lower.contains("encrypt")
+            {
                 return "Security".to_string();
             }
         }

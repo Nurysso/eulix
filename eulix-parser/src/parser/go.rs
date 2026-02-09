@@ -1,9 +1,13 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use crate::kb::types::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tree_sitter::{Node, Parser};
-
 
 pub struct GoParser {
     source_code: String,
@@ -54,20 +58,16 @@ impl GoParser {
                     for spec_node in child.children(&mut import_cursor) {
                         if spec_node.kind() == "import_spec" {
                             if let Some(path_node) = spec_node.child_by_field_name("path") {
-                                let path = self.get_node_text(&path_node)
-                                    .trim_matches('"')
-                                    .to_string();
+                                let path =
+                                    self.get_node_text(&path_node).trim_matches('"').to_string();
 
-                                let alias = spec_node.child_by_field_name("name")
+                                let alias = spec_node
+                                    .child_by_field_name("name")
                                     .map(|n| self.get_node_text(&n));
 
                                 imports.push(Import {
                                     module: path.clone(),
-                                    items: if let Some(a) = alias {
-                                        vec![a]
-                                    } else {
-                                        vec![]
-                                    },
+                                    items: if let Some(a) = alias { vec![a] } else { vec![] },
                                     import_type: self.classify_import(&path),
                                 });
                             }
@@ -76,7 +76,8 @@ impl GoParser {
                             for item in spec_node.children(&mut list_cursor) {
                                 if item.kind() == "import_spec" {
                                     if let Some(path_node) = item.child_by_field_name("path") {
-                                        let path = self.get_node_text(&path_node)
+                                        let path = self
+                                            .get_node_text(&path_node)
                                             .trim_matches('"')
                                             .to_string();
 
@@ -101,9 +102,27 @@ impl GoParser {
     fn classify_import(&self, module: &str) -> String {
         // Go stdlib packages
         let stdlib = [
-            "fmt", "os", "io", "strings", "strconv", "time", "net", "http",
-            "encoding/json", "context", "sync", "errors", "log", "bytes",
-            "math", "sort", "regexp", "path", "bufio", "crypto", "database/sql",
+            "fmt",
+            "os",
+            "io",
+            "strings",
+            "strconv",
+            "time",
+            "net",
+            "http",
+            "encoding/json",
+            "context",
+            "sync",
+            "errors",
+            "log",
+            "bytes",
+            "math",
+            "sort",
+            "regexp",
+            "path",
+            "bufio",
+            "crypto",
+            "database/sql",
         ];
 
         if stdlib.iter().any(|s| module.starts_with(s)) {
@@ -135,7 +154,8 @@ impl GoParser {
         let name = self.get_node_text(&name_node);
 
         // Check if it's a method (has receiver)
-        let receiver = node.child_by_field_name("receiver")
+        let receiver = node
+            .child_by_field_name("receiver")
             .map(|r| self.get_node_text(&r));
 
         let params = self.extract_parameters(node);
@@ -194,7 +214,8 @@ impl GoParser {
 
                     if let Some(name_node) = child.child_by_field_name("name") {
                         let name = self.get_node_text(&name_node);
-                        let type_annotation = child.child_by_field_name("type")
+                        let type_annotation = child
+                            .child_by_field_name("type")
                             .map(|t| self.get_node_text(&t))
                             .unwrap_or_default();
 
@@ -229,7 +250,13 @@ impl GoParser {
         }
     }
 
-    fn build_signature(&self, name: &str, params: &[Parameter], return_type: &str, receiver: Option<&str>) -> String {
+    fn build_signature(
+        &self,
+        name: &str,
+        params: &[Parameter],
+        return_type: &str,
+        receiver: Option<&str>,
+    ) -> String {
         let param_str = params
             .iter()
             .map(|p| format!("{} {}", p.name, p.type_annotation))
@@ -241,7 +268,10 @@ impl GoParser {
         if return_type.is_empty() {
             format!("func {}{}({})", receiver_str, name, param_str)
         } else {
-            format!("func {}{}({}) {}", receiver_str, name, param_str, return_type)
+            format!(
+                "func {}{}({}) {}",
+                receiver_str, name, param_str, return_type
+            )
         }
     }
 
@@ -252,7 +282,13 @@ impl GoParser {
         calls
     }
 
-    fn find_calls_recursive(&self, node: &Node, calls: &mut Vec<FunctionCall>, seen: &mut HashSet<String>, context: &str) {
+    fn find_calls_recursive(
+        &self,
+        node: &Node,
+        calls: &mut Vec<FunctionCall>,
+        seen: &mut HashSet<String>,
+        context: &str,
+    ) {
         let mut cursor = node.walk();
 
         let child_context = match node.kind() {
@@ -316,19 +352,22 @@ impl GoParser {
         let mut variables: HashMap<String, Variable> = HashMap::new();
 
         for param in params {
-            variables.insert(param.name.clone(), Variable {
-                name: param.name.clone(),
-                var_type: if param.type_annotation.is_empty() {
-                    None
-                } else {
-                    Some(param.type_annotation.clone())
+            variables.insert(
+                param.name.clone(),
+                Variable {
+                    name: param.name.clone(),
+                    var_type: if param.type_annotation.is_empty() {
+                        None
+                    } else {
+                        Some(param.type_annotation.clone())
+                    },
+                    scope: "param".to_string(),
+                    defined_at: None,
+                    transformations: vec![],
+                    used_in: vec![],
+                    returned: false,
                 },
-                scope: "param".to_string(),
-                defined_at: None,
-                transformations: vec![],
-                used_in: vec![],
-                returned: false,
-            });
+            );
         }
 
         self.track_variable_usage(node, &mut variables);
@@ -344,19 +383,23 @@ impl GoParser {
                     let var_name = self.get_node_text(&left);
                     let line = node.start_position().row + 1;
 
-                    let var_type = node.child_by_field_name("type")
+                    let var_type = node
+                        .child_by_field_name("type")
                         .map(|t| self.get_node_text(&t));
 
                     if !variables.contains_key(&var_name) {
-                        variables.insert(var_name.clone(), Variable {
-                            name: var_name,
-                            var_type,
-                            scope: "local".to_string(),
-                            defined_at: Some(line),
-                            transformations: vec![],
-                            used_in: vec![],
-                            returned: false,
-                        });
+                        variables.insert(
+                            var_name.clone(),
+                            Variable {
+                                name: var_name,
+                                var_type,
+                                scope: "local".to_string(),
+                                defined_at: Some(line),
+                                transformations: vec![],
+                                used_in: vec![],
+                                returned: false,
+                            },
+                        );
                     }
                 }
             }
@@ -415,14 +458,16 @@ impl GoParser {
 
     fn parse_if_statement(&self, node: &Node) -> Option<Branch> {
         let line = node.start_position().row + 1;
-        let condition = node.child_by_field_name("condition")
+        let condition = node
+            .child_by_field_name("condition")
             .map(|c| self.get_node_text(&c))
             .unwrap_or_default();
 
         let consequence = node.child_by_field_name("consequence")?;
         let true_path = self.extract_execution_path(&consequence)?;
 
-        let false_path = node.child_by_field_name("alternative")
+        let false_path = node
+            .child_by_field_name("alternative")
             .and_then(|alt| self.extract_execution_path(&alt));
 
         Some(Branch {
@@ -439,7 +484,11 @@ impl GoParser {
         let returns = self.find_return_value(block);
         let raises = None;
 
-        Some(ExecutionPath { calls, returns, raises })
+        Some(ExecutionPath {
+            calls,
+            returns,
+            raises,
+        })
     }
 
     fn extract_calls_from_block(&self, block: &Node) -> Vec<String> {
@@ -488,7 +537,8 @@ impl GoParser {
 
     fn parse_loop(&self, node: &Node) -> Option<Loop> {
         let line = node.start_position().row + 1;
-        let condition = node.child_by_field_name("condition")
+        let condition = node
+            .child_by_field_name("condition")
             .map(|c| self.get_node_text(&c))
             .unwrap_or_default();
 
@@ -557,7 +607,10 @@ impl GoParser {
                         .to_string();
 
                     if let Some(method) = self.parse_function(&child, &type_name) {
-                        methods_map.entry(type_name).or_insert_with(Vec::new).push(method);
+                        methods_map
+                            .entry(type_name)
+                            .or_insert_with(Vec::new)
+                            .push(method);
                     }
                 }
             }
@@ -612,7 +665,8 @@ impl GoParser {
                 if child.kind() == "field_declaration" {
                     if let Some(name_node) = child.child_by_field_name("name") {
                         let name = self.get_node_text(&name_node);
-                        let type_annotation = child.child_by_field_name("type")
+                        let type_annotation = child
+                            .child_by_field_name("type")
                             .map(|t| self.get_node_text(&t))
                             .unwrap_or_default();
 
@@ -663,11 +717,13 @@ impl GoParser {
         let name = self.get_node_text(&name_node);
         let line = node.start_position().row + 1;
 
-        let type_annotation = node.child_by_field_name("type")
+        let type_annotation = node
+            .child_by_field_name("type")
             .map(|t| self.get_node_text(&t))
             .unwrap_or_default();
 
-        let value = node.child_by_field_name("value")
+        let value = node
+            .child_by_field_name("value")
             .map(|v| self.get_node_text(&v));
 
         Some(GlobalVar {
@@ -681,7 +737,8 @@ impl GoParser {
     fn extract_docstring(&self, node: &Node) -> String {
         if let Some(prev) = node.prev_sibling() {
             if prev.kind() == "comment" {
-                return self.get_node_text(&prev)
+                return self
+                    .get_node_text(&prev)
                     .trim_start_matches("//")
                     .trim()
                     .to_string();
@@ -698,8 +755,11 @@ impl GoParser {
             let mut cursor = node.walk();
 
             match node.kind() {
-                "if_statement" | "for_statement" | "switch_statement" |
-                "expression_switch_statement" | "binary_expression" => {
+                "if_statement"
+                | "for_statement"
+                | "switch_statement"
+                | "expression_switch_statement"
+                | "binary_expression" => {
                     count += 1;
                 }
                 _ => {}
@@ -725,8 +785,9 @@ impl GoParser {
             .filter_map(|(idx, line)| {
                 re.captures(line).map(|caps| {
                     let text = caps.get(1).unwrap().as_str().trim().to_string();
-                    let priority = if text.to_lowercase().contains("critical") ||
-                                      text.to_lowercase().contains("urgent") {
+                    let priority = if text.to_lowercase().contains("critical")
+                        || text.to_lowercase().contains("urgent")
+                    {
                         "high"
                     } else if text.to_lowercase().contains("minor") {
                         "low"
@@ -748,11 +809,23 @@ impl GoParser {
         let mut notes = Vec::new();
 
         let patterns = vec![
-            (r"password|secret|token|apikey", "sensitive_data", "Handles sensitive data"),
+            (
+                r"password|secret|token|apikey",
+                "sensitive_data",
+                "Handles sensitive data",
+            ),
             (r"eval\(", "code_execution", "Dynamic code execution"),
-            (r"exec\.Command|os\.Exec", "command_execution", "System command execution"),
+            (
+                r"exec\.Command|os\.Exec",
+                "command_execution",
+                "System command execution",
+            ),
             (r"unsafe\.", "unsafe_code", "Uses unsafe operations"),
-            (r"sql\.Query|db\.Query", "sql_query", "Database query - check for SQL injection"),
+            (
+                r"sql\.Query|db\.Query",
+                "sql_query",
+                "Database query - check for SQL injection",
+            ),
         ];
 
         for (pattern, note_type, description) in patterns {
@@ -772,7 +845,12 @@ impl GoParser {
         notes
     }
 
-    fn auto_tag_function(&self, name: &str, docstring: &str, calls: &[FunctionCall]) -> Vec<String> {
+    fn auto_tag_function(
+        &self,
+        name: &str,
+        docstring: &str,
+        calls: &[FunctionCall],
+    ) -> Vec<String> {
         let mut tags = Vec::new();
         let name_lower = name.to_lowercase();
         let doc_lower = docstring.to_lowercase();
@@ -783,57 +861,85 @@ impl GoParser {
         }
 
         // Initialization
-        if name_lower.contains("init") || name_lower.contains("setup") ||
-            name_lower.contains("initialize") || name_lower.contains("bootstrap") {
+        if name_lower.contains("init")
+            || name_lower.contains("setup")
+            || name_lower.contains("initialize")
+            || name_lower.contains("bootstrap")
+        {
             tags.push("initialization".to_string());
         }
 
         // Cleanup
-        if name_lower.contains("cleanup") || name_lower.contains("close") ||
-            name_lower.contains("shutdown") || name_lower.contains("dispose") {
+        if name_lower.contains("cleanup")
+            || name_lower.contains("close")
+            || name_lower.contains("shutdown")
+            || name_lower.contains("dispose")
+        {
             tags.push("cleanup".to_string());
         }
 
         // Authentication & Security
-        if name_lower.contains("auth") || name_lower.contains("login") ||
-            name_lower.contains("logout") || name_lower.contains("password") ||
-            name_lower.contains("hash") || name_lower.contains("encrypt") ||
-            name_lower.contains("decrypt") || name_lower.contains("token") ||
-            doc_lower.contains("authentication") {
+        if name_lower.contains("auth")
+            || name_lower.contains("login")
+            || name_lower.contains("logout")
+            || name_lower.contains("password")
+            || name_lower.contains("hash")
+            || name_lower.contains("encrypt")
+            || name_lower.contains("decrypt")
+            || name_lower.contains("token")
+            || doc_lower.contains("authentication")
+        {
             tags.push("authentication".to_string());
             tags.push("security".to_string());
         }
 
         // API & HTTP
-        if name_lower.contains("api") || name_lower.contains("endpoint") ||
-            name_lower.contains("route") || name_lower.contains("handler") ||
-            name_lower.contains("serve") || name_lower.contains("http") ||
-            doc_lower.contains("http") || doc_lower.contains("endpoint") {
+        if name_lower.contains("api")
+            || name_lower.contains("endpoint")
+            || name_lower.contains("route")
+            || name_lower.contains("handler")
+            || name_lower.contains("serve")
+            || name_lower.contains("http")
+            || doc_lower.contains("http")
+            || doc_lower.contains("endpoint")
+        {
             tags.push("api".to_string());
         }
 
-        if name_lower.contains("handler") || name_lower.contains("serve") ||
-            name_lower.contains("controller") {
+        if name_lower.contains("handler")
+            || name_lower.contains("serve")
+            || name_lower.contains("controller")
+        {
             tags.push("http-handler".to_string());
         }
 
         // Database
-        if name_lower.contains("db") || name_lower.contains("database") ||
-            name_lower.contains("query") || name_lower.contains("select") ||
-            name_lower.contains("insert") || name_lower.contains("update") ||
-            name_lower.contains("delete") || name_lower.contains("save") ||
-            name_lower.contains("find") {
+        if name_lower.contains("db")
+            || name_lower.contains("database")
+            || name_lower.contains("query")
+            || name_lower.contains("select")
+            || name_lower.contains("insert")
+            || name_lower.contains("update")
+            || name_lower.contains("delete")
+            || name_lower.contains("save")
+            || name_lower.contains("find")
+        {
             tags.push("database".to_string());
         }
 
         // Validation
-        if name_lower.contains("validate") || name_lower.contains("check") ||
-            name_lower.contains("verify") || name_lower.contains("sanitize") {
+        if name_lower.contains("validate")
+            || name_lower.contains("check")
+            || name_lower.contains("verify")
+            || name_lower.contains("sanitize")
+        {
             tags.push("validation".to_string());
         }
 
         // Error handling
-        if name_lower.contains("error") || name_lower.contains("handle") && doc_lower.contains("error") {
+        if name_lower.contains("error")
+            || name_lower.contains("handle") && doc_lower.contains("error")
+        {
             tags.push("error-handling".to_string());
         }
 
@@ -848,22 +954,30 @@ impl GoParser {
         }
 
         // File I/O
-        if name_lower.contains("read") || name_lower.contains("write") ||
-            name_lower.contains("file") || name_lower.contains("open") ||
-            name_lower.contains("load") {
+        if name_lower.contains("read")
+            || name_lower.contains("write")
+            || name_lower.contains("file")
+            || name_lower.contains("open")
+            || name_lower.contains("load")
+        {
             tags.push("file-io".to_string());
         }
 
         // Network
-        if name_lower.contains("dial") || name_lower.contains("listen") ||
-            name_lower.contains("connect") || name_lower.contains("request") ||
-            name_lower.contains("response") {
+        if name_lower.contains("dial")
+            || name_lower.contains("listen")
+            || name_lower.contains("connect")
+            || name_lower.contains("request")
+            || name_lower.contains("response")
+        {
             tags.push("network".to_string());
         }
 
         // Configuration
-        if name_lower.contains("config") || name_lower.contains("setting") ||
-            name_lower.contains("option") {
+        if name_lower.contains("config")
+            || name_lower.contains("setting")
+            || name_lower.contains("option")
+        {
             tags.push("configuration".to_string());
         }
 
@@ -873,26 +987,36 @@ impl GoParser {
         }
 
         // Parsing
-        if name_lower.contains("parse") || name_lower.contains("decode") ||
-            name_lower.contains("unmarshal") {
+        if name_lower.contains("parse")
+            || name_lower.contains("decode")
+            || name_lower.contains("unmarshal")
+        {
             tags.push("parsing".to_string());
         }
 
         // Serialization
-        if name_lower.contains("serialize") || name_lower.contains("encode") ||
-            name_lower.contains("marshal") {
+        if name_lower.contains("serialize")
+            || name_lower.contains("encode")
+            || name_lower.contains("marshal")
+        {
             tags.push("serialization".to_string());
         }
 
         // Goroutines/Concurrency
-        if calls.iter().any(|c| c.callee.contains("Go") || c.callee == "go") {
+        if calls
+            .iter()
+            .any(|c| c.callee.contains("Go") || c.callee == "go")
+        {
             tags.push("concurrent".to_string());
             tags.push("goroutine".to_string());
         }
 
         // Channels
-        if calls.iter().any(|c| c.callee.contains("chan") || c.callee.contains("channel")) ||
-            name_lower.contains("channel") {
+        if calls
+            .iter()
+            .any(|c| c.callee.contains("chan") || c.callee.contains("channel"))
+            || name_lower.contains("channel")
+        {
             tags.push("channels".to_string());
             tags.push("concurrent".to_string());
         }

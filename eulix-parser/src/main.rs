@@ -1,3 +1,8 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use clap::Parser;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -12,10 +17,10 @@ mod utils;
 
 use kb::types::*;
 use parser::analyze::Analyzer;
+use parser::c;
+use parser::go;
 use parser::language::Language;
 use parser::python;
-use parser::go;
-use parser::c;
 use utils::file_walker::FileWalker;
 
 #[derive(Debug, Clone)]
@@ -103,12 +108,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", "─".repeat(64));
     }
     let parse_start = Instant::now();
-    let (mut kb, stats) = parse_directory(&args.root, &args.languages, args.euignore.as_deref(), args.verbose)?;
+    let (mut kb, stats) = parse_directory(
+        &args.root,
+        &args.languages,
+        args.euignore.as_deref(),
+        args.verbose,
+    )?;
 
     if args.verbose {
         println!("\n{}", "─".repeat(64));
         println!("Parsing Complete!");
-        println!("     Time:         {:.2}s", parse_start.elapsed().as_secs_f64());
+        println!(
+            "     Time:         {:.2}s",
+            parse_start.elapsed().as_secs_f64()
+        );
         println!("     Parsed:       {} files", stats.parsed.len());
         println!("     Skipped:      {} files", stats.skipped.len());
         println!("     Failed:       {} files", stats.failed.len());
@@ -136,7 +149,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if args.verbose {
             println!("\n{}", "─".repeat(64));
             println!(" Analysis Complete!");
-            println!("  Time:         {:.2}s", analyze_start.elapsed().as_secs_f64());
+            println!(
+                "  Time:         {:.2}s",
+                analyze_start.elapsed().as_secs_f64()
+            );
             println!("  Graph Nodes:  {}", kb.call_graph.nodes.len());
             println!("  Graph Edges:  {}", kb.call_graph.edges.len());
             println!("{}", "═".repeat(64));
@@ -151,7 +167,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let summary = Analyzer::generate_summary(&kb);
 
         if args.verbose {
-            println!(" Summary generated in {:.2}s", summary_start.elapsed().as_secs_f64());
+            println!(
+                " Summary generated in {:.2}s",
+                summary_start.elapsed().as_secs_f64()
+            );
             println!("{}", "═".repeat(64));
         }
 
@@ -190,7 +209,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fs::write(&index_path, index_json)?;
         if args.verbose {
             let size = fs::metadata(&index_path)?.len();
-            println!("   ✓ {}_index.json ({:.2} KB)", base_name, size as f64 / 1024.0);
+            println!(
+                "   ✓ {}_index.json ({:.2} KB)",
+                base_name,
+                size as f64 / 1024.0
+            );
         }
 
         // Write summary.json
@@ -199,7 +222,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fs::write(&summary_path, summary_json)?;
         if args.verbose {
             let size = fs::metadata(&summary_path)?.len();
-            println!("   ✓ {}_summary.json ({:.2} KB)", base_name, size as f64 / 1024.0);
+            println!(
+                "   ✓ {}_summary.json ({:.2} KB)",
+                base_name,
+                size as f64 / 1024.0
+            );
         }
 
         // Write call_graph.json
@@ -208,7 +235,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fs::write(&callgraph_path, callgraph_json)?;
         if args.verbose {
             let size = fs::metadata(&callgraph_path)?.len();
-            println!("   ✓ {}_call_graph.json ({:.2} KB)", base_name, size as f64 / 1024.0);
+            println!(
+                "   ✓ {}_call_graph.json ({:.2} KB)",
+                base_name,
+                size as f64 / 1024.0
+            );
         }
 
         if args.verbose {
@@ -280,7 +311,10 @@ fn print_final_summary(kb: &KnowledgeBase, stats: &ParseStats, total_time: f64) 
     println!("   Call Graph Nodes:       {}", kb.call_graph.nodes.len());
     println!("   Call Graph Edges:       {}", kb.call_graph.edges.len());
     println!("   Entry Points:           {}", kb.entry_points.len());
-    println!("   External Dependencies:  {}", kb.external_dependencies.len());
+    println!(
+        "   External Dependencies:  {}",
+        kb.external_dependencies.len()
+    );
     println!();
 
     if !stats.failed.is_empty() {
@@ -307,16 +341,14 @@ fn parse_directory(
     let path = PathBuf::from(dir);
 
     // Determine euignore path
-    let euignore = euignore_path
-        .map(PathBuf::from)
-        .or_else(|| {
-            let default_path = path.join(".euignore");
-            if default_path.exists() {
-                Some(default_path)
-            } else {
-                None
-            }
-        });
+    let euignore = euignore_path.map(PathBuf::from).or_else(|| {
+        let default_path = path.join(".euignore");
+        if default_path.exists() {
+            Some(default_path)
+        } else {
+            None
+        }
+    });
 
     if verbose && euignore.is_some() {
         println!("   [!] Using .euignore: {:?}", euignore.as_ref().unwrap());
@@ -356,7 +388,11 @@ fn parse_directory(
                     if verbose {
                         println!("   ✗ Failed:  {} - {}", relative_path, error_msg);
                     }
-                    stats.lock().unwrap().failed.push((relative_path, error_msg));
+                    stats
+                        .lock()
+                        .unwrap()
+                        .failed
+                        .push((relative_path, error_msg));
                     None
                 }
             }
@@ -488,7 +524,7 @@ fn collect_source_files(
                     println!("      • Found {} .{} files", files.len(), extension);
                 }
                 all_files.extend(files)
-            },
+            }
             Err(e) => {
                 if verbose {
                     eprintln!("        Failed to collect .{} files: {}", extension, e);
@@ -521,12 +557,8 @@ fn parse_file(
             let (_, file_data) = python::parse_file(file_path)?;
             Ok((relative_path, file_data))
         }
-        Language::JavaScript => {
-            Err("JavaScript parsing not yet implemented".into())
-        }
-        Language::TypeScript => {
-            Err("TypeScript parsing not yet implemented".into())
-        }
+        Language::JavaScript => Err("JavaScript parsing not yet implemented".into()),
+        Language::TypeScript => Err("TypeScript parsing not yet implemented".into()),
         Language::Go => {
             let (_, file_data) = go::parse_file(file_path)?;
             Ok((relative_path, file_data))
@@ -535,9 +567,7 @@ fn parse_file(
             let (_, file_data) = c::parse_file(file_path)?;
             Ok((relative_path, file_data))
         }
-        Language::Rust => {
-            Err("Rust parsing not yet implemented".into())
-        }
+        Language::Rust => Err("Rust parsing not yet implemented".into()),
         _ => Err(format!("Unsupported language: {:?}", lang).into()),
     }
 }

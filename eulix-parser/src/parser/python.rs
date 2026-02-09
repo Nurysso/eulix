@@ -1,3 +1,8 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
 use crate::kb::types::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -81,9 +86,24 @@ impl PythonParser {
     fn classify_import(&self, module: &str) -> String {
         // Python stdlib modules (common ones)
         let stdlib = [
-            "os", "sys", "re", "json", "datetime", "time", "collections",
-            "itertools", "functools", "pathlib", "subprocess", "threading",
-            "asyncio", "typing", "math", "random", "hashlib", "uuid",
+            "os",
+            "sys",
+            "re",
+            "json",
+            "datetime",
+            "time",
+            "collections",
+            "itertools",
+            "functools",
+            "pathlib",
+            "subprocess",
+            "threading",
+            "asyncio",
+            "typing",
+            "math",
+            "random",
+            "hashlib",
+            "uuid",
         ];
 
         if stdlib.contains(&module) {
@@ -273,7 +293,8 @@ impl PythonParser {
             let type_parts: Vec<&str> = name_type_part.split(':').collect();
             Some(Parameter {
                 name: type_parts[0].trim().to_string(),
-                type_annotation: type_parts.get(1)
+                type_annotation: type_parts
+                    .get(1)
                     .map(|s| s.trim().to_string())
                     .unwrap_or_default(),
                 default_value,
@@ -299,7 +320,13 @@ impl PythonParser {
         String::new()
     }
 
-    fn build_signature(&self, name: &str, params: &[Parameter], return_type: &str, is_async: bool) -> String {
+    fn build_signature(
+        &self,
+        name: &str,
+        params: &[Parameter],
+        return_type: &str,
+        is_async: bool,
+    ) -> String {
         let async_prefix = if is_async { "async " } else { "" };
         let param_str = params
             .iter()
@@ -316,7 +343,10 @@ impl PythonParser {
         if return_type.is_empty() {
             format!("{}def {}({})", async_prefix, name, param_str)
         } else {
-            format!("{}def {}({}) -> {}", async_prefix, name, param_str, return_type)
+            format!(
+                "{}def {}({}) -> {}",
+                async_prefix, name, param_str, return_type
+            )
         }
     }
 
@@ -329,7 +359,13 @@ impl PythonParser {
         calls
     }
 
-    fn find_calls_recursive(&self, node: &Node, calls: &mut Vec<FunctionCall>, seen: &mut HashSet<String>, context: &str) {
+    fn find_calls_recursive(
+        &self,
+        node: &Node,
+        calls: &mut Vec<FunctionCall>,
+        seen: &mut HashSet<String>,
+        context: &str,
+    ) {
         let mut cursor = node.walk();
 
         // Determine context for children
@@ -386,7 +422,10 @@ impl PythonParser {
         if let Some(arg_list) = call_node.child_by_field_name("arguments") {
             let mut cursor = arg_list.walk();
             for child in arg_list.children(&mut cursor) {
-                if child.kind() == "identifier" || child.kind() == "string" || child.kind() == "integer" {
+                if child.kind() == "identifier"
+                    || child.kind() == "string"
+                    || child.kind() == "integer"
+                {
                     args.push(self.get_node_text(&child));
                 }
             }
@@ -401,19 +440,22 @@ impl PythonParser {
 
         // Add parameters as variables
         for param in params {
-            variables.insert(param.name.clone(), Variable {
-                name: param.name.clone(),
-                var_type: if param.type_annotation.is_empty() {
-                    None
-                } else {
-                    Some(param.type_annotation.clone())
+            variables.insert(
+                param.name.clone(),
+                Variable {
+                    name: param.name.clone(),
+                    var_type: if param.type_annotation.is_empty() {
+                        None
+                    } else {
+                        Some(param.type_annotation.clone())
+                    },
+                    scope: "param".to_string(),
+                    defined_at: None,
+                    transformations: vec![],
+                    used_in: vec![],
+                    returned: false,
                 },
-                scope: "param".to_string(),
-                defined_at: None,
-                transformations: vec![],
-                used_in: vec![],
-                returned: false,
-            });
+            );
         }
 
         // Track assignments and usage
@@ -446,7 +488,26 @@ impl PythonParser {
                                 });
                             } else {
                                 // New local variable
-                                variables.insert(var_name.clone(), Variable {
+                                variables.insert(
+                                    var_name.clone(),
+                                    Variable {
+                                        name: var_name.clone(),
+                                        var_type: None,
+                                        scope: "local".to_string(),
+                                        defined_at: Some(line),
+                                        transformations: vec![],
+                                        used_in: vec![],
+                                        returned: false,
+                                    },
+                                );
+                            }
+                        }
+                    } else {
+                        // Simple assignment
+                        if !variables.contains_key(&var_name) {
+                            variables.insert(
+                                var_name.clone(),
+                                Variable {
                                     name: var_name.clone(),
                                     var_type: None,
                                     scope: "local".to_string(),
@@ -454,21 +515,8 @@ impl PythonParser {
                                     transformations: vec![],
                                     used_in: vec![],
                                     returned: false,
-                                });
-                            }
-                        }
-                    } else {
-                        // Simple assignment
-                        if !variables.contains_key(&var_name) {
-                            variables.insert(var_name.clone(), Variable {
-                                name: var_name.clone(),
-                                var_type: None,
-                                scope: "local".to_string(),
-                                defined_at: Some(line),
-                                transformations: vec![],
-                                used_in: vec![],
-                                returned: false,
-                            });
+                                },
+                            );
                         }
                     }
                 }
@@ -560,7 +608,11 @@ impl PythonParser {
         let returns = self.find_return_value(&block);
         let raises = self.find_raise_value(&block);
 
-        Some(ExecutionPath { calls, returns, raises })
+        Some(ExecutionPath {
+            calls,
+            returns,
+            raises,
+        })
     }
 
     fn extract_calls_from_block(&self, block: &Node) -> Vec<String> {
@@ -617,7 +669,11 @@ impl PythonParser {
     }
 
     fn parse_loop(&self, node: &Node) -> Option<Loop> {
-        let loop_type = if node.kind() == "for_statement" { "for" } else { "while" };
+        let loop_type = if node.kind() == "for_statement" {
+            "for"
+        } else {
+            "while"
+        };
         let line = node.start_position().row + 1;
         let condition = self.extract_condition(node).unwrap_or_default();
         let calls = self.extract_calls_from_block(node);
@@ -870,7 +926,8 @@ impl PythonParser {
                     let type_parts: Vec<&str> = left.splitn(2, ':').collect();
                     if type_parts.len() == 2 {
                         let name = type_parts[0].trim();
-                        if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                        {
                             return Some(GlobalVar {
                                 name: name.to_string(),
                                 type_annotation: type_parts[1].trim().to_string(),
@@ -931,9 +988,8 @@ impl PythonParser {
             let mut cursor = node.walk();
 
             match node.kind() {
-                "if_statement" | "elif_clause" | "while_statement" |
-                "for_statement" | "except_clause" | "with_statement" |
-                "and" | "or" => {
+                "if_statement" | "elif_clause" | "while_statement" | "for_statement"
+                | "except_clause" | "with_statement" | "and" | "or" => {
                     count += 1;
                 }
                 _ => {}
@@ -959,8 +1015,9 @@ impl PythonParser {
             .filter_map(|(idx, line)| {
                 re.captures(line).map(|caps| {
                     let text = caps.get(1).unwrap().as_str().trim().to_string();
-                    let priority = if text.to_lowercase().contains("critical") ||
-                                      text.to_lowercase().contains("urgent") {
+                    let priority = if text.to_lowercase().contains("critical")
+                        || text.to_lowercase().contains("urgent")
+                    {
                         "high"
                     } else if text.to_lowercase().contains("minor") {
                         "low"
@@ -984,12 +1041,32 @@ impl PythonParser {
 
         let patterns = vec![
             (r"password", "password_handling", "Handles passwords"),
-            (r"secret|api_key|token", "sensitive_data", "Handles sensitive data"),
-            (r"eval\(", "code_execution", "Uses eval() - potential security risk"),
-            (r"exec\(", "code_execution", "Uses exec() - potential security risk"),
+            (
+                r"secret|api_key|token",
+                "sensitive_data",
+                "Handles sensitive data",
+            ),
+            (
+                r"eval\(",
+                "code_execution",
+                "Uses eval() - potential security risk",
+            ),
+            (
+                r"exec\(",
+                "code_execution",
+                "Uses exec() - potential security risk",
+            ),
             (r"__import__", "dynamic_import", "Dynamic imports detected"),
-            (r"pickle\.load", "deserialization", "Uses pickle - potential security risk"),
-            (r"subprocess|os\.system|os\.popen", "command_execution", "System command execution"),
+            (
+                r"pickle\.load",
+                "deserialization",
+                "Uses pickle - potential security risk",
+            ),
+            (
+                r"subprocess|os\.system|os\.popen",
+                "command_execution",
+                "System command execution",
+            ),
         ];
 
         for (pattern, note_type, description) in patterns {
@@ -1010,7 +1087,12 @@ impl PythonParser {
     }
 
     // Auto-tag functions based on name and behavior
-    fn auto_tag_function(&self, name: &str, docstring: &str, calls: &[FunctionCall]) -> Vec<String> {
+    fn auto_tag_function(
+        &self,
+        name: &str,
+        docstring: &str,
+        calls: &[FunctionCall],
+    ) -> Vec<String> {
         let mut tags = Vec::new();
         let name_lower = name.to_lowercase();
         let doc_lower = docstring.to_lowercase();
@@ -1021,58 +1103,87 @@ impl PythonParser {
         }
 
         // Initialization
-        if name_lower.contains("init") || name_lower.contains("setup") ||
-            name_lower.contains("initialize") || name_lower.contains("bootstrap") {
+        if name_lower.contains("init")
+            || name_lower.contains("setup")
+            || name_lower.contains("initialize")
+            || name_lower.contains("bootstrap")
+        {
             tags.push("initialization".to_string());
         }
 
         // Cleanup
-        if name_lower.contains("cleanup") || name_lower.contains("close") ||
-            name_lower.contains("shutdown") || name_lower.contains("dispose") {
+        if name_lower.contains("cleanup")
+            || name_lower.contains("close")
+            || name_lower.contains("shutdown")
+            || name_lower.contains("dispose")
+        {
             tags.push("cleanup".to_string());
         }
 
         // Authentication & Security
-        if name_lower.contains("auth") || name_lower.contains("login") ||
-            name_lower.contains("logout") || name_lower.contains("password") ||
-            name_lower.contains("hash") || name_lower.contains("encrypt") ||
-            name_lower.contains("decrypt") || name_lower.contains("token") ||
-            doc_lower.contains("authentication") {
+        if name_lower.contains("auth")
+            || name_lower.contains("login")
+            || name_lower.contains("logout")
+            || name_lower.contains("password")
+            || name_lower.contains("hash")
+            || name_lower.contains("encrypt")
+            || name_lower.contains("decrypt")
+            || name_lower.contains("token")
+            || doc_lower.contains("authentication")
+        {
             tags.push("authentication".to_string());
             tags.push("security".to_string());
         }
 
         // API & HTTP
-        if name_lower.contains("api") || name_lower.contains("endpoint") ||
-            name_lower.contains("route") || name_lower.contains("handler") ||
-            name_lower.contains("view") || doc_lower.contains("http") ||
-            doc_lower.contains("endpoint") {
+        if name_lower.contains("api")
+            || name_lower.contains("endpoint")
+            || name_lower.contains("route")
+            || name_lower.contains("handler")
+            || name_lower.contains("view")
+            || doc_lower.contains("http")
+            || doc_lower.contains("endpoint")
+        {
             tags.push("api".to_string());
         }
 
-        if name_lower.contains("handler") || name_lower.contains("view") ||
-            name_lower.contains("controller") {
+        if name_lower.contains("handler")
+            || name_lower.contains("view")
+            || name_lower.contains("controller")
+        {
             tags.push("http-handler".to_string());
         }
 
         // Database
-        if name_lower.contains("db") || name_lower.contains("database") ||
-            name_lower.contains("query") || name_lower.contains("select") ||
-            name_lower.contains("insert") || name_lower.contains("update") ||
-            name_lower.contains("delete") || name_lower.contains("save") ||
-            name_lower.contains("fetch") || name_lower.contains("find") {
+        if name_lower.contains("db")
+            || name_lower.contains("database")
+            || name_lower.contains("query")
+            || name_lower.contains("select")
+            || name_lower.contains("insert")
+            || name_lower.contains("update")
+            || name_lower.contains("delete")
+            || name_lower.contains("save")
+            || name_lower.contains("fetch")
+            || name_lower.contains("find")
+        {
             tags.push("database".to_string());
         }
 
         // Validation
-        if name_lower.contains("validate") || name_lower.contains("check") ||
-            name_lower.contains("verify") || name_lower.contains("sanitize") {
+        if name_lower.contains("validate")
+            || name_lower.contains("check")
+            || name_lower.contains("verify")
+            || name_lower.contains("sanitize")
+        {
             tags.push("validation".to_string());
         }
 
         // Error handling
-        if name_lower.contains("error") || name_lower.contains("exception") ||
-            name_lower.contains("handle") && (doc_lower.contains("error") || doc_lower.contains("exception")) {
+        if name_lower.contains("error")
+            || name_lower.contains("exception")
+            || name_lower.contains("handle")
+                && (doc_lower.contains("error") || doc_lower.contains("exception"))
+        {
             tags.push("error-handling".to_string());
         }
 
@@ -1087,21 +1198,29 @@ impl PythonParser {
         }
 
         // File I/O
-        if name_lower.contains("read") || name_lower.contains("write") ||
-            name_lower.contains("file") || name_lower.contains("open") ||
-            name_lower.contains("load") {
+        if name_lower.contains("read")
+            || name_lower.contains("write")
+            || name_lower.contains("file")
+            || name_lower.contains("open")
+            || name_lower.contains("load")
+        {
             tags.push("file-io".to_string());
         }
 
         // Network
-        if name_lower.contains("socket") || name_lower.contains("connect") ||
-            name_lower.contains("request") || name_lower.contains("response") {
+        if name_lower.contains("socket")
+            || name_lower.contains("connect")
+            || name_lower.contains("request")
+            || name_lower.contains("response")
+        {
             tags.push("network".to_string());
         }
 
         // Configuration
-        if name_lower.contains("config") || name_lower.contains("setting") ||
-            name_lower.contains("option") {
+        if name_lower.contains("config")
+            || name_lower.contains("setting")
+            || name_lower.contains("option")
+        {
             tags.push("configuration".to_string());
         }
 
@@ -1121,8 +1240,11 @@ impl PythonParser {
         }
 
         // Async/Await
-        if calls.iter().any(|c| c.callee.contains("await") || c.callee.contains("async")) ||
-            name_lower.contains("async") {
+        if calls
+            .iter()
+            .any(|c| c.callee.contains("await") || c.callee.contains("async"))
+            || name_lower.contains("async")
+        {
             tags.push("async".to_string());
             tags.push("coroutine".to_string());
         }
@@ -1138,10 +1260,16 @@ impl PythonParser {
                 "__enter__" | "__exit__" => tags.push("context-manager".to_string()),
                 "__call__" => tags.push("callable".to_string()),
                 "__iter__" | "__next__" => tags.push("iterator".to_string()),
-                "__getitem__" | "__setitem__" | "__delitem__" => tags.push("subscriptable".to_string()),
+                "__getitem__" | "__setitem__" | "__delitem__" => {
+                    tags.push("subscriptable".to_string())
+                }
                 "__len__" => tags.push("sized".to_string()),
-                "__eq__" | "__ne__" | "__lt__" | "__le__" | "__gt__" | "__ge__" => tags.push("comparison".to_string()),
-                "__add__" | "__sub__" | "__mul__" | "__div__" => tags.push("arithmetic".to_string()),
+                "__eq__" | "__ne__" | "__lt__" | "__le__" | "__gt__" | "__ge__" => {
+                    tags.push("comparison".to_string())
+                }
+                "__add__" | "__sub__" | "__mul__" | "__div__" => {
+                    tags.push("arithmetic".to_string())
+                }
                 _ => {}
             }
         }
@@ -1160,13 +1288,19 @@ impl PythonParser {
         }
 
         // Threading
-        if calls.iter().any(|c| c.callee.contains("Thread") || c.callee.contains("threading")) {
+        if calls
+            .iter()
+            .any(|c| c.callee.contains("Thread") || c.callee.contains("threading"))
+        {
             tags.push("threading".to_string());
             tags.push("concurrent".to_string());
         }
 
         // Multiprocessing
-        if calls.iter().any(|c| c.callee.contains("Process") || c.callee.contains("multiprocessing")) {
+        if calls
+            .iter()
+            .any(|c| c.callee.contains("Process") || c.callee.contains("multiprocessing"))
+        {
             tags.push("multiprocessing".to_string());
             tags.push("concurrent".to_string());
         }
@@ -1200,7 +1334,10 @@ impl PythonParser {
         }
 
         // Public API functions (decorated)
-        if decorators.iter().any(|d| d.contains("route") || d.contains("api") || d.contains("endpoint")) {
+        if decorators
+            .iter()
+            .any(|d| d.contains("route") || d.contains("api") || d.contains("endpoint"))
+        {
             score += 0.2;
         }
 
