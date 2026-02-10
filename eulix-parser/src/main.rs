@@ -40,10 +40,12 @@ impl ParseStats {
     }
 }
 
-/// Fast multi-language code parser
 #[derive(Parser, Debug)]
-#[command(name = "eulix_parser")]
-#[command(about = "Fast multi-language code parser", long_about = None)]
+#[command(
+    name = "eulix_parser",
+    version = env!("CARGO_PKG_VERSION"),
+    about = "Fast multi-language code parser"
+)]
 struct Args {
     /// Project root directory
     #[arg(short, long)]
