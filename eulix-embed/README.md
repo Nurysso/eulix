@@ -1,5 +1,5 @@
 # Eulix Embed
-Eulix_Embed is a Rust-based knowledge base embedding generator that processes json created by [eulix_parser](https://github.com/Aelune/eulix/tree/main/eulix-parser) into semantic vector embeddings. It analyzes code structure, creates chunks, generates embeddings using ONNX models, and builds searchable indices for code understanding and retrieval.
+Eulix_Embed is a Rust-based knowledge base embedding generator that processes json created by [eulix_parser](https://github.com/nurysso/eulix/tree/main/eulix-parser) into semantic vector embeddings. It analyzes code structure, creates chunks, generates embeddings using ONNX models, and builds searchable indices for code understanding and retrieval.
 
 ## Architecture
 
@@ -38,7 +38,7 @@ Eulix_Embed is a Rust-based knowledge base embedding generator that processes js
 ### Build from Source
 
 ```bash
-git clone https://github.com/Aelune/eulix
+git clone https://github.com/nurysso/eulix
 cd eulix/eulix_embed
 # for rocm
 cargo build --release --features rocm
