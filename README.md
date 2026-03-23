@@ -1,81 +1,210 @@
-# Eulix
+<div align="center">
 
-Eulix is a high-performance semantic code-intelligence system designed to analyze large codebases and generate rich, structured program knowledge. It provides fast code parsing, semantic extraction, and vector embeddings for search, navigation, and automated reasoning.
+<img src="docs/assets/logo.jpg" alt="Eulix" width="120" />
+
+**Semantic code intelligence for large codebases.**
+
+[![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/go-1.22+-00ADD8?logo=go)](https://go.dev)
+[![Rust](https://img.shields.io/badge/rust-stable-orange?logo=rust)](https://www.rust-lang.org)
+
+[Overview](#overview) · [Install](#installation) · [Usage](#usage) · [Docs](docs/) · [Benchmarks](#benchmarks)
+
+</div>
+
+---
+
+Eulix is a high-performance code-intelligence system that parses large codebases, extracts rich semantic data, and generates vector embeddings — enabling fast semantic search, call-graph navigation, and LLM-powered codebase reasoning.
+
+It ships as three focused binaries: a **Go CLI** for orchestration, a **Rust parser** for static analysis, and a **Rust embedder** for vector generation.
+
+```
+$ eulix analyze
+$ eulix chat
+> How does authentication flow through this codebase?
+```
+
+---
 
 ## Overview
 
-Eulix consists of three specialized binaries:
+| Component      | Language | Role                                                  |
+| -------------- | -------- | ----------------------------------------------------- |
+| `eulix`        | Go       | CLI — runs analyses, queries, config                  |
+| `eulix_parser` | Rust     | Static analyzer — symbols, call graphs, complexity    |
+| `eulix_embed`  | Rust     | Embedder — transformer models, CUDA/ROCm acceleration |
 
-* **CLI (Go):** User-facing command-line interface for running analyses, querying results, and managing configurations.
-* **Parser (Rust):** High-throughput static analyzer capable of processing ~9 million lines of code in under 40 seconds on a single thread.
-* **Embedder (Rust):** Vector-embedding generator built on *candle* and Hugging Face models, supporting both CUDA and ROCm acceleration.
+### What it extracts
 
-## Features
+- **Symbol index** — functions, classes, and their source locations
+- **Call graphs** — incoming and outgoing call relationships across files
+- **Docstrings & summaries** — extracted docstrings and synthesized descriptions
+- **Knowledge base** — control-flow structures, try/except blocks, cyclomatic complexity
 
-### Parsing and Semantic Extraction
+### Supported languages
 
-The parser produces detailed semantic data including:
+Python · Go · C
 
-* **Indexing:** Function, class, and symbol locations
-* **Call Graphs:** Incoming and outgoing call relationships
-* **Summaries:** Extracted docstrings and synthesized descriptions
-* **Knowledge Base:** Fine-grained semantic details such as control-flow structures, try/except blocks, and cyclomatic complexity
-* **Languages supported:** Python, Go, C
+---
 
-### Embedding Generation
+## Installation
 
-The embedder supports multiple transformer models:
+> **Prerequisites:** Go 1.22+, Rust stable, a Hugging Face account (for model downloads)
 
-* `sentence-transformers/all-MiniLM-L6-v2` (384d, fast)
-* `BAAI/bge-small-en-v1.5` (384d, strong performance)
-* `BAAI/bge-base-en-v1.5` (768d, higher quality)
-* `sentence-transformers/all-mpnet-base-v2` (768d, high quality)
+### Build from source
 
-Embeddings are generated using ONNX and downloaded via Hugging Face. Hardware acceleration is available for both CUDA and ROCm, with a dummy backend for testing and installation.
+```bash
+git clone https://github.com/nurysso/eulix
+cd eulix
 
-## Command Reference
+# Build the CLI
+go build -o eulix ./cmd/eulix
 
-### Main CLI (`eulix`)
+# Build the parser and embedder
+cargo build --release -p eulix_parser -p eulix_embed
+```
+
+For GPU acceleration, enable the appropriate feature flag:
+
+```bash
+# CUDA
+cargo build --release --features cuda -p eulix_embed
+
+# ROCm
+cargo build --release --features rocm -p eulix_embed
+```
+
+<!-- See [docs/install.md](docs/install.md) for full setup instructions including model downloads. -->
+
+---
+
+## Usage
+
+### Initialize a project
+
+```bash
+cd my-project
+eulix init
+```
+
+This creates a `.eulix/` config directory in your project root.
+
+### Analyze a codebase
+
+```bash
+eulix analyze
+```
+
+Runs the parser and embedder pipeline, producing a knowledge base and embeddings stored locally.
+
+### Chat with your codebase
+
+```bash
+eulix chat
+```
+
+Opens an interactive session backed by semantic search over your knowledge base.
+
+### Query history
+
+```bash
+eulix history
+```
+
+Browse past queries interactively.
+
+---
+
+## CLI Reference
+
+### `eulix`
 
 ```
-Available Commands:
+Commands:
+  init        Initialize eulix in current directory
   analyze     Analyze codebase and generate knowledge base
-  aspirine    Fix corrupted embeddings.bin and kb (testing utility)
-  cache       Manage cache entries
   chat        Start interactive chat interface
+  history     View query history interactively
+  cache       Manage cache entries
   config      Manage eulix configuration
   glados      Validate knowledge base and embeddings integrity
-  history     View query history interactively
-  init        Initialize eulix in current directory
+  aspirine    Fix corrupted embeddings.bin and kb (testing utility)
 ```
 
-### Parser (`eulix_parser`)
+### `eulix_parser`
 
-Fast multi-language code parser with parallel processing support. Key options:
+```
+Options:
+  -r, --root <ROOT>              Project root directory (required)
+  -o, --output <OUTPUT>          Output file for knowledge base
+  -t, --threads <THREADS>        Parsing threads (default: 4)
+  -l, --languages <LANGUAGES>    Languages to parse: "python,go,c" or "all"
+      --no-analyze               Skip analysis phase for faster parsing
+      --euignore <PATH>           Custom ignore file path
+```
 
-* `-r, --root <ROOT>`: Project root directory (required)
-* `-o, --output <OUTPUT>`: Output file for knowledge base
-* `-t, --threads <THREADS>`: Number of parsing threads (default: 4)
-* `-l, --languages <LANGUAGES>`: Languages to parse (comma-separated or "all")
-* `--no-analyze`: Skip analysis phase for faster parsing
-* `--euignore <PATH>`: Custom ignore file path
+### `eulix_embed`
 
-### Embedder (`eulix_embed`)
+```
+Commands:
+  embed    Generate embeddings for a knowledge base
+  query    Generate an embedding for a query string
 
-Generate and query vector embeddings:
+Options:
+  -m, --model <NAME>      HuggingFace model name or local path
+  -f, --format <FORMAT>   Output format: json | binary
+```
 
-**Commands:**
-* `embed`: Generate embeddings for knowledge base (default)
-* `query`: Generate embedding for a query string
+---
 
-**Common Options:**
-* `-m, --model <NAME>`: HuggingFace model name or local path
-* `-f, --format <FORMAT>`: Output format (json or binary)
+## Embedding Models
 
-## Current Limitations
+Eulix supports the following transformer models out of the box, downloaded via Hugging Face:
 
-* Context window creation performs well in most cases but may struggle with certain function name patterns
+| Model                                     | Dimensions | Notes              |
+| ----------------------------------------- | ---------- | ------------------ |
+| `sentence-transformers/all-MiniLM-L6-v2`  | 384d       | Fast, lightweight  |
+| `BAAI/bge-small-en-v1.5`                  | 384d       | Strong performance |
+| `BAAI/bge-base-en-v1.5`                   | 768d       | Higher quality     |
+| `sentence-transformers/all-mpnet-base-v2` | 768d       | High quality       |
 
-## Documentation and Benchmarks
+All models run via ONNX. A dummy backend is available for testing and CI environments without GPU support.
 
-Comprehensive documentation and performance benchmarks will be added soon. The system is currently in active testing.
+---
+
+## Benchmarks
+
+> Full benchmark tables and methodology are in [docs/eulixparser](docs/eulix-parser/benchmark.md) and [docs/eulixembed](docs/eulix-embed/benchmark.md).
+
+**Parser** — ~9 million lines of code in under 40 seconds on a single thread. Scales linearly with `-t` (threads).
+
+**Embedder** — performance varies by model and hardware. CUDA and ROCm backends provide significant throughput gains over CPU for large codebases.
+
+---
+
+## Limitations
+
+- Context window creation may struggle with certain function name patterns in edge cases
+
+These are tracked and being addressed. See [docs/](docs/) for details.
+
+---
+
+## Documentation
+
+Full documentation lives in [`docs/`](docs/):
+
+- [Installation & Setup](docs/install.md)
+- [Configuration](docs/config.md)
+- [Parser Benchmarks](docs/eulix-parser/benchmark.md)
+- [Embedder Benchmarks](docs/eulix-embed/benchmark.md)
+
+---
+
+## Contributing
+
+Contributions are welcome. Please open an issue before submiting a pull request for significant changes.
+
+---
+
+## [LICENSE](LICENSE).
