@@ -408,8 +408,8 @@ fn main() -> Result<()> {
     }
 
     if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
-        println!("0.1.3");
-        std::process::exit(0);
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
     }
 
     // Determine command (default to "embed" for backward compatibility)

@@ -3,7 +3,7 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::path::PathBuf;
 
@@ -34,7 +34,7 @@ impl std::str::FromStr for EmbeddingBackend {
             "onnx-cpu" | "cpu" => Ok(Self::OnnxCpu),
             "onnx" | "auto" => Ok(Self::auto_detect()),
             "dummy" | "test" => Ok(Self::Dummy),
-            _ => Err(anyhow!(
+            _ => Err(anyhow::anyhow!(
                 "Unknown backend: {}. Options: auto, cuda, rocm, cpu, dummy",
                 s
             )),
@@ -43,17 +43,14 @@ impl std::str::FromStr for EmbeddingBackend {
 }
 
 impl EmbeddingBackend {
-    /// Auto-detect the best available backend
     pub fn auto_detect() -> Self {
         println!("  Auto-detecting GPU backend...");
 
-        // Check for CUDA
         if Self::is_cuda_available() {
             println!("  ✓ NVIDIA GPU detected - using CUDA acceleration");
             return Self::OnnxCuda;
         }
 
-        // Check for ROCm
         if Self::is_rocm_available() {
             println!("  ✓ AMD GPU detected - using ROCm acceleration");
             return Self::OnnxRocm;
@@ -65,12 +62,9 @@ impl EmbeddingBackend {
     }
 
     fn is_cuda_available() -> bool {
-        // Check multiple indicators for CUDA availability
         if std::env::var("CUDA_PATH").is_ok() || std::env::var("CUDA_HOME").is_ok() {
             return true;
         }
-
-        // Common CUDA installation paths
         let cuda_paths = [
             "/usr/local/cuda",
             "/usr/local/cuda-12",
@@ -78,41 +72,30 @@ impl EmbeddingBackend {
             "/opt/cuda",
             "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA",
         ];
-
         for path in &cuda_paths {
             if std::path::Path::new(path).exists() {
                 return true;
             }
         }
-
-        // Check if nvidia-smi is available
         if let Ok(output) = std::process::Command::new("nvidia-smi").output() {
             return output.status.success();
         }
-
         false
     }
 
     fn is_rocm_available() -> bool {
-        // Check for ROCm installation
         if std::env::var("ROCM_PATH").is_ok() || std::env::var("ROCM_HOME").is_ok() {
             return true;
         }
-
-        // Common ROCm installation paths
         let rocm_paths = ["/opt/rocm", "/opt/rocm-5", "/opt/rocm-6"];
-
         for path in &rocm_paths {
             if std::path::Path::new(path).exists() {
                 return true;
             }
         }
-
-        // Check if rocm-smi is available
         if let Ok(output) = std::process::Command::new("rocm-smi").output() {
             return output.status.success();
         }
-
         false
     }
 
@@ -126,7 +109,6 @@ impl EmbeddingBackend {
     }
 }
 
-/// Configuration for the embedding generator
 pub struct EmbedderConfig {
     pub backend: EmbeddingBackend,
     pub model_name: String,
@@ -139,13 +121,14 @@ pub struct EmbedderConfig {
 impl Default for EmbedderConfig {
     fn default() -> Self {
         let backend = EmbeddingBackend::auto_detect();
-        // Use larger batch size for GPU backends
         let batch_size = match backend {
-            EmbeddingBackend::OnnxCuda | EmbeddingBackend::OnnxRocm => 128,
+            EmbeddingBackend::OnnxCuda => 128,
+            // ROCm has higher per-batch overhead than CUDA; smaller batches
+            // reduce padding waste and keep latency tighter.
+            EmbeddingBackend::OnnxRocm => 32,
             EmbeddingBackend::OnnxCpu => 32,
             EmbeddingBackend::Dummy => 32,
         };
-
         Self {
             backend,
             model_name: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
@@ -163,7 +146,6 @@ pub struct EmbeddingGenerator {
 }
 
 impl EmbeddingGenerator {
-    /// Create a new embedding generator with auto-detected backend
     pub fn new(model_name: &str) -> Result<Self> {
         let config = EmbedderConfig {
             model_name: model_name.to_string(),
@@ -172,7 +154,6 @@ impl EmbeddingGenerator {
         Self::with_config(config)
     }
 
-    /// Create with explicit configuration
     pub fn with_config(config: EmbedderConfig) -> Result<Self> {
         println!("     Initializing embedding generator:");
         println!("     Backend: {}", config.backend.description());
@@ -194,7 +175,6 @@ impl EmbeddingGenerator {
         })
     }
 
-    /// Try to create ONNX backend with fallback to dummy
     fn try_create_onnx_backend(
         config: &EmbedderConfig,
         device_type: DeviceType,
@@ -215,45 +195,39 @@ impl EmbeddingGenerator {
                 eprintln!("    4. Try CPU backend: --backend cpu");
                 eprintln!("    5. Use dummy backend: --backend dummy");
                 eprintln!("\n    Falling back to dummy embeddings for now...\n");
-
                 Ok(Box::new(DummyBackend::new(config)))
             }
         }
     }
 
+    /// Single-embed sequential path. Faster than batched inference on a single
+    /// ROCm/CUDA session because each call uses the exact sequence length with
+    /// zero padding. Batching only wins with a session pool (multiple concurrent
+    /// ONNX sessions), which is a TODO for a future refactor.
     pub fn generate_vectors(&self, chunks: Vec<Chunk>) -> Result<VectorStore> {
         let total = chunks.len();
         let mut store = VectorStore::new();
 
-        println!(" Processing {} chunks in batches...", total);
+        println!(" Processing {} chunks...", total);
         let start = std::time::Instant::now();
 
-        let batch_size = self.config.batch_size;
-
-        for (batch_idx, chunk_batch) in chunks.chunks(batch_size).enumerate() {
-            let batch_start = batch_idx * batch_size;
-
-            if batch_start % 100 == 0 && batch_start > 0 {
+        for (i, chunk) in chunks.iter().enumerate() {
+            if i > 0 && i % 100 == 0 {
                 let elapsed = start.elapsed().as_secs_f32();
-                let rate = batch_start as f32 / elapsed;
-                let eta = ((total - batch_start) as f32 / rate).round();
+                let rate = i as f32 / elapsed;
+                let eta = ((total - i) as f32 / rate).round();
                 println!(
                     "     Progress: {}/{} ({:.1} chunks/sec, ETA: {:.0}s)",
-                    batch_start, total, rate, eta
+                    i, total, rate, eta
                 );
             }
 
-            for chunk in chunk_batch {
-                let embedding = self
-                    .backend_impl
-                    .generate_embedding(&chunk.content)
-                    .context(format!(
-                        "Failed to generate embedding for chunk: {}",
-                        chunk.id
-                    ))?;
+            let embedding = self
+                .backend_impl
+                .generate_embedding(&chunk.content)
+                .with_context(|| format!("Failed to embed chunk: {}", chunk.id))?;
 
-                store.add(chunk.id.clone(), embedding);
-            }
+            store.add(chunk.id.clone(), embedding);
         }
 
         let elapsed = start.elapsed();
@@ -269,32 +243,29 @@ impl EmbeddingGenerator {
         Ok(store)
     }
 
-    /// Parallel processing version (for CPU/multi-GPU scenarios)
+    /// FIX 2: parallel path now propagates errors instead of panicking via .expect().
+    /// Each thread returns a Result; failures are collected and the first one surfaced.
+    /// Note: inference still serializes on the session Mutex — true parallelism here
+    /// requires a session pool, which is a larger refactor.
     pub fn generate_vectors_parallel(&self, chunks: Vec<Chunk>) -> Result<VectorStore> {
         let total = chunks.len();
-        let mut store = VectorStore::new();
 
         println!(" Processing {} chunks in parallel...", total);
         let start = std::time::Instant::now();
 
-        let results: Vec<(String, Vec<f32>)> = chunks
+        let results: Vec<Result<(String, Vec<f32>)>> = chunks
             .into_par_iter()
-            .enumerate()
-            .map(|(idx, chunk)| {
-                if idx % 100 == 0 && idx > 0 {
-                    let elapsed = start.elapsed().as_secs_f32();
-                    let rate = idx as f32 / elapsed;
-                    println!("     Progress: {}/{} ({:.1} chunks/sec)", idx, total, rate);
-                }
-
+            .map(|chunk| {
                 let embedding = self
                     .backend_impl
                     .generate_embedding(&chunk.content)
-                    .expect("Failed to generate embedding");
-
-                (chunk.id, embedding)
+                    .with_context(|| format!("Failed to embed chunk: {}", chunk.id))?;
+                Ok((chunk.id, embedding))
             })
             .collect();
+
+        // Surface the first error, if any.
+        let pairs: Vec<(String, Vec<f32>)> = results.into_iter().collect::<Result<Vec<_>>>()?;
 
         let elapsed = start.elapsed();
         println!(
@@ -306,7 +277,8 @@ impl EmbeddingGenerator {
             total as f32 / elapsed.as_secs_f32()
         );
 
-        for (id, vector) in results {
+        let mut store = VectorStore::new();
+        for (id, vector) in pairs {
             store.add(id, vector);
         }
 
@@ -326,9 +298,13 @@ impl EmbeddingGenerator {
     }
 }
 
-/// Trait for different embedding backends
 trait EmbeddingBackendTrait {
     fn generate_embedding(&self, text: &str) -> Result<Vec<f32>>;
+    /// Batch variant — default impl falls back to calling generate_embedding per item.
+    /// Real backends should override this with a true batched call.
+    fn generate_embeddings_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        texts.iter().map(|t| self.generate_embedding(t)).collect()
+    }
     fn dimension(&self) -> usize;
 }
 
@@ -337,12 +313,17 @@ impl EmbeddingBackendTrait for OnnxBackend {
         self.generate_embedding(text)
     }
 
+    /// Delegates to the real batched ONNX call in onnx_backend.rs.
+    fn generate_embeddings_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        self.generate_embeddings_batch(texts)
+    }
+
     fn dimension(&self) -> usize {
         self.dimension()
     }
 }
 
-// Dummy Backend (for testing)
+// Dummy Backend
 struct DummyBackend {
     dimension: usize,
     normalize: bool,
@@ -370,20 +351,22 @@ impl EmbeddingBackendTrait for DummyBackend {
     }
 }
 
-// Helper Functions
+/// FIX 3: replaced DefaultHasher (non-deterministic across Rust versions/processes)
+/// with a simple seeded LCG so dummy vectors are stable for regression testing.
 fn dummy_embedding(text: &str, dimension: usize, normalize: bool) -> Vec<f32> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    text.hash(&mut hasher);
-    let hash = hasher.finish();
+    // Stable FNV-1a seed from the input text.
+    let mut seed: u64 = 0xcbf29ce484222325;
+    for byte in text.bytes() {
+        seed ^= byte as u64;
+        seed = seed.wrapping_mul(0x100000001b3);
+    }
 
     let mut embedding = Vec::with_capacity(dimension);
-    let mut seed = hash;
-
     for _ in 0..dimension {
-        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        // Park-Miller LCG — cheap, portable, stable.
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let normalized = (seed as f32 / u64::MAX as f32) * 2.0 - 1.0;
         embedding.push(normalized);
     }
@@ -410,16 +393,33 @@ mod tests {
     fn test_dummy_backend() {
         let config = EmbedderConfig::default();
         let backend = DummyBackend::new(&config);
-
         let embedding = backend.generate_embedding("test").unwrap();
         assert_eq!(embedding.len(), 384);
+    }
+
+    #[test]
+    fn test_dummy_determinism() {
+        // Vectors must be identical across calls — the whole point of the FNV fix.
+        let config = EmbedderConfig::default();
+        let backend = DummyBackend::new(&config);
+        let a = backend.generate_embedding("hello world").unwrap();
+        let b = backend.generate_embedding("hello world").unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_dummy_distinct() {
+        let config = EmbedderConfig::default();
+        let backend = DummyBackend::new(&config);
+        let a = backend.generate_embedding("foo").unwrap();
+        let b = backend.generate_embedding("bar").unwrap();
+        assert_ne!(a, b);
     }
 
     #[test]
     fn test_normalization() {
         let mut vec = vec![3.0, 4.0];
         normalize_vector(&mut vec);
-
         let magnitude: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!((magnitude - 1.0).abs() < 1e-6);
     }
