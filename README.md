@@ -2,7 +2,7 @@
 
 <img src="docs/assets/logo.jpg" alt="Eulix" width="120" />
 
-**Semantic code intelligence for large codebases.**
+**Local-first code intelligence for large codebases.**
 
 [![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/go-1.22+-00ADD8?logo=go)](https://go.dev)
@@ -14,36 +14,51 @@
 
 ---
 
-Eulix is a high-performance code-intelligence system that parses large codebases, extracts rich semantic data, and generates vector embeddings — enabling fast semantic search, call-graph navigation, and LLM-powered codebase reasoning.
+Eulix is a **local-first code intelligence system** designed to provide deep reasoning over massive repositories without compromising privacy or speed.
 
-It ships as three focused binaries: a **Go CLI** for orchestration, a **Rust parser** for static analysis, and a **Rust embedder** for vector generation.
-
-```
-$ eulix analyze
-$ eulix chat
-> How does authentication flow through this codebase?
-```
+It orchestrates a high-performance pipeline of **Go** and **Rust** to bridge the gap between raw static analysis and LLM-powered insights. By combining a multi-layer retrieval strategy with rigorous anti-hallucination prompting, Eulix ensures that codebase answers are grounded in your actual source code.
 
 ---
 
 ## Overview
 
-| Component      | Language | Role                                                  |
-| -------------- | -------- | ----------------------------------------------------- |
-| `eulix`        | Go       | CLI — runs analyses, queries, config                  |
-| `eulix_parser` | Rust     | Static analyzer — symbols, call graphs, complexity    |
-| `eulix_embed`  | Rust     | Embedder — transformer models, CUDA/ROCm acceleration |
+Eulix operates as three focused binaries that work in concert:
 
-### What it extracts
+| Component      | Language | Role                                                                                               |
+| -------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `eulix`        | Go       | **Orchestrator** — Manages the CLI, config, and the RAG pipeline                                   |
+| `eulix_parser` | Rust     | **Static Analyzer** — Extracts symbols, call graphs, and complexity                                |
+| `eulix_embed`  | Rust     | **Embedder** — Runs transformer models via ONNX with GPU acceleration(supports both rocm and cuda) |
 
-- **Symbol index** — functions, classes, and their source locations
-- **Call graphs** — incoming and outgoing call relationships across files
-- **Docstrings & summaries** — extracted docstrings and synthesized descriptions
-- **Knowledge base** — control-flow structures, try/except blocks, cyclomatic complexity
+### Smart Multi-Layer Retrieval
+
+Unlike simple RAG tools, Eulix uses a tiered retrieval pipeline to find the most relevant context before hitting an LLM:
+
+1.  **Symbol Lookup:** Precision matching for functions, classes, and variables.
+2.  **Keyword Search:** Traditional lexical matching for specific terms.
+3.  **Semantic Vector Search:** Deep contextual matching using local embeddings.
+4.  **Call-Graph Expansion:** Traverses relationships to pull in relevant upstream/downstream logic.
+
+### Reliable Reasoning
+
+Eulix is built with an **anti-hallucination discipline**. Our prompts are architected to force the model to cite its sources and strictly adhere to the provided context, minimizing "invented" logic or APIs.
+
+---
+
+## Features
+
+- **Symbol Indexing** — Comprehensive mapping of functions, classes, and source locations.
+- **Advanced Call Graphs** — Maps incoming and outgoing relationships across the entire project.
+- **Knowledge Base** — Captures control-flow structures, error handling blocks, and cyclomatic complexity.
+- **Local-First** — All parsing and embedding happens on your machine. No code leaves your infrastructure.
+- **High Performance** — Rust-powered backend capable of parsing millions of lines in seconds.
 
 ### Supported languages
 
 Python · Go · C
+
+> [!NOTE]
+> rust · Typecript · C++ will be supported soon
 
 ---
 
@@ -55,156 +70,118 @@ Python · Go · C
 
 ```bash
 git clone https://github.com/nurysso/eulix
-cd eulix
+cd eulix && make install
 
+# Or you can do this if you want to test each bin
 # Build the CLI
 go build -o eulix ./cmd/eulix
 
-# Build the parser and embedder
-cargo build --release -p eulix_parser -p eulix_embed
+# Build the parser
+cd eulix-parser && cargo build --release
+
+# Build embedder
+# Go back to root of the project and
+cd eulix-embed && cargo build --release --feature rocm
+# use cuda instead of rocm if you have nvidia gpu
+
+# try make help for other usefull commands during building or installing
 ```
-
-For GPU acceleration, enable the appropriate feature flag:
-
-```bash
-# CUDA
-cargo build --release --features cuda -p eulix_embed
-
-# ROCm
-cargo build --release --features rocm -p eulix_embed
-```
-
-<!-- See [docs/install.md](docs/install.md) for full setup instructions including model downloads. -->
 
 ---
 
 ## Usage
 
-### Initialize a project
+### 1\. Initialize a project
 
 ```bash
 cd my-project
 eulix init
 ```
 
-This creates a `.eulix/` config directory in your project root.
-
-### Analyze a codebase
+### 2\. Analyze the codebase
 
 ```bash
 eulix analyze
 ```
 
-Runs the parser and embedder pipeline, producing a knowledge base and embeddings stored locally.
+This triggers the parser and embedding pipeline, generating a `.eulix` folder which will be used as knowledge base for llm.
 
-### Chat with your codebase
+### 3\. Chat with your code
 
 ```bash
 eulix chat
 ```
 
-Opens an interactive session backed by semantic search over your knowledge base.
-
-### Query history
-
-```bash
-eulix history
-```
-
-Browse past queries interactively.
+Open's an interactive session to query your codebase using the multi-layer retrieval pipeline.
 
 ---
 
 ## CLI Reference
 
-### `eulix`
+### `eulix` (Go)
 
-```
-Commands:
-  init        Initialize eulix in current directory
-  analyze     Analyze codebase and generate knowledge base
-  chat        Start interactive chat interface
-  history     View query history interactively
-  cache       Manage cache entries
-  config      Manage eulix configuration
-  glados      Validate knowledge base and embeddings integrity
-  aspirine    Fix corrupted embeddings.bin and kb (testing utility)
-```
+The main entry point for orchestration.
 
-### `eulix_parser`
+- ` init` : Initialize eulix in current directory
+- ` analyze` : Analyze codebase and generate knowledge base
+- ` chat` : Start interactive chat interface
+- ` cache` : Manage cache entries
+- ` config` : Manage eulix configuration
+- ` history` : View query history interactively
+- ` version` : Displays version of eulix and eulix_parser, eulix_embed
+- ` glados` : Checks for errors in knowledge base and embeddings size
+- ` aspirine` : tries to fix embedings.bin and kb MEANT TO BE USED IN TEST
 
-```
-Options:
-  -r, --root <ROOT>              Project root directory (required)
-  -o, --output <OUTPUT>          Output file for knowledge base
-  -t, --threads <THREADS>        Parsing threads (default: 4)
-  -l, --languages <LANGUAGES>    Languages to parse: "python,go,c" or "all"
-      --no-analyze               Skip analysis phase for faster parsing
-      --euignore <PATH>           Custom ignore file path
-```
+### `eulix_parser` (Rust)
 
-### `eulix_embed`
+Fast static analysis tool.
 
-```
-Commands:
-  embed    Generate embeddings for a knowledge base
-  query    Generate an embedding for a query string
+- `-r, --root` : Project root directory
+- `-v, --ver` : parser version
+- `-o, --output` : Output file for knowledge base [default: knowledge_base.json]
+- `-t, --threads` : Number of threads for parallel parsing [default: 4]
+- `-v, --verbose` : Verbose output
+- `-l, --languages` : Languages to parse (comma-separated, or "all") [default: all]
+- `--no-analyze` : Skip analysis phase (faster, only parse files)
+- `--euignore` : Path to custom .euignore file (defaults to <root>/.euignore)
+- `  -h, --help` : Print help
+- `  -V, --version` : Print version
 
-Options:
-  -m, --model <NAME>      HuggingFace model name or local path
-  -f, --format <FORMAT>   Output format: json | binary
-```
+### `eulix_embed` (Rust)
 
----
+Vector generation via ONNX. Supports `sentence-transformers/all-MiniLM-L6-v2`, `BAAI/bge-small-en-v1.5`, `BAAI/bge-base-en-v1.5`, and more. Native CUDA/ROCm support for high-throughput embedding.
+eulix_embed [COMMAND] [OPTIONS]
 
-## Embedding Models
+COMMANDS:
 
-Eulix supports the following transformer models out of the box, downloaded via Hugging Face:
+- `embed` : Generate embeddings for knowledge base (default)
+- `query` : Generate embedding for a query string
 
-| Model                                     | Dimensions | Notes              |
-| ----------------------------------------- | ---------- | ------------------ |
-| `sentence-transformers/all-MiniLM-L6-v2`  | 384d       | Fast, lightweight  |
-| `BAAI/bge-small-en-v1.5`                  | 384d       | Strong performance |
-| `BAAI/bge-base-en-v1.5`                   | 768d       | Higher quality     |
-| `sentence-transformers/all-mpnet-base-v2` | 768d       | High quality       |
+EMBED OPTIONS:
 
-All models run via ONNX. A dummy backend is available for testing and CI environments without GPU support.
+- `-k, --kb-path` : Path to knowledge base JSON file
+- `-o, --output` : Output directory for embeddings
+- `-m, --model` : HuggingFace model name or local path
 
----
+QUERY OPTIONS:
 
-## Benchmarks
+- `-q, --query ` : Query text to embed
+- `-m, --model ` : HuggingFace model name or local path
+- `-f, --format` : Output format: json (default) or binary
 
-> Full benchmark tables and methodology are in [docs/eulixparser](docs/eulix-parser/benchmark.md) and [docs/eulixembed](docs/eulix-embed/benchmark.md).
+- `-h, --help` : Show this help message
+- `-v, --version` : Show version
 
-**Parser** — ~9 million lines of code in under 40 seconds on a single thread. Scales linearly with `-t` (threads).
+> Benchmarks will be added in docs soon.
 
-**Embedder** — performance varies by model and hardware. CUDA and ROCm backends provide significant throughput gains over CPU for large codebases.
+<!-- **Parser:** Handles \~9 million lines of code in under 40 seconds on a single thread. Scales linearly with additional cores.
 
----
-
-## Limitations
-
-- Context window creation may struggle with certain function name patterns in edge cases
-
-These are tracked and being addressed. See [docs/](docs/) for details.
-
----
-
-## Documentation
-
-Full documentation lives in [`docs/`](docs/):
-
-- [Installation & Setup](docs/install.md)
-- [Configuration](docs/config.md)
-- [Parser Benchmarks](docs/eulix-parser/benchmark.md)
-- [Embedder Benchmarks](docs/eulix-embed/benchmark.md)
-
----
+**Embedder:** Optimized for local inference via ONNX Runtime, significantly outperforming Python-based embedding scripts on the same hardware. -->
 
 ## Contributing
 
-Contributions are welcome. Please open an issue before submiting a pull request for significant changes.
+Contributions are welcome. Please open an issue before submitting a pull request for significant changes.
 
 ---
 
-## [LICENSE](LICENSE).
+## [LICENSE](LICENSE)
