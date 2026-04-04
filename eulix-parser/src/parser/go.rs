@@ -1078,6 +1078,7 @@ impl GoParser {
     }
 }
 
+/// Entry point called from main.rs
 pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
