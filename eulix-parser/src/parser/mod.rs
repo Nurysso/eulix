@@ -4,6 +4,9 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 pub mod analyze;
 pub mod c;
+pub mod cpp;
 pub mod go;
 pub mod language;
 pub mod python;
+pub mod rust;
+pub mod typescript;

@@ -18,9 +18,12 @@ mod utils;
 use kb::types::*;
 use parser::analyze::Analyzer;
 use parser::c;
+use parser::cpp;
 use parser::go;
 use parser::language::Language;
 use parser::python;
+use parser::rust as rust_parser;
+use parser::typescript;
 use utils::file_walker::FileWalker;
 
 #[derive(Debug, Clone)]
@@ -44,8 +47,10 @@ impl ParseStats {
 #[command(
     name = "eulix_parser",
     version = env!("CARGO_PKG_VERSION"),
+    // disable_version_flag = true,
     about = "Fast multi-language code parser"
 )]
+
 struct Args {
     /// Project root directory
     #[arg(short, long)]
@@ -89,7 +94,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.verbose {
         println!("╔════════════════════════════════════════════════════════════════╗");
-        println!("║             EULIX PARSER - Code Analysis Tool                  ║");
+        println!("║             EULIX PARSER -                   ║");
+        let version = env!("CARGO_PKG_VERSION");
+        println!("║{:^64}║", format!("EULIX PARSER - v{}", version));
         println!("╚════════════════════════════════════════════════════════════════╝");
         println!();
         println!("Project Root:    {}", args.root);
@@ -357,7 +364,7 @@ fn parse_directory(
     }
 
     // Collect all source files based on language filter
-    let files = collect_source_files(&path, languages, verbose)?;
+    let files = collect_source_files(&path, languages, euignore.as_deref(), verbose)?;
 
     if verbose {
         println!("    Discovered {} source files", files.len());
@@ -433,7 +440,7 @@ fn parse_directory(
 
     let metadata = Metadata {
         project_name,
-        version: "1.0".to_string(),
+        version: chrono::Utc::now().format("%Y.%m.%d.%H%M%S").to_string(),
         parsed_at: chrono::Utc::now().to_rfc3339(),
         languages: languages_set.into_iter().collect(),
         total_files: structure.len(),
@@ -457,11 +464,10 @@ fn parse_directory(
     Ok((kb, final_stats))
 }
 
-#[allow(dead_code)]
 fn collect_source_files(
     root: &Path,
-    // euignore_path: Option<&Path>,
     languages: &str,
+    euignore_path: Option<&Path>,
     verbose: bool,
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let mut all_files = Vec::new();
@@ -470,6 +476,7 @@ fn collect_source_files(
     let lang_filters: Vec<Language> = if languages == "all" {
         vec![
             Language::C,
+            Language::Cpp,
             Language::Python,
             Language::JavaScript,
             Language::TypeScript,
@@ -481,7 +488,8 @@ fn collect_source_files(
             .split(',')
             .map(|s| s.trim())
             .filter_map(|lang_str| match lang_str.to_lowercase().as_str() {
-                "c" | "C" => Some(Language::C),
+                "c" => Some(Language::C),
+                "cpp" | "c++" | "cxx" => Some(Language::Cpp),
                 "python" | "py" => Some(Language::Python),
                 "javascript" | "js" => Some(Language::JavaScript),
                 "typescript" | "ts" => Some(Language::TypeScript),
@@ -501,10 +509,41 @@ fn collect_source_files(
         println!("    Searching for files...");
     }
 
-    // Use FileWalker for all languages
-    let walker = FileWalker::new(root.to_path_buf());
+    // Use FileWalker for all languages; thread through the custom euignore path if provided
+    let walker = if let Some(ignore_path) = euignore_path {
+        FileWalker::new(root.to_path_buf()).with_euignore(ignore_path.to_path_buf())
+    } else {
+        FileWalker::new(root.to_path_buf())
+    };
 
     for lang in &lang_filters {
+        // C++ uses multiple extensions — handle separately
+        if *lang == Language::Cpp {
+            let cpp_exts = ["cpp", "cc", "cxx", "hpp", "hxx"];
+            for ext in &cpp_exts {
+                let ext_str = *ext;
+                match walker.walk_files(|path| {
+                    path.extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e == ext_str)
+                        .unwrap_or(false)
+                }) {
+                    Ok(files) => {
+                        if verbose && !files.is_empty() {
+                            println!("      • Found {} .{} files", files.len(), ext_str);
+                        }
+                        all_files.extend(files);
+                    }
+                    Err(e) => {
+                        if verbose {
+                            eprintln!("        Failed to collect .{} files: {}", ext_str, e);
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
         let extension = match lang {
             Language::C => "c",
             Language::Python => "py",
@@ -560,7 +599,10 @@ fn parse_file(
             Ok((relative_path, file_data))
         }
         Language::JavaScript => Err("JavaScript parsing not yet implemented".into()),
-        Language::TypeScript => Err("TypeScript parsing not yet implemented".into()),
+        Language::TypeScript => {
+            let (_, file_data) = typescript::parse_file(file_path)?;
+            Ok((relative_path, file_data))
+        }
         Language::Go => {
             let (_, file_data) = go::parse_file(file_path)?;
             Ok((relative_path, file_data))
@@ -569,7 +611,14 @@ fn parse_file(
             let (_, file_data) = c::parse_file(file_path)?;
             Ok((relative_path, file_data))
         }
-        Language::Rust => Err("Rust parsing not yet implemented".into()),
+        Language::Cpp => {
+            let (_, file_data) = cpp::parse_file(file_path)?;
+            Ok((relative_path, file_data))
+        }
+        Language::Rust => {
+            let (_, file_data) = rust_parser::parse_file(file_path)?;
+            Ok((relative_path, file_data))
+        }
         _ => Err(format!("Unsupported language: {:?}", lang).into()),
     }
 }

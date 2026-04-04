@@ -9,11 +9,22 @@ use std::path::{Path, PathBuf};
 
 pub struct FileWalker {
     root: PathBuf,
+    /// Optional path to a custom .euignore file (overrides the default <root>/.euignore)
+    euignore_path: Option<PathBuf>,
 }
 
 impl FileWalker {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            euignore_path: None,
+        }
+    }
+
+    /// Use a custom .euignore path (from --euignore CLI flag) instead of the default
+    pub fn with_euignore(mut self, path: PathBuf) -> Self {
+        self.euignore_path = Some(path);
+        self
     }
 
     /// Generic walker that respects .euignore for any file extension
@@ -23,15 +34,19 @@ impl FileWalker {
     {
         let mut builder = WalkBuilder::new(&self.root);
 
-        // Only use .euignore, completely ignore .gitignore
+        // If a custom .euignore was provided, load it explicitly first
+        if let Some(ref custom_ignore) = self.euignore_path {
+            builder.add_ignore(custom_ignore);
+        }
+        // Always also honour any .euignore files found inside the tree
         builder.add_custom_ignore_filename(".euignore");
 
-        // Disable all gitignore support
+        // Disable all gitignore support so only .euignore governs exclusions
         builder.git_ignore(false);
         builder.git_global(false);
         builder.git_exclude(false);
 
-        // Standard ignored directories
+        // Hard-coded directories that are always excluded regardless of .euignore
         let ignored_dirs = [
             ".git",
             ".eulix",
@@ -54,7 +69,6 @@ impl FileWalker {
         builder.filter_entry(move |entry| {
             let path = entry.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
             let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
 
             if is_dir {
