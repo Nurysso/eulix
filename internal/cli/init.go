@@ -3,20 +3,107 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
+const (
+	eulixDir     = ".eulix"
+	euignorePath = ".euignore"
+	configPath   = "eulix.toml"
+)
 
+type initState struct {
+	hasConfig   bool
+	hasDir      bool
+	hasEuignore bool
+}
 
-func initializeProject() error {
-	// Create .eulix directory
-	eulixDir := ".eulix"
-	if err := os.MkdirAll(eulixDir, 0755); err != nil {
-		return fmt.Errorf("failed to create .eulix directory: %w", err)
+func checkInitState() initState {
+	s := initState{}
+	_, err := os.Stat(configPath)
+	s.hasConfig = err == nil
+	_, err = os.Stat(eulixDir)
+	s.hasDir = err == nil
+	_, err = os.Stat(euignorePath)
+	s.hasEuignore = err == nil
+	return s
+}
+
+func (s initState) fullyInitialized() bool {
+	return s.hasConfig && s.hasDir && s.hasEuignore
+}
+
+func (s initState) missing() []string {
+	var m []string
+	if !s.hasConfig {
+		m = append(m, configPath+" (configuration)")
+	}
+	if !s.hasDir {
+		m = append(m, eulixDir+"/ (knowledge base directory)")
+	}
+	if !s.hasEuignore {
+		m = append(m, euignorePath+" (ignore patterns)")
+	}
+	return m
+}
+
+// initializeProject accepts a force boolean and an optional list of specific
+// components to create (nil = create all missing).
+func initializeProject(force bool, targets []string) error {
+	state := checkInitState()
+
+	// --- Already fully initialized ---
+	if state.fullyInitialized() && !force {
+		fmt.Println("Eulix is already initialized.")
+		fmt.Println("\nUse --force / -f to reset and overwrite all files.")
+		return nil
 	}
 
-	// Create .euignore file
-	euignorePath := ".euignore"
-	if _, err := os.Stat(euignorePath); os.IsNotExist(err) {
+	// --- Partially initialized: warn and prompt ---
+	if !force && (state.hasConfig || state.hasDir || state.hasEuignore) {
+		missing := state.missing()
+		if len(missing) > 0 {
+			fmt.Println("Eulix is partially initialized. The following components are missing:")
+			for _, m := range missing {
+				fmt.Printf("  - %s\n", m)
+			}
+			fmt.Println("\nOptions:")
+			fmt.Println("  • Run 'eulix init --fix' to create only the missing components")
+			fmt.Println("  • Run 'eulix init --force' to reset and recreate everything")
+			return nil
+		}
+	}
+
+	// --- Determine what to write ---
+	writeAll := force || (!state.hasConfig && !state.hasDir && !state.hasEuignore)
+	shouldWrite := func(name string) bool {
+		if writeAll {
+			return true
+		}
+		// targets == nil means "fill in missing"
+		if targets == nil {
+			return true
+		}
+		for _, t := range targets {
+			if strings.EqualFold(t, name) {
+				return true
+			}
+		}
+		return false
+	}
+
+	var created []string
+
+	// 1. Knowledge base directory
+	if shouldWrite("dir") || !state.hasDir {
+		if err := os.MkdirAll(eulixDir, 0755); err != nil {
+			return fmt.Errorf("failed to create %s: %w", eulixDir, err)
+		}
+		created = append(created, fmt.Sprintf("  - %-20s (knowledge base directory)", eulixDir+"/"))
+	}
+
+	// 2. .euignore
+	if shouldWrite("euignore") || !state.hasEuignore {
 		defaultIgnore := `# Eulix ignore patterns
 node_modules/
 .git/
@@ -26,16 +113,17 @@ dist/
 test/
 build/
 `
-		if err := os.WriteFile(euignorePath, []byte(defaultIgnore), 0644); err != nil {
-			return fmt.Errorf("failed to create .euignore: %w", err)
+		if !state.hasEuignore || force {
+			if err := os.WriteFile(euignorePath, []byte(defaultIgnore), 0644); err != nil {
+				return fmt.Errorf("failed to create %s: %w", euignorePath, err)
+			}
+			created = append(created, fmt.Sprintf("  - %-20s (ignore patterns)", euignorePath))
 		}
 	}
 
-	// Create eulix.toml if it doesn't exist
-	configPath := "eulix.toml"
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	// 3. eulix.toml
+	if shouldWrite("config") || !state.hasConfig {
 		defaultConfig := `# Eulix Configuration
-
 [project]
 path = "."
 
@@ -46,47 +134,52 @@ threads = 4
 model = "BAAI/bge-small-en-v1.5"
 
 [llm]
-local = true
-provider = "ollama"
-model = "llama3.2:3b"
-max_tokens = 8192
+local       = true
+provider    = "ollama"
+model       = "llama3.2:3b"
+max_tokens  = 8192
 temperature = 0.7
-baseURL = "http://localhost:11434"
-
-# To use Anthropic Claude instead, change to:
-# local = false
-# provider = "anthropic"
-# model = "claude-3-5-sonnet-20241022"
-# api_key = ""  # or set ANTHROPIC_API_KEY environment variable
+baseURL     = "http://localhost:11434"
 
 [cache]
+
 [cache.redis]
-enabled = false
-url = "redis://localhost:6379"
+enabled  = false
+url      = "redis://localhost:6379"
 ttl_hours = 6
 
 [cache.sql]
 enabled = true
-driver = "sqlite"
-dsn = ".eulix/history.db"
+driver  = "sqlite"
+dsn     = ".eulix/history.db"
 
 [checksum]
-change_threshold = 0.10
+change_threshold       = 0.10
 force_reanalyze_threshold = 0.30
 `
-		if err := os.WriteFile(configPath, []byte(defaultConfig), 0644); err != nil {
-			return fmt.Errorf("failed to create config: %w", err)
+		if !state.hasConfig || force {
+			if err := os.WriteFile(configPath, []byte(defaultConfig), 0644); err != nil {
+				return fmt.Errorf("failed to create config: %w", err)
+			}
+			created = append(created, fmt.Sprintf("  - %-20s (configuration)", configPath))
 		}
 	}
 
-	fmt.Println("Eulix initialized successfully!")
-	fmt.Println()
-	fmt.Println("Created:")
-	fmt.Println("  - .eulix/       (knowledge base directory)")
-	fmt.Println("  - .euignore     (ignore patterns)")
-	fmt.Println("  - eulix.toml    (configuration)")
-	fmt.Println()
-	fmt.Println("Next steps:")
+	// --- Feedback ---
+	if force {
+		fmt.Println("Eulix configuration has been reset!")
+	} else {
+		fmt.Println("Eulix initialized successfully!")
+	}
+
+	if len(created) > 0 {
+		fmt.Println("\nCreated/Updated:")
+		for _, c := range created {
+			fmt.Println(c)
+		}
+	}
+
+	fmt.Println("\nNext steps:")
 	fmt.Println("  1. Edit eulix.toml to configure your setup")
 	fmt.Println("  2. Run 'eulix analyze' to analyze your codebase")
 	fmt.Println("  3. Run 'eulix chat' to start querying")
