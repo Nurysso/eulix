@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,6 +15,16 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+)
+
+const (
+	AppName    = "Eulix"
+	AppVersion = "v0.6.3"
+)
+
+var (
+	force bool
+	fix   bool
 )
 
 var rootCmd = &cobra.Command{
@@ -36,6 +47,26 @@ var analyzeCmd = &cobra.Command{
 		if err := analyzeProject("."); err != nil {
 			fmt.Fprintf(os.Stderr, "Analysis failed: %v\n", err)
 			os.Exit(1)
+		}
+	},
+}
+
+var versionCMD = &cobra.Command{
+	Use:   "version",
+	Short: "Displays version of eulix and eulix_parser, eulix_embed",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("%s: %s \n", AppName, AppVersion)
+
+		components := []string{"eulix_parser", "eulix_embed"}
+
+		for _, bin := range components {
+			output, err := runSubCommand(bin, "--version")
+			if err != nil {
+				fmt.Printf("%s: [Error] %v\n", bin, err)
+				continue
+			}
+			fmt.Printf("%s: %s", bin, output)
 		}
 	},
 }
@@ -108,10 +139,17 @@ var chatCmd = &cobra.Command{
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize eulix in current directory",
+	Short: "Initialize eulix in the current directory",
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := initializeProject(); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to initialize: %v\n", err)
+		// --fix: create only missing components, never overwrite existing ones
+		var targets []string
+		if fix && !force {
+			state := checkInitState()
+			targets = state.missing() // passes the human-readable names — adapt if needed
+		}
+
+		if err := initializeProject(force, targets); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 	},
@@ -416,70 +454,88 @@ func Execute() error {
 }
 
 func init() {
+	setupFlags()
+	setupCacheCommands()
+	disableDefaultHelp()
+	registerCommands()
+}
+
+func setupFlags() {
+	// init flags
+	initCmd.Flags().BoolVarP(&force, "force", "f", false, "Reset and overwrite all eulix files")
+	initCmd.Flags().BoolVar(&fix, "fix", false, "Create only missing components, keep existing ones")
+
 	// Aspirine flags
 	aspirineCmd.Flags().Bool("no-backup", false, "Don't backup existing embeddings.bin")
 	aspirineCmd.Flags().Bool("force", false, "Force rebuild even if validations fail")
 
-	// Cache list flags
+	// Cache flags
 	cacheListCmd.Flags().BoolP("verbose", "v", false, "Show detailed information")
-
-	// Cache clear flags
 	cacheClearCmd.Flags().BoolP("force", "f", false, "Skip confirmation prompt")
 
-	// History command flags
+	// History flags
 	historyCmd.Flags().Bool("tui", false, "Force interactive TUI mode (default)")
 	historyCmd.Flags().Bool("no-tui", false, "Use text output instead of TUI")
+}
 
-	// Add cache subcommands
-	cacheCmd.AddCommand(cacheListCmd)
-	cacheCmd.AddCommand(cacheStatsCmd)
-	cacheCmd.AddCommand(cacheClearCmd)
-	cacheCmd.AddCommand(cacheDeleteCmd)
-	cacheCmd.AddCommand(cacheCleanCmd)
+func setupCacheCommands() {
+	cacheCmd.AddCommand(
+		cacheListCmd,
+		cacheStatsCmd,
+		cacheClearCmd,
+		cacheDeleteCmd,
+		cacheCleanCmd,
+	)
+}
 
-	// Disable default help command
+func disableDefaultHelp() {
 	rootCmd.SetHelpCommand(&cobra.Command{
 		Use:    "no-help",
 		Hidden: true,
 	})
+}
 
-	// Add all commands to root
-	rootCmd.AddCommand(initCmd)
-	rootCmd.AddCommand(analyzeCmd)
-	rootCmd.AddCommand(chatCmd)
-	rootCmd.AddCommand(configCmd)
-	rootCmd.AddCommand(glaDOSCmd)
-	rootCmd.AddCommand(aspirineCmd)
-	rootCmd.AddCommand(cacheCmd)
-	rootCmd.AddCommand(historyCmd)
+func registerCommands() {
+	rootCmd.AddCommand(
+		versionCMD,
+		initCmd,
+		analyzeCmd,
+		chatCmd,
+		configCmd,
+		glaDOSCmd,
+		aspirineCmd,
+		cacheCmd,
+		historyCmd,
+	)
 }
 
 // Helper functions
 
+func runSubCommand(name string, arg string) (string, error) {
+	cmd := exec.Command(name, arg)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
 func checkInitialized() error {
-	eulixDir := ".eulix"
-	if _, err := os.Stat(eulixDir); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "\nEulix not initialized in this directory\n\n")
-		fmt.Fprintf(os.Stderr, "Please run: eulix init\n\n")
-		os.Exit(1)
+	state := checkInitState()
+
+	if state.fullyInitialized() {
+		return nil
 	}
 
-	euignorePath := ".euignore"
-	if _, err := os.Stat(euignorePath); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "\n.euignore file missing\n\n")
-		fmt.Fprintf(os.Stderr, "Please run: eulix init, or create a .euignore file similar to .gitignore\n\n")
-		os.Exit(1)
+	missing := state.missing()
+	fmt.Fprintf(os.Stderr, "\nEulix is not fully initialized. Missing:\n")
+	for _, m := range missing {
+		fmt.Fprintf(os.Stderr, "  - %s\n", m)
 	}
+	fmt.Fprintf(os.Stderr, "\nRun 'eulix init --fix' to restore missing files, or 'eulix init --force' to reset.\n\n")
+	os.Exit(1)
 
-	configPath := "eulix.toml"
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "\neulix.toml configuration file missing\n\n")
-		fmt.Fprintf(os.Stderr, "This file is required for eulix to run properly.\n")
-		fmt.Fprintf(os.Stderr, "Please run: eulix init\n\n")
-		os.Exit(1)
-	}
-
-	return nil
+	return nil // unreachable, satisfies compiler
 }
 
 func isInitialized() bool {
