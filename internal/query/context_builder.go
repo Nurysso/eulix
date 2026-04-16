@@ -26,10 +26,10 @@ const (
 
 func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Client) (*ContextBuilder, error) {
 	cb := &ContextBuilder{
-		eulixDir:   eulixDir,
-		config:     cfg,
-		llmClient:  llmClient,
-		vectorMap:  make(map[string]int),
+		eulixDir:  eulixDir,
+		config:    cfg,
+		llmClient: llmClient,
+		vectorMap: make(map[string]int),
 	}
 
 	// Initialize query embedder
@@ -60,10 +60,10 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	// Try to load call graph
 	cb.loadCallGraph()
 	if err := cb.loadKnowledgeBase(); err != nil {
-			cb.hasKB = false
-		} else {
-			cb.hasKB = true
-		}
+		cb.hasKB = false
+	} else {
+		cb.hasKB = true
+	}
 
 	return cb, nil
 }
@@ -161,16 +161,22 @@ func (cb *ContextBuilder) loadChunks() error {
 		tokens := len(embChunk.Content) / 4
 
 		cb.chunks[i] = Chunk{
-			ID:        embChunk.ID,
-			ChunkType: embChunk.ChunkType,
-			File:      embChunk.Metadata.FilePath,
-			StartLine: embChunk.Metadata.LineStart,
-			EndLine:   embChunk.Metadata.LineEnd,
-			Content:   embChunk.Content,
-			Tokens:    tokens,
-			Symbols:   symbols,
-			Name:      embChunk.Metadata.Name,
+			ID:         embChunk.ID,
+			ChunkType:  embChunk.ChunkType,
+			File:       embChunk.Metadata.FilePath,
+			StartLine:  embChunk.Metadata.LineStart,
+			EndLine:    embChunk.Metadata.LineEnd,
+			Content:    embChunk.Content,
+			Tokens:     tokens,
+			Symbols:    symbols,
+			Name:       embChunk.Metadata.Name,
 			Importance: calculateImportance(embChunk.ChunkType, embChunk.Metadata.Complexity),
+		}
+	}
+	cb.symbolIndex = make(map[string][]int)
+	for i, chunk := range cb.chunks {
+		for _, sym := range chunk.Symbols {
+			cb.symbolIndex[sym] = append(cb.symbolIndex[sym], i)
 		}
 	}
 
@@ -271,7 +277,6 @@ func (cb *ContextBuilder) loadCallGraph() {
 	cb.hasCallGraph = len(cb.callGraph) > 0
 }
 
-
 // CORE LOGIC
 
 // BuildContext is the key of the context window creation
@@ -322,17 +327,13 @@ func (cb *ContextBuilder) buildContextWithGraph(candidates []ScoredChunk, budget
 						continue
 					}
 
-					for _, chunk := range cb.chunks {
-						if contains(chunk.Symbols, rel.Target) {
-							if existing, exists := expanded[chunk.ID]; !exists || score > existing.Score {
-								expanded[chunk.ID] = ScoredChunk{
-									Chunk:    chunk,
-									Score:    score,
-									Distance: rel.Distance,
-									FromID:   candidate.ID,
-								}
+					for _, idx := range cb.symbolIndex[rel.Target] {
+						chunk := cb.chunks[idx]
+						if existing, exists := expanded[chunk.ID]; !exists || score > existing.Score {
+							expanded[chunk.ID] = ScoredChunk{
+								Chunk: chunk, Score: score,
+								Distance: rel.Distance, FromID: candidate.ID,
 							}
-							break
 						}
 					}
 				}
@@ -674,7 +675,7 @@ func (cb *ContextBuilder) expandFromKBFunction(fn KBFunction, filePath string, b
 
 // Search Functions
 
-//  Multi-strategy search with better identifier handling
+// Multi-strategy search with better identifier handling
 func (cb *ContextBuilder) multiStrategySearch(query string, topK int) []ScoredChunk {
 	allCandidates := make(map[string]ScoredChunk)
 
@@ -697,14 +698,7 @@ func (cb *ContextBuilder) multiStrategySearch(query string, topK int) []ScoredCh
 		}
 		allCandidates[match.ID] = match
 	}
-	allCandidates = make(map[string]ScoredChunk)
-
-	// Strategy 1: Exact symbol match (HIGHEST PRIORITY)
-	exactMatches = cb.exactSymbolSearch(query)
-	for _, match := range exactMatches {
-		match.MatchType = "exact"
-		allCandidates[match.ID] = match
-	}
+	// allCandidates = make(map[string]ScoredChunk)
 
 	// Strategy 2: Partial identifier match (split camelCase/snake_case)
 	partialMatches := cb.partialIdentifierMatch(query)
@@ -738,6 +732,7 @@ func (cb *ContextBuilder) multiStrategySearch(query string, topK int) []ScoredCh
 		if err == nil {
 			semanticMatches := cb.vectorSearch(queryEmbedding, topK, 0.5)
 			for _, match := range semanticMatches {
+				match.Score = match.Score * 20.0 // normalize 0-1 to 0-20
 				if existing, exists := allCandidates[match.ID]; exists {
 					// Combine scores
 					match.Score = existing.Score + match.Score*0.5
@@ -792,9 +787,9 @@ func (cb *ContextBuilder) exactSymbolSearch(query string) []ScoredChunk {
 			querySymbolLower := strings.ToLower(querySymbol)
 			if nameLower == querySymbolLower {
 				scored = append(scored, ScoredChunk{
-					Chunk:       chunk,
-					Score:       100.0,
-					Distance:    0,
+					Chunk:        chunk,
+					Score:        100.0,
+					Distance:     0,
 					MatchDetails: fmt.Sprintf("Exact match: %s", chunk.Name),
 				})
 				break
@@ -808,9 +803,9 @@ func (cb *ContextBuilder) exactSymbolSearch(query string) []ScoredChunk {
 				querySymbolLower := strings.ToLower(querySymbol)
 				if symbolLower == querySymbolLower {
 					scored = append(scored, ScoredChunk{
-						Chunk:       chunk,
-						Score:       90.0,
-						Distance:    0,
+						Chunk:        chunk,
+						Score:        90.0,
+						Distance:     0,
 						MatchDetails: fmt.Sprintf("Symbol match: %s", symbol),
 					})
 					break
@@ -881,7 +876,7 @@ func (cb *ContextBuilder) partialIdentifierMatch(query string) []ScoredChunk {
 			}
 		}
 
-		if matchCount >= 2 || (matchCount == 1 && totalScore > 15) {
+		if matchCount >= 2 || (matchCount == 1 && totalScore >= 15) {
 			key := chunk.ID
 			if !matchedChunks[key] {
 				matchedChunks[key] = true
@@ -1029,7 +1024,6 @@ func (cb *ContextBuilder) vectorSearch(queryEmb []float32, topK int, threshold f
 	return scored
 }
 
-
 // Chunker Management Utilities
 
 func (cb *ContextBuilder) selectChunks(scored []ScoredChunk, budget int) []Chunk {
@@ -1038,6 +1032,12 @@ func (cb *ContextBuilder) selectChunks(scored []ScoredChunk, budget int) []Chunk
 	headerOverhead := 20
 	coveredFiles := make(map[string]bool)
 
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].File != scored[j].File {
+			return scored[i].Score > scored[j].Score // different files: keep score order
+		}
+		return scored[i].StartLine < scored[j].StartLine // same file: sort by position
+	})
 	for _, sc := range scored {
 		chunkTokens := sc.Tokens + headerOverhead
 
@@ -1152,7 +1152,6 @@ func extractQueryKeywords(queryLower string) []string {
 	return keywords
 }
 
-
 // Helper Management Utilities
 
 // Split identifiers into tokens for matching
@@ -1183,7 +1182,7 @@ func splitIdentifierToTokens(s string) []string {
 	return tokens
 }
 
-//  Extract potential symbols from query with better tokenization
+// Extract potential symbols from query with better tokenization
 func extractPotentialSymbols(query string) []string {
 	symbols := make([]string, 0)
 	words := strings.Fields(query)
@@ -1285,15 +1284,15 @@ func mergeChunks(a, b Chunk) Chunk {
 	}
 
 	return Chunk{
-		ID:        a.ID,
-		ChunkType: a.ChunkType,
-		File:      a.File,
-		StartLine: startLine,
-		EndLine:   endLine,
-		Content:   content,
-		Tokens:    a.Tokens + b.Tokens,
-		Symbols:   symbols,
-		Name:      a.Name,
+		ID:         a.ID,
+		ChunkType:  a.ChunkType,
+		File:       a.File,
+		StartLine:  startLine,
+		EndLine:    endLine,
+		Content:    content,
+		Tokens:     a.Tokens + b.Tokens,
+		Symbols:    symbols,
+		Name:       a.Name,
 		Importance: math.Max(a.Importance, b.Importance),
 	}
 }
