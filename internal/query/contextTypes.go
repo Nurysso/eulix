@@ -1,10 +1,10 @@
 package query
+
 import (
+	"eulix/internal/cache"
 	"eulix/internal/config"
 	"eulix/internal/embeddings"
 	"eulix/internal/llm"
-	"eulix/internal/cache"
-
 )
 
 // Classifier.go
@@ -13,14 +13,14 @@ type QueryType int
 // Router.go
 
 type Router struct {
-	eulixDir       string
-	config         *config.Config
-	classifier     *Classifier
-	llmClient      *llm.Client
-	cache          *cache.Manager
-	contextBuilder *ContextBuilder
-	kbIndex        *KBIndex
-	callGraph      *CallGraph
+	eulixDir        string
+	config          *config.Config
+	classifier      *Classifier
+	llmClient       *llm.Client
+	cache           *cache.Manager
+	contextBuilder  *ContextBuilder
+	kbIndex         *KBIndex
+	callGraph       *CallGraph
 	currentChecksum string
 }
 
@@ -56,31 +56,33 @@ type centralFunction struct {
 
 // context_window.go
 type ContextBuilder struct {
-	eulixDir       string
-	config         *config.Config
-	llmClient      *llm.Client
-	queryEmbedder  *embeddings.QueryEmbedder
-	embeddings     [][]float32
-	chunks         []Chunk
-	vectorMap      map[string]int // ID -> Index in embeddings slice
-	callGraph      map[string][]Relationship
-	hasCallGraph   bool
-	hasEmbeddings  bool
-	embData        *EmbeddingsData
-	kbData         *KnowledgeBase
-	hasKB          bool
+	eulixDir      string
+	config        *config.Config
+	llmClient     *llm.Client
+	queryEmbedder *embeddings.QueryEmbedder
+	embeddings    [][]float32
+	chunks        []Chunk
+	vectorMap     map[string]int // ID -> Index in embeddings slice
+	callGraph     map[string][]Relationship
+	hasCallGraph  bool
+	hasEmbeddings bool
+	embData       *EmbeddingsData
+	kbData        *KnowledgeBase
+	hasKB         bool
+	classifier    *Classifier
+	symbolIndex   map[string][]int
 }
 
 type Chunk struct {
-	ID        string
-	ChunkType string
-	File      string
-	StartLine int
-	EndLine   int
-	Content   string
-	Tokens    int
-	Symbols   []string
-	Name      string
+	ID         string
+	ChunkType  string
+	File       string
+	StartLine  int
+	EndLine    int
+	Content    string
+	Tokens     int
+	Symbols    []string
+	Name       string
 	Importance float64
 }
 
@@ -92,25 +94,25 @@ type Relationship struct {
 
 type ScoredChunk struct {
 	Chunk
-	Score       float64
-	Distance    int
-	FromID      string
-	MatchType   string // "exact", "symbol", "semantic", "keyword", "partial"
+	Score        float64
+	Distance     int
+	FromID       string
+	MatchType    string // "exact", "symbol", "semantic", "keyword", "partial"
 	MatchDetails string
 }
 
 type EmbeddingsData struct {
-	Model       string             `json:"model"`
-	Dimension   int                `json:"dimension"`
-	TotalChunks int                `json:"total_chunks"`
-	Embeddings  []EmbeddingChunk   `json:"embeddings"`
+	Model       string           `json:"model"`
+	Dimension   int              `json:"dimension"`
+	TotalChunks int              `json:"total_chunks"`
+	Embeddings  []EmbeddingChunk `json:"embeddings"`
 }
 
 type EmbeddingChunk struct {
-	ID       string      `json:"id"`
-	ChunkType string     `json:"chunk_type"`
-	Content  string      `json:"content"`
-	Metadata Metadata    `json:"metadata"`
+	ID        string   `json:"id"`
+	ChunkType string   `json:"chunk_type"`
+	Content   string   `json:"content"`
+	Metadata  Metadata `json:"metadata"`
 }
 
 type Metadata struct {
@@ -135,43 +137,43 @@ type VectorStoreHeader struct {
 	Dimension uint32
 }
 type KnowledgeBase struct {
-	Metadata   KBMetadata              `json:"metadata"`
-	Structure  map[string]FileStructure `json:"structure"`
-	CallGraph  KBCallGraph             `json:"call_graph"`
-	Indices    KBIndices               `json:"indices"`
-	EntryPoints []EntryPoint           `json:"entry_points"`
+	Metadata    KBMetadata               `json:"metadata"`
+	Structure   map[string]FileStructure `json:"structure"`
+	CallGraph   KBCallGraph              `json:"call_graph"`
+	Indices     KBIndices                `json:"indices"`
+	EntryPoints []EntryPoint             `json:"entry_points"`
 }
 
 type KBMetadata struct {
-	ProjectName     string   `json:"project_name"`
-	Version         string   `json:"version"`
-	TotalFunctions  int      `json:"total_functions"`
-	TotalClasses    int      `json:"total_classes"`
+	ProjectName    string `json:"project_name"`
+	Version        string `json:"version"`
+	TotalFunctions int    `json:"total_functions"`
+	TotalClasses   int    `json:"total_classes"`
 }
 
 type FileStructure struct {
-	Language   string        `json:"language"`
-	Functions  []KBFunction  `json:"functions"`
-	Classes    []KBClass     `json:"classes"`
+	Language  string       `json:"language"`
+	Functions []KBFunction `json:"functions"`
+	Classes   []KBClass    `json:"classes"`
 }
 
 type KBFunction struct {
-	ID          string       `json:"id"`
-	Name        string       `json:"name"`
-	Signature   string       `json:"signature"`
-	Docstring   string       `json:"docstring"`
-	LineStart   int          `json:"line_start"`
-	LineEnd     int          `json:"line_end"`
-	Calls       []FunctionCall `json:"calls"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Signature string         `json:"signature"`
+	Docstring string         `json:"docstring"`
+	LineStart int            `json:"line_start"`
+	LineEnd   int            `json:"line_end"`
+	Calls     []FunctionCall `json:"calls"`
 }
 
 type KBClass struct {
-	ID        string        `json:"id"`
-	Name      string        `json:"name"`
-	Docstring string        `json:"docstring"`
-	LineStart int           `json:"line_start"`
-	LineEnd   int           `json:"line_end"`
-	Methods   []KBFunction  `json:"methods"`
+	ID        string       `json:"id"`
+	Name      string       `json:"name"`
+	Docstring string       `json:"docstring"`
+	LineStart int          `json:"line_start"`
+	LineEnd   int          `json:"line_end"`
+	Methods   []KBFunction `json:"methods"`
 }
 
 type FunctionCall struct {
@@ -198,7 +200,7 @@ type CallGraphEdge struct {
 }
 
 type KBIndices struct {
-	FunctionsByName map[string][]string `json:"functions_by_name"`
+	FunctionsByName  map[string][]string `json:"functions_by_name"`
 	FunctionsCalling map[string][]string `json:"functions_calling"`
 }
 
