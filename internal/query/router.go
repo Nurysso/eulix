@@ -5,16 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sort"
+	"strings"
 
 	"eulix/internal/cache"
 	"eulix/internal/config"
 	"eulix/internal/llm"
 	"eulix/internal/types"
 )
-
-
 
 func (r *Router) SetCurrentChecksum(checksum string) {
 	r.currentChecksum = checksum
@@ -171,6 +169,8 @@ func (r *Router) Query(query string) (string, error) {
 			return "", err
 		}
 		response, err = r.handleExample(query, classification)
+	case QueryTypeCodeGeneration:
+		return r.handleCodeGeneration(query, classification)
 	case QueryTypeTesting:
 		if err := r.ensureContextBuilder(); err != nil {
 			return "", err
@@ -196,6 +196,17 @@ func (r *Router) Query(query string) (string, error) {
 	}
 
 	return response, nil
+}
+
+func (r *Router) handleCodeGeneration(query string, class *Classification) (string, error) {
+	return `I can show you the structure and relationships from the AST, but I cannot generate implementation code because I only have semantic information (function signatures, types, call graphs), not the actual source code.
+
+What I CAN help with:
+- Showing which functions/classes are involved
+- Explaining the call flow and relationships
+- Identifying the relevant modules and their purposes
+
+Would you like me to explain the architecture instead?`, nil
 }
 
 func (r *Router) handleLocation(query string, class *Classification) (string, error) {
@@ -556,7 +567,6 @@ SYMBOLS: %v`, context, query, class.Symbols)
 	return r.llmClient.Query(context, prompt)
 }
 
-
 func (r *Router) handlePerformance(query string, class *Classification) (string, error) {
 	context, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
@@ -713,20 +723,25 @@ AST DATA:
 
 QUESTION: %s
 
-CREATE EXAMPLES FOR:
-- Function calls with correct types
-- Error handling (if returns error)
-- Type construction
+YOU ABSOLUTELY CANNOT:
+- Write implementation code (you don't have the source)
+- Show variable assignments or logic
+- Generate executable examples
 
-EXAMPLE FORMAT:
-user := &User{Name: "test"}
-result, err := ProcessUser(user)
-if err != nil { ... }
+YOU CAN ONLY:
+- Describe the function signature: ProcessUser(user *User) (*ProcessedUser, error)
+- Show the call pattern: "First call ValidateUser, then TransformUser"
+- List the types involved: User, ProcessedUser, error
 
-Be clear: "This example shows correct types but I cannot verify the actual behavior"
+RESPONSE FORMAT:
+"Based on the signature X, you would call it like:
+result, err := FunctionName(params)
+
+However, I cannot show the actual implementation as I only have AST metadata."
+
+DO NOT generate code. DO NOT invent implementation details.
 
 SYMBOLS: %v`, context, query, class.Symbols)
-
 	return r.llmClient.Query(context, prompt)
 }
 
