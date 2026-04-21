@@ -10,3 +10,4 @@ parser/test
 **/target/
 .eulix/
 eulix
+eulix.toml

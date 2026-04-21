@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"eulix/internal/cache"
 	"eulix/internal/config"
@@ -67,11 +68,44 @@ var (
 	highlightColor = lipgloss.Color("#8B5CF6")
 )
 
+var headingRe = regexp.MustCompile(`^(#{1,6})\s+(.+)$`)
+
+// Compiled once — used in formatListItem and processInlineMarkdown.
+var (
+	numberedListRe = regexp.MustCompile(`^(\d+)\.\s+(.+)$`)
+	inlineCodeRe   = regexp.MustCompile("`([^`]+)`")
+	boldRe         = regexp.MustCompile(`(\*\*|__)([^*_]+)(\*\*|__)`)
+	isNumberedRe   = regexp.MustCompile(`^\d+\.\s`)
+)
+
+// Package-level styles — constructed once per process lifetime.
+var (
+	codeBlockStyle = lipgloss.NewStyle().
+			Foreground(codeColor).
+			Background(lipgloss.Color("#1F2937")).
+			Padding(0, 1)
+
+	codeInlineStyle = lipgloss.NewStyle().
+			Foreground(codeColor)
+
+	boldStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(textColor)
+
+	listStyle = lipgloss.NewStyle().
+			Foreground(highlightColor)
+
+	headingStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(primaryColor).
+			Underline(true)
+)
+
 func MainModel(router *query.Router, cfg *config.Config, cacheManager *cache.Manager) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Ask a question or type /help for commands"
 	ti.Focus()
-	ti.CharLimit = 500
+	ti.CharLimit = 0
 	ti.Width = 80
 	ti.PromptStyle = lipgloss.NewStyle().Foreground(primaryColor).Bold(true)
 	ti.TextStyle = lipgloss.NewStyle().Foreground(textColor)
@@ -100,7 +134,7 @@ func MainModel(router *query.Router, cfg *config.Config, cacheManager *cache.Man
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
-		tea.DisableMouse, // Disable mouse capture to allow text selection
+		tea.DisableMouse,
 	)
 }
 
@@ -118,28 +152,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			query := strings.TrimSpace(m.input.Value())
-			if query == "" {
+			q := strings.TrimSpace(m.input.Value())
+			if q == "" {
 				return m, nil
 			}
 
-			if strings.HasPrefix(query, "/") {
-				return m.handleCommand(query)
+			if strings.HasPrefix(q, "/") {
+				return m.handleCommand(q)
 			}
 
-			m.messages = append(m.messages, Message{
-				Role:    "user",
-				Content: query,
-			})
-
+			m.messages = append(m.messages, Message{Role: "user", Content: q})
 			m.input.SetValue("")
 			m.processing = true
 			m.state = StateProcessing
 
-			return m, tea.Batch(
-				m.spinner.Tick,
-				m.processQuery(query),
-			)
+			return m, tea.Batch(m.spinner.Tick, m.processQuery(q))
 		}
 
 	case queryResultMsg:
@@ -161,7 +188,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoBottom()
-
 		return m, nil
 
 	case spinner.TickMsg:
@@ -174,9 +200,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.viewport.Width = msg.Width - 4
-		m.viewport.Height = msg.Height - 10
+		// reserve rows for header(2) + input(3) + spinner(1) + footer(1) + borders(2)
+		m.viewport.Height = msg.Height - 9
 		m.input.Width = msg.Width - 8
-
 		m.viewport.SetContent(m.renderMessages())
 
 	case switchToCacheViewerMsg:
@@ -226,7 +252,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !m.processing {
 		m.input, cmd = m.input.Update(msg)
 	}
-
 	m.viewport, _ = m.viewport.Update(msg)
 
 	return m, cmd
@@ -244,71 +269,46 @@ func (m Model) handleCommand(command string) (tea.Model, tea.Cmd) {
 			Role:    "system",
 			Content: "AVAILABLE COMMANDS\n\n  /help     Show this help message\n  /history  View cached queries and responses\n  /clear    Clear conversation history\n  /stats    Show system statistics\n  /quit     Exit the application\n\nKEYBOARD SHORTCUTS\n\n  Enter     Send message\n  Esc       Exit application\n  Ctrl+C    Force exit",
 		})
-		m.viewport.SetContent(m.renderMessages())
-		m.viewport.GotoBottom()
-		m.input.SetValue("")
-		return m, nil
-
 	case "/history":
-		return m, func() tea.Msg {
-			return switchToCacheViewerMsg{}
-		}
-
+		return m, func() tea.Msg { return switchToCacheViewerMsg{} }
 	case "/clear":
 		m.messages = []Message{
 			{Role: "system", Content: "Conversation cleared. How can I help you?"},
 		}
-		m.viewport.SetContent(m.renderMessages())
 		m.viewport.GotoTop()
 		m.input.SetValue("")
-		return m, nil
-
-	case "/stats":
-		statsMsg := m.getSystemStats()
-		m.messages = append(m.messages, Message{
-			Role:    "system",
-			Content: statsMsg,
-		})
 		m.viewport.SetContent(m.renderMessages())
-		m.viewport.GotoBottom()
-		m.input.SetValue("")
 		return m, nil
-
+	case "/stats":
+		m.messages = append(m.messages, Message{Role: "system", Content: m.getSystemStats()})
 	case "/quit":
 		return m, tea.Quit
-
 	default:
 		m.messages = append(m.messages, Message{
 			Role:    "error",
 			Content: fmt.Sprintf("Unknown command: %s\n\nType /help to see available commands.", parts[0]),
 		})
-		m.viewport.SetContent(m.renderMessages())
-		m.viewport.GotoBottom()
-		m.input.SetValue("")
-		return m, nil
 	}
+
+	m.viewport.SetContent(m.renderMessages())
+	m.viewport.GotoBottom()
+	m.input.SetValue("")
+	return m, nil
 }
 
 func (m Model) getSystemStats() string {
-	conversationLength := len(m.messages)
 	userMessages := 0
 	for _, msg := range m.messages {
 		if msg.Role == "user" {
 			userMessages++
 		}
 	}
-
 	cacheStatus := "Disabled"
 	if m.cacheManager != nil {
 		cacheStatus = "Enabled"
 	}
-
 	return fmt.Sprintf("SYSTEM STATISTICS\n\n  Total Messages    %d\n  Your Questions    %d\n  AI Responses      %d\n  Current State     %s\n  Cache Status      %s",
-		conversationLength,
-		userMessages,
-		userMessages,
-		m.getStateName(),
-		cacheStatus)
+		len(m.messages), userMessages, userMessages, m.getStateName(), cacheStatus)
 }
 
 func (m Model) getStateName() string {
@@ -335,7 +335,6 @@ func (m Model) View() string {
 
 	var b strings.Builder
 
-	// Header
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(textColor).
@@ -343,22 +342,18 @@ func (m Model) View() string {
 		Padding(0, 2).
 		Width(m.width).
 		Align(lipgloss.Center)
-
 	b.WriteString(headerStyle.Render("EULIX AI CODEBASE ASSISTANT"))
 	b.WriteString("\n")
 
-	// Viewport with messages
 	viewportStyle := lipgloss.NewStyle().
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(borderColor).
 		Padding(1, 2).
 		Width(m.width - 2).
 		Height(m.viewport.Height)
-
 	b.WriteString(viewportStyle.Render(m.viewport.View()))
 	b.WriteString("\n")
 
-	// Processing indicator
 	if m.processing {
 		processingStyle := lipgloss.NewStyle().
 			Foreground(primaryColor).
@@ -368,35 +363,24 @@ func (m Model) View() string {
 		b.WriteString("\n")
 	}
 
-	// Input box
 	inputContainerStyle := lipgloss.NewStyle().
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(primaryColor).
 		Padding(0, 1).
 		Width(m.width - 2)
-
-	inputPrefix := lipgloss.NewStyle().
-		Foreground(primaryColor).
-		Bold(true).
-		Render("")
-
+	inputPrefix := lipgloss.NewStyle().Foreground(primaryColor).Bold(true).Render("")
 	b.WriteString(inputContainerStyle.Render(inputPrefix + m.input.View()))
 	b.WriteString("\n")
 
-	// Footer help
-	helpStyle := lipgloss.NewStyle().
-		Foreground(mutedColor).
-		Padding(0, 2)
-
-	helpText := "Enter: send | Esc: quit | /help: commands"
-	b.WriteString(helpStyle.Render(helpText))
+	helpStyle := lipgloss.NewStyle().Foreground(mutedColor).Padding(0, 2)
+	b.WriteString(helpStyle.Render("Enter: send | Esc: quit | /help: commands | ↑/↓: scroll"))
 
 	return b.String()
 }
 
-func (m Model) processQuery(query string) tea.Cmd {
+func (m Model) processQuery(q string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := m.router.Query(query)
+		result, err := m.router.Query(q)
 		return queryResultMsg{result: result, err: err}
 	}
 }
@@ -404,22 +388,11 @@ func (m Model) processQuery(query string) tea.Cmd {
 func (m Model) renderMessages() string {
 	var b strings.Builder
 
-	userStyle := lipgloss.NewStyle().
-		Foreground(primaryColor).
-		Bold(true)
-
-	assistantStyle := lipgloss.NewStyle().
-		Foreground(successColor)
-
-	systemStyle := lipgloss.NewStyle().
-		Foreground(mutedColor)
-
-	errorStyle := lipgloss.NewStyle().
-		Foreground(errorColor).
-		Bold(true)
-
-	messagePadding := lipgloss.NewStyle().
-		MarginBottom(1)
+	userStyle := lipgloss.NewStyle().Foreground(primaryColor).Bold(true)
+	assistantStyle := lipgloss.NewStyle().Foreground(successColor)
+	systemStyle := lipgloss.NewStyle().Foreground(mutedColor)
+	errorStyle := lipgloss.NewStyle().Foreground(errorColor).Bold(true)
+	messagePadding := lipgloss.NewStyle().MarginBottom(1)
 
 	wrapWidth := m.viewport.Width - 6
 	if wrapWidth < 40 {
@@ -447,7 +420,6 @@ func (m Model) renderMessages() string {
 
 		header := style.Render(prefix)
 
-		// Format content based on role
 		var content string
 		if msg.Role == "assistant" {
 			content = formatMarkdownResponse(msg.Content, wrapWidth)
@@ -455,276 +427,295 @@ func (m Model) renderMessages() string {
 			content = formatSimpleText(msg.Content, wrapWidth)
 		}
 
-		fullMessage := fmt.Sprintf("%s\n%s", header, content)
-		b.WriteString(messagePadding.Render(fullMessage))
+		b.WriteString(messagePadding.Render(fmt.Sprintf("%s\n%s", header, content)))
 		b.WriteString("\n")
 	}
 
 	return b.String()
 }
 
-// formatMarkdownResponse formats LLM responses with markdown-like styling
+// formatMarkdownResponse formats LLM responses with markdown-like styling.
 func formatMarkdownResponse(text string, width int) string {
-	var result strings.Builder
-
-	// Normalize line breaks - preserve intentional double newlines, convert single to space
-	text = normalizeLineBreaks(text)
-
+	// normalise away newlines preserve the LLM's line breaks
+	// so long responses are never truncated mid-sentence.
+	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(text, "\n")
+
+	var b strings.Builder
+	b.Grow(len(text) + 256)
+
 	inCodeBlock := false
 	inList := false
+	prevWasParagraph := false
 
-	codeBlockStyle := lipgloss.NewStyle().
-		Foreground(codeColor).
-		Background(lipgloss.Color("#1F2937")).
-		Padding(0, 1)
-
-	codeInlineStyle := lipgloss.NewStyle().
-		Foreground(codeColor)
-
-	boldStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(textColor)
-
-	listStyle := lipgloss.NewStyle().
-		Foreground(highlightColor)
-
-	headingStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(primaryColor).
-		Underline(true)
-
-	for i, line := range lines {
+	for _, line := range lines {
 		line = strings.TrimRight(line, " \t")
 
-		// Empty line handling
+		// Empty line
 		if line == "" {
-			if inCodeBlock {
-				result.WriteString("\n")
-			} else if i > 0 && i < len(lines)-1 {
-				result.WriteString("\n")
-			}
+			b.WriteByte('\n')
 			inList = false
+			prevWasParagraph = false
 			continue
 		}
 
-		// Code blocks (``` or ~~~)
+		// Code-fence toggle
 		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
 			inCodeBlock = !inCodeBlock
 			if inCodeBlock {
-				// Starting code block
-				lang := strings.TrimPrefix(line, "```")
-				lang = strings.TrimPrefix(lang, "~~~")
-				lang = strings.TrimSpace(lang)
+				lang := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "```"), "~~~"))
 				if lang != "" {
-					result.WriteString(headingStyle.Render(fmt.Sprintf("[%s]", strings.ToUpper(lang))))
-					result.WriteString("\n")
+					fmt.Fprintf(&b, "%s\n", headingStyle.Render("["+strings.ToUpper(lang)+"]"))
 				}
 			} else {
-				// Ending code block - add spacing
-				result.WriteString("\n")
+				b.WriteByte('\n')
 			}
+			prevWasParagraph = false
 			continue
 		}
 
+		// Inside code block — render verbatim, never wrap
 		if inCodeBlock {
-			// Inside code block - preserve formatting
-			result.WriteString(codeBlockStyle.Render(line))
-			result.WriteString("\n")
+			fmt.Fprintf(&b, "%s\n", codeBlockStyle.Render(line))
 			continue
 		}
 
-		// Headings (##, ###, etc)
-		if match := regexp.MustCompile(`^(#{1,6})\s+(.+)$`).FindStringSubmatch(line); match != nil {
-			heading := strings.TrimSpace(match[2])
-			result.WriteString(headingStyle.Render(heading))
-			result.WriteString("\n")
+		// Heading
+		if m := headingRe.FindStringSubmatch(line); m != nil {
+			if prevWasParagraph {
+				b.WriteByte('\n')
+			}
+			fmt.Fprintf(&b, "%s\n", headingStyle.Render(strings.TrimSpace(m[2])))
+			inList = false
+			prevWasParagraph = false
 			continue
 		}
 
-		// Lists (-, *, +, or numbered)
+		// List item
 		if isListItem(line) {
-			formatted := formatListItem(line, width-4, listStyle, codeInlineStyle, boldStyle)
-			result.WriteString("  " + formatted)
-			result.WriteString("\n")
+			formatted := formatListItem(line, width-4)
+			fmt.Fprintf(&b, "  %s\n", formatted)
 			inList = true
+			prevWasParagraph = false
 			continue
 		}
 
-		// Regular paragraph
-		if inList && !isListItem(line) {
-			result.WriteString("\n")
+		// List continuation (indented line following a list item)
+		if inList && (strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "\t")) {
+			trimmed := strings.TrimLeft(line, " \t")
+			formatted := processInlineMarkdown(trimmed, width-4)
+			fmt.Fprintf(&b, "    %s\n", formatted)
+			continue
+		}
+
+		// Paragraph
+		if inList {
+			b.WriteByte('\n')
 			inList = false
 		}
 
-		// Process inline markdown (bold, code, etc)
-		formatted := processInlineMarkdown(line, width, codeInlineStyle, boldStyle)
-		result.WriteString(formatted)
-		result.WriteString("\n")
+		formatted := processInlineMarkdown(line, width)
+		fmt.Fprintf(&b, "%s\n", formatted)
+		prevWasParagraph = true
 	}
 
-	return strings.TrimRight(result.String(), "\n")
+	return strings.TrimRight(b.String(), "\n")
 }
 
-// normalizeLineBreaks intelligently handles line breaks
+// normalizeLineBreaks is kept only for explicit callers that want soft-wrap
+// joining. formatMarkdownResponse no longer calls it.
 func normalizeLineBreaks(text string) string {
-	// Replace CRLF with LF
 	text = strings.ReplaceAll(text, "\r\n", "\n")
-
-	// Preserve double newlines (paragraph breaks)
 	text = strings.ReplaceAll(text, "\n\n", "<<PARAGRAPH_BREAK>>")
 
-	// Replace single newlines with spaces (unless before list items, headings, or code blocks)
 	lines := strings.Split(text, "\n")
-	var normalized []string
+	var out []string
 
-	for i := 0; i < len(lines); i++ {
-		line := lines[i]
-
-		// Check if next line is special (list, heading, code)
+	for i, line := range lines {
 		if i < len(lines)-1 {
-			nextLine := strings.TrimSpace(lines[i+1])
-			if nextLine == "" || strings.HasPrefix(nextLine, "#") ||
-			   strings.HasPrefix(nextLine, "```") || strings.HasPrefix(nextLine, "~~~") ||
-			   isListItem(nextLine) {
-				normalized = append(normalized, line)
+			next := strings.TrimSpace(lines[i+1])
+			if next == "" || strings.HasPrefix(next, "#") ||
+				strings.HasPrefix(next, "```") || strings.HasPrefix(next, "~~~") ||
+				isListItem(next) {
+				out = append(out, line)
 				continue
 			}
 		}
-
-		// Check if current line is special
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") ||
-		   strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") ||
-		   isListItem(trimmed) {
-			normalized = append(normalized, line)
+			strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") ||
+			isListItem(trimmed) {
+			out = append(out, line)
 			continue
 		}
-
-		// Regular line - join with next
 		if i < len(lines)-1 {
-			normalized = append(normalized, line+" ")
+			out = append(out, line+" ")
 		} else {
-			normalized = append(normalized, line)
+			out = append(out, line)
 		}
 	}
 
-	text = strings.Join(normalized, "")
-	text = strings.ReplaceAll(text, "<<PARAGRAPH_BREAK>>", "\n\n")
-
-	return text
+	text = strings.Join(out, "")
+	return strings.ReplaceAll(text, "<<PARAGRAPH_BREAK>>", "\n\n")
 }
 
-// isListItem checks if a line is a list item
 func isListItem(line string) bool {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return false
 	}
 
-	// Unordered lists: -, *, +
+	// Unordered lists
 	if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "+ ") {
 		return true
 	}
 
-	// Numbered lists: 1., 2., etc
-	if matched, _ := regexp.MatchString(`^\d+\.\s`, line); matched {
-		return true
-	}
-
-	return false
+	// Corrected: MatchString only returns one value
+	return isNumberedRe.MatchString(line)
 }
 
-// formatListItem formats a list item with proper indentation
-func formatListItem(line string, width int, listStyle, codeStyle, boldStyle lipgloss.Style) string {
+// formatListItem no longer accepts style args — uses package-level vars.
+func formatListItem(line string, width int) string {
 	line = strings.TrimSpace(line)
 
-	// Extract bullet/number and content
 	var bullet, content string
-	if strings.HasPrefix(line, "- ") {
+	switch {
+	case strings.HasPrefix(line, "- "):
 		bullet = "•"
 		content = strings.TrimPrefix(line, "- ")
-	} else if strings.HasPrefix(line, "* ") {
+	case strings.HasPrefix(line, "* "):
 		bullet = "•"
 		content = strings.TrimPrefix(line, "* ")
-	} else if strings.HasPrefix(line, "+ ") {
+	case strings.HasPrefix(line, "+ "):
 		bullet = "•"
 		content = strings.TrimPrefix(line, "+ ")
-	} else if match := regexp.MustCompile(`^(\d+)\.\s+(.+)$`).FindStringSubmatch(line); match != nil {
-		bullet = match[1] + "."
-		content = match[2]
+	default:
+		if m := numberedListRe.FindStringSubmatch(line); m != nil {
+			bullet = m[1] + "."
+			content = m[2]
+		}
 	}
 
-	content = processInlineMarkdown(content, width-4, codeStyle, boldStyle)
-
-	return listStyle.Render(bullet) + " " + content
+	return listStyle.Render(bullet) + " " + processInlineMarkdown(content, width-4)
 }
 
-// processInlineMarkdown handles inline markdown like **bold** and `code`
-func processInlineMarkdown(text string, width int, codeStyle, boldStyle lipgloss.Style) string {
-	// Handle inline code first (`code`)
-	codeRegex := regexp.MustCompile("`([^`]+)`")
-	text = codeRegex.ReplaceAllStringFunc(text, func(match string) string {
-		code := strings.Trim(match, "`")
-		return codeStyle.Render(code)
+// processInlineMarkdown handles `code` and **bold** spans, then word-wraps.
+func processInlineMarkdown(text string, width int) string {
+	// Inline code
+	text = inlineCodeRe.ReplaceAllStringFunc(text, func(match string) string {
+		return codeInlineStyle.Render(strings.Trim(match, "`"))
 	})
 
-	// Handle bold (**text** or __text__)
-	boldRegex := regexp.MustCompile(`(\*\*|__)([^*_]+)(\*\*|__)`)
-	text = boldRegex.ReplaceAllStringFunc(text, func(match string) string {
-		// Extract text between markers
-		inner := regexp.MustCompile(`(\*\*|__)([^*_]+)(\*\*|__)`).FindStringSubmatch(match)
-		if len(inner) > 2 {
+	// Bold
+	text = boldRe.ReplaceAllStringFunc(text, func(match string) string {
+		if inner := boldRe.FindStringSubmatch(match); len(inner) > 2 {
 			return boldStyle.Render(inner[2])
 		}
 		return match
 	})
 
-	// Wrap text
 	return wrapText(text, width)
 }
 
-// formatSimpleText formats non-assistant messages (system, user, error)
 func formatSimpleText(text string, width int) string {
-	textStyle := lipgloss.NewStyle().Foreground(textColor)
-
-	// Just wrap and style, no special formatting
-	wrapped := wrapText(text, width)
-	return textStyle.Render(wrapped)
+	return lipgloss.NewStyle().Foreground(textColor).Render(wrapText(text, width))
 }
 
+// wrapText wraps text at word boundaries, preserving existing newlines.
+// previous version used strings.Fields which silently dropped all
+// embedded newlines, causing multi-line responses to be cut off.
 func wrapText(text string, width int) string {
 	if width <= 0 {
 		width = 80
 	}
 
-	var result strings.Builder
-	var currentLine strings.Builder
-	currentLength := 0
+	// Process each existing line independently so we never collapse
+	// intentional line breaks from the LLM output.
+	inputLines := strings.Split(text, "\n")
+	out := make([]string, 0, len(inputLines))
 
-	words := strings.Fields(text)
-	for i, word := range words {
-		wordLen := lipgloss.Width(word)
-
-		if currentLength > 0 && currentLength+1+wordLen > width {
-			result.WriteString(currentLine.String())
-			result.WriteString("\n")
-			currentLine.Reset()
-			currentLength = 0
+	for _, inputLine := range inputLines {
+		if inputLine == "" {
+			out = append(out, "")
+			continue
 		}
 
-		if currentLength > 0 {
-			currentLine.WriteString(" ")
-			currentLength++
+		var (
+			curLine strings.Builder
+			curLen  int
+		)
+
+		// Split on spaces while keeping ANSI-aware width via lipgloss.Width.
+		words := strings.Split(inputLine, " ")
+		for i, word := range words {
+			// lipgloss.Width correctly measures visible width of styled spans.
+			wLen := lipgloss.Width(word)
+			if wLen == 0 {
+				// Zero-width (e.g. empty string between consecutive spaces):
+				// re-emit the space rather than dropping it.
+				if curLen > 0 {
+					curLine.WriteByte(' ')
+					curLen++
+				}
+				continue
+			}
+
+			needsSpace := curLen > 0
+			advance := wLen
+			if needsSpace {
+				advance++
+			}
+
+			if curLen > 0 && curLen+advance > width {
+				out = append(out, curLine.String())
+				curLine.Reset()
+				curLen = 0
+				needsSpace = false
+				advance = wLen
+			}
+
+			if needsSpace {
+				curLine.WriteByte(' ')
+			}
+			curLine.WriteString(word)
+			curLen += advance
+
+			// Flush on last word of this input line.
+			if i == len(words)-1 {
+				out = append(out, curLine.String())
+			}
 		}
 
-		currentLine.WriteString(word)
-		currentLength += wordLen
-
-		if i == len(words)-1 {
-			result.WriteString(currentLine.String())
+		// Edge case: single word exactly fills the line — already flushed above.
+		// But if curLine was never flushed (empty words slice), emit it anyway.
+		if len(words) == 0 {
+			out = append(out, "")
 		}
 	}
 
-	return result.String()
+	return strings.Join(out, "\n")
+}
+
+// visibleLen returns the number of visible rune positions in s,
+// skipping ANSI escape sequences. Used as a fallback when lipgloss.Width
+// is unavailable (e.g. in unit tests without a TTY).
+func visibleLen(s string) int {
+	n := 0
+	esc := false
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		if r == '\x1b' {
+			esc = true
+			continue
+		}
+		if esc {
+			if r == 'm' {
+				esc = false
+			}
+			continue
+		}
+		n++
+	}
+	return n
 }
