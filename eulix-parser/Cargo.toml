@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 # CLI
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 
 # Parsing
 tree-sitter = "0.20"
@@ -25,6 +25,7 @@ tree-sitter-cpp = "0.20"
 rayon = "1.8"
 
 # Serialization
+erased-serde = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
