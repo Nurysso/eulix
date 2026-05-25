@@ -11,7 +11,7 @@ import (
 	"eulix/internal/cache"
 	"eulix/internal/config"
 	"eulix/internal/llm"
-	"eulix/internal/types"
+	// "eulix/internal/types"
 )
 
 func (r *Router) SetCurrentChecksum(checksum string) {
@@ -82,7 +82,17 @@ func (r *Router) ensureContextBuilder() error {
 		return nil
 	}
 
-	contextBuilder, err := ContextWindowCreator(r.eulixDir, r.config, r.llmClient)
+	// Use the project path from config (now guaranteed to be absolute)
+	sourceRoot := r.config.Project.Path
+
+	// Verify source root exists
+	if _, err := os.Stat(sourceRoot); os.IsNotExist(err) {
+		return fmt.Errorf("source root does not exist: %s", sourceRoot)
+	}
+
+	fmt.Printf("[INFO] Initializing context builder with source root: %s\n", sourceRoot)
+
+	contextBuilder, err := ContextWindowCreator(r.eulixDir, r.config, r.llmClient, sourceRoot)
 	if err != nil {
 		return fmt.Errorf("failed to initialize context builder: %w", err)
 	}
@@ -170,7 +180,7 @@ func (r *Router) Query(query string) (string, error) {
 		}
 		response, err = r.handleExample(query, classification)
 	case QueryTypeCodeGeneration:
-		return r.handleCodeGeneration(query, classification)
+		return r.handleCodeGeneration()
 	case QueryTypeTesting:
 		if err := r.ensureContextBuilder(); err != nil {
 			return "", err
@@ -198,7 +208,7 @@ func (r *Router) Query(query string) (string, error) {
 	return response, nil
 }
 
-func (r *Router) handleCodeGeneration(query string, class *Classification) (string, error) {
+func (r *Router) handleCodeGeneration() (string, error) {
 	return `I can show you the structure and relationships from the AST, but I cannot generate implementation code because I only have semantic information (function signatures, types, call graphs), not the actual source code.
 
 What I CAN help with:
@@ -318,14 +328,21 @@ func (r *Router) handleUnderstanding(query string, class *Classification) (strin
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
 
-	prompt := r.buildAntiHallucinationPrompt(query, class, context)
-
-	response, err := r.llmClient.Query(context, prompt)
-	if err != nil {
-		return "", fmt.Errorf("LLM query failed: %w", err)
+	// Warn the prompt if source hydration likely failed
+	hasSource := false
+	for _, chunk := range context.Chunks {
+		if strings.Contains(chunk.Content, "```") {
+			hasSource = true
+			break
+		}
 	}
 
-	return response, nil
+	prompt := r.buildAntiHallucinationPrompt(query, class)
+	if !hasSource {
+		prompt = "NOTE: Only AST metadata is available, no source code was loaded.\n" + prompt
+	}
+
+	return r.llmClient.Query(context, prompt)
 }
 
 func (r *Router) handleImplementation(query string, class *Classification) (string, error) {
@@ -347,7 +364,7 @@ func (r *Router) handleImplementation(query string, class *Classification) (stri
 	prompt := fmt.Sprintf(`You have AST and semantic information, NOT source code.
 
 AST/SEMANTIC DATA:
-%s
+%v
 
 QUESTION: %s
 
@@ -404,7 +421,7 @@ CALL GRAPH:
 %s
 
 AST DATA:
-%s
+%v
 
 QUESTION: %s
 
@@ -434,7 +451,7 @@ func (r *Router) handleDebug(query string, class *Classification) (string, error
 	prompt := fmt.Sprintf(`Debug using AST/semantic information only.
 
 AST DATA:
-%s
+%v
 
 PROBLEM: %s
 
@@ -469,7 +486,7 @@ func (r *Router) handleComparison(query string, class *Classification) (string, 
 	prompt := fmt.Sprintf(`Compare using AST/type information.
 
 AST DATA:
-%s
+%v
 
 COMPARE: %v
 
@@ -508,7 +525,7 @@ func (r *Router) handleDependency(query string, class *Classification) (string, 
 		if len(funcNode.Calls) > 0 {
 			results = append(results, "\nDirect Dependencies (functions it calls):")
 			for _, dep := range funcNode.Calls {
-				results = append(results, fmt.Sprintf("  â†’ %s", dep))
+				results = append(results, fmt.Sprintf("  ← %s", dep))
 			}
 		}
 
@@ -516,7 +533,7 @@ func (r *Router) handleDependency(query string, class *Classification) (string, 
 		if len(funcNode.CalledBy) > 0 {
 			results = append(results, "\nDependent Functions (functions that call it):")
 			for _, caller := range funcNode.CalledBy {
-				results = append(results, fmt.Sprintf("  â† %s", caller))
+				results = append(results, fmt.Sprintf("  → %s", caller))
 			}
 		}
 
@@ -525,7 +542,7 @@ func (r *Router) handleDependency(query string, class *Classification) (string, 
 		if len(transitive) > 0 {
 			results = append(results, "\nTransitive Dependencies:")
 			for _, dep := range transitive {
-				results = append(results, fmt.Sprintf("  â‡’ %s", dep))
+				results = append(results, fmt.Sprintf("  ⇒ %s", dep))
 			}
 		}
 	} else {
@@ -544,7 +561,7 @@ func (r *Router) handleRefactoring(query string, class *Classification) (string,
 	prompt := fmt.Sprintf(`Suggest refactoring from AST structure.
 
 AST DATA:
-%s
+%v
 
 QUESTION: %s
 
@@ -576,7 +593,7 @@ func (r *Router) handlePerformance(query string, class *Classification) (string,
 	prompt := fmt.Sprintf(`Performance analysis from AST data.
 
 AST DATA:
-%s
+%v
 
 QUESTION: %s
 
@@ -621,7 +638,7 @@ CALL GRAPH:
 %s
 
 AST DATA:
-%s
+%v
 
 QUESTION: %s
 
@@ -654,7 +671,7 @@ func (r *Router) handleSecurity(query string, class *Classification) (string, er
 	prompt := fmt.Sprintf(`Security analysis from AST/types.
 
 AST DATA:
-%s
+%v
 
 QUESTION: %s
 
@@ -688,7 +705,7 @@ func (r *Router) handleDocumentation(query string, class *Classification) (strin
 	prompt := fmt.Sprintf(`Document from AST/signatures.
 
 AST DATA:
-%s
+%v
 
 QUESTION: %s
 
@@ -719,7 +736,7 @@ func (r *Router) handleExample(query string, class *Classification) (string, err
 	prompt := fmt.Sprintf(`Create examples from function signatures.
 
 AST DATA:
-%s
+%v
 
 QUESTION: %s
 
@@ -775,7 +792,7 @@ Question: %s`, query, class.Symbols, query)
 }
 
 // Anti-hallucination prompt builder
-func (r *Router) buildAntiHallucinationPrompt(query string, class *Classification, context *types.ContextWindow) string {
+func (r *Router) buildAntiHallucinationPrompt(query string, class *Classification) string {
 	var promptBuilder strings.Builder
 
 	promptBuilder.WriteString("CRITICAL INSTRUCTIONS:\n")
@@ -785,7 +802,9 @@ func (r *Router) buildAntiHallucinationPrompt(query string, class *Classificatio
 	promptBuilder.WriteString("4. Do NOT invent function names, variables, or code behavior\n")
 	promptBuilder.WriteString("5. If you're uncertain, express that uncertainty clearly\n")
 	promptBuilder.WriteString("6. Distinguish between what you see in the code vs. what you infer\n\n")
-
+	promptBuilder.WriteString("IMPORTANT: You have AST/semantic metadata, NOT full source code.\n")
+	promptBuilder.WriteString("If source code blocks appear below, use them. Otherwise say:\n")
+	promptBuilder.WriteString("'I can see the signature but not the implementation.'\n\n")
 	if len(class.Symbols) > 0 {
 		promptBuilder.WriteString(fmt.Sprintf("SYMBOLS MENTIONED: %v\n", class.Symbols))
 	}
