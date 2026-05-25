@@ -3,4 +3,3 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 pub mod file_walker;
-pub mod ignore;
