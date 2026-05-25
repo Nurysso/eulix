@@ -91,6 +91,115 @@ impl RustParser {
         }
     }
 
+    fn extract_rust_info(&self, node: &Node, is_async: bool) -> RustInfo {
+        let mut is_pub = false;
+        let mut is_pub_crate = false;
+        let mut is_unsafe = false;
+        let mut is_const_fn = false;
+        let mut is_extern = false;
+        let mut lifetimes = Vec::new();
+        let mut derives = Vec::new();
+        let mut is_test = false;
+        let mut is_bench = false;
+        let mut cfg_attrs = Vec::new();
+        let mut unknown_attrs = Vec::new();
+
+        // Visibility + function modifiers from node children
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "visibility_modifier" => {
+                    let text = self.get_node_text(&child);
+                    if text.contains("(crate)") {
+                        is_pub_crate = true;
+                    } else {
+                        is_pub = true;
+                    }
+                }
+                "function_modifiers" => {
+                    let text = self.get_node_text(&child);
+                    if text.contains("unsafe") {
+                        is_unsafe = true;
+                    }
+                    if text.contains("const") {
+                        is_const_fn = true;
+                    }
+                    if text.contains("extern") {
+                        is_extern = true;
+                    }
+                }
+                // Lifetime params: fn foo<'a, 'b, T>(...)
+                "type_parameters" => {
+                    let mut lc = child.walk();
+                    for lp in child.children(&mut lc) {
+                        if lp.kind() == "lifetime" {
+                            lifetimes.push(self.get_node_text(&lp));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Walk preceding siblings for #[...] attribute items
+        let mut prev = node.prev_sibling();
+        while let Some(sib) = prev {
+            match sib.kind() {
+                "attribute_item" => {
+                    let raw = self.get_node_text(&sib);
+                    // Strip #[ and ]
+                    let inner = raw
+                        .trim_start_matches('#')
+                        .trim_start_matches('[')
+                        .trim_end_matches(']')
+                        .trim();
+
+                    if inner.starts_with("derive") {
+                        if let Some(s) = inner.find('(') {
+                            let end = inner.rfind(')').unwrap_or(inner.len());
+                            for d in inner[s + 1..end].split(',') {
+                                let d = d.trim().to_string();
+                                if !d.is_empty() {
+                                    derives.push(d);
+                                }
+                            }
+                        }
+                    } else if inner == "test" {
+                        is_test = true;
+                    } else if inner == "bench" {
+                        is_bench = true;
+                    } else if inner.starts_with("cfg") {
+                        cfg_attrs.push(raw);
+                    } else {
+                        unknown_attrs.push(raw);
+                    }
+
+                    prev = sib.prev_sibling();
+                }
+                // Skip doc comments — they're handled by extract_docstring
+                "line_comment" | "block_comment" => {
+                    prev = sib.prev_sibling();
+                }
+                _ => break,
+            }
+        }
+
+        RustInfo {
+            is_unsafe,
+            is_pub,
+            is_pub_crate,
+            is_const_fn,
+            is_async,
+            is_extern,
+            lifetimes,
+            derives,
+            is_test,
+            is_bench,
+            cfg_attrs,
+            unknown_attrs,
+        }
+    }
+
     // Top-level functions
     fn extract_functions(&self, root: &Node) -> Vec<Function> {
         let mut functions = Vec::new();
@@ -115,7 +224,14 @@ impl RustParser {
         let name_node = node.child_by_field_name("name")?;
         let name = self.get_node_text(&name_node);
 
-        let is_async = node.children(&mut node.walk()).any(|c| c.kind() == "async");
+        let is_async = {
+            let mut c = node.walk();
+            node.children(&mut c).any(|ch| ch.kind() == "async")
+                || node
+                    .child_by_field_name("function_modifiers") // also catches mod list
+                    .map(|m| self.get_node_text(&m).contains("async"))
+                    .unwrap_or(false)
+        };
 
         let params = self.extract_parameters(node);
         let return_type = self.extract_return_type(node);
@@ -142,9 +258,15 @@ impl RustParser {
                 (vec![], vec![], ControlFlow::default(), 1)
             };
 
-        let tags = self.auto_tag_function(&name, &docstring, &calls);
+        let rust_info = self.extract_rust_info(node, is_async);
+        let mut tags = self.auto_tag_function(&name, &docstring, &calls);
+        if rust_info.is_test {
+            tags.push("test".to_string());
+        }
+        if rust_info.is_unsafe {
+            tags.push("unsafe".to_string());
+        }
         let importance_score = self.estimate_importance(&name, !struct_context.is_empty());
-
         Some(Function {
             id,
             name,
@@ -164,6 +286,10 @@ impl RustParser {
             decorators: vec![],
             tags,
             importance_score,
+            lang_info: LanguageSpecificInfo {
+                rust: Some(rust_info),
+                ..Default::default()
+            },
         })
     }
 
@@ -307,6 +433,7 @@ impl RustParser {
             .child_by_field_name("body")
             .map(|body| self.extract_struct_fields(&body))
             .unwrap_or_default();
+        let rust_info = self.extract_rust_info(node, false);
 
         Some(Class {
             id: format!("struct_{}", name),
@@ -318,6 +445,10 @@ impl RustParser {
             methods: vec![],
             attributes,
             decorators: vec![],
+            lang_info: LanguageSpecificInfo {
+                rust: Some(rust_info),
+                ..Default::default()
+            },
         })
     }
 
@@ -350,7 +481,7 @@ impl RustParser {
                 fields
             })
             .unwrap_or_default();
-
+        let rust_info = self.extract_rust_info(node, false);
         Some(Class {
             id: format!("enum_{}", name),
             name,
@@ -361,6 +492,10 @@ impl RustParser {
             methods: vec![],
             attributes,
             decorators: vec![],
+            lang_info: LanguageSpecificInfo {
+                rust: Some(rust_info),
+                ..Default::default()
+            },
         })
     }
 
@@ -862,7 +997,9 @@ impl RustParser {
         if lower.starts_with("new") || lower == "default" || lower == "init" {
             tags.push("constructor".to_string());
         }
-        if lower.starts_with("test") || lower.starts_with("should_") {
+        if (lower.starts_with("test") || lower.starts_with("should_"))
+            && !tags.contains(&"test".to_string())
+        {
             tags.push("test".to_string());
         }
         if lower.contains("parse") || lower.contains("deserializ") {

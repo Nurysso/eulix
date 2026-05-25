@@ -1,6 +1,6 @@
 [package]
 name = "eulix-parser"
-version = "0.6.4"
+version = "0.6.6"
 edition = "2021"
 
 [[bin]]
@@ -45,3 +45,5 @@ chrono = { version = "0.4", features = ["serde"] }
 opt-level = 3
 lto = true
 codegen-units = 1
+strip = true
+panic = "abort"

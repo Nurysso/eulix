@@ -229,6 +229,7 @@ impl CppParser {
             decorators: vec![],
             tags,
             importance_score,
+            lang_info: LanguageSpecificInfo::default(),
         })
     }
 
@@ -416,6 +417,7 @@ impl CppParser {
             methods,
             attributes,
             decorators: vec![],
+            lang_info: LanguageSpecificInfo::default(),
         })
     }
 

@@ -257,6 +257,7 @@ impl TypeScriptParser {
             decorators: self.extract_decorators(node),
             tags,
             importance_score,
+            lang_info: LanguageSpecificInfo::default(),
         })
     }
 
@@ -438,6 +439,7 @@ impl TypeScriptParser {
             methods,
             attributes,
             decorators: self.extract_decorators(node),
+            lang_info: LanguageSpecificInfo::default(),
         })
     }
 
@@ -501,6 +503,7 @@ impl TypeScriptParser {
             methods: vec![],
             attributes,
             decorators: vec![],
+            lang_info: LanguageSpecificInfo::default(),
         })
     }
 
@@ -969,7 +972,7 @@ impl TypeScriptParser {
     // Docstrings — JSDoc style
 
     fn extract_docstring(&self, node: &Node) -> String {
-        let mut prev = node.prev_sibling();
+        let prev = node.prev_sibling();
 
         while let Some(sib) = prev {
             match sib.kind() {
@@ -996,7 +999,7 @@ impl TypeScriptParser {
                 }
                 _ => break,
             }
-            prev = sib.prev_sibling();
+            // prev = sib.prev_sibling(); // was unreachable dont remember why I added it
         }
 
         String::new()
