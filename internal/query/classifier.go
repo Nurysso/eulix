@@ -72,17 +72,17 @@ type Classifier struct {
 	implementationPattern *regexp.Regexp
 
 	// New patterns
-	debugPattern         *regexp.Regexp
-	comparisonPattern    *regexp.Regexp
-	dependencyPattern    *regexp.Regexp
-	refactoringPattern   *regexp.Regexp
-	performancePattern   *regexp.Regexp
-	dataFlowPattern      *regexp.Regexp
-	securityPattern      *regexp.Regexp
-	documentationPattern *regexp.Regexp
-	examplePattern       *regexp.Regexp
-	testingPattern       *regexp.Regexp
-	codeGenPattern       *regexp.Regexp
+	debugPattern       *regexp.Regexp
+	comparisonPattern  *regexp.Regexp
+	dependencyPattern  *regexp.Regexp
+	refactoringPattern *regexp.Regexp
+	performancePattern *regexp.Regexp
+	dataFlowPattern    *regexp.Regexp
+	securityPattern    *regexp.Regexp
+	// documentationPattern *regexp.Regexp
+	examplePattern *regexp.Regexp
+	testingPattern *regexp.Regexp
+	codeGenPattern *regexp.Regexp
 
 	symbolPattern *regexp.Regexp
 	validSymbols  map[string]bool
@@ -106,10 +106,10 @@ func QuerySheriff(kbIndexPath string) (*Classifier, error) {
 		performancePattern:    regexp.MustCompile(`(?i)(performance|slow|fast|optimize|bottleneck|efficient|speed|latency|memory\s+usage)`),
 		dataFlowPattern:       regexp.MustCompile(`(?i)(data\s+flow|how\s+data|trace\s+data|data\s+path|value\s+propagat|passes?\s+through)`),
 		securityPattern:       regexp.MustCompile(`(?i)(security|vulnerable|sanitize|validation|injection|xss|csrf|authentication|authorization)`),
-		documentationPattern:  regexp.MustCompile(`(?i)(document|comment|explain|describe|what\s+does|purpose\s+of|meant\s+to\s+do)`),
-		examplePattern:        regexp.MustCompile(`(?i)(example|how\s+to\s+use|usage\s+example|sample|demonstrate|show\s+me\s+how)`),
-		testingPattern:        regexp.MustCompile(`(?i)(test|unit\s+test|integration\s+test|mock|coverage|test\s+case)`),
-		codeGenPattern:        regexp.MustCompile(`(?i)(show\s+me\s+code|write\s+code|code\s+example|sample\s+code|how\s+to\s+implement|generate\s+code)`),
+		// documentationPattern:  regexp.MustCompile(`(?i)(document|comment|explain|describe|what\s+does|purpose\s+of|meant\s+to\s+do)`),
+		examplePattern: regexp.MustCompile(`(?i)(example|how\s+to\s+use|usage\s+example|sample|demonstrate|show\s+me\s+how)`),
+		testingPattern: regexp.MustCompile(`(?i)(test|unit\s+test|integration\s+test|mock|coverage|test\s+case)`),
+		codeGenPattern: regexp.MustCompile(`(?i)(show\s+me\s+code|write\s+code|code\s+example|sample\s+code|how\s+to\s+implement|generate\s+code)`),
 
 		symbolPattern: regexp.MustCompile(`\b[A-Z][a-z]+(?:[A-Z][a-z]+)*\b|\b[a-z_][a-z0-9_]*\b|\b[A-Z_][A-Z0-9_]+\b`),
 		validSymbols:  make(map[string]bool),
@@ -157,7 +157,7 @@ func (c *Classifier) Classify(query string) *Classification {
 	queryLower := strings.ToLower(query)
 
 	// Level 1: Fast Pattern Matching with new types
-	if result := c.level1PatternMatch(query, queryLower); result != nil && result.Confidence >= 0.95 {
+	if result := c.level1PatternMatch(queryLower); result != nil && result.Confidence >= 0.95 {
 		return result
 	}
 
@@ -167,20 +167,20 @@ func (c *Classifier) Classify(query string) *Classification {
 	entities := c.extractEntities(validSymbols)
 
 	if len(validSymbols) > 0 {
-		if result := c.level2SymbolAnalysis(query, queryLower, validSymbols, entities); result != nil {
+		if result := c.level2SymbolAnalysis(queryLower, validSymbols, entities); result != nil {
 			return result
 		}
 	}
 
 	// Level 3: Enhanced Keyword Analysis
-	return c.level3KeywordAnalysis(query, queryLower, validSymbols, entities)
+	return c.level3KeywordAnalysis(queryLower, validSymbols, entities)
 }
 
-func (c *Classifier) level1PatternMatch(query, queryLower string) *Classification {
+func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 	// Priority order matters - check more specific patterns first
 	if c.codeGenPattern.MatchString(queryLower) {
 		return &Classification{
-			Type:         QueryTypeCodeGeneration, // NEW TYPE
+			Type:         QueryTypeCodeGeneration,
 			Confidence:   0.95,
 			Reasoning:    "Level 1: code generation request",
 			NeedsContext: false, // We can't help with this
@@ -287,15 +287,15 @@ func (c *Classifier) level1PatternMatch(query, queryLower string) *Classificatio
 	}
 
 	// Documentation queries
-	if c.documentationPattern.MatchString(queryLower) {
-		return &Classification{
-			Type:         QueryTypeDocumentation,
-			Confidence:   0.95,
-			Reasoning:    "Level 1: documentation pattern match",
-			NeedsContext: true,
-			Priority:     3,
-		}
-	}
+	// if c.documentationPattern.MatchString(queryLower) {
+	// 	return &Classification{
+	// 		Type:         QueryTypeDocumentation,
+	// 		Confidence:   0.95,
+	// 		Reasoning:    "Level 1: documentation pattern match",
+	// 		NeedsContext: true,
+	// 		Priority:     3,
+	// 	}
+	// }
 
 	// Original patterns
 	if c.locationPattern.MatchString(queryLower) {
@@ -341,7 +341,7 @@ func (c *Classifier) level1PatternMatch(query, queryLower string) *Classificatio
 	return nil
 }
 
-func (c *Classifier) level2SymbolAnalysis(query, queryLower string, symbols []string, entities []Entity) *Classification {
+func (c *Classifier) level2SymbolAnalysis(queryLower string, symbols []string, entities []Entity) *Classification {
 	if len(symbols) == 0 {
 		return nil
 	}
@@ -421,7 +421,7 @@ func (c *Classifier) level2SymbolAnalysis(query, queryLower string, symbols []st
 	return nil
 }
 
-func (c *Classifier) level3KeywordAnalysis(query, queryLower string, symbols []string, entities []Entity) *Classification {
+func (c *Classifier) level3KeywordAnalysis(queryLower string, symbols []string, entities []Entity) *Classification {
 	keywords := extractKeywords(queryLower)
 
 	// Check for debug keywords
