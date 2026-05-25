@@ -1,16 +1,16 @@
 package query
 
 import (
+	"os"
+	"sync"
+	"time"
+
 	"eulix/internal/cache"
 	"eulix/internal/config"
-	"eulix/internal/embeddings"
 	"eulix/internal/llm"
 )
 
-// Classifier.go
 type QueryType int
-
-// Router.go
 
 type Router struct {
 	eulixDir        string
@@ -59,18 +59,35 @@ type ContextBuilder struct {
 	eulixDir      string
 	config        *config.Config
 	llmClient     *llm.Client
-	queryEmbedder *embeddings.QueryEmbedder
-	embeddings    [][]float32
-	chunks        []Chunk
-	vectorMap     map[string]int // ID -> Index in embeddings slice
-	callGraph     map[string][]Relationship
-	hasCallGraph  bool
+	queryEmbedder QueryEmbedder
+
+	// Embeddings (may be nil for very large corpora; use ivfIndex instead)
 	hasEmbeddings bool
+	embeddings    [][]float32
 	embData       *EmbeddingsData
-	kbData        *KnowledgeBase
-	hasKB         bool
-	classifier    *Classifier
-	symbolIndex   map[string][]int
+
+	// Chunks (Content field is empty when lazyContent is true)
+	chunks      []Chunk
+	symbolIndex map[string][]int
+	vectorMap   map[string]int
+	lazyContent bool // true: Content loaded on demand during assembleContext
+
+	// GB-scale indices — built automatically based on corpus size
+	ivfIndex    *IVFIndex      // non-nil when len(embeddings) > ivfBuildThreshold
+	invertedIdx *InvertedIndex // non-nil when len(chunks) > invIdxThreshold
+
+	// Knowledge base and call graph
+	hasKB        bool
+	kbData       *KnowledgeBase
+	hasCallGraph bool
+	callGraph    map[string][]Relationship
+	kbIdx        *KBIndex
+	sourceRoot   string
+	debugLog     *DebugLogger
+
+	// Thread-safe trace storage
+	mu        sync.Mutex
+	lastTrace *DebugTrace
 }
 
 type Chunk struct {
@@ -84,6 +101,106 @@ type Chunk struct {
 	Symbols    []string
 	Name       string
 	Importance float64
+}
+type DebugLogger struct {
+	file *os.File
+	mu   sync.Mutex
+}
+
+// QueryIntent is derived from the raw query before any search begins.
+// It drives per-strategy budget weights so that, e.g., a pinpoint symbol
+// lookup gives almost all budget to KB/exact search rather than semantic.
+type QueryIntent struct {
+	Type           string
+	Symbols        []string
+	Keywords       []string
+	Specificity    float64 // 0 = broad question, 1 = pinpoint identifier
+	Confidence     float64
+	RunnerUpType   string
+	RunnerUpWeight float64
+}
+
+//  Debug / tracing types
+
+// BudgetAllocation records how the token budget was split.
+type BudgetAllocation struct {
+	MaxTokens       int
+	SystemReserve   int
+	QueryCost       int
+	ResponseReserve int
+	ContextBudget   int
+	StrategyWeights map[string]float64
+}
+
+// StrategyTrace records one search strategy's outcome.
+type StrategyTrace struct {
+	Name     string
+	Duration time.Duration
+	Found    int
+	TopScore float64
+	AvgScore float64
+	Skipped  bool
+	Reason   string
+}
+
+// ChunkTrace records the MMR selection decision for one candidate.
+type ChunkTrace struct {
+	ID            string
+	File          string
+	Lines         [2]int
+	Tokens        int
+	Score         float64
+	MatchType     string
+	MatchDetails  string
+	Rank          int
+	Included      bool
+	ExcludeReason string
+}
+
+// DebugTrace is the full diagnostic for one BuildContext call.
+// Access it with cb.GetLastTrace() — no callsite changes required.
+type DebugTrace struct {
+	Query           string
+	Intent          QueryIntent
+	Budget          BudgetAllocation
+	Strategies      []StrategyTrace
+	TotalCandidates int
+	SelectionMethod string // "mmr" or "greedy"
+	ChunkTraces     []ChunkTrace
+	TotalTokens     int
+	Duration        time.Duration
+	Warnings        []string
+}
+
+//  Scalability index types
+
+// IVFIndex is an Inverted File Index for sub-linear approximate nearest-neighbour
+// search. It partitions embedding space into ivfNClusters cells via k-means; at
+// query time only ivfNProbe cells are scanned instead of the full corpus.
+type IVFIndex struct {
+	Centroids [][]float32 // [nClusters][dim]
+	Lists     [][]int32   // [nClusters] → embedding indices in that cell
+	NClusters int
+	Dim       int
+}
+
+// Posting is one entry in the inverted keyword index.
+type Posting struct {
+	ChunkIdx int
+	TF       float32 // normalised term frequency
+}
+
+// InvertedIndex maps lowercase terms to sorted posting lists.
+// Lookup cost is O(|unique query terms|) rather than O(n_chunks × |terms|).
+type InvertedIndex struct {
+	mu       sync.RWMutex
+	Postings map[string][]Posting
+	DocCount int
+}
+
+// QueryEmbedder abstracts the binary embedding client for testability.
+type QueryEmbedder interface {
+	EmbedQueryBinary(query string) ([]float32, error)
 }
 
 type Relationship struct {

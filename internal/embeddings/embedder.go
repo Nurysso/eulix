@@ -39,7 +39,7 @@ func NewEmbedder(modelName, backend string, dimension int) (*Embedder, error) {
 	// Try to find eulix_embed binary in common locations
 	binaryPath, err := findEulixBinary()
 	if err != nil {
-		return nil, fmt.Errorf("eulix_embed binary not found: %w\n\n",err)
+		return nil, fmt.Errorf("eulix_embed binary not found: %w\n\n", err)
 	}
 
 	// Test the binary works
@@ -61,7 +61,7 @@ func VectorWeaver(binaryPath, model string) *Embedder {
 	return &Embedder{
 		binaryPath: binaryPath,
 		model:      model,
-		dimension:  384, // Default dimension, will be updated from response
+		dimension:  0, // Default dimension, will be updated from response
 	}
 }
 
@@ -280,9 +280,9 @@ func (e *Embedder) VerifyConsistency(testText string) error {
 // GetModelInfo returns information about the model
 func (e *Embedder) GetModelInfo() map[string]interface{} {
 	return map[string]interface{}{
-		"model":      e.model,
-		"backend":    e.backend,
-		"dimension":  e.dimension,
-		"binary":     e.binaryPath,
+		"model":     e.model,
+		"backend":   e.backend,
+		"dimension": e.dimension,
+		"binary":    e.binaryPath,
 	}
 }
