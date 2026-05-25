@@ -83,8 +83,11 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-
-    // Set thread pool size
+    let version = env!("CARGO_PKG_VERSION");
+    let bin_hash = "miku"; // temperoraly placeholder till I figure out how to store git hash.
+                           // let bin_hash = var("VERGEN_GIT_SHA")?;
+                           // let bin_hash = env!("VERGEN_GIT_SHA");
+                           // Set thread pool size
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
         .build_global()
@@ -94,8 +97,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.verbose {
         println!("╔════════════════════════════════════════════════════════════════╗");
-        println!("║             EULIX PARSER -                   ║");
-        let version = env!("CARGO_PKG_VERSION");
         println!("║{:^64}║", format!("EULIX PARSER - v{}", version));
         println!("╚════════════════════════════════════════════════════════════════╝");
         println!();
@@ -122,6 +123,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &args.languages,
         args.euignore.as_deref(),
         args.verbose,
+        version,
+        &bin_hash,
     )?;
 
     if args.verbose {
@@ -346,6 +349,8 @@ fn parse_directory(
     languages: &str,
     euignore_path: Option<&str>,
     verbose: bool,
+    version: &str,
+    git_hash: &str,
 ) -> Result<(KnowledgeBase, ParseStats), Box<dyn std::error::Error>> {
     let path = PathBuf::from(dir);
 
@@ -440,8 +445,9 @@ fn parse_directory(
 
     let metadata = Metadata {
         project_name,
-        version: chrono::Utc::now().format("%Y.%m.%d.%H%M%S").to_string(),
-        parsed_at: chrono::Utc::now().to_rfc3339(),
+        version: version.to_string(),
+        git_hash: git_hash.to_string(),
+        parsed_at: chrono::Utc::now().format("%Y.%m.%d.%H%M%S").to_string(),
         languages: languages_set.into_iter().collect(),
         total_files: structure.len(),
         total_loc,
