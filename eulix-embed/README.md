@@ -1,307 +1,205 @@
-# Eulix Embed
-Eulix_Embed is a Rust-based knowledge base embedding generator that processes json created by [eulix_parser](https://github.com/nurysso/eulix/tree/main/eulix-parser) into semantic vector embeddings. It analyzes code structure, creates chunks, generates embeddings using ONNX models, and builds searchable indices for code understanding and retrieval.
+# eulix_embed.py
 
-## Architecture
+Eulix_Embed is a Python-based knowledge base embedding generator that processes kb json created by `eulix_parser` into semantic vector embeddings. It analyzes code structure, creates chunks, generates embeddings using AutoModel/AutoTokenizer from Hugging Face, and builds searchable indices for code understanding and retrieval.
 
-### Core Components
+> This is a python port of original [rust version](https://github.com/Nurysso/eulix/tree/Embedder-Rust-Onnx/eulix-embed)
 
-1. **Main Pipeline** (`main.rs`)
-   - Orchestrates the entire embedding generation workflow
-   - Handles CLI argument parsing and execution
-   - Provides progress reporting and statistics
+## How It Works
 
-2. **ONNX Backend** (`onnx_backend.rs`)
-   - Manages ONNX Runtime for embedding generation
-   - Supports CUDA (NVIDIA), ROCm (AMD), and CPU execution
-   - Handles model downloading from HuggingFace Hub
-   - Performs tokenization and mean pooling
+The script reads a KB JSON file (typically `knowledge_base.json`) and performs a **single-pass stream** over it using `ijson`, chunking every function, method, class, and file into structured text representations, embedding them with a HuggingFace transformer model, and writing the results to binary files ready for vector search.
 
-3. **Embedder** (`embedder.rs`)
-   - High-level embedding generation interface
-   - Auto-detects available GPU acceleration
-   - Supports batch and parallel processing
-   - Includes fallback dummy backend for testing
+```
+KB JSON ──► single-pass stream ──► chunks ──► embeddings ──► embeddings.bin
+                                                           └──► vectors.bin
+                                                           └──► context.json  (optional)
+                                                           └──► embeddings.json (optional)
+```
 
-4. **Chunker** (`chunker.rs`)
-   - Converts knowledge base into processable chunks
-   - Creates chunks for functions, classes, methods, and files
-   - Adds contextual information and metadata
-   - Assigns importance scores and tags
+## Requirements
+
+- Python 3.10 or 3.11
+- PyTorch with CUDA (NVIDIA), ROCm/HIP (AMD), MPS (Apple Silicon), or CPU
 
 ## Installation
 
-### Prerequisites
+This project requires **Python 3.10** and can be set up quickly using [uv](https://github.com/astral-sh/uv), a fast Python package installer and resolver.
 
-- Rust 1.70 or later
-- (Optional) CUDA 11+ or ROCm 5+ for GPU acceleration
+### 1. Environment Setup
 
-### Build from Source
+Choose the installation flow that matches your operating system:
 
 ```bash
-git clone https://github.com/nurysso/eulix
-cd eulix/eulix_embed
-# for rocm
-cargo build --release --features rocm
-# for cpu
-cargo build --release
-#  for cuda(havent tested it so may not work)
-cargo build --release --features cuda
+# Install uv (if you haven't already)
+ # macOS/Linux
+curl -LsSf [https://astral.sh/uv/install.sh](https://astral.sh/uv/install.sh) | sh
+
+# Windows
+powershell -c "irm [https://astral.sh/uv/install.ps1](https://astral.sh/uv/install.ps1) | iex"
+
+# Create and activate a Python 3.10 virtual environment
+uv venv --python 3.10
+source .venv/bin/activate       # Linux/macOS
+.\venv\Scripts\activate          # Windows
+
 ```
+
+### 2. Install Project Dependencies
+
+Install the core packages along with the recommended fast JSON and parsing backends:
+Bash
+
+```bash
+uv pip install -r requirements.txt
+```
+
+> Note on JSON Performance: The project will automatically use orjson and ijson with C-extensions for maximum speed when parsing large datasets.
+
+### 3. Install PyTorch
+
+PyTorch installation commands vary depending on your Operating System and GPU availability. Run the command that matches your hardware setup:
+|Platform / OS | Compute Target | Command |
+| ------------------ | ---------------------------------------- | ------------------------------------------------------------------------------ |
+| Linux / Windows| NVIDIA GPU (CUDA 12.1) | uv pip install torch --index-url https://download.pytorch.org/whl/cu121 |
+| Linux / Windows| NVIDIA GPU (CUDA 11.8) | uv pip install torch --index-url https://download.pytorch.org/whl/cu118 | Linux / Windows | CPU Only | uv pip install torch --index-url https://download.pytorch.org/whl/cpu|
+| mac OS | Apple Silicon | uv pip install torch|
+| Linux | AMD GPU (ROCm 7.2+) | uv pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2 |
+
+For other environments (like AMD ROCm), please consult the official PyTorch Start Guide.
+
+### 4. Model-Specific Packages (Optional)
+
+If you plan to use Jina v2 models, you will need to install the sentence-transformers package:
+Bash
+
+```bash
+uv pip install sentence-transformers
+```
+
+---
+
 ## Usage
 
-### Basic Command
+### `embed` — generate embeddings from a KB file
 
 ```bash
-eulix_embed --kb-path knowledge_base.json --output ./embeddings --model sentence-transformers/all-MiniLM-L6-v2
+python eulix_embed.py embed [OPTIONS]
 ```
 
-### CLI Options
+| Option             | Default                                  | Description                                                                    |
+| ------------------ | ---------------------------------------- | ------------------------------------------------------------------------------ |
+| `-k` / `--kb-path` | `knowledge_base.json`                    | Path to the KB JSON file                                                       |
+| `-o` / `--output`  | `./embeddings`                           | Output directory                                                               |
+| `-m` / `--model`   | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace model name                                                         |
+| `--device`         | auto                                     | `cuda` / `mps` / `cpu`                                                         |
+| `--batch-size`     | auto (64 GPU, 16 CPU)                    | Embedding batch size                                                           |
+| `--max-chunk`      | `2000`                                   | Maximum characters per chunk                                                   |
+| `--save-json`      | off                                      | Also write `embeddings.json` + `context.json`, and enable graph edge streaming |
 
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--kb-path` | `-k` | Path to knowledge base JSON file | `knowledge_base.json` |
-| `--output` | `-o` | Output directory for embeddings | `./embeddings` |
-| `--model` | `-m` | HuggingFace model name or local path | `sentence-transformers/all-MiniLM-L6-v2` |
-| `--help` | `-h` | Show help message | - |
-| `--version` | `-v` | Show version | - |
+**Examples:**
 
-### Supported Models
-
-**Fast (Development/Testing)**
-- `sentence-transformers/all-MiniLM-L6-v2` (384d, recommended for testing)
-
-**Better Quality**
-- `BAAI/bge-small-en-v1.5` (384d)
-- `BAAI/bge-base-en-v1.5` (768d)
-
-**Not Currently Working**
-- `sentence-transformers/all-mpnet-base-v2`
-
-## Pipeline Stages
-
-### Stage 1: Load Knowledge Base
-
-Reads the knowledge base JSON file and extracts:
-- File structures with functions and classes
-- Function signatures, parameters, and return types
-- Call graphs and relationships
-- Entry points and complexity metrics
-
-### Stage 2: Process Code Chunks
-
-Creates chunks of different types:
-- **EntryPoint**: Application entry points (highest priority)
-- **Function**: Regular functions with full context
-- **Class**: Class overviews with attributes and methods
-- **Method**: Class methods with inheritance context
-- **File**: File-level summaries
-
-Each chunk includes:
-- Source code content
-- File path and line numbers
-- Language and complexity metrics
-- Tags and importance scores
-
-### Stage 3: Generate Embeddings
-
-- Tokenizes text content
-- Generates dense vector embeddings using ONNX models
-- Applies mean pooling and normalization
-- Processes in batches for efficiency
-
-### Stage 4: Build Embedding Index
-
-Creates a searchable index containing:
-- Chunk IDs and types
-- Original content
-- Vector embeddings
-- Metadata and relationships
-
-### Stage 5: Create Context Index
-
-Builds additional context structures:
-- Tag-based lookups
-- Relationship graphs
-- Call hierarchies
-- Entry point mappings
-
-### Stage 6: Save Outputs
-
-Generates multiple output files:
-- `embeddings.json` - Full index in JSON format
-- `embeddings.bin` - Compact binary format
-- `vectors.bin` - Pure vector data
-- `context.json` - Context and relationships
-
-## GPU Acceleration
-
-### Auto-Detection
-
-The system automatically detects available GPU hardware:
-
-```rust
-// Automatically selects best backend
-let generator = EmbeddingGenerator::new(model_name)?;
-```
-
-### Detection Logic
-
-1. **CUDA (NVIDIA)**: Checks for `CUDA_PATH`, `/usr/local/cuda`, or `nvidia-smi`
-2. **ROCm (AMD)**: Checks for `ROCM_PATH`, `/opt/rocm`, or `rocm-smi`
-3. **CPU Fallback**: Used if no GPU detected
-
-### Manual Backend Selection
-
-You can specify backends programmatically:
-
-```rust
-let config = EmbedderConfig {
-    backend: EmbeddingBackend::OnnxCuda,  // or OnnxRocm, OnnxCpu
-    model_name: model_name.to_string(),
-    ..Default::default()
-};
-let generator = EmbeddingGenerator::with_config(config)?;
-```
-
-## Error Handling
-
-### Common Issues
-
-**1. Knowledge Base Not Found**
-```
-[ERROR] Knowledge base file not found: knowledge_base.json
-```
-Solution: Provide correct path with `--kb-path`
-
-**2. Model Download Failed**
-```
-Failed to download ONNX model
-```
-Solutions:
-- Check internet connection
-- Set `HF_HOME` environment variable
-- Download model manually
-- Use CPU backend: `--backend cpu`
-
-**3. GPU Not Detected**
-```
-No GPU detected - using CPU backend
-```
-Solutions:
-- Install CUDA/ROCm drivers
-- Set `CUDA_PATH` or `ROCM_PATH` environment variables
-- Verify with `nvidia-smi` or `rocm-smi`
-
-## Performance
-
-### Typical Speeds
-
-- **GPU (CUDA/ROCm)**: 100-500 chunks/sec
-- **CPU**: 10-50 chunks/sec
-
-### Memory Usage
-
-- Model size: 50-400 MB (depending on model)
-- Embeddings: ~1.5 KB per chunk (384d)
-- Total index: Varies by codebase size
-
-### Optimization Tips
-
-1. Use GPU acceleration when available
-2. Choose smaller models for faster processing
-3. Adjust batch sizes based on available memory
-4. Use binary formats for faster loading
-
-## Output Format
-
-### embeddings.json
-```json
-{
-  "model": "sentence-transformers/all-MiniLM-L6-v2",
-  "dimension": 384,
-  "total_chunks": 1500,
-  "entries": [
-    {
-      "id": "function_id",
-      "chunk_type": "function",
-      "content": "...",
-      "embedding": [0.123, ...],
-      "metadata": {...}
-    }
-  ]
-}
-```
-
-### context.json
-```json
-{
-  "tags": {
-    "async": ["chunk_id1", "chunk_id2"],
-    "api": ["chunk_id3"]
-  },
-  "relationships": [
-    {
-      "from": "caller_id",
-      "to": "callee_id",
-      "type": "calls"
-    }
-  ]
-}
-```
-
-## Testing
-
-### Dummy Backend
-
-For testing without model download:
-
-```rust
-let config = EmbedderConfig {
-    backend: EmbeddingBackend::Dummy,
-    ..Default::default()
-};
-```
-
-Generates hash-based embeddings (not semantically meaningful).
-
-## Troubleshooting
-
-### HuggingFace Hub Issues
-
-Set cache directory:
 ```bash
-export HF_HOME=/path/to/cache
+# Basic run — auto device, default model
+uv run eulix_embed.py embed -k .eulix/kb.json -o .eulix
+
+# Specific model, save JSON outputs
+uv run  eulix_embed.py embed -k .eulix/kb.json -o .eulix -m BAAI/bge-base-en-v1.5 --save-json
 ```
 
-### ONNX Runtime Errors
+---
 
-Ensure model has ONNX format available:
-- Check HuggingFace model page for `onnx/model.onnx`
-- Some models require conversion
+### `query` — embed a single query string
 
-### Token Limit Exceeded
+Useful for testing similarity search at the CLI level.
 
-Chunks automatically truncated to 512 tokens (~2000 chars).
+```bash
+uv run  eulix_embed.py query -q "how does authentication work" -m BAAI/bge-base-en-v1.5
+```
 
-## Contributing
+| Option            | Default            | Description                       |
+| ----------------- | ------------------ | --------------------------------- |
+| `-q` / `--query`  | _(required)_       | Query text to embed               |
+| `-m` / `--model`  | `all-MiniLM-L6-v2` | HuggingFace model name            |
+| `-f` / `--format` | `json`             | Output format: `json` or `binary` |
 
-When extending the codebase:
+---
 
-1. Follow Rust naming conventions
-2. Add error context with `anyhow::Context`
-3. Include progress reporting for long operations
-4. Write tests for new backends
-5. Update documentation
+### `compare` — verify embeddings.bin matches vectors.bin
+
+```bash
+python eulix_embed.py compare [embeddings.bin] [vectors.bin]
+```
+
+Checks dimension consistency, entry count, and spot-checks vector values. Exits non-zero if mismatches are found.
+
+---
+
+## Output Files
+
+| File              | Always written     | Description                                              |
+| ----------------- | ------------------ | -------------------------------------------------------- |
+| `embeddings.bin`  | ✓                  | Ordered list of `(id, f32[dim])` — preserves chunk order |
+| `vectors.bin`     | ✓                  | `id → f32[dim]` map — for keyed lookup                   |
+| `context.json`    | `--save-json` only | Relationships, tags, entry points, call graph summary    |
+| `embeddings.json` | `--save-json` only | Human-readable embeddings with metadata                  |
+
+### Binary format (v3)
+
+```
+magic(4)          — "EULX"
+version(4)        — u32 little-endian, value = 3
+model_name_len(4) — u32
+model_name        — UTF-8 bytes
+count(4)          — u32 number of entries
+dimension(4)      — u32
+[ id_len(4) + id_bytes + f32 * dimension ] × count
+```
+
+---
+
+## Supported Models
+
+| Model                                    | Dimension | Notes                               |
+| ---------------------------------------- | --------- | ----------------------------------- |
+| `sentence-transformers/all-MiniLM-L6-v2` | 384       | Fast, good general purpose baseline |
+| `BAAI/bge-small-en-v1.5`                 | 384       | Small, strong retrieval performance |
+| `BAAI/bge-base-en-v1.5`                  | 768       | Balanced quality/speed              |
+| `jinaai/jina-embeddings-v2-base-code`    | 768       | 8192-token context, best for code   |
+
+Jina v2 models require `sentence-transformers` and use an extended bucket schedule up to 8192 tokens.
+
+---
+
+## Chunk Types
+
+The chunker mirrors the Rust `chunker.rs` logic exactly and produces five chunk types:
+
+| Type         | Source                                     | Importance score      |
+| ------------ | ------------------------------------------ | --------------------- |
+| `entrypoint` | Functions marked as entry points in the KB | 1.0                   |
+| `function`   | Top-level functions                        | from KB (default 0.5) |
+| `method`     | Class methods                              | from KB (default 0.5) |
+| `class`      | Class overview (attributes + method list)  | 0.7                   |
+| `file`       | Per-file summary (imports, function list)  | 0.5                   |
+
+---
+
+## Performance Notes
+
+- **ijson C backend**: install `libyajl2` (`apt install libyajl2` / `dnf install yajl`) for ~10× faster JSON streaming. Without it, set `IJSON_BACKEND=python` to suppress loader errors.
+- **Bucketing**: on GPU, sequences are grouped into fixed-length buckets before batching. This avoids padding waste and significantly improves throughput.
+- **orjson**: optional but recommended — install with `pip install orjson` for faster JSON output when using `--save-json`.
+- **Graph edges**: call and dependency graph edges are only streamed when `--save-json` is passed. Without it, `Relationships: 0` in the summary is expected.
+
+---
+
+## Known Issues
+
+- **648 chunks / 590 vectors discrepancy**: if chunk count exceeds vector count in the summary, duplicate chunk IDs are silently dropped from `vector_store`. This is most likely caused by class IDs not being tracked in `seen_ids` during chunking. A fix is to add `seen_ids.add(cls["id"])` before appending class chunks in `chunk_one_file`.
+- **`(null): No such file or directory` at startup**: these messages come from the ROCm/libtorch stack trying to dlopen a library, not from this script. They are harmless and the pipeline runs correctly.
+
+---
 
 ## License
 
-[LICENSE](../LICENSE)
-
-## Version
-
-Current version: 0.1.2
-
-
-# Note on Development
-This binary was primarily built (approximately 90%) by Claude, due to my limited experience with embeddings, GPU-based computation time to finish the eulix project. I contributed the architecture design, performed basic code fixes, and implemented minor performance optimizations. <br>
-Any issues or ideas to improve this bin is appriciated and welcomed
+Copyright (C) 2026 Dawood Khan
+Licensed under the [GNU General Public License v3.0 or later](https://www.gnu.org/licenses/gpl-3.0.html).
