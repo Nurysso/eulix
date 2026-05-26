@@ -327,21 +327,21 @@ impl Analyzer {
             .collect();
 
         // --- PHASE 5: Conversion to Final Edges ---
+        // --- PHASE 5: Conversion to Final Edges ---
+        let node_count = final_nodes.len();
         let final_edges: Vec<CallGraphEdge> = all_edges
             .into_iter()
-            .map(|(from_idx, to_idx, kind, cond, line)| {
-                CallGraphEdge {
-                    // Use the index to get the actual String ID (e.g., "my_function_name")
-                    from: final_nodes[from_idx].id.clone(),
-                    to: final_nodes[to_idx].id.clone(),
-                    edge_type: if kind == 1 {
-                        "inheritance".to_string()
-                    } else {
-                        "call".to_string()
-                    },
-                    conditional: cond,
-                    call_site_line: line,
-                }
+            .filter(|(from_idx, to_idx, _, _, _)| *from_idx < node_count && *to_idx < node_count)
+            .map(|(from_idx, to_idx, kind, cond, line)| CallGraphEdge {
+                from: final_nodes[from_idx].id.clone(),
+                to: final_nodes[to_idx].id.clone(),
+                edge_type: if kind == 1 {
+                    "inheritance".to_string()
+                } else {
+                    "call".to_string()
+                },
+                conditional: cond,
+                call_site_line: line,
             })
             .collect();
 
