@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+
+
 # Copyright (C) 2026 Dawood Khan
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
@@ -55,42 +58,41 @@ check_python_version()
 
 
 
+# import os
 import argparse
 import gc
 import json
-import os
 import struct
-import sys
+import shutil
 import time
-from collections import defaultdict, deque
+from collections import defaultdict, deque, Counter
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Generator, Iterator, List, Optional, Set, Tuple
+from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
 from tqdm import tqdm
-import ijson
+import ijson.common
 from collections import Counter
 
 # Optional fast JSON backend
 try:
     import orjson as _orjson
-
-    def _json_dumps(obj: Any, *, indent: bool = False) -> str:
-        opts = _orjson.OPT_INDENT_2 if indent else 0
-        return _orjson.dumps(obj, option=opts).decode()
-
     _HAS_ORJSON = True
 except ImportError:
+    _orjson = None
     _HAS_ORJSON = False
 
-    def _json_dumps(obj: Any, *, indent: bool = False) -> str:  # type: ignore[misc]
-        return json.dumps(obj, indent=2 if indent else None)
-
+# Define the wrapper function once
+def _json_dumps(obj: Any, *, indent: bool = False) -> str:
+    if _HAS_ORJSON and _orjson is not None:
+        opts = _orjson.OPT_INDENT_2 if indent else 0 # type: ignore[attr-defined]
+        return _orjson.dumps(obj, option=opts).decode() # type ignore[attr-defined]
+    return json.dumps(obj, indent=2 if indent else None)
 
 # ijson ObjectBuilder — used by the single-pass state machine
 try:
@@ -99,7 +101,7 @@ except ImportError:
     try:
         from ijson import ObjectBuilder as _OB  # type: ignore[no-redef]
     except ImportError:
-        raise ImportError("ijson ObjectBuilder not found — pip install ijson")
+        raise ImportError("ijson ObjectBuilder not found — if using \"uv\" use uv pip install ijson")
 
 
 # Constants — mirrors Rust exactly
@@ -108,13 +110,11 @@ BUCKETS_JINA: List[int] = [32, 64, 128, 192, 256, 384, 512, 768, 1024, 2048, 409
 
 BINARY_MAGIC = b"EULX"
 BINARY_VERSION = 3
-VECTOR_MAGIC = b"EULX"
-VECTOR_VERSION = 3
+# VECTOR_MAGIC = b"EULX"
+Version = "0.6.1" # different from Binary and vector magic
 
 # Dataclass slots: Python ≥3.10 natively; earlier versions fall back gracefully.
 _DC_KW: Dict[str, Any] = {"slots": True} if sys.version_info >= (3, 10) else {}
-
-
 
 # Snap-to-bucket helper — identical to Rust
 def snap_to_bucket(seq_len: int, buckets: List[int]) -> int:
@@ -265,7 +265,7 @@ def _stream_kb(path: Path, *, need_graphs: bool = False) -> Generator:
                 continue
 
             #  Stream call_graph edges (only when caller needs them)
-            if top_key == "call_graph" and need_graphs:
+            if top_key == "call_graph":
                 # Only promote the direct sub-keys of call_graph (not nested ones)
                 if prefix == "call_graph" and event == "map_key":
                     cg_sub = value
@@ -286,7 +286,7 @@ def _stream_kb(path: Path, *, need_graphs: bool = False) -> Generator:
                 continue
 
             #  Stream dependency_graph edges
-            if top_key == "dependency_graph" and need_graphs:
+            if top_key == "dependency_graph":
                 if prefix == "dependency_graph" and event == "map_key":
                     dg_sub = value
                 elif dg_sub == "edges":
@@ -532,11 +532,15 @@ def chunk_one_file(
                 )
             )
 
-    #  Classes + methods ─
+    #  Classes + methods
     for cls in fs.get("classes", []):
+        cid = cls["id"]
+        if cid in seen_ids:
+            continue
+        seen_ids.add(cid)
         chunks.append(
             Chunk(
-                id=cls["id"],
+                id=cid,
                 chunk_type=ChunkType.class_,
                 content=_truncate_content(_fmt_class_overview(cls, file_path), max_size),
                 metadata=ChunkMetadata(
@@ -579,26 +583,28 @@ def chunk_one_file(
     #  File summary
     summary = _fmt_file_summary(file_path, fs)
     if summary.strip():
-        chunks.append(
-            Chunk(
-                id=f"file:{file_path}",
-                chunk_type=ChunkType.file,
-                content=_truncate_content(summary, max_size),
-                metadata=ChunkMetadata(
-                    file_path=file_path,
-                    language=lang,
-                    line_start=1,
-                    line_end=fs.get("loc"),
-                    name=file_path,
-                    complexity=None,
-                ),
-                tags=["file", lang],
-                importance_score=0.5,
+        fid = f"file:{file_path}"
+        if fid not in seen_ids:      # guard file chunks too, just in case
+            seen_ids.add(fid)
+            chunks.append(
+                Chunk(
+                    id=fid,
+                    chunk_type=ChunkType.file,
+                    content=_truncate_content(summary, max_size),
+                    metadata=ChunkMetadata(
+                        file_path=file_path,
+                        language=lang,
+                        line_start=1,
+                        line_end=fs.get("loc"),
+                        name=file_path,
+                        complexity=None,
+                    ),
+                    tags=["file", lang],
+                    importance_score=0.5,
+                )
             )
-        )
 
     return chunks
-
 
 # PYTORCH EMBEDDER
 
@@ -609,7 +615,7 @@ class EmbeddingGenerator:
     def __init__(
         self,
         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-        device: Optional[str] = None,
+        device: Optional[str] = None, # type: ignore
         batch_size: Optional[int] = None,
         normalize: bool = True,
         use_bucketing: bool = True,
@@ -619,11 +625,12 @@ class EmbeddingGenerator:
 
         if device is None:
             if torch.cuda.is_available():
-                self.device = torch.device("cuda")
                 # Distinguish NVIDIA vs AMD ROCm
                 if torch.version.hip is not None:
+                    self.device = torch.device("cuda")
                     print("  ✓ AMD GPU detected — using ROCm/HIP")
                 else:
+                    self.device = torch.device("cuda")
                     print("  ✓ NVIDIA GPU detected — using CUDA")
             elif torch.backends.mps.is_available():
                 self.device = torch.device("mps")
@@ -649,7 +656,7 @@ class EmbeddingGenerator:
             try:
                 from sentence_transformers import SentenceTransformer
 
-                self._st_model = SentenceTransformer(model_name, device=str(self.device))
+                self._st_model = SentenceTransformer(model_name, device=self.device)
                 self._st_model.eval()
                 self.tokenizer = self._st_model.tokenizer
                 self.model = None
@@ -760,6 +767,7 @@ class EmbeddingGenerator:
                 bucket_map[b].append((orig_idx, chunk))
 
             print(f"     Shape buckets active: {len(bucket_map)}")
+# blen is short for Bucket Length
             for blen in sorted(bucket_map):
                 print(f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks")
 
@@ -793,8 +801,19 @@ class EmbeddingGenerator:
         indexed_sorted = sorted(indexed, key=lambda x: x[0])
 
         store: Dict[str, np.ndarray] = {}
+        duplicates: List[str] = []                           # track duplicates
         for (orig_idx, emb), (i, _, chunk) in zip(results, indexed_sorted):
+            if chunk.id in store:
+                duplicates.append(chunk.id)
             store[chunk.id] = emb
+
+        if duplicates:                                       # surface them loudly
+            print(f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:")
+            for did in duplicates[:10]:
+                print(f"         {did}")
+            if len(duplicates) > 10:
+                print(f"         ... and {len(duplicates) - 10} more")
+
         return store
 
     def embed_query(self, query: str) -> np.ndarray:
@@ -821,35 +840,74 @@ def save_embeddings_bin(
     dimension: int,
     entries: List[Tuple[str, np.ndarray]],
 ) -> None:
+    """
+Save embeddings to a custom binary format for efficient storage and retrieval.
+
+    File Format (Little-Endian):
+    =============================
+    Offset  | Size (bytes) | Field                    | Description
+    --------|--------------|--------------------------|-------------------------------
+    0       | 4            | magic                    | "EULX" file signature
+    4       | 4            | version                  | Format version (currently 3)
+    8       | 4            | model_name_len           | Length of model name string
+    12      | variable     | model_name               | UTF-8 encoded model name
+    12+len  | 4            | num_embeddings           | Number of embeddings in file
+    16+len  | 4            | dimension                | Vector dimension (e.g., 384)
+    20+len  | variable     | embedding_data           | Repeated for each embedding:
+            |              |   - 4 bytes: id_len       | Length of ID string
+            |              |   - id_len bytes: id      | UTF-8 encoded identifier
+            |              |   - dimension*4 bytes:    | Float32 vector in row-major order
+    Note:
+        The binary format intentionally uses 32-bit length prefixes (even though IDs are
+        limited to 0xFFFF) to maintain 4-byte alignment for the vector data, improving
+        memory access performance on modern hardware.
+"""
+
     with open(path, "wb") as fh:
         fh.write(BINARY_MAGIC)
         fh.write(struct.pack("<I", BINARY_VERSION))
         _write_str(fh, model_name)
         fh.write(struct.pack("<II", len(entries), dimension))
         for eid, vec in entries:
-            _write_str(fh, eid)
-            fh.write(vec.astype(np.float32).tobytes())
+            # Guard against IDs that would corrupt the length prefix
+            eid_bytes = eid.encode("utf-8")
+            if len(eid_bytes) > 0xFFFF:
+                raise ValueError(f"Chunk ID too long ({len(eid_bytes)} bytes): {eid[:80]}...")
+            fh.write(struct.pack("<I", len(eid_bytes)))
+            fh.write(eid_bytes)
+            arr = np.asarray(vec, dtype=np.float32)
+            if arr.shape != (dimension,):
+                raise ValueError(f"Vector shape mismatch for {eid}: {arr.shape} vs ({dimension},)")
+            fh.write(arr.tobytes())
 
 
-def load_embeddings_bin(
-    path: Path,
-) -> Tuple[str, int, List[Tuple[str, np.ndarray]]]:
+def load_embeddings_bin(path: Path):
     with open(path, "rb") as fh:
         magic = fh.read(4)
-        if magic != BINARY_MAGIC:
-            raise ValueError(f"Bad magic: {magic!r}, expected {BINARY_MAGIC!r}")
-        (version,) = struct.unpack("<I", fh.read(4))
-        if version not in (2, 3):
-            raise ValueError(f"Unsupported version {version}")
+        version, = struct.unpack("<I", fh.read(4))
         model_name = _read_str(fh)
         count, dim = struct.unpack("<II", fh.read(8))
+        print(f"  magic={magic}, version={version}, model={model_name}")
+        print(f"  count={count}, dim={dim}")
+        print(f"  expected file size: {8 + len(model_name.encode()) + 4 + count * (4 + dim * 4)} bytes (approx)")
+        print(f"  actual file size:   {path.stat().st_size} bytes")
+
         entries = []
         for idx in range(count):
-            eid = _read_str(fh) if version >= 3 else f"embedding_{idx}"
-            raw = fh.read(dim * 4)
-            vec = np.frombuffer(raw, dtype=np.float32).copy()
-            entries.append((eid, vec))
-    return model_name, dim, entries
+            pos = fh.tell()
+            try:
+                eid = _read_str(fh)
+                raw = fh.read(dim * 4)
+                if len(raw) != dim * 4:
+                    print(f"  [ERROR] entry {idx} at byte {pos}: expected {dim*4} bytes, got {len(raw)}")
+                    break
+                vec = np.frombuffer(raw, dtype=np.float32).copy()
+                entries.append((eid, vec))
+            except Exception as e:
+                print(f"  [ERROR] entry {idx} at byte {pos}: {e}")
+                break
+
+        print(f"  successfully read {len(entries)} / {count} entries")
 
 
 def save_vectors_bin(
@@ -859,13 +917,20 @@ def save_vectors_bin(
     store: Dict[str, np.ndarray],
 ) -> None:
     with open(path, "wb") as fh:
-        fh.write(VECTOR_MAGIC)
-        fh.write(struct.pack("<I", VECTOR_VERSION))
+        fh.write(BINARY_MAGIC)
+        fh.write(struct.pack("<I", BINARY_VERSION))
         _write_str(fh, model_name)
         fh.write(struct.pack("<II", len(store), dimension))
         for eid, vec in store.items():
-            _write_str(fh, eid)
-            fh.write(vec.astype(np.float32).tobytes())
+            eid_bytes = eid.encode("utf-8")
+            if len(eid_bytes) > 0xFFFF:
+                raise ValueError(f"Chunk ID too long ({len(eid_bytes)} bytes): {eid[:80]}...")
+            fh.write(struct.pack("<I", len(eid_bytes)))
+            fh.write(eid_bytes)
+            arr = np.asarray(vec, dtype=np.float32)
+            if arr.shape != (dimension,):
+                raise ValueError(f"Vector shape mismatch for {eid}: {arr.shape} vs ({dimension},)")
+            fh.write(arr.tobytes())
 
 
 def load_vectors_bin(
@@ -873,7 +938,7 @@ def load_vectors_bin(
 ) -> Tuple[str, int, Dict[str, np.ndarray]]:
     with open(path, "rb") as fh:
         magic = fh.read(4)
-        if magic != VECTOR_MAGIC:
+        if magic != BINARY_MAGIC:
             raise ValueError(f"Bad magic: {magic!r}")
         (version,) = struct.unpack("<I", fh.read(4))
         model_name = _read_str(fh)
@@ -899,6 +964,7 @@ def build_context_index(
     cg_edges: Optional[List[Dict]] = None,
     dep_edges: Optional[List[Dict]] = None,
     include_chunks: bool = False,
+    debug: bool= False,
 ) -> Dict:
     """
     Build the context index.
@@ -959,22 +1025,101 @@ def build_context_index(
             }
         )
 
-    # BFS call-graph depth from entry points
+    # ── BFS call-graph depth ─────────────────────────────────────────────────
+
+    # Deduplicate edges before building adj — parser emits duplicate call sites
+    # (same from→to at different line numbers) which bloat traversal for free.
+    seen_edges: Set[Tuple[str, str]] = set()
     adj: Dict[str, List[str]] = defaultdict(list)
     for edge in cg_edges or []:
-        adj[edge["from"]].append(edge["to"])
-    max_depth = 0
+        key = (edge["from"], edge["to"])
+        if key not in seen_edges:
+            seen_edges.add(key)
+            adj[edge["from"]].append(edge["to"])
+
+    PREFIXES = ("func_", "method_", "struct_", "class_", "module_")
+
+    def _strip(node_id: str) -> str:
+        for pfx in PREFIXES:
+            if node_id.startswith(pfx):
+                return node_id[len(pfx):]
+        return node_id
+
+    name_to_ids: Dict[str, List[str]] = defaultdict(list)
+    for node_id in adj:
+        name_to_ids[_strip(node_id)].append(node_id)
+
+    def _resolve_ep(ep: Dict) -> List[str]:
+        if ep["function"] in adj:
+            return [ep["function"]]
+        candidates = name_to_ids.get(ep["function"], [])
+        ep_file = ep.get("file", "")
+        if ep_file and len(candidates) > 1:
+            filtered = [
+                c for c in candidates
+                if ep_file in c or ep_file.split("/")[-1] in c
+            ]
+            if filtered:
+                return filtered
+        return candidates
+
+    # Resolve entry points → adj node IDs
+    bfs_roots: Set[str] = set()
+    unresolved: List[str] = []
     for ep in meta.get("entry_points", []):
-        visited: Dict[str, int] = {ep["function"]: 0}
-        q: deque = deque([(ep["function"], 0)])
+        resolved = _resolve_ep(ep)
+        if resolved:
+            bfs_roots.update(resolved)
+        else:
+            unresolved.append(f"{ep['function']!r} ({ep.get('file', '')})")
+
+    if unresolved and debug:
+        for u in unresolved:
+            print(f"  [INFO] {u} is a bootstrap entry point with no call graph "
+                  f"edges — excluded from BFS (expected for main functions)")
+
+    # Fallback: graph roots = nodes never appearing as a call target
+    using_fallback = False
+    if not bfs_roots:
+        all_targets: Set[str] = {e["to"] for e in cg_edges or []}
+        graph_roots = [n for n in adj if n not in all_targets]
+        print(f"  [INFO] Bootstrap entry points have no call graph edges. "
+              f"Using {len(graph_roots)} graph root(s) for BFS depth calculation.")
+        bfs_roots.update(graph_roots)
+        using_fallback = True
+
+    if debug:
+        print(f"  [DEBUG] cg_edges (raw)   : {len(cg_edges or [])}")
+        print(f"  [DEBUG] cg_edges (deduped): {len(seen_edges)}")
+        print(f"  [DEBUG] adj nodes         : {len(adj)}")
+        print(f"  [DEBUG] bfs_roots         : {len(bfs_roots)}"
+              f"{' (fallback)' if using_fallback else ''}")
+        for k, vs in list(adj.items())[:3]:
+            print(f"  [DEBUG]   adj sample: {k!r} -> {vs[:3]}")
+
+    # BFS — track depth per node, guard against cycles with visited_global
+    max_depth = 0
+    visited_global: Set[str] = set()
+
+    for root in bfs_roots:
+        if root in visited_global:
+            continue
+        q: deque[Tuple[str, int]] = deque([(root, 0)])
+        visited_local: Set[str] = {root}
         while q:
             node, depth = q.popleft()
-            max_depth = max(max_depth, depth)
+            visited_global.add(node)
+            if depth > max_depth:
+                max_depth = depth
             for nb in adj.get(node, []):
-                if nb not in visited:
-                    visited[nb] = depth + 1
+                if nb not in visited_local:        # cycle guard per-root
+                    visited_local.add(nb)
                     q.append((nb, depth + 1))
 
+    if debug:
+        print(f"  [DEBUG] max_depth: {max_depth}")
+
+    # ─────────────────────────────────────────────────────────────────────────
     entry_points_info = [
         {
             "id": ep["function"],
@@ -1022,14 +1167,28 @@ class EmbeddingPipeline:
         device: Optional[str] = None,
         batch_size: Optional[int] = None,
         save_json: bool = False,
+        debug: bool = False,
     ):
         self.max_chunk_size = max_chunk_size
         self.save_json = save_json
+        self.debug = debug
         self.generator = EmbeddingGenerator(
             model_name=model_name,
             device=device,
             batch_size=batch_size,
         )
+
+    def _check_disk_space(self, output_dir: Path, kb_path: Path, estimated_chunks: int = None) -> None:
+        free = shutil.disk_usage(output_dir.parent if not output_dir.exists() else output_dir).free
+        kb_size = kb_path.stat().st_size
+        # Rough estimate: 2× KB size for both bin files + 20% headroom
+        required = int(kb_size * 2.2)
+        free_gb = free / 1_073_741_824
+        req_gb  = required / 1_073_741_824
+        print(f"Disk space:  {free_gb:.1f} GB free, ~{req_gb:.1f} GB estimated required")
+        if free < required:
+            print(f"  [ERROR] Insufficient disk space — need ~{req_gb:.1f} GB, have {free_gb:.1f} GB")
+            sys.exit(1)
 
     def process(self, kb_path: Path, output_dir: Path) -> None:
         t_total = time.time()
@@ -1042,7 +1201,7 @@ class EmbeddingPipeline:
         print(f"  orjson        : {'yes' if _HAS_ORJSON else 'no (stdlib json)'}")
         print(f"  Chunk slots   : {'yes' if _DC_KW else 'no (Python <3.10)'}")
         print(f"{SEP}\n")
-
+        self._check_disk_space(output_dir, kb_path)
         #  Step 1 + 2: Single-pass KB scan + chunk generation
         print("STEP 1+2: Knowledge Base scan + Chunk generation (single pass)")
         print(sep)
@@ -1142,6 +1301,7 @@ class EmbeddingPipeline:
             cg_edges=cg_edges,
             dep_edges=dep_edges,
             include_chunks=self.save_json,
+            debug=self.debug,
         )
         # Edges lists no longer needed
         del cg_edges, dep_edges
@@ -1278,6 +1438,7 @@ def cmd_embed(args: argparse.Namespace) -> None:
         device=args.device,
         batch_size=args.batch_size,
         save_json=args.save_json,
+        debug=args.debug,
     )
     kb_path = Path(args.kb_path)
     if not kb_path.exists():
@@ -1343,6 +1504,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
     if len(emb_entries) != len(vec_store):
         issues.append(f"Count mismatch: {len(emb_entries)} vs {len(vec_store)}")
 
+# evec is short for embedding vector
     for eid, evec in emb_entries[:5]:
         if eid in vec_store:
             diff = np.abs(evec - vec_store[eid]).max()
@@ -1376,7 +1538,8 @@ def main() -> None:
     ep.add_argument("--device", default=None)
     ep.add_argument("--batch-size", type=int, default=None)
     ep.add_argument("--max-chunk", type=int, default=2000)
-    ep.add_argument("--save-json", action="store_true")
+    ep.add_argument("--save-json", action="store_true", help="[Use for Debugging] Save a json copy of embedder.bin and vector.bin ")
+    ep.add_argument("--debug", action="store_true", help="Print debug info during pipeline")
 
     qp = sub.add_parser("query")
     qp.add_argument("-q", "--query", default="")
@@ -1398,6 +1561,8 @@ def main() -> None:
         cmd_query(args)
     elif args.command == "compare":
         cmd_compare(args)
+    elif args.command == "version":
+        print("0.3.1") # This version is different from rust embedder
     else:
         print_help()
         sys.exit(1)
