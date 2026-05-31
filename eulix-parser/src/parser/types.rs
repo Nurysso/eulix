@@ -368,6 +368,7 @@ pub struct TypeScriptInfo {
     pub is_overload: bool,           // TS function overloads
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CInfo {
     pub is_static: bool, // file-scoped linkage
     pub is_inline: bool,
@@ -376,6 +377,7 @@ pub struct CInfo {
     pub calling_convention: Option<String>, // __cdecl, __stdcall etc.
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CppInfo {
     pub is_static: bool,
     pub is_inline: bool,

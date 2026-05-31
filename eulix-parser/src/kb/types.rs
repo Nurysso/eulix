@@ -379,7 +379,7 @@ pub struct CInfo {
     pub is_variadic: bool,                  // printf-style ...
     pub calling_convention: Option<String>, // __cdecl, __stdcall etc.
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CppInfo {
     pub is_static: bool,
     pub is_inline: bool,
