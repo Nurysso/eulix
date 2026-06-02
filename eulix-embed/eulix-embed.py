@@ -1,8 +1,17 @@
 #!/usr/bin/env python
 
 
-# Copyright (C) 2026 Dawood Khan
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Dawood
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#     http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 # Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 #
 # Python port of eulix_embed (Rust) — check embed branch for implementation.
@@ -27,44 +36,20 @@
 # INSTALL:
 #   pip install ijson[yajl2_cffi] orjson  # fast C backends (optional)
 #   pip install ijson numpy torch transformers tqdm
-# or use UV to maintain
+# or use UV to maintain [RECOMENDED APPROACH]
 
 from __future__ import annotations
 import sys
-
-def check_python_version():
-    # Define your allowed Python boundaries
-    MIN_VERSION = (3, 10)
-    MAX_VERSION = (3, 11)  # Stop before 3.12+ if your ML libraries aren't ready
-
-    current_version = sys.version_info[:2]
-
-    if current_version < MIN_VERSION or current_version > MAX_VERSION:
-        print("=" * 60)
-        print("❌ CRITICAL: PYTHON VERSION COMPATIBILITY ERROR")
-        print(f"Current version: Python {sys.version.split()[0]}")
-        print(f"Required version: Between Python {MIN_VERSION[0]}.{MIN_VERSION[1]} and {MAX_VERSION[0]}.{MAX_VERSION[1]}")
-        print("=" * 60)
-        print("\nPlease switch your virtual environment or Python installation.")
-        print("If using 'uv', you can recreate the environment with the correct version:")
-        print(f"  uv venv --python {MIN_VERSION[0]}.{MIN_VERSION[1]}")
-        print("=" * 60)
-
-        # Immediately halt execution with a non-zero exit code
-        sys.exit(1)
-
-# Run the check immediately
-check_python_version()
-
-
-
-# import os
+import traceback
 import argparse
 import gc
+import re
 import json
 import struct
 import shutil
 import time
+import site
+from functools import partial
 from collections import defaultdict, deque, Counter
 from dataclasses import dataclass
 from enum import Enum
@@ -82,17 +67,26 @@ from collections import Counter
 # Optional fast JSON backend
 try:
     import orjson as _orjson
+    # Pre-bind the serialization functions
+    if hasattr(_orjson, "OPT_INDENT_2"):
+        _json_dumps_no_indent = partial(_orjson.dumps, option=0)
+        _json_dumps_indent   = partial(_orjson.dumps, option=_orjson.OPT_INDENT_2)
+    else:   # fallback for older orjson versions
+        _json_dumps_no_indent = lambda obj: _orjson.dumps(obj).decode()
+        _json_dumps_indent   = lambda obj: _orjson.dumps(obj, option=_orjson.OPT_INDENT_2).decode()
     _HAS_ORJSON = True
 except ImportError:
-    _orjson = None
     _HAS_ORJSON = False
+    _json_dumps_no_indent = partial(json.dumps, indent=None)
+    _json_dumps_indent   = partial(json.dumps, indent=2)
 
 # Define the wrapper function once
 def _json_dumps(obj: Any, *, indent: bool = False) -> str:
-    if _HAS_ORJSON and _orjson is not None:
-        opts = _orjson.OPT_INDENT_2 if indent else 0 # type: ignore[attr-defined]
-        return _orjson.dumps(obj, option=opts).decode() # type ignore[attr-defined]
-    return json.dumps(obj, indent=2 if indent else None)
+    """Fast JSON dumps – uses orjson when available, falls back to json."""
+    if indent:
+        return _json_dumps_indent(obj)
+    else:
+        return _json_dumps_no_indent(obj)
 
 # ijson ObjectBuilder — used by the single-pass state machine
 try:
@@ -111,7 +105,7 @@ BUCKETS_JINA: List[int] = [32, 64, 128, 192, 256, 384, 512, 768, 1024, 2048, 409
 BINARY_MAGIC = b"EULX"
 BINARY_VERSION = 3
 # VECTOR_MAGIC = b"EULX"
-Version = "0.6.1" # different from Binary and vector magic
+Version = "0.3.3" # different from Binary and vector magic
 
 # Dataclass slots: Python ≥3.10 natively; earlier versions fall back gracefully.
 _DC_KW: Dict[str, Any] = {"slots": True} if sys.version_info >= (3, 10) else {}
@@ -337,12 +331,14 @@ def _generate_tags(func: Dict[str, Any], base_tag: str) -> List[str]:
     return sorted(set(tags))
 
 
-def _fmt_function_with_context(func: Dict, file_path: str) -> str:
+def _fmt_function_with_context(func: Dict, file_path: str, remove_comments: bool) -> str:
     out: List[str] = []
     out.append(f"// File: {file_path}")
     out.append(f"// Function: {func['name']}")
-    if func.get("docstring"):
-        out.append(f"// Description: {func['docstring']}")
+    # Testing for context window Accuracy if it changes if docstrings arent provided
+    if remove_comments:
+        if func.get("docstring"):
+            out.append(f"// Description: {func['docstring']}")
     out.append(f"// Lines: {func.get('line_start', 0)}-{func.get('line_end', 0)}")
     out.append(f"// Complexity: {func.get('complexity', 0)}")
     out.append("")
@@ -398,27 +394,31 @@ def _fmt_function_with_context(func: Dict, file_path: str) -> str:
     return "\n".join(out)
 
 
-def _fmt_method_with_class_ctx(method: Dict, cls: Dict, file_path: str) -> str:
+def _fmt_method_with_class_ctx(method: Dict, cls: Dict, file_path: str, remove_comments: bool) -> str:
     out: List[str] = []
     out.append(f"// File: {file_path}")
     out.append(f"// Class: {cls['name']}")
     out.append(f"// Method: {method['name']}")
-    if method.get("docstring"):
-        out.append(f"// Description: {method['docstring']}")
+    # Testing for context window Accuracy if it changes if docstrings arent provided
+    if remove_comments:
+        if method.get("docstring"):
+            out.append(f"// Description: {method['docstring']}")
     out.append("")
     if cls.get("bases"):
         out.append(f"// Inherits from: {', '.join(cls['bases'])}")
     out.append("")
-    out.append(_fmt_function_with_context(method, file_path))
+    out.append(_fmt_function_with_context(method, file_path, remove_comments))
     return "\n".join(out)
 
 
-def _fmt_class_overview(cls: Dict, file_path: str) -> str:
+def _fmt_class_overview(cls: Dict, file_path: str, remove_comments: bool) -> str:
     out: List[str] = []
     out.append(f"// File: {file_path}")
     out.append(f"// Class: {cls['name']}")
-    if cls.get("docstring"):
-        out.append(f"// Description: {cls['docstring']}")
+    # Testing for context window Accuracy if it changes if docstrings arent provided
+    if remove_comments:
+        if cls.get("docstring"):
+            out.append(f"// Description: {cls['docstring']}")
     out.append(f"// Lines: {cls.get('line_start', 0)}-{cls.get('line_end', 0)}")
     out.append("")
     if cls.get("bases"):
@@ -468,6 +468,212 @@ def _fmt_file_summary(file_path: str, fs: Dict) -> str:
         out.append("")
     return "\n".join(out)
 
+# USED FOR testing no comments and docstring in embedder and vector
+# to see how it effects context window creation
+def strip_comments(content: str, lang: str) -> str:
+    """Remove comments from source code based on language."""
+    if lang == "python":
+        # Remove # comments (but not # inside strings – simple version)
+        lines = []
+        for line in content.splitlines():
+            if '#' in line:
+                # crude: remove from first # not in quotes
+                in_string = False
+                quote_char = None
+                new_line = []
+                for i, ch in enumerate(line):
+                    if ch in ('"', "'") and (i == 0 or line[i-1] != '\\'):
+                        if not in_string:
+                            in_string = True
+                            quote_char = ch
+                        elif ch == quote_char:
+                            in_string = False
+                    elif ch == '#' and not in_string:
+                        break
+                    new_line.append(ch)
+                lines.append(''.join(new_line).rstrip())
+            else:
+                lines.append(line)
+        return '\n'.join(lines)
+    elif lang in ("c", "cpp", "java", "go", "javascript", "typescript", "rust"):
+        # Remove // and /* */ comments
+        # Simple regex (not perfect for strings, but good enough for KB)
+        content = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)
+        content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+        return content
+    return content
+
+def clean_boilerplate(text: str) -> str:
+    lines = text.splitlines()
+    filtered = []
+    for line in lines:
+        lower = line.lower()
+        if any(x in lower for x in ("license", "copyright", "todo", "fixme", "note:", "author:")):
+            continue
+        if line.strip().startswith(("// SPDX", "/* SPDX")):
+            continue
+        filtered.append(line)
+    return "\n".join(filtered)
+
+def clean_content(content: str, lang: str) -> str:
+    """Remove comments and boilerplate from content before truncation."""
+    content = strip_comments(content, lang)      # remove //, /* */, # comments
+    content = clean_boilerplate(content)         # remove license, TODO, etc.
+    return content
+
+
+def chunk_one_file_no_comm(
+    file_path: str,
+    fs: Dict[str, Any],
+    entry_point_ids: Set[str],
+    entry_points_by_id: Dict[str, Any],
+    max_size: int,
+    seen_ids: Set[str],
+    remove_comments: bool,
+) -> List[Chunk]:
+    """
+    Produce all Chunk objects for a single file struct.
+    Mutates seen_ids so duplicate IDs across files are skipped.
+    The file_struct dict (fs) is discarded by the caller after this returns.
+    """
+    chunks: List[Chunk] = []
+    lang = fs.get("language", "")
+
+    if not getattr(chunk_one_file_no_comm, "has_printed_info", False):
+            print("\033[1;31;40m [INFO] stripping down license headers, comments, docstrings\n  USED FOR TESTINF ACCURACY OF CONTEXT WINDOW CREATION IF IT IS EFFECTED REMOVE IT \033[0m")
+            chunk_one_file_no_comm.has_printed_info = True    # Functions (regular + entry points)
+    for func in fs.get("functions", []):
+        fid = func["id"]
+        if fid in seen_ids:
+            continue
+        seen_ids.add(fid)
+
+        # Build raw content, then clean, then truncate
+        raw_content = _fmt_function_with_context(func, file_path, remove_comments)
+        cleaned = clean_content(raw_content, lang)
+        content = _truncate_content(cleaned, max_size)
+
+        if fid in entry_point_ids:
+            ep = entry_points_by_id.get(fid, {})
+            chunks.append(
+                Chunk(
+                    id=fid,
+                    chunk_type=ChunkType.entry_point,
+                    content=content,
+                    metadata=ChunkMetadata(
+                        file_path=file_path,
+                        language=lang,
+                        line_start=func.get("line_start"),
+                        line_end=func.get("line_end"),
+                        name=func["name"],
+                        complexity=func.get("complexity"),
+                    ),
+                    tags=_generate_tags(func, ep.get("entry_type", "entrypoint")),
+                    importance_score=1.0,
+                )
+            )
+        else:
+            chunks.append(
+                Chunk(
+                    id=fid,
+                    chunk_type=ChunkType.function,
+                    content=content,
+                    metadata=ChunkMetadata(
+                        file_path=file_path,
+                        language=lang,
+                        line_start=func.get("line_start"),
+                        line_end=func.get("line_end"),
+                        name=func["name"],
+                        complexity=func.get("complexity"),
+                    ),
+                    tags=_generate_tags(func, "function"),
+                    importance_score=func.get("importance_score", 0.5),
+                )
+            )
+
+    # ----- Classes + methods -----
+    for cls in fs.get("classes", []):
+        cid = cls["id"]
+        if cid in seen_ids:
+            continue
+        seen_ids.add(cid)
+
+        # Class overview
+        raw_class = _fmt_class_overview(cls, file_path, remove_comments)
+        class_content = _truncate_content(clean_content(raw_class, lang), max_size)
+        chunks.append(
+            Chunk(
+                id=cid,
+                chunk_type=ChunkType.class_,
+                content=class_content,
+                metadata=ChunkMetadata(
+                    file_path=file_path,
+                    language=lang,
+                    line_start=cls.get("line_start"),
+                    line_end=cls.get("line_end"),
+                    name=cls["name"],
+                    complexity=None,
+                ),
+                tags=["class", lang],
+                importance_score=0.7,
+            )
+        )
+
+        # Methods inside this class
+        for method in cls.get("methods", []):
+            mid = method["id"]
+            if mid in seen_ids:
+                continue
+            seen_ids.add(mid)
+
+            raw_method = _fmt_method_with_class_ctx(method, cls, file_path, remove_comments)
+            method_content = _truncate_content(clean_content(raw_method, lang), max_size)
+            chunks.append(
+                Chunk(
+                    id=mid,
+                    chunk_type=ChunkType.method,
+                    content=method_content,
+                    metadata=ChunkMetadata(
+                        file_path=file_path,
+                        language=lang,
+                        line_start=method.get("line_start"),
+                        line_end=method.get("line_end"),
+                        name=f"{cls['name']}.{method['name']}",
+                        complexity=method.get("complexity"),
+                    ),
+                    tags=_generate_tags(method, "method"),
+                    importance_score=method.get("importance_score", 0.5),
+                )
+            )
+
+    # File summary
+    summary = _fmt_file_summary(file_path, fs)
+    if summary.strip():
+        fid = f"file:{file_path}"
+        if fid not in seen_ids:
+            seen_ids.add(fid)
+            raw_summary = _fmt_file_summary(file_path, fs)
+            cleaned_summary = clean_content(raw_summary, lang)
+            summary_content = _truncate_content(cleaned_summary, max_size)
+            chunks.append(
+                Chunk(
+                    id=fid,
+                    chunk_type=ChunkType.file,
+                    content=summary_content,
+                    metadata=ChunkMetadata(
+                        file_path=file_path,
+                        language=lang,
+                        line_start=1,
+                        line_end=fs.get("loc"),
+                        name=file_path,
+                        complexity=None,
+                    ),
+                    tags=["file", lang],
+                    importance_score=0.5,
+                )
+            )
+
+    return chunks
 
 def chunk_one_file(
     file_path: str,
@@ -476,6 +682,7 @@ def chunk_one_file(
     entry_points_by_id: Dict[str, Any],
     max_size: int,
     seen_ids: Set[str],
+    remove_comments: bool,
 ) -> List[Chunk]:
     """
     Produce all Chunk objects for a single file struct.
@@ -492,7 +699,7 @@ def chunk_one_file(
             continue
         seen_ids.add(fid)
 
-        content = _truncate_content(_fmt_function_with_context(func, file_path), max_size)
+        content = _truncate_content(_fmt_function_with_context(func, file_path, remove_comments), max_size)
 
         if fid in entry_point_ids:
             ep = entry_points_by_id.get(fid, {})
@@ -542,7 +749,7 @@ def chunk_one_file(
             Chunk(
                 id=cid,
                 chunk_type=ChunkType.class_,
-                content=_truncate_content(_fmt_class_overview(cls, file_path), max_size),
+                content=_truncate_content(_fmt_class_overview(cls, file_path, remove_comments), max_size),
                 metadata=ChunkMetadata(
                     file_path=file_path,
                     language=lang,
@@ -565,7 +772,7 @@ def chunk_one_file(
                     id=mid,
                     chunk_type=ChunkType.method,
                     content=_truncate_content(
-                        _fmt_method_with_class_ctx(method, cls, file_path), max_size
+                        _fmt_method_with_class_ctx(method, cls, file_path, remove_comments), max_size
                     ),
                     metadata=ChunkMetadata(
                         file_path=file_path,
@@ -606,6 +813,7 @@ def chunk_one_file(
 
     return chunks
 
+
 # PYTORCH EMBEDDER
 
 class EmbeddingGenerator:
@@ -622,72 +830,98 @@ class EmbeddingGenerator:
     ):
         self.model_name = model_name
         self.normalize = normalize
-
-        if device is None:
-            if torch.cuda.is_available():
-                # Distinguish NVIDIA vs AMD ROCm
-                if torch.version.hip is not None:
-                    self.device = torch.device("cuda")
-                    print("  ✓ AMD GPU detected — using ROCm/HIP")
+        try:
+            if device is None:
+                if torch.cuda.is_available():
+                    # Distinguish NVIDIA vs AMD ROCm
+                    if torch.version.hip is not None:
+                        self.device = torch.device("cuda")
+                        print("  ✓ AMD GPU detected — using ROCm/HIP")
+                    else:
+                        self.device = torch.device("cuda")
+                        print("  ✓ NVIDIA GPU detected — using CUDA")
+                elif torch.backends.mps.is_available():
+                    self.device = torch.device("mps")
+                    print("  ✓ Apple MPS detected")
                 else:
-                    self.device = torch.device("cuda")
-                    print("  ✓ NVIDIA GPU detected — using CUDA")
-            elif torch.backends.mps.is_available():
-                self.device = torch.device("mps")
-                print("  ✓ Apple MPS detected")
+                    self.device = torch.device("cpu")
+                    print("  ℹ No GPU detected — using CPU")
             else:
-                self.device = torch.device("cpu")
-                print("  ℹ No GPU detected — using CPU")
-        else:
-            self.device = torch.device(device)
-        if batch_size is None:
-            batch_size = 64 if self.device.type == "cuda" else 16
-        self.batch_size = batch_size
+                self.device = torch.device(device)
+            if batch_size is None:
+                batch_size = 64 if self.device.type == "cuda" else 16
+            self.batch_size = batch_size
 
-        self.use_bucketing = use_bucketing and self.device.type in ("cuda", "mps")
+            self.use_bucketing = use_bucketing and self.device.type in ("cuda", "mps")
 
-        print(f"     Model:      {model_name}")
-        print(f"     Batch size: {self.batch_size}")
-        print(f"     Bucketing:  {'enabled' if self.use_bucketing else 'disabled'}")
+            print(f"     Model:      {model_name}")
+            print(f"     Batch size: {self.batch_size}")
+            print(f"     Bucketing:  {'enabled' if self.use_bucketing else 'disabled'}")
 
-        is_jina = "jina" in model_name.lower()
+            is_jina = "jina" in model_name.lower()
 
-        if is_jina:
+            if is_jina:
+                try:
+                    from sentence_transformers import SentenceTransformer
+
+                    self._st_model = SentenceTransformer(model_name, device=self.device)
+                    self._st_model.eval()
+                    self.tokenizer = self._st_model.tokenizer
+                    self.model = None
+                    self._use_st = True
+                    print("     Jina v2: loaded via sentence-transformers")
+                except ImportError:
+                    raise ImportError(
+                        "Jina v2 models require sentence-transformers.\n"
+                        "Install: pip install sentence-transformers"
+                    )
+            else:
+                self._use_st = False
+                try:
+                    self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"\033[1;31;40m Failed to load tokenizer for '{model_name}'.\n\033[0m"
+                        f"\033[1;31;40m Possible reasons:\n\033[0m"
+                        f"\033[1;31;40m  - Model ID is incorrect (check https://hugginface.co/models)\n\033[0m"
+                        f"\033[1;31;40m  - You need to login: `hugginface-cli login`\n\033[0m"
+                        f"\033[1;31;40m  - Model is gated and you lack permissions\n\033[0m"
+                        f"\033[1;31;40m  - Netowrk issue\n\033[0m"
+                        f"Original error:{e}"
+                    )
+                try:
+                    self.model = AutoModel.from_pretrained(model_name).to(self.device)
+                    self.model.eval()
+                except Exception as e:
+                    raise RuntimeError(
+                        f"\033[1;31;40m Failed to load model weights for \{model_name}.\n\033[0m"
+                        f"Original error: {e}"
+                    )
+            # Probe dimension
             try:
-                from sentence_transformers import SentenceTransformer
+                if self._use_st:
+                    test_emb = self._st_model.encode(["hello"], convert_to_numpy=True)
+                    self._dimension = test_emb.shape[-1]
+                else:
+                    with torch.no_grad():
+                        dummy = self.tokenizer("hello", return_tensors="pt", padding=True).to(
+                            self.device
+                        )
+                        out = self.model(**dummy)
+                        emb = self._mean_pool(out.last_hidden_state, dummy["attention_mask"])
+                        self._dimension = emb.shape[-1]
+            except Exception as e:
+                raise RuntimeError(f"Failed to probe embedding dimension: {e}")
 
-                self._st_model = SentenceTransformer(model_name, device=self.device)
-                self._st_model.eval()
-                self.tokenizer = self._st_model.tokenizer
-                self.model = None
-                self._use_st = True
-                print("     Jina v2: loaded via sentence-transformers")
-            except ImportError:
-                raise ImportError(
-                    "Jina v2 models require sentence-transformers.\n"
-                    "Install: pip install sentence-transformers"
-                )
-        else:
-            self._use_st = False
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.model = AutoModel.from_pretrained(model_name).to(self.device)
-            self.model.eval()
-
-        # Probe dimension
-        if self._use_st:
-            test_emb = self._st_model.encode(["hello"], convert_to_numpy=True)
-            self._dimension = test_emb.shape[-1]
-        else:
-            with torch.no_grad():
-                dummy = self.tokenizer("hello", return_tensors="pt", padding=True).to(
-                    self.device
-                )
-                out = self.model(**dummy)
-                emb = self._mean_pool(out.last_hidden_state, dummy["attention_mask"])
-                self._dimension = emb.shape[-1]
-
-        print(f"     Dimension:  {self._dimension}")
-        print("  ✓ Embedding generator ready!")
+            print(f"     Dimension:  {self._dimension}")
+            print("  ✓ Embedding generator ready!")
+        except RuntimeError as e:
+            print("f\nError: {e}")
+            print("\nTips:")
+            print("  - Use a valid model name from Hugging Face (e.g., 'sentence-transformers/all-MiniLM-L6-v2')")
+            print("  - Check your internet connection")
+            print("  - Run `huggingface-cli login` if the model is private/gated")
+            sys.exit(1)
 
     @property
     def dimension(self) -> int:
@@ -767,7 +1001,7 @@ class EmbeddingGenerator:
                 bucket_map[b].append((orig_idx, chunk))
 
             print(f"     Shape buckets active: {len(bucket_map)}")
-# blen is short for Bucket Length
+            # blen is short for Bucket Length
             for blen in sorted(bucket_map):
                 print(f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks")
 
@@ -1167,11 +1401,13 @@ class EmbeddingPipeline:
         device: Optional[str] = None,
         batch_size: Optional[int] = None,
         save_json: bool = False,
+        remove_comments: bool = False,
         debug: bool = False,
     ):
         self.max_chunk_size = max_chunk_size
         self.save_json = save_json
         self.debug = debug
+        self.remove_comments = remove_comments
         self.generator = EmbeddingGenerator(
             model_name=model_name,
             device=device,
@@ -1190,11 +1426,11 @@ class EmbeddingPipeline:
             print(f"  [ERROR] Insufficient disk space — need ~{req_gb:.1f} GB, have {free_gb:.1f} GB")
             sys.exit(1)
 
-    def process(self, kb_path: Path, output_dir: Path) -> None:
+    def process(self, kb_path: Path, output_dir: Path, args: argparse.Namespace) -> None:
         t_total = time.time()
         SEP = "=" * 70
         sep = "-" * 70
-
+        chunk_strategy = chunk_one_file_no_comm if args.remove_comments else chunk_one_file
         print(f"\n{SEP}")
         print("  EULIX EMBED — EMBEDDING PIPELINE (Python/PyTorch)")
         print(f"  ijson backend : {ijson.backend}")
@@ -1237,13 +1473,14 @@ class EmbeddingPipeline:
                 n_methods += sum(
                     len(c.get("methods", [])) for c in fs.get("classes", [])
                 )
-                for chunk in chunk_one_file(
+                for chunk in chunk_strategy(
                     file_path,
                     fs,
                     entry_point_ids,
                     entry_points_by_id,
                     self.max_chunk_size,
                     seen_ids,
+                    self.remove_comments,
                 ):
                     ct_counts[chunk.chunk_type.value] += 1
                     chunks.append(chunk)
@@ -1430,6 +1667,20 @@ SUPPORTED MODELS:
 """
     )
 
+def ijson_check():
+    """Check which ijson backend is active."""
+    try:
+        import ijson
+        print(f"ijson backend: {ijson.backend}")
+        if ijson.backend == 'yajl2_c':
+            print("  ✓ Fast C backend (yajl2_c) - optimal performance")
+        elif ijson.backend == 'yajl2_cffi':
+            print("  ✓ C backend via CFFI - good performance")
+        else:
+            print("  ⚠ Pure Python backend - slower, consider: pip install 'ijson[yajl2_cffi]'")
+    except ImportError:
+        print("❌ ijson not installed")
+        print("   Install with: uv pip install ijson")
 
 def cmd_embed(args: argparse.Namespace) -> None:
     pipeline = EmbeddingPipeline(
@@ -1438,13 +1689,14 @@ def cmd_embed(args: argparse.Namespace) -> None:
         device=args.device,
         batch_size=args.batch_size,
         save_json=args.save_json,
+        remove_comments=args.remove_comments,
         debug=args.debug,
     )
     kb_path = Path(args.kb_path)
     if not kb_path.exists():
         print(f"[ERROR] KB file not found: {kb_path}", file=sys.stderr)
         sys.exit(1)
-    pipeline.process(kb_path, Path(args.output))
+    pipeline.process(kb_path, Path(args.output), args)
 
 
 def cmd_query(args: argparse.Namespace) -> None:
@@ -1522,11 +1774,44 @@ def cmd_compare(args: argparse.Namespace) -> None:
     else:
         print("\n✓ All checks passed.")
 
+def check_python_version():
+    # Define your allowed Python boundaries
+    MIN_VERSION = (3, 10)
+    MAX_VERSION = (3, 11)  # Stop before 3.12+ if your ML libraries aren't ready
+
+    current_version = sys.version_info[:2]
+
+    if current_version < MIN_VERSION or current_version > MAX_VERSION:
+        print("=" * 60)
+        print("❌ CRITICAL: PYTHON VERSION COMPATIBILITY ERROR")
+        print(f"Current version: Python {sys.version.split()[0]}")
+        print(f"Required version: Between Python {MIN_VERSION[0]}.{MIN_VERSION[1]} and {MAX_VERSION[0]}.{MAX_VERSION[1]}")
+        print("=" * 60)
+        print("\nPlease switch your virtual environment or Python installation.")
+        print("If using 'uv', you can recreate the environment with the correct version:")
+        print(f"  uv venv --python {MIN_VERSION[0]}.{MIN_VERSION[1]}")
+        print("=" * 60)
+
+        # Immediately halt execution with a non-zero exit code
+        sys.exit(1)
 
 def main() -> None:
     if len(sys.argv) == 1 or sys.argv[1] in ("-h", "--help"):
         print_help()
         sys.exit(0)
+
+    if len(sys.argv) == 2 and sys.argv[1] in ("--version", "-V"):
+        print(f"eulix-embed version {Version}")
+        sys.exit(0)
+    command = sys.argv[1]
+    valid_commands = ("embed", "query", "compare", "ijson-backend", "version")
+    if command not in valid_commands:
+        print_help()
+        sys.exit(1)
+
+    # Check Python version only for commands that need ML libraries
+    if command in ("embed", "query", "compare"):
+        check_python_version()
 
     p = argparse.ArgumentParser(add_help=False)
     sub = p.add_subparsers(dest="command")
@@ -1535,10 +1820,13 @@ def main() -> None:
     ep.add_argument("-k", "--kb-path", default="knowledge_base.json")
     ep.add_argument("-o", "--output", default="./embeddings")
     ep.add_argument("-m", "--model", default="sentence-transformers/all-MiniLM-L6-v2")
-    ep.add_argument("--device", default=None)
-    ep.add_argument("--batch-size", type=int, default=None)
+    ep.add_argument("-d", "--device", default=None)
+    ep.add_argument("-b","--batch-size", type=int, default=None)
+    ep.add_argument("-rcom","--remove-comments", action="store_true",
+                    help="Removes comments, docstring, license headers from embedding and vidx bins")
     ep.add_argument("--max-chunk", type=int, default=2000)
-    ep.add_argument("--save-json", action="store_true", help="[Use for Debugging] Save a json copy of embedder.bin and vector.bin ")
+    ep.add_argument("--save-json", action="store_true",
+                    help="[Use for Debugging] Save a json copy of embedder.bin and vector.bin")
     ep.add_argument("--debug", action="store_true", help="Print debug info during pipeline")
 
     qp = sub.add_parser("query")
@@ -1550,7 +1838,15 @@ def main() -> None:
     cp.add_argument("emb", nargs="?", default="embeddings/embeddings.bin")
     cp.add_argument("vec", nargs="?", default="embeddings/vectors.bin")
 
+    tp = sub.add_parser("ijson-backend")
+    # tp.add_argument("--short", action="store_true", help="aditional infos")
+
+    # Add version subparser
+    vp = sub.add_parser("version")
+    vp.add_argument("--short", action="store_true", help="Print only version number")
+
     args = p.parse_args()
+
     if args.command is None:
         args = ep.parse_args(sys.argv[1:])
         args.command = "embed"
@@ -1561,8 +1857,15 @@ def main() -> None:
         cmd_query(args)
     elif args.command == "compare":
         cmd_compare(args)
+    elif args.command == "ijson-backend":
+        ijson_check()
     elif args.command == "version":
-        print("0.3.1") # This version is different from rust embedder
+        if hasattr(args, 'short') and args.short:
+            print("0.3.3")
+        else:
+            print(f"eulix-embed version {Version}")
+            print(f"Python: {sys.version.split()[0]}")
+            print(f"ijson backend: {ijson.backend}")
     else:
         print_help()
         sys.exit(1)
