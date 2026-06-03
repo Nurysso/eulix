@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"eulix/internal/cache"
+	"eulix/internal/checksum"
 	"eulix/internal/config"
 	"eulix/internal/fixers"
 	"eulix/internal/tui"
@@ -48,6 +49,24 @@ var analyzeCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Analysis failed: %v\n", err)
 			os.Exit(1)
 		}
+	},
+}
+
+var checksumCmd = &cobra.Command{
+	Use:   "checksum",
+	Short: "Creates checksum without running analyze",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		detector := checksum.HashHound(".")
+		currentChecksum, err := detector.Calculate()
+		if err != nil {
+			// return fmt.Errorf("checksum calculation failed: %w", err)
+		}
+		fmt.Printf("   Found: %d files\n", currentChecksum.TotalFiles)
+		if err := detector.Save(currentChecksum); err != nil {
+			// return fmt.Errorf("failed to save checksum: %w", err)
+		}
+		os.Exit(1)
 	},
 }
 
@@ -498,6 +517,7 @@ func disableDefaultHelp() {
 func registerCommands() {
 	rootCmd.AddCommand(
 		versionCMD,
+		checksumCmd,
 		initCmd,
 		analyzeCmd,
 		chatCmd,
