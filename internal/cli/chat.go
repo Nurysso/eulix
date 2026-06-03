@@ -18,14 +18,14 @@ import (
 
 // printStatusMessage prints a formatted status message with consistent spacing
 func printStatusMessage(primaryMsg string, additionalLines ...string) {
-    printStatusMessageWithIcon(" ", primaryMsg, additionalLines...)
+	printStatusMessageWithIcon(" ", primaryMsg, additionalLines...)
 }
 
 func printStatusMessageWithIcon(icon, primaryMsg string, additionalLines ...string) {
-    fmt.Printf("%s %s\n", icon, primaryMsg)
-    for _, line := range additionalLines {
-        fmt.Printf("  %s\n", line)
-    }
+	fmt.Printf("%s %s\n", icon, primaryMsg)
+	for _, line := range additionalLines {
+		fmt.Printf("  %s\n", line)
+	}
 }
 
 // promptConfirm asks for user confirmation
@@ -144,8 +144,7 @@ func startChat() error {
 				if err := cacheManager.InvalidateByChecksum(current.Hash); err != nil {
 					fmt.Printf("Failed to invalidate old cache: %v\n", err)
 				} else {
-					printStatusMessage("Cache invalidated due to codebase changes",
-					)
+					printStatusMessage("Cache invalidated due to codebase changes")
 				}
 			}
 
