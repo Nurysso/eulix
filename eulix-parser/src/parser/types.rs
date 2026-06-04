@@ -81,6 +81,8 @@ pub struct Function {
     pub decorators: Vec<String>,
     pub tags: Vec<String>,
     pub importance_score: f32,
+    #[serde(default)]
+    pub lang_info: LanguageSpecificInfo,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -195,6 +197,8 @@ pub struct Class {
     pub methods: Vec<Function>,
     pub attributes: Vec<Attribute>,
     pub decorators: Vec<String>,
+    #[serde(default)]
+    pub lang_info: LanguageSpecificInfo,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -307,4 +311,104 @@ pub struct PatternInfo {
     pub naming_convention: String,
     pub structure_type: String,
     pub architecture_style: Option<String>, // "layered", "microservices", "mvc"
+}
+
+/// Language-specific metadata that doesn't apply universally.
+/// Each parser populates only the variant relevant to its language.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LanguageSpecificInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub python: Option<PythonInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rust: Option<RustInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub go: Option<GoInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub typescript: Option<TypeScriptInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c: Option<CInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpp: Option<CppInfo>,
+}
+
+pub struct RustInfo {
+    pub is_unsafe: bool,
+    pub is_pub: bool,
+    pub is_pub_crate: bool,
+    pub is_const_fn: bool,
+    pub is_async: bool,             // async fn
+    pub is_extern: bool,            // extern "C" fn
+    pub lifetimes: Vec<String>,     // e.g. ["'a", "'b"]
+    pub derives: Vec<String>,       // #[derive(Debug, Clone, ...)]
+    pub is_test: bool,              // #[test]
+    pub is_bench: bool,             // #[bench]
+    pub cfg_attrs: Vec<String>,     // #[cfg(target_os = "linux")] etc.
+    pub unknown_attrs: Vec<String>, // catch-all for unrecognized #[...]
+}
+
+pub struct GoInfo {
+    pub is_exported: bool,             // name starts with uppercase
+    pub receiver_type: Option<String>, // e.g. "(*MyStruct)" for methods
+    pub is_interface_method: bool,
+    pub build_tags: Vec<String>,    // //go:build linux && amd64
+    pub go_directives: Vec<String>, // //go:generate, //go:noescape etc.
+}
+
+pub struct TypeScriptInfo {
+    pub is_async: bool,
+    pub is_exported: bool,
+    pub is_default_export: bool,
+    pub is_abstract: bool,
+    pub access_modifier: Option<String>, // "public" | "private" | "protected"
+    pub is_readonly: bool,
+    pub is_optional: bool,           // optional method/property (?)
+    pub decorators: Vec<String>,     // @Component, @Injectable etc.
+    pub generic_params: Vec<String>, // e.g. ["T", "K extends string"]
+    pub is_arrow_fn: bool,           // const foo = () => ...
+    pub is_overload: bool,           // TS function overloads
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CInfo {
+    pub is_static: bool, // file-scoped linkage
+    pub is_inline: bool,
+    pub is_extern: bool,
+    pub is_variadic: bool,                  // printf-style ...
+    pub calling_convention: Option<String>, // __cdecl, __stdcall etc.
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CppInfo {
+    pub is_static: bool,
+    pub is_inline: bool,
+    pub is_virtual: bool,
+    pub is_pure_virtual: bool, // = 0
+    pub is_override: bool,     // override keyword
+    pub is_final: bool,        // final keyword
+    pub is_const_method: bool, // void foo() const
+    pub is_noexcept: bool,
+    pub is_explicit: bool, // explicit constructors
+    pub is_constexpr: bool,
+    pub is_constructor: bool,
+    pub is_destructor: bool,
+    pub access_specifier: Option<String>, // "public" | "private" | "protected"
+    pub template_params: Vec<String>,     // e.g. ["typename T", "int N"]
+}
+
+/// Python-specific metadata for a function or class.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PythonInfo {
+    pub is_dataclass: bool,
+    pub is_staticmethod: bool,
+    pub is_classmethod: bool,
+    pub is_property: bool,
+    pub is_property_setter: bool,
+    pub is_property_deleter: bool,
+    pub is_abstractmethod: bool,
+    pub is_cached_property: bool,
+    pub is_overload: bool,
+    pub is_override: bool,               // typing.override (Python 3.12+)
+    pub is_final: bool,                  // typing.final
+    pub flask_route: Option<String>,     // e.g. "/users/<id>"
+    pub unknown_decorators: Vec<String>, // catch-all for anything unrecognized
 }
