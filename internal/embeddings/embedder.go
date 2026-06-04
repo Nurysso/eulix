@@ -15,6 +15,7 @@ If testing and developing chat/retrival (context window creation)
 use the checksum subcommand so that the latest metadata+embeddings
 is checked before retrival
 */
+
 package embeddings
 
 import (
@@ -26,10 +27,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"unsafe"
+	// "unsafe"
 )
 
-// Types for embedder
+// Embedder wraps the Rust eulix_embed binary for embedding generation
+// This ensures consistent embeddings with the KB generation pipeline
 type Embedder struct {
 	binaryPath string
 	model      string
@@ -48,28 +50,12 @@ type QueryEmbeddingResult struct {
 	Embedding []float32 `json:"embedding"`
 }
 
-// BatchEmbedInput represents the payload format the Rust binary expects for batches
-type BatchEmbedInput struct {
-	Texts []string `json:"texts"`
-	Model string   `json:"model"`
-}
-
-// BatchEmbedResult represents the structured collection returned from the binary
-type BatchEmbedResult struct {
-	Model      string      `json:"model"`
-	Dimension  int         `json:"dimension"`
-	Embeddings [][]float32 `json:"embeddings"`
-}
-
 // VectorWeaver creates a new query embedder
-func VectorWeaver(binaryPath, model string, defaultDimension int) *Embedder {
-	if defaultDimension <= 0 {
-		defaultDimension = 384 // Dynamic fallback for BAAI/bge-small configurations
-	}
+func VectorWeaver(binaryPath, model string) *Embedder {
 	return &Embedder{
 		binaryPath: binaryPath,
 		model:      model,
-		dimension:  defaultDimension,
+		dimension:  0, // Default dimension, will be updated from response
 	}
 }
 
@@ -148,14 +134,12 @@ func (e *Embedder) EmbedQueryBinary(query string) ([]float32, error) {
 
 	// Read float32 values (little-endian)
 	embedding := make([]float32, dimension)
-	// offset := 4
-	// for i := 0; i < int(dimension); i++ {
-	// 	bits := binary.LittleEndian.Uint32(data[offset : offset+4])
-	// 	embedding[i] = math.Float32frombits(bits)
-	// 	offset += 4
-	// }
-	floatBytes := data[4:]
-	embedding = unsafe.Slice((*float32)(unsafe.Pointer(&floatBytes[0])), dimension)
+	offset := 4
+	for i := 0; i < int(dimension); i++ {
+		bits := binary.LittleEndian.Uint32(data[offset : offset+4])
+		embedding[i] = math.Float32frombits(bits)
+		offset += 4
+	}
 
 	return embedding, nil
 }
@@ -173,26 +157,6 @@ func (e *Embedder) GetModel() string {
 // Close cleans up resources (no-op for command-based embedder)
 func (e *Embedder) Close() error {
 	return nil
-}
-
-// Helper function to find the eulix_embed binary
-func findEulixEmbed() (scriptPath string, pythonPath string, err error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", "", fmt.Errorf("cannot determine home directory: %w", err)
-	}
-
-	// Canonical install location: ~/.Eulix/eulix_embed.py
-	script := filepath.Join(homeDir, ".Eulix", "eulix_embed.py")
-	if _, err := os.Stat(script); err == nil {
-		python, err := findVenvPython(homeDir)
-		if err != nil {
-			return "", "", fmt.Errorf("found embed script but no usable Python: %w", err)
-		}
-		return script, python, nil
-	}
-
-	return "", "", fmt.Errorf("eulix_embed.py not found (expected at %s)", script)
 }
 
 // findVenvPython returns the Python interpreter inside ~/.Eulix/.venv,
@@ -222,91 +186,76 @@ func findVenvPython(homeDir string) (string, error) {
 	return "", fmt.Errorf("no Python interpreter found in venv (%s) or on PATH", venvPath)
 }
 
+// Helper function to find the eulix_embed binary
+func findEulixEmbed() (scriptPath string, pythonPath string, err error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+
+	// Canonical install location: ~/.Eulix/eulix_embed.py
+	script := filepath.Join(homeDir, ".Eulix", "eulix_embed.py")
+	if _, err := os.Stat(script); err == nil {
+		python, err := findVenvPython(homeDir)
+		if err != nil {
+			return "", "", fmt.Errorf("found embed script but no usable Python: %w", err)
+		}
+		return script, python, nil
+	}
+
+	return "", "", fmt.Errorf("eulix_embed.py not found (expected at %s)", script)
+}
+
 // CosineSimilarity calculates cosine similarity between two vectors
 // Both vectors should be normalized (L2 norm = 1)
-func CosineSimilarity(a, b []float32) float64 {
-	if len(a) != len(b) {
-		return 0.0
-	}
+// func CosineSimilarity(a, b []float32) float64 {
+// 	if len(a) != len(b) {
+// 		return 0.0
+// 	}
 
-	var dotProduct float64
-	for i := range a {
-		dotProduct += float64(a[i] * b[i])
-	}
+// 	var dotProduct float64
+// 	for i := range a {
+// 		dotProduct += float64(a[i] * b[i])
+// 	}
 
-	return dotProduct
-}
+// 	return dotProduct
+// }
 
 // NormalizeVector performs L2 normalization on a vector
 // Returns a new normalized vector
-func NormalizeVector(vec []float32) []float32 {
-	var norm float32
-	for _, v := range vec {
-		norm += v * v
-	}
-	norm = float32(math.Sqrt(float64(norm)))
+// func NormalizeVector(vec []float32) []float32 {
+// 	var norm float32
+// 	for _, v := range vec {
+// 		norm += v * v
+// 	}
+// 	norm = float32(math.Sqrt(float64(norm)))
 
-	if norm == 0 {
-		return vec
-	}
+// 	if norm == 0 {
+// 		return vec
+// 	}
 
-	normalized := make([]float32, len(vec))
-	for i, v := range vec {
-		normalized[i] = v / norm
-	}
+// 	normalized := make([]float32, len(vec))
+// 	for i, v := range vec {
+// 		normalized[i] = v / norm
+// 	}
 
-	return normalized
-}
+// 	return normalized
+// }
 
 // BatchEmbed generates embeddings for multiple texts
 // Returns a slice of embeddings in the same order as input texts
-// BatchEmbed generates embeddings for multiple texts in a single high-performance process pass
 func (e *Embedder) BatchEmbed(texts []string) ([][]float32, error) {
-	if len(texts) == 0 {
-		return [][]float32{}, nil
+	embeddings := make([][]float32, len(texts))
+
+	for i, text := range texts {
+		emb, err := e.Embed(text)
+		if err != nil {
+			return nil, fmt.Errorf("failed to embed text %d: %w", i, err)
+		}
+		embeddings[i] = emb
 	}
 
-	// Prepare payload for the Rust binary
-	inputPayload := BatchEmbedInput{
-		Texts: texts,
-		Model: e.model,
-	}
-
-	inputBytes, err := json.Marshal(inputPayload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal batch inputs: %w", err)
-	}
-
-	// Invoke the binary in 'batch' mode using JSON format
-	cmd := exec.Command(
-		e.binaryPath,
-		"batch",
-		"-f", "json",
-	)
-
-	// Create pipes for high-speed memory streaming instead of string arguments
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	cmd.Stdin = bytes.NewReader(inputBytes)
-
-	// Execute process execution pass
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("eulix_embed batch processing failed: %w\nstderr: %s", err, stderr.String())
-	}
-
-	// Parse the batch array back from stdout
-	var result BatchEmbedResult
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse batch embedding response: %w", err)
-	}
-
-	// Keep internal dimension settings completely synced with the real output matrix
-	if result.Dimension > 0 && e.dimension != result.Dimension {
-		e.dimension = result.Dimension
-	}
-
-	return result.Embeddings, nil
+	return embeddings, nil
 }
 
 // VerifyConsistency checks if the embedder produces consistent results

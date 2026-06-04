@@ -144,10 +144,23 @@ impl PythonParser {
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {
-            if child.kind() == "function_definition" {
-                if let Some(func) = self.parse_function(&child, "") {
-                    functions.push(func);
+            match child.kind() {
+                "function_definition" => {
+                    if let Some(func) = self.parse_function(&child, "") {
+                        functions.push(func);
+                    }
                 }
+                "decorated_definition" => {
+                    let mut inner_cursor = child.walk();
+                    for inner in child.children(&mut inner_cursor) {
+                        if inner.kind() == "function_definition" {
+                            if let Some(func) = self.parse_function(&inner, "") {
+                                functions.push(func);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -157,24 +170,35 @@ impl PythonParser {
     fn parse_function(&self, node: &Node, class_context: &str) -> Option<Function> {
         let mut cursor = node.walk();
         let mut name = String::new();
-        let mut is_async = false;
+        let is_async = node.kind() == "async_function_definition";
 
         // Check for async
-        if let Some(prev) = node.prev_sibling() {
-            if prev.kind() == "async" {
-                is_async = true;
-            }
-        }
+        // if let Some(prev) = node.prev_sibling() {
+        //     if prev.kind() == "async" {
+        //         is_async = true;
+        //     }
+        // }
 
         // Extract decorators
         let mut decorators = Vec::new();
-        let mut current = node.prev_sibling();
-        while let Some(sibling) = current {
-            if sibling.kind() == "decorator" {
-                decorators.insert(0, self.get_node_text(&sibling));
+        if let Some(parent) = node.parent() {
+            if parent.kind() == "decorated_definition" {
+                let mut cur = parent.walk();
+                for child in parent.children(&mut cur) {
+                    if child.kind() == "decorator" {
+                        decorators.push(self.get_node_text(&child));
+                    }
+                }
             }
-            current = sibling.prev_sibling();
         }
+        // let mut decorators = Vec::new();
+        // let mut current = node.prev_sibling();
+        // while let Some(sibling) = current {
+        //     if sibling.kind() == "decorator" {
+        //         decorators.insert(0, self.get_node_text(&sibling));
+        //     }
+        //     current = sibling.prev_sibling();
+        // }
 
         for child in node.children(&mut cursor) {
             if child.kind() == "identifier" && name.is_empty() {
@@ -220,6 +244,8 @@ impl PythonParser {
         // Calculate importance (placeholder, will be refined later)
         let importance_score = self.estimate_importance(&name, &decorators);
 
+        let python_info = self.classify_decorators(&decorators);
+
         Some(Function {
             id,
             name,
@@ -239,6 +265,10 @@ impl PythonParser {
             decorators,
             tags,
             importance_score,
+            lang_info: LanguageSpecificInfo {
+                python: Some(python_info),
+                ..Default::default()
+            },
         })
     }
 
@@ -281,7 +311,7 @@ impl PythonParser {
     fn parse_parameter(&self, node: &Node) -> Option<Parameter> {
         let text = self.get_node_text(node);
 
-        let parts: Vec<&str> = text.split('=').collect();
+        let parts: Vec<&str> = text.splitn(2, '=').collect();
         let name_type_part = parts[0].trim();
         let default_value = if parts.len() > 1 {
             Some(parts[1].trim().to_string())
@@ -776,10 +806,25 @@ impl PythonParser {
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {
-            if child.kind() == "class_definition" {
-                if let Some(class) = self.parse_class(&child) {
-                    classes.push(class);
+            match child.kind() {
+                "class_definition" => {
+                    if let Some(class) = self.parse_class(&child) {
+                        classes.push(class);
+                    }
                 }
+                "decorated_definition" => {
+                    // When a class has decorators, tree-sitter wraps it in
+                    // decorated_definition. Find the inner class_definition.
+                    let mut inner_cursor = child.walk();
+                    for inner in child.children(&mut inner_cursor) {
+                        if inner.kind() == "class_definition" {
+                            if let Some(class) = self.parse_class(&inner) {
+                                classes.push(class);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -795,12 +840,15 @@ impl PythonParser {
         let mut decorators = Vec::new();
 
         // Extract decorators
-        let mut current = node.prev_sibling();
-        while let Some(sibling) = current {
-            if sibling.kind() == "decorator" {
-                decorators.insert(0, self.get_node_text(&sibling));
+        if let Some(parent) = node.parent() {
+            if parent.kind() == "decorated_definition" {
+                let mut cur = parent.walk();
+                for child in parent.children(&mut cur) {
+                    if child.kind() == "decorator" {
+                        decorators.push(self.get_node_text(&child));
+                    }
+                }
             }
-            current = sibling.prev_sibling();
         }
 
         for child in node.children(&mut cursor) {
@@ -829,7 +877,7 @@ impl PythonParser {
         let line_start = node.start_position().row + 1;
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
-
+        let python_info = self.classify_decorators(&decorators);
         Some(Class {
             id: format!("class_{}", name),
             name,
@@ -840,7 +888,93 @@ impl PythonParser {
             methods,
             attributes,
             decorators,
+            lang_info: LanguageSpecificInfo {
+                python: Some(python_info),
+                ..Default::default()
+            },
         })
+    }
+
+    fn classify_decorators(&self, decorators: &[String]) -> PythonInfo {
+        let mut info = PythonInfo {
+            is_dataclass: false,
+            is_staticmethod: false,
+            is_classmethod: false,
+            is_property: false,
+            is_property_setter: false,
+            is_property_deleter: false,
+            is_abstractmethod: false,
+            is_cached_property: false,
+            is_overload: false,
+            is_override: false,
+            is_final: false,
+            flask_route: None,
+            unknown_decorators: Vec::new(),
+        };
+
+        for raw in decorators {
+            // Normalise: strip leading '@' and grab just the base name / dotted path
+            let d = raw.trim().trim_start_matches('@');
+            // Split off any call args: "@app.route('/x')" -> base = "app.route"
+            let base = d.split('(').next().unwrap_or(d).trim();
+            // Last segment for simple matching: "functools.cached_property" -> "cached_property"
+            let leaf = base.split('.').last().unwrap_or(base);
+
+            match leaf {
+                //  dataclass
+                "dataclass" => info.is_dataclass = true,
+
+                //  method kind
+                "staticmethod" => info.is_staticmethod = true,
+                "classmethod" => info.is_classmethod = true,
+
+                // property family
+                "property" => info.is_property = true,
+                // "@foo.setter" / "@foo.deleter"
+                "setter" => info.is_property_setter = true,
+                "deleter" => info.is_property_deleter = true,
+
+                // abc / typing
+                "abstractmethod" | "abstractstaticmethod" | "abstractclassmethod" => {
+                    info.is_abstractmethod = true
+                }
+
+                "cached_property" => info.is_cached_property = true,
+                "overload" => info.is_overload = true,
+                "override" => info.is_override = true,
+                "final" => info.is_final = true,
+
+                // web frameworks
+                // Flask/FastAPI: @app.route('/path'), @router.get('/path'), …
+                "route" | "get" | "post" | "put" | "patch" | "delete" => {
+                    // Try to pull the path string out of the raw decorator text
+                    let path = self.extract_decorator_arg(raw);
+                    info.flask_route = path;
+                }
+
+                // unknown
+                _ => info.unknown_decorators.push(raw.clone()),
+            }
+        }
+
+        info
+    }
+
+    /// Pulls the first string literal argument from a decorator, e.g.
+    /// `@app.route("/users/<id>", methods=["GET"])` -> `Some("/users/<id>")`
+    fn extract_decorator_arg(&self, raw: &str) -> Option<String> {
+        let start = raw.find('(')?;
+        let inner = &raw[start + 1..];
+        // Find the first quoted string
+        for quote in ['"', '\''] {
+            if let Some(q_start) = inner.find(quote) {
+                let after = &inner[q_start + 1..];
+                if let Some(q_end) = after.find(quote) {
+                    return Some(after[..q_end].to_string());
+                }
+            }
+        }
+        None
     }
 
     fn extract_base_classes(&self, node: &Node) -> Vec<String> {

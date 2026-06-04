@@ -3,5 +3,4 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-pub mod builder;
 pub mod types;
