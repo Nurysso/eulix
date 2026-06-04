@@ -1,3 +1,15 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer mnae (Nurysso) contact - nurysso [at] proton.me
+/*
+Package checksum handles project-level source file hashing and change detection.
+It walks a project directory, hashes each source file, and produces a combined
+project hash used by eulix to detect whether re-analysis is needed.
+Ignore rules are read from a .euignore file in the project root (same syntax
+as .gitignore). The .eulix/ output directory is always excluded automatically.
+*/
+
 package checksum
 
 import (
@@ -23,7 +35,7 @@ type Checksum struct {
 }
 
 type Detector struct {
-	projectPath   string
+	projectPath    string
 	ignorePatterns []string
 }
 
@@ -260,23 +272,23 @@ func hashFile(path string) (string, int, error) {
 
 func isSourceFile(ext string) bool {
 	sourceExts := map[string]bool{
-		".go":   true,
-		".py":   true,
-		".js":   true,
-		".ts":   true,
-		".tsx":  true,
-		".jsx":  true,
-		".java": true,
-		".c":    true,
-		".cpp":  true,
-		".h":    true,
-		".hpp":  true,
-		".rs":   true,
-		".rb":   true,
-		".php":  true,
-		".cs":   true,
+		".go":    true,
+		".py":    true,
+		".js":    true,
+		".ts":    true,
+		".tsx":   true,
+		".jsx":   true,
+		".java":  true,
+		".c":     true,
+		".cpp":   true,
+		".h":     true,
+		".hpp":   true,
+		".rs":    true,
+		".rb":    true,
+		".php":   true,
+		".cs":    true,
 		".swift": true,
-		".kt":   true,
+		".kt":    true,
 		".scala": true,
 	}
 	return sourceExts[ext]

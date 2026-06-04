@@ -1,3 +1,13 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package cache provides the cache interface implementation for EULIX.
+/*
+This file is responsible for managing cache(database+redis)
+for eulix project Currently kinda buggy/un-tested
+*/
+
 package cache
 
 import (
@@ -12,8 +22,8 @@ import (
 
 	"eulix/internal/config"
 
-	"github.com/redis/go-redis/v9"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/redis/go-redis/v9"
 )
 
 type Manager struct {
@@ -24,12 +34,12 @@ type Manager struct {
 }
 
 type CacheEntry struct {
-	QueryHash      string    `json:"query_hash"`
-	Query          string    `json:"query"`
-	Response       string    `json:"response"`
-	ChecksumHash   string    `json:"checksum_hash"`
-	CreatedAt      time.Time `json:"created_at"`
-	ExpiresAt      time.Time `json:"expires_at"`
+	QueryHash    string    `json:"query_hash"`
+	Query        string    `json:"query"`
+	Response     string    `json:"response"`
+	ChecksumHash string    `json:"checksum_hash"`
+	CreatedAt    time.Time `json:"created_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 func CacheController(cfg *config.Config) (*Manager, error) {

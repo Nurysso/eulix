@@ -1,3 +1,12 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package cli provides the command-line interface implementation for EULIX.
+/*
+This file is responsible for running the Chat command that launches tui
+and checks for necessary file required by context window creation
+*/
 package cli
 
 import (
@@ -18,14 +27,14 @@ import (
 
 // printStatusMessage prints a formatted status message with consistent spacing
 func printStatusMessage(primaryMsg string, additionalLines ...string) {
-    printStatusMessageWithIcon(" ", primaryMsg, additionalLines...)
+	printStatusMessageWithIcon(" ", primaryMsg, additionalLines...)
 }
 
 func printStatusMessageWithIcon(icon, primaryMsg string, additionalLines ...string) {
-    fmt.Printf("%s %s\n", icon, primaryMsg)
-    for _, line := range additionalLines {
-        fmt.Printf("  %s\n", line)
-    }
+	fmt.Printf("%s %s\n", icon, primaryMsg)
+	for _, line := range additionalLines {
+		fmt.Printf("  %s\n", line)
+	}
 }
 
 // promptConfirm asks for user confirmation
@@ -46,6 +55,7 @@ func checkEmbeddingsFiles(eulixDir string) []string {
 		"kb_index.json":      "KB index",
 		"kb_call_graph.json": "Call graph",
 		"embeddings.bin":     "Embeddings (binary)",
+		"vectors.bin":        "vector index (binary)",
 	}
 
 	for file, desc := range requiredFiles {
@@ -144,8 +154,7 @@ func startChat() error {
 				if err := cacheManager.InvalidateByChecksum(current.Hash); err != nil {
 					fmt.Printf("Failed to invalidate old cache: %v\n", err)
 				} else {
-					printStatusMessage("Cache invalidated due to codebase changes",
-					)
+					printStatusMessage("Cache invalidated due to codebase changes")
 				}
 			}
 

@@ -1,3 +1,13 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package config handles configs defined by user for their project.
+/*
+Responsible for parsing toml based config and writes default config
+when init is ran
+*/
+
 package config
 
 import (
@@ -30,6 +40,7 @@ type ParserConfig struct {
 type EmbeddingsConfig struct {
 	Model     string `toml:"model"`
 	Dimension int    `toml:"dimension"`
+	VenvPath  string `toml:"venvPath"`
 }
 
 type LLMConfig struct {
@@ -79,7 +90,9 @@ func Load() (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		fmt.Printf("[CONFIG] Project path: %s → %s\n", cfg.Project.Path, absPath)
+		if cfg.Project.DebugConfig {
+			fmt.Printf("[CONFIG] Project path: %s → %s\n", cfg.Project.Path, absPath)
+		}
 		cfg.Project.Path = absPath
 	}
 
@@ -105,7 +118,8 @@ func defaultConfig() *Config {
 	if err != nil {
 		cwd = "."
 	}
-
+	home, _ := os.UserHomeDir()
+	PathVenv := filepath.Join(home, ".Eulix", ".venv")
 	return &Config{
 		Project: ProjectConfig{
 			Path:        cwd,
@@ -118,6 +132,7 @@ func defaultConfig() *Config {
 		Embeddings: EmbeddingsConfig{
 			Model:     "BAAI/bge-base-en-v1.5",
 			Dimension: 768,
+			VenvPath:  PathVenv,
 		},
 		LLM: LLMConfig{
 			Local:       true,
@@ -151,7 +166,7 @@ func TestSourcePaths() {
 	sourceRoot := filepath.Dir(eulixDir) // parent of .eulix
 
 	// Test file from your KB
-	testFile := "django/shortcuts.py" // example from Django
+	testFile := "testproject/django/shortcuts.py" // example from Django
 	fullPath := filepath.Join(sourceRoot, testFile)
 
 	fmt.Printf("Eulix dir: %s\n", eulixDir)
