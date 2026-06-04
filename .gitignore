@@ -1,13 +1,13 @@
 example_project/
 examples/
 scripts/
+*.idea/
 test_project/
 eulix-embed/embeddingstestoutputs/
 test/
 build/
-parser/target
-parser/test
 **/target/
+*-bug.*
 .eulix/
 eulix
 eulix.toml
