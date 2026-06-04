@@ -10,3 +10,6 @@ build/
 *-bug.*
 .eulix/
 eulix
+eulix.toml
+callgraph-viz/
+context_debug_*.txt

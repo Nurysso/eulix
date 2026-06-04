@@ -68,9 +68,10 @@ var (
 	highlightColor = lipgloss.Color("#8B5CF6")
 )
 
+var headingRe = regexp.MustCompile(`^(#{1,6})\s+(.+)$`)
+
 // Compiled once — used in formatListItem and processInlineMarkdown.
 var (
-	headingRe      = regexp.MustCompile(`^(#{1,6})\s+(.+)$`)
 	numberedListRe = regexp.MustCompile(`^(\d+)\.\s+(.+)$`)
 	inlineCodeRe   = regexp.MustCompile("`([^`]+)`")
 	boldRe         = regexp.MustCompile(`(\*\*|__)([^*_]+)(\*\*|__)`)

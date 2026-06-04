@@ -3,10 +3,69 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
+//! # Eulix Parser
+//!
+//! A fast, multi-threaded source code parser that builds a structured
+//! knowledge base from large codebases.
+//!
+//! ## Supported Languages
+//!
+//! | Language   | Extensions              |
+//! |------------|-------------------------|
+//! | C          | `.c`                    |
+//! | C++        | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` |
+//! | Python     | `.py`                   |
+//! | Rust       | `.rs`                   |
+//! | TypeScript | `.ts`                   |
+//! | Go         | `.go`                   |
+//!
+//! ## Pipeline
+//!
+//! The parser runs in four sequential phases:
+//!
+//! 1. **File Discovery & Parsing** — Walks the project root, filters by
+//!    language, respects `.euignore` exclusion rules, and parses all
+//!    source files in parallel via Rayon. Extracts functions, classes,
+//!    methods, imports, and LOC per file.
+//!
+//! 2. **Analysis** — Builds a call graph (nodes = callables, edges =
+//!    call relationships) and reverse call graph, resolves cross-file
+//!    call locations using PRISM aproximate precission analysis, detects patterns,
+//!    identifies entry points, and enumerates external dependencies.
+//!
+//! 3. **Summary Generation** — Produces a high-level summary of the
+//!    knowledge base (language breakdown, top-level metrics, dependency
+//!    overview).
+//!
+//! 4. **Output** — Writes four JSON artifacts to the output directory:
+//!    - `kb.json`            — full knowledge base (files + graph)
+//!    - `kb_index.json`      — symbol and file indices
+//!    - `kb_summary.json`    — human-readable project summary
+//!    - `kb_call_graph.json` — serialized call graph (nodes + edges)
+//!
+//! ## Usage
+//!
+//! ```bash
+//! eulix_parser --root ./my_project --output out/kb.json --threads 12
+//! eulix_parser --root . --languages rust,python --no-analyze
+//! eulix_parser --root . --euignore ./.euignore --verbose
+//! ```
+//!
+//! ## Performance
+//!
+//! Parsing is parallelised across all available threads with Rayon.
+//! On a 12-thread run against ~37k files (26M LOC), typical wall time
+//! is ~46s for parsing and ~5s for analysis.
+//! For codebases exceeding ~10k files, `--no-analyze` is recommended
+//! if only the raw parse output is needed.
+
 use clap::Parser;
+use mimalloc::MiMalloc;
+// use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -25,6 +84,9 @@ use parser::python;
 use parser::rust as rust_parser;
 use parser::typescript;
 use utils::file_walker::FileWalker;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[derive(Debug, Clone)]
 struct ParseStats {
@@ -83,8 +145,11 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-
-    // Set thread pool size
+    let version = env!("CARGO_PKG_VERSION");
+    let bin_hash = "miku"; // temperoraly placeholder till I figure out how to store git hash.
+                           // let bin_hash = var("VERGEN_GIT_SHA")?;
+                           // let bin_hash = env!("VERGEN_GIT_SHA");
+                           // Set thread pool size
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
         .build_global()
@@ -94,8 +159,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.verbose {
         println!("╔════════════════════════════════════════════════════════════════╗");
-        println!("║             EULIX PARSER -                   ║");
-        let version = env!("CARGO_PKG_VERSION");
         println!("║{:^64}║", format!("EULIX PARSER - v{}", version));
         println!("╚════════════════════════════════════════════════════════════════╝");
         println!();
@@ -122,6 +185,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &args.languages,
         args.euignore.as_deref(),
         args.verbose,
+        version,
+        &bin_hash,
     )?;
 
     if args.verbose {
@@ -198,57 +263,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         fs::create_dir_all(output_dir)?;
 
-        // Write main kb file
-        let kb_json = serde_json::to_string_pretty(&kb)?;
-        fs::write(output_path, kb_json)?;
-        if args.verbose {
-            let size = fs::metadata(output_path)?.len();
-            println!("   ✓ {} ({:.2} KB)", args.output, size as f64 / 1024.0);
-        }
-
-        // Write additional analysis files in the same directory
         let base_name = output_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("kb");
 
-        // Write index.json
         let index_path = output_dir.join(format!("{}_index.json", base_name));
-        let index_json = serde_json::to_string_pretty(&kb.indices)?;
-        fs::write(&index_path, index_json)?;
-        if args.verbose {
-            let size = fs::metadata(&index_path)?.len();
-            println!(
-                "   ✓ {}_index.json ({:.2} KB)",
-                base_name,
-                size as f64 / 1024.0
-            );
-        }
-
-        // Write summary.json
         let summary_path = output_dir.join(format!("{}_summary.json", base_name));
-        let summary_json = serde_json::to_string_pretty(&summary)?;
-        fs::write(&summary_path, summary_json)?;
-        if args.verbose {
-            let size = fs::metadata(&summary_path)?.len();
-            println!(
-                "   ✓ {}_summary.json ({:.2} KB)",
-                base_name,
-                size as f64 / 1024.0
-            );
+        let callgraph_path = output_dir.join(format!("{}_call_graph.json", base_name));
+
+        // Serialize all four in parallel
+        let ((kb_json, index_json), (summary_json, callgraph_json)) = rayon::join(
+            || {
+                rayon::join(
+                    || sonic_rs::to_string(&kb).expect("Failed to serialize kb"),
+                    || sonic_rs::to_string(&kb.indices).expect("Failed to serialize indices"),
+                )
+            },
+            || {
+                rayon::join(
+                    || sonic_rs::to_string_pretty(&summary).expect("Failed to serialize summary"),
+                    || sonic_rs::to_string(&kb.call_graph).expect("Failed to serialize call_graph"),
+                )
+            },
+        );
+
+        // Write all four files in parallel
+        let files: Vec<(&Path, &str)> = vec![
+            (output_path, kb_json.as_str()),
+            (&index_path, index_json.as_str()),
+            (&summary_path, summary_json.as_str()),
+            (&callgraph_path, callgraph_json.as_str()),
+        ];
+
+        let write_errors: Vec<String> = files
+            .par_iter()
+            .filter_map(|(path, json)| {
+                let result = fs::File::create(path).and_then(|f| {
+                    let mut w = BufWriter::new(f);
+                    w.write_all(json.as_bytes())
+                });
+                result.err().map(|e| format!("{}: {}", path.display(), e))
+            })
+            .collect();
+
+        if !write_errors.is_empty() {
+            for e in &write_errors {
+                eprintln!("   ✗ Failed to write {}", e);
+            }
         }
 
-        // Write call_graph.json
-        let callgraph_path = output_dir.join(format!("{}_call_graph.json", base_name));
-        let callgraph_json = serde_json::to_string_pretty(&kb.call_graph)?;
-        fs::write(&callgraph_path, callgraph_json)?;
         if args.verbose {
-            let size = fs::metadata(&callgraph_path)?.len();
-            println!(
-                "   ✓ {}_call_graph.json ({:.2} KB)",
-                base_name,
-                size as f64 / 1024.0
-            );
+            for (path, _) in &files {
+                if path.exists() {
+                    let size = fs::metadata(path)?.len();
+                    println!("   ✓ {} ({:.2} KB)", path.display(), size as f64 / 1024.0);
+                }
+            }
         }
 
         if args.verbose {
@@ -275,7 +346,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fs::create_dir_all(parent)?;
         }
 
-        let kb_json = serde_json::to_string_pretty(&kb)?;
+        let kb_json = serde_json::to_string(&kb)?;
         fs::write(output_path, kb_json)?;
 
         if args.verbose {
@@ -346,6 +417,8 @@ fn parse_directory(
     languages: &str,
     euignore_path: Option<&str>,
     verbose: bool,
+    version: &str,
+    git_hash: &str,
 ) -> Result<(KnowledgeBase, ParseStats), Box<dyn std::error::Error>> {
     let path = PathBuf::from(dir);
 
@@ -387,7 +460,7 @@ fn parse_directory(
             match parse_file(file_path, &path) {
                 Ok(result) => {
                     if verbose {
-                        println!("   ✓ Parsed:  {}", relative_path);
+                        println!("\r   ✓ Parsed:  {:<80}", relative_path);
                     }
                     stats.lock().unwrap().parsed.push(relative_path.clone());
                     Some(result)
@@ -395,7 +468,7 @@ fn parse_directory(
                 Err(e) => {
                     let error_msg = e.to_string();
                     if verbose {
-                        println!("   ✗ Failed:  {} - {}", relative_path, error_msg);
+                        println!("\r   ✗ Failed:  {:<80} - {:<80}", relative_path, error_msg);
                     }
                     stats
                         .lock()
@@ -440,8 +513,9 @@ fn parse_directory(
 
     let metadata = Metadata {
         project_name,
-        version: chrono::Utc::now().format("%Y.%m.%d.%H%M%S").to_string(),
-        parsed_at: chrono::Utc::now().to_rfc3339(),
+        version: version.to_string(),
+        git_hash: git_hash.to_string(),
+        parsed_at: chrono::Utc::now().format("%Y.%m.%d.%H%M%S").to_string(),
         languages: languages_set.into_iter().collect(),
         total_files: structure.len(),
         total_loc,
@@ -592,6 +666,7 @@ fn parse_file(
         .unwrap_or(file_path)
         .to_string_lossy()
         .to_string();
+    // let checksum = compute_crc32(file_path);
 
     match lang {
         Language::Python => {
@@ -622,3 +697,11 @@ fn parse_file(
         _ => Err(format!("Unsupported language: {:?}", lang).into()),
     }
 }
+
+// MAYBE in future we can add hash
+// fn compute_crc32(path: &Path) -> Option<u32> {
+//     let bytes = fs::read(path).ok()?;
+//     let mut hasher = Hasher::new();
+//     hasher.update(&bytes);
+//     Some(hasher.finalize())
+// }

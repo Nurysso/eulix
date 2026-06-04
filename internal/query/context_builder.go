@@ -96,7 +96,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	cb.debugLog.Log("Initializing ContextBuilder with source root: %s", sourceRoot)
 
 	eulixBinaryPath := filepath.Join(eulixDir, "..", "eulix_embed")
-	cb.queryEmbedder = embeddings.VectorWeaver(eulixBinaryPath, cfg.Embeddings.Model, cfg.Embeddings.Dimension)
+	cb.queryEmbedder = embeddings.VectorWeaver(eulixBinaryPath, cfg.Embeddings.Model)
 	// Load chunks from kb.json + kb_index.json (replaces embeddings.json)
 	if err := cb.loadChunksFromKB(); err != nil {
 		return nil, fmt.Errorf("failed to load chunks from KB: %w", err)

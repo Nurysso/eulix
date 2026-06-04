@@ -119,7 +119,7 @@ func defaultConfig() *Config {
 		cwd = "."
 	}
 	home, _ := os.UserHomeDir()
-	PathVenv := filepath.Join(home, ".foo", ".venv")
+	PathVenv := filepath.Join(home, ".Eulix", ".venv")
 	return &Config{
 		Project: ProjectConfig{
 			Path:        cwd,

@@ -5,21 +5,22 @@
 // Package query manages query routing and retrival for EULIX.
 
 /*
-	Package query implements the query routing, classification, and LLM prompt
-	pipeline for eulix. Incoming natural-language questions are classified by
-	QuerySheriff, dispatched to a type-specific handler, and answered using a
-	mix of real source code (≈65%) and AST metadata retrieved by ContextBuilder.
+       Package query implements the query routing, classification, and LLM prompt
+       pipeline for eulix. Incoming natural-language questions are classified by
+       QuerySheriff, dispatched to a type-specific handler, and answered using a
+       mix of real source code (≈65%) and AST metadata retrieved by ContextBuilder.
 
-	Key types
+       Key types
 
-		Router			— top-level dispatcher; holds KB index, call graph, cache
-		ContextBuilder	— assembles the context window for LLM calls
-		Classifier		— maps a query string to a QueryType + confidence score
+               Router                  — top-level dispatcher; holds KB index, call
+graph, cache
+               ContextBuilder  — assembles the context window for LLM calls
+               Classifier              — maps a query string to a QueryType + confidence score
 
-	Prompt construction follows a chain-of-thought pattern: every LLM prompt is
-	composed of a shared header (cotHeader), a handler-specific reasoning body,
-	and a shared footer (cotFooter). Handlers label each claim as one of:
-		CONFIRMED IN SOURCE / INFERRED FROM SIGNATURE / CANNOT DETERMINE
+       Prompt construction follows a chain-of-thought pattern: every LLM prompt is
+       composed of a shared header (cotHeader), a handler-specific reasoning body,
+       and a shared footer (cotFooter). Handlers label each claim as one of:
+               CONFIRMED IN SOURCE / INFERRED FROM SIGNATURE / CANNOT DETERMINE
 */
 
 package query
@@ -38,7 +39,7 @@ import (
 	"eulix/internal/types"
 )
 
-// CoT scaffolding
+//  CoT scaffolding
 
 // cotHeader builds the universal reasoning preamble injected into every prompt.
 // It instructs the model to separate "what I can see" from "what I infer",
@@ -112,7 +113,7 @@ func buildPrompt(query string, class *Classification, sourceAvailable bool, task
 		cotFooter()
 }
 
-// Controller / loader (unchanged)
+//  Controller / loader (unchanged) ─
 
 func (r *Router) SetCurrentChecksum(checksum string) {
 	r.currentChecksum = checksum
@@ -192,7 +193,7 @@ func (r *Router) ensureContextBuilder() error {
 	return nil
 }
 
-//  Main dispatch
+//  Main dispatch ─
 
 func (r *Router) Query(query string) (string, error) {
 	if r.cache != nil && r.currentChecksum != "" {
@@ -295,7 +296,7 @@ func (r *Router) Query(query string) (string, error) {
 	return response, nil
 }
 
-//  Handlers
+//  Handlers ─
 
 func (r *Router) handleCodeGeneration() (string, error) {
 	return `I have semantic information (function signatures, types, call graphs) but not full source code for every symbol, so I cannot safely generate implementation code — I would likely hallucinate logic.
@@ -868,7 +869,7 @@ func (r *Router) Close() error {
 	return nil
 }
 
-//  Entity extraction
+//  Entity extraction ─
 
 func extractEntityName(query string) string {
 	words := strings.Fields(query)

@@ -200,6 +200,7 @@ impl GoParser {
             decorators: vec![],
             tags,
             importance_score,
+            lang_info: LanguageSpecificInfo::default(),
         })
     }
 
@@ -298,36 +299,68 @@ impl GoParser {
             _ => context,
         };
 
-        if node.kind() == "call_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let call_name = self.get_node_text(&func_node);
-                let name = call_name
-                    .split('.')
-                    .last()
-                    .unwrap_or(&call_name)
-                    .trim()
-                    .to_string();
-
-                if !name.is_empty() {
-                    let key = format!("{}:{}", name, node.start_position().row);
-                    if !seen.contains(&key) {
-                        seen.insert(key);
-
-                        let args = self.extract_call_arguments(node);
-
-                        calls.push(FunctionCall {
-                            callee: name,
-                            defined_in: None,
-                            line: node.start_position().row + 1,
-                            args,
-                            is_conditional: context != "unconditional",
-                            context: context.to_string(),
-                        });
+        if node.kind() == "go_statement" {
+            // Extract the call inside the go statement
+            let mut go_cursor = node.walk();
+            for child in node.children(&mut go_cursor) {
+                if child.kind() == "call_expression" {
+                    if let Some(func_node) = child.child_by_field_name("function") {
+                        let name = self
+                            .get_node_text(&func_node)
+                            .split('.')
+                            .last()
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if !name.is_empty() {
+                            let key = format!("{}:{}", name, child.start_position().row);
+                            if !seen.contains(&key) {
+                                seen.insert(key);
+                                calls.push(FunctionCall {
+                                    callee: name,
+                                    defined_in: None,
+                                    line: child.start_position().row + 1,
+                                    args: self.extract_call_arguments(&child),
+                                    is_conditional: false,
+                                    context: "goroutine".to_string(), // ← marks it
+                                });
+                            }
+                        }
                     }
                 }
             }
         }
 
+        if node.kind() == "defer_statement" {
+            let mut defer_cursor = node.walk();
+            for child in node.children(&mut defer_cursor) {
+                if child.kind() == "call_expression" {
+                    if let Some(func_node) = child.child_by_field_name("function") {
+                        let name = self
+                            .get_node_text(&func_node)
+                            .split('.')
+                            .last()
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if !name.is_empty() {
+                            let key = format!("{}:{}", name, child.start_position().row);
+                            if !seen.contains(&key) {
+                                seen.insert(key);
+                                calls.push(FunctionCall {
+                                    callee: name,
+                                    defined_in: None,
+                                    line: child.start_position().row + 1,
+                                    args: self.extract_call_arguments(&child),
+                                    is_conditional: false,
+                                    context: "defer".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
         for child in node.children(&mut cursor) {
             self.find_calls_recursive(&child, calls, seen, child_context);
         }
@@ -581,9 +614,24 @@ impl GoParser {
 
         for child in root.children(&mut cursor) {
             if child.kind() == "type_declaration" {
-                if let Some(spec) = child.child_by_field_name("spec") {
-                    if let Some(struct_data) = self.parse_struct(&spec) {
-                        structs.push(struct_data);
+                let mut type_cursor = child.walk();
+                for spec in child.children(&mut type_cursor) {
+                    if spec.kind() == "type_spec" {
+                        if let Some(type_node) = spec.child_by_field_name("type") {
+                            match type_node.kind() {
+                                "struct_type" => {
+                                    if let Some(s) = self.parse_struct(&spec) {
+                                        structs.push(s);
+                                    }
+                                }
+                                "interface_type" => {
+                                    if let Some(i) = self.parse_interface(&spec) {
+                                        structs.push(i);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                 }
             }
@@ -596,21 +644,27 @@ impl GoParser {
         for child in root.children(&mut cursor) {
             if child.kind() == "function_declaration" {
                 if let Some(receiver) = child.child_by_field_name("receiver") {
-                    let receiver_text = self.get_node_text(&receiver);
-                    let type_name = receiver_text
-                        .trim_start_matches('(')
-                        .trim_end_matches(')')
-                        .split_whitespace()
-                        .last()
-                        .unwrap_or("")
-                        .trim_start_matches('*')
-                        .to_string();
+                    let type_name = {
+                        let mut type_name = String::new();
+                        let mut rec_cursor = receiver.walk();
+                        for rec_child in receiver.children(&mut rec_cursor) {
+                            if rec_child.kind() == "parameter_declaration" {
+                                if let Some(t) = rec_child.child_by_field_name("type") {
+                                    type_name =
+                                        self.get_node_text(&t).trim_start_matches('*').to_string();
+                                }
+                            }
+                        }
+                        type_name
+                    };
 
-                    if let Some(method) = self.parse_function(&child, &type_name) {
-                        methods_map
-                            .entry(type_name)
-                            .or_insert_with(Vec::new)
-                            .push(method);
+                    if !type_name.is_empty() {
+                        if let Some(method) = self.parse_function(&child, &type_name) {
+                            methods_map
+                                .entry(type_name)
+                                .or_insert_with(Vec::new)
+                                .push(method);
+                        }
                     }
                 }
             }
@@ -653,6 +707,7 @@ impl GoParser {
             methods: vec![],
             attributes,
             decorators: vec![],
+            lang_info: LanguageSpecificInfo::default(),
         })
     }
 
@@ -713,15 +768,24 @@ impl GoParser {
     }
 
     fn parse_global_var(&self, node: &Node) -> Option<GlobalVar> {
-        let name_node = node.child_by_field_name("name")?;
-        let name = self.get_node_text(&name_node);
         let line = node.start_position().row + 1;
+
+        // name field can be an identifier_list for multi-name specs
+        let name = node
+            .child_by_field_name("name")
+            .map(|n| self.get_node_text(&n))
+            .unwrap_or_default();
+
+        if name.is_empty() {
+            return None;
+        }
 
         let type_annotation = node
             .child_by_field_name("type")
             .map(|t| self.get_node_text(&t))
             .unwrap_or_default();
 
+        // value can be an expression_list for multi-value specs
         let value = node
             .child_by_field_name("value")
             .map(|v| self.get_node_text(&v));
@@ -732,6 +796,80 @@ impl GoParser {
             value,
             line,
         })
+    }
+
+    fn parse_interface(&self, node: &Node) -> Option<Class> {
+        let name_node = node.child_by_field_name("name")?;
+        let name = self.get_node_text(&name_node);
+        let line_start = node.start_position().row + 1;
+        let line_end = node.end_position().row + 1;
+        let docstring = self.extract_docstring(node);
+
+        let methods = if let Some(type_node) = node.child_by_field_name("type") {
+            if type_node.kind() == "interface_type" {
+                self.extract_interface_methods(&type_node)
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        Some(Class {
+            id: format!("interface_{}", name),
+            name,
+            bases: vec![],
+            docstring,
+            line_start,
+            line_end,
+            methods,
+            attributes: vec![],
+            decorators: vec!["interface".to_string()], // reuse decorators to signal kind
+            lang_info: LanguageSpecificInfo::default(),
+        })
+    }
+
+    fn extract_interface_methods(&self, interface_node: &Node) -> Vec<Function> {
+        let mut methods = Vec::new();
+
+        if let Some(body) = interface_node.child_by_field_name("body") {
+            let mut cursor = body.walk();
+            for child in body.children(&mut cursor) {
+                if child.kind() == "method_spec" {
+                    if let Some(name_node) = child.child_by_field_name("name") {
+                        let name = self.get_node_text(&name_node);
+                        let params = self.extract_parameters(&child);
+                        let return_type = self.extract_return_type(&child);
+                        let signature = self.build_signature(&name, &params, &return_type, None);
+                        let line_start = child.start_position().row + 1;
+
+                        methods.push(Function {
+                            id: format!("ifacemethod_{}", name),
+                            name: name.clone(),
+                            signature,
+                            params,
+                            return_type,
+                            docstring: String::new(),
+                            line_start,
+                            line_end: line_start,
+                            calls: vec![],
+                            called_by: vec![],
+                            variables: vec![],
+                            control_flow: ControlFlow::default(),
+                            exceptions: ExceptionInfo::default(),
+                            complexity: 1,
+                            is_async: false,
+                            decorators: vec![],
+                            tags: vec!["interface-method".to_string()],
+                            importance_score: 0.5,
+                            lang_info: LanguageSpecificInfo::default(),
+                        });
+                    }
+                }
+            }
+        }
+
+        methods
     }
 
     fn extract_docstring(&self, node: &Node) -> String {
@@ -1003,10 +1141,8 @@ impl GoParser {
         }
 
         // Goroutines/Concurrency
-        if calls
-            .iter()
-            .any(|c| c.callee.contains("Go") || c.callee == "go")
-        {
+        // In auto_tag_function, replace the goroutine check:
+        if calls.iter().any(|c| c.context == "goroutine") {
             tags.push("concurrent".to_string());
             tags.push("goroutine".to_string());
         }

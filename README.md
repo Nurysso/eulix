@@ -2,63 +2,94 @@
 
 <img src="docs/assets/logo.jpg" alt="Eulix" width="120" />
 
-**Local-first code intelligence for large codebases.**
+**Turn your codebase into a searchable book.**
 
 [![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/go-1.22+-00ADD8?logo=go)](https://go.dev)
-[![Rust](https://img.shields.io/badge/rust-stable-orange?logo=rust)](https://www.rust-lang.org)
+[![Go](https://img.shields.io/badge/Go-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev)
+[![Rust](https://img.shields.io/badge/Rust-orange?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Python](https://img.shields.io/badge/Python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)](https://www.python.org/)
 
-[Overview](#overview) · [Install](#installation) · [Usage](#usage) · [Docs](docs/) · [Benchmarks](#benchmarks)
+[Overview](#overview) · [Install](#installation) · [Usage](#usage) · [Docs](docs/)
 
 </div>
 
 ---
 
-Eulix is a **local-first code intelligence system** designed to provide deep reasoning over massive repositories without compromising privacy or speed.
+Eulix transforms your codebase into a structured, searchable knowledge base. **Ask questions about your code — get accurate answers** grounded in actual source structure, not hallucinations.
 
-It orchestrates a high-performance pipeline of **Go** and **Rust** to bridge the gap between raw static analysis and LLM-powered insights. By combining a multi-layer retrieval strategy with rigorous anti-hallucination prompting, Eulix ensures that codebase answers are grounded in your actual source code.
+Using **ML algorithms and LLMs**, Eulix analyzes your code's architecture (symbols, call graphs, control flow), then intelligently retrieves relevant context to answer questions with precision. Everything stays on your machine. No code leaves your infrastructure.
 
 ---
 
-## Overview
+## How It Works
 
-Eulix operates as three focused binaries that work in concert:
+### 1. Index Your Codebase
 
-| Component      | Language | Role                                                                                               |
-| -------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `eulix`        | Go       | **Orchestrator** — Manages the CLI, config, and the RAG pipeline                                   |
-| `eulix_parser` | Rust     | **Static Analyzer** — Extracts symbols, call graphs, and complexity                                |
-| `eulix_embed`  | Rust     | **Embedder** — Runs transformer models via ONNX with GPU acceleration(supports both rocm and cuda) |
+Eulix analyzes your source code and creates a structured knowledge base:
 
-### Smart Multi-Layer Retrieval
+- **Symbol Index** — Maps all functions, classes, variables, and their locations
+- **Call Graphs** — Tracks which code calls what (dependencies, relationships)
+- **Control Flow** — Captures structure, complexity, and error handling
+- **Embeddings** — Generates semantic vectors for each code unit (local, no cloud)
 
-Unlike simple RAG tools, Eulix uses a tiered retrieval pipeline to find the most relevant context before hitting an LLM:
+Result: Your codebase becomes a "book" with chapters (files), sections (classes), and indexed content (functions).
 
-1.  **Symbol Lookup:** Precision matching for functions, classes, and variables.
-2.  **Keyword Search:** Traditional lexical matching for specific terms.
-3.  **Semantic Vector Search:** Deep contextual matching using local embeddings.
-4.  **Call-Graph Expansion:** Traverses relationships to pull in relevant upstream/downstream logic.
+### 2. Answer Questions Accurately
 
-### Reliable Reasoning
+When you ask a question, Eulix:
 
-Eulix is built with an **anti-hallucination discipline**. Our prompts are architected to force the model to cite its sources and strictly adhere to the provided context, minimizing "invented" logic or APIs.
+1. **Finds relevant code** using multi-layer retrieval (symbol lookup → keyword search → semantic search → call graph traversal)
+2. **Builds precise context** — Only includes code that matters, with accurate relationships
+3. **Feeds to LLM** — Local model explains based on grounded facts, not guesses
+
+Unlike generic "ask ChatGPT about your code", Eulix's context is structured and accurate. Your 7B local model answers like a 14B cloud model.
+
+### Architecture
+
+Three focused binaries working in concert:
+
+| Component      | Language | Role                                                                                   |
+| -------------- | -------- | -------------------------------------------------------------------------------------- |
+| `eulix`        | Go       | **Orchestrator** — CLI, config, and the retrieval pipeline                             |
+| `eulix_parser` | Rust     | **Static Analyzer** — Extracts symbols, call graphs, and complexity                    |
+| `eulix_embed`  | Python   | **Embedder** — Runs transformers via Pytorch with GPU acceleration (ROCm/CUDA support) |
+
+---
+
+## Why Eulix
+
+**Accurate answers grounded in your actual code.** Most AI code tools hallucinate because they guess at context. Eulix builds structured knowledge of your codebase first, so answers are precise.
+
+**Works offline, stays private.** All parsing, embedding, and reasoning happen locally. Zero code exposure. Perfect for proprietary or regulated codebases.
+
+**Fast on small models.** With accurate context, a local 7B model explains code as well as ChatGPT-4. No API costs, no latency, no rate limits.
+
+**Production-ready.** Handles millions of lines of code. Built for large teams, legacy systems, and complex architectures.
 
 ---
 
 ## Features
 
-- **Symbol Indexing** — Comprehensive mapping of functions, classes, and source locations.
-- **Advanced Call Graphs** — Maps incoming and outgoing relationships across the entire project.
-- **Knowledge Base** — Captures control-flow structures, error handling blocks, and cyclomatic complexity.
-- **Local-First** — All parsing and embedding happens on your machine. No code leaves your infrastructure.
-- **High Performance** — Rust-powered backend capable of parsing millions of lines in seconds.
+- **Multi-Language Parsing** — Python, Go, C, and more. Extract structure, not just text.
+- **Precise Call Graphs** — Understand which code calls what, across the entire project.
+- **Local Intelligence** — All analysis happens on your machine. No cloud dependency, no privacy concerns.
+- **GPU Acceleration** — CUDA/ROCm support for fast embedding generation.
+- **MCP Integration** — Plugs into any editor or tool via Model Context Protocol (coming soon).
+- **Anti-Hallucination Design** — Retrieval-augmented answering grounded in actual code structure.
 
-### Supported languages
+### Supported Languages
 
-Python · Go · C
+**Stable:** Python · Go · C
 
-> [!NOTE]
-> rust · Typecript · C++ will be supported soon
+**Coming soon:** Rust · TypeScript · C++
+
+### Use Cases
+
+- **Onboarding new engineers** — Explain "what does this module do?" in seconds
+- **Debugging unfamiliar code** — Trace execution flow and dependencies
+- **Refactoring legacy systems** — Understand impact of changes before making them
+- **Security audits** — Find all callers of sensitive functions
+- **Architecture decisions** — Explore how components interact
 
 ---
 
@@ -68,24 +99,50 @@ Python · Go · C
 
 ### Build from source
 
+#### Requirements
+
+- Go 1.22+
+- Rust (stable)
+- Python 3.10+
+- `uv`
+
+#### Clone the repository
+
 ```bash
 git clone https://github.com/nurysso/eulix
-cd eulix && make install
+cd eulix
+```
 
-# Or you can do this if you want to test each bin
-# Build the CLI
+#### Install everything
+
+```bash
+make install
+```
+
+#### Optional: build binaries manually
+
+```bash
+# Build CLI
 go build -o eulix ./cmd/eulix
 
-# Build the parser
-cd eulix-parser && cargo build --release
-
-# Build embedder
-# Go back to root of the project and
-cd eulix-embed && cargo build --release --feature rocm
-# use cuda instead of rocm if you have nvidia gpu
-
-# try make help for other usefull commands during building or installing
+# Build parser
+cd eulix-parser
+cargo build --release
+cd ..
 ```
+
+#### Setup Python dependencies
+
+```bash
+uv venv 3.10 # or you can also go with 3.11
+source .venv/bin/activate
+
+uv pip install -r requirements.txt
+```
+
+Install PyTorch for your platform from:
+
+https://pytorch.org/
 
 ---
 
@@ -94,7 +151,7 @@ cd eulix-embed && cargo build --release --feature rocm
 ### 1\. Initialize a project
 
 ```bash
-cd my-project
+cd fooPro
 eulix init
 ```
 
@@ -149,7 +206,7 @@ Fast static analysis tool.
 
 ### `eulix_embed` (Rust)
 
-Vector generation via ONNX. Supports `sentence-transformers/all-MiniLM-L6-v2`, `BAAI/bge-small-en-v1.5`, `BAAI/bge-base-en-v1.5`, and more. Native CUDA/ROCm support for high-throughput embedding.
+Vector generation via Pytorch. Supports `sentence-transformers/all-MiniLM-L6-v2`, `BAAI/bge-small-en-v1.5`, `BAAI/bge-base-en-v1.5`, and more. Native CUDA/ROCm support for high-throughput embedding.
 eulix_embed [COMMAND] [OPTIONS]
 
 COMMANDS:
@@ -176,7 +233,7 @@ QUERY OPTIONS:
 
 <!-- **Parser:** Handles \~9 million lines of code in under 40 seconds on a single thread. Scales linearly with additional cores.
 
-**Embedder:** Optimized for local inference via ONNX Runtime, significantly outperforming Python-based embedding scripts on the same hardware. -->
+**Embedder:** Optimized for local inference via python and Pytorch, significantly outperforming Rust-based embedding on the same hardware. -->
 
 ## Contributing
 

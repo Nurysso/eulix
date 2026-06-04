@@ -1,29 +1,28 @@
 # Eulix Configuration
-
 [project]
 path = "."
+Max_Lines = 300
+DebugConfig = true
 
 [parser]
 threads = 4
 
 [embeddings]
 model = "BAAI/bge-small-en-v1.5"
-backend = "rocm"
-#dimension = 384
+dimension = 768
 
 [llm]
-local = true
-provider = "ollama"
-model = "qwen2.5-coder:7b"
-max_tokens = 15000
-temperature = 0.7
-baseURL = "http://localhost:11434"
-
 # To use Anthropic Claude instead, change to:
 # local = false
 # provider = "anthropic"
 # model = "claude-3-5-sonnet-20241022"
 # api_key = ""  # or set ANTHROPIC_API_KEY environment variable
+local       = true
+provider    = "ollama"
+model       = "qwen2.5-coder:7b"
+max_tokens  = 8192
+temperature = 0.4
+baseURL     = "http://localhost:11434"
 
 [cache]
 [cache.redis]
