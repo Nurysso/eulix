@@ -1,3 +1,23 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+// Package llm handles communication with LLM providers (Anthropic and Ollama).
+
+/*
+	It builds context-aware prompts from a ContextWindow and routes queries to
+	the configured provider — remote (Anthropic) or local (Ollama).
+
+Usage:
+	client, err := MouthClient(cfg)
+	response, err := client.Query(contextWindow, "What does this function do?")
+
+	Provider selection is controlled by cfg.LLM.Local:
+	- false → Anthropic API (requires cfg.LLM.APIKey)
+	- true  → Ollama at localhost:11434 (or cfg.LLM.BaseURL if set)
+*/
+
 package llm
 
 import (
@@ -38,10 +58,10 @@ type AnthropicResponse struct {
 
 // Ollama API structures
 type OllamaRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Stream      bool      `json:"stream"`
-	Options     *OllamaOptions `json:"options,omitempty"`
+	Model    string         `json:"model"`
+	Messages []Message      `json:"messages"`
+	Stream   bool           `json:"stream"`
+	Options  *OllamaOptions `json:"options,omitempty"`
 }
 
 type OllamaOptions struct {
@@ -143,7 +163,7 @@ func (c *Client) queryOllama(prompt string) (string, error) {
 	// Use correct Ollama chat endpoint
 	ollamaURL := "http://localhost:11434/api/chat"
 	if c.config.LLM.BaseURL != "" {
-		ollamaURL = c.config.LLM.BaseURL + "/api/chat"  // Changed from /api/generate
+		ollamaURL = c.config.LLM.BaseURL + "/api/chat" // Changed from /api/generate
 	}
 
 	req, err := http.NewRequest("POST", ollamaURL, bytes.NewBuffer(jsonData))
