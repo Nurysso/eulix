@@ -1,3 +1,29 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package cli provides the command-line interface implementation for EULIX.
+/*
+	This file acts as the primary controller for cache-related CLI operations.
+	It provides high-level commands to manage, inspect, and test the
+	underlying caching backends (SQL and Redis[havent tested redis yet]).
+
+Usage Guidelines:
+	- Standard Operations: Use 'eulix cache stats' for health checks or
+		'eulix cache clear' to reset state.
+	- Testing: 'eulix cache test' performs a full read/write/validate cycle
+	using the current file checksum.
+	- Developer Note: These functions depend on the 'internal/cache' manager.
+		Ensure configuration is loaded via 'internal/config' before invoking
+		cache controllers to maintain environment consistency.
+	- Interaction: Cache management commands that alter state (Delete/Clear)
+		require user confirmation to prevent accidental data loss.
+
+Architecture:
+	This layer separates UI concerns (printing to stdout/stderr) from
+	business logic (cache invalidation/storage). Do not import this package
+	into core engine modules to avoid circular dependencies.
+*/
 package cli
 
 import (

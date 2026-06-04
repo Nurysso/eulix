@@ -1,3 +1,14 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package cli provides the command-line interface implementation for EULIX.
+/*
+This file is responsible for running of analyze command which auto runs
+eulix_parser and eulix_embed python script by a local venv located at
+$HOME/.Eulix/.venv (can be customized by eulix.toml) based on
+config provided in eulix.toml
+*/
 package cli
 
 import (
@@ -82,7 +93,7 @@ func analyzeProject(projectPath string) error {
 		return fmt.Errorf("checksum calculation failed: %w", err)
 	}
 
-	// Runs parser
+	// Run parser
 	fmt.Println("Parsing codebase...")
 	kbPath := filepath.Join(eulixDir, "kb.json")
 	parserCmd := exec.Command("eulix_parser",
@@ -92,18 +103,21 @@ func analyzeProject(projectPath string) error {
 	)
 	parserCmd.Stdout = os.Stdout
 	parserCmd.Stderr = os.Stderr
-
 	if err := parserCmd.Run(); err != nil {
 		return fmt.Errorf("parser failed: %w", err)
 	}
 	fmt.Println("✓ Parser completed")
 	fmt.Println()
 
-	// Generate embeddings
+	// Generate embeddings via ~/.Eulix/eulix_embed.py
 	fmt.Println("Generating embeddings...")
-	embeddingsPath := filepath.Join(eulixDir)
+	embedScriptPath := filepath.Join(homeDir, ".Eulix", "eulix_embed.py")
+	if _, err := os.Stat(embedScriptPath); os.IsNotExist(err) {
+		return fmt.Errorf("embed script not found: %s", embedScriptPath)
+	}
 
-	embedCmd := exec.Command("eulix_embed",
+	embeddingsPath := filepath.Join(eulixDir)
+	embedCmd := exec.Command(pythonPath, embedScriptPath,
 		"embed",
 		"-k", kbPath,
 		"-o", embeddingsPath,
@@ -112,7 +126,6 @@ func analyzeProject(projectPath string) error {
 	embedCmd.Stdout = os.Stdout
 	embedCmd.Stderr = os.Stderr
 	embedCmd.Env = venvEnv
-
 	if err := embedCmd.Run(); err != nil {
 		return fmt.Errorf("embedding generation failed: %w", err)
 	}

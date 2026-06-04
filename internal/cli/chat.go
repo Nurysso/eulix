@@ -1,3 +1,12 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package cli provides the command-line interface implementation for EULIX.
+/*
+This file is responsible for running the Chat command that launches tui
+and checks for necessary file required by context window creation
+*/
 package cli
 
 import (
@@ -46,6 +55,7 @@ func checkEmbeddingsFiles(eulixDir string) []string {
 		"kb_index.json":      "KB index",
 		"kb_call_graph.json": "Call graph",
 		"embeddings.bin":     "Embeddings (binary)",
+		"vectors.bin":        "vector index (binary)",
 	}
 
 	for file, desc := range requiredFiles {
