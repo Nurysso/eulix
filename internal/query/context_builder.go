@@ -60,18 +60,26 @@ const (
 	ivfNClusters      = 256
 	ivfNProbe         = 8
 	ivfKMeansIter     = 20
-	mmrLambda         = 0.8
 )
 
 // Query intent
+
 const (
-	IntentSymbolExact = "symbol_exact"
-	IntentSymbolFuzzy = "symbol_fuzzy"
-	IntentConcept     = "concept"
-	IntentFlow        = "flow"
-	IntentDebug       = "debug"
-	IntentCallers     = "callers" // "who calls X", "call sites of X"
-	IntentCallees     = "callees" // "what does X call", "dependencies of X"
+	IntentUnknown IntentType = iota
+	IntentSymbolExact
+	IntentSymbolFuzzy
+	IntentConcept
+	IntentFlow
+	IntentDebug
+	IntentCallers
+	IntentCallees
+)
+
+const (
+	mmrLambda            = 0.7
+	headerOverhead       = 20
+	distantLineThreshold = 150
+	simPenaltyFactor     = 1.20
 )
 
 //  Constructor
@@ -89,21 +97,18 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 
 	eulixBinaryPath := filepath.Join(eulixDir, "..", "eulix_embed")
 	cb.queryEmbedder = embeddings.VectorWeaver(eulixBinaryPath, cfg.Embeddings.Model)
-
 	// Load chunks from kb.json + kb_index.json (replaces embeddings.json)
 	if err := cb.loadChunksFromKB(); err != nil {
 		return nil, fmt.Errorf("failed to load chunks from KB: %w", err)
 	}
-
 	// Load raw float32 embeddings from embeddings.bin
 	if err := cb.loadEmbeddings(); err != nil {
 		cb.debugLog.Log("Embeddings not loaded: %v", err)
 		cb.hasEmbeddings = false
 	} else {
 		cb.hasEmbeddings = true
-		cb.debugLog.Log("Loaded e%d embeddings", len(cb.embeddings))
+		cb.debugLog.Log("Loaded %d embeddings", len(cb.embeddings))
 	}
-
 	// Load id→embedding-index map from vectors.bin
 	if err := cb.loadVectorMap(); err != nil {
 		cb.debugLog.Log("Vector map not loaded: %v", err)
@@ -157,8 +162,7 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 	if err := json.Unmarshal(idxData, &kbIdx); err != nil {
 		return fmt.Errorf("failed to parse kb_index.json: %w", err)
 	}
-
-	//  2. Load kb.json for full content
+	// 2. Load kb.json for full content
 	kbData, err := os.ReadFile(filepath.Join(cb.eulixDir, "kb.json"))
 	if err != nil {
 		return fmt.Errorf("kb.json not found: %w", err)
@@ -171,6 +175,7 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 
 	//  3. Build chunk slice from all functions + classes in every file
 	// Pre-count so we can decide lazy vs eager
+
 	total := 0
 	for _, fs := range kb.Structure {
 		total += len(fs.Functions) + len(fs.Classes)
@@ -205,8 +210,7 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 			}
 		}
 	}
-
-	//  4. Build symbol index
+	// 4. Build symbol index
 	cb.symbolIndex = make(map[string][]int, len(cb.chunks)*2)
 	for i, c := range cb.chunks {
 		for _, sym := range c.Symbols {
@@ -221,8 +225,13 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 		cb.invertedIdx = cb.buildInvertedIndexFromKB(&kb)
 	}
 
-	//  6. Stash KBIndex for fast name→location lookups
 	cb.kbIdx = &kbIdx
+
+	// Note: for lazy-content corpora (> lazyContentLimit chunks) chunk.Content is
+	// empty at this point, so the index will be sparse; those corpora rely on the
+	// inverted index + KB structures for caller discovery instead.
+	cb.callSites = buildCallSiteIndex(cb.chunks)
+	cb.debugLog.Log("Built call-site index with %d entries", len(cb.callSites))
 
 	return nil
 }
@@ -243,8 +252,7 @@ func (cb *ContextBuilder) buildInvertedIndexFromKB(kb *KnowledgeBase) *InvertedI
 		key := fmt.Sprintf("%s:%d-%d", c.File, c.StartLine, c.EndLine)
 		keyToIdx[key] = i
 	}
-
-	// Index directly from KB structures — never call buildChunkFromKB* here
+	// Index directly from KB structures - never call buildChunksFromKB* here
 	indexChunk := func(chunkIdx int, content, name string, symbols []string) {
 		termFreq := make(map[string]int, 32)
 		for _, kw := range extractQueryKeywords(strings.ToLower(content)) {
@@ -275,7 +283,7 @@ func (cb *ContextBuilder) buildInvertedIndexFromKB(kb *KnowledgeBase) *InvertedI
 		for _, fn := range fs.Functions {
 			key := fmt.Sprintf("%s:%d-%d", filePath, fn.LineStart, fn.LineEnd)
 			if i, ok := keyToIdx[key]; ok {
-				// Use signature+docstring only — not full body — for indexing
+				// Use signature+docstrings only not full body - from indexing
 				indexChunk(i, fn.Signature+" "+fn.Docstring, fn.Name, nil)
 			}
 		}
@@ -323,14 +331,12 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	}
 
 	off := 0
-
-	// Magic
+	// Magic Byte
 	if string(data[off:off+4]) != MagicBytes {
 		return fmt.Errorf("wrong magic bytes in embeddings.bin: %q", data[off:off+4])
 	}
 	off += 4
-
-	// Version (2 or 3 supported)
+	// Version 2 or 3 supported
 	version := binary.LittleEndian.Uint32(data[off : off+4])
 	off += 4
 	if version != 2 && version != 3 {
@@ -339,14 +345,12 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	if version != BinaryVersion {
 		return fmt.Errorf("version mismatch: expected %d, got %d", BinaryVersion, version)
 	}
-
 	// Model name
 	_, off, err = readStr(data, off)
 	if err != nil {
 		return fmt.Errorf("reading model name: %w", err)
 	}
-
-	// Count + dimension
+	// Count + dimensions
 	if off+8 > len(data) {
 		return fmt.Errorf("invalid embeddings file: truncated header")
 	}
@@ -359,7 +363,7 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	}
 
 	cb.embeddings = make([][]float32, numEmb)
-	ids := make([]string, numEmb) // preserve id order if needed
+	ids := make([]string, numEmb) // todo: improve logic of preserve id order if needed
 
 	for i := 0; i < numEmb; i++ {
 		// Per-entry ID (version >= 3; version 2 used positional naming)
@@ -371,7 +375,6 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 		} else {
 			ids[i] = fmt.Sprintf("embedding_%d", i)
 		}
-
 		// Vector payload
 		if off+dim*4 > len(data) {
 			return fmt.Errorf("unexpected EOF reading vector at index %d", i)
@@ -392,8 +395,8 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 
 // loadVectorMap reads vectors.bin to build the id→embedding-index map.
 // Format: [4B magic][4B version][4B+str model_name][4B count][4B dim]
-//
-//	then for each entry: [4B+str id][dim*4B float32 vector (skipped)]
+
+// then for each entry: [4B+str id][dim*4B float32 vector (skipped)]
 func (cb *ContextBuilder) loadVectorMap() error {
 	data, err := os.ReadFile(filepath.Join(cb.eulixDir, "vectors.bin"))
 	if err != nil {
@@ -404,26 +407,22 @@ func (cb *ContextBuilder) loadVectorMap() error {
 	}
 
 	off := 0
-
 	// Magic
 	if string(data[off:off+4]) != VectorMagic {
 		return fmt.Errorf("wrong magic bytes in vectors.bin: %q", data[off:off+4])
 	}
 	off += 4
-
 	// Version
 	version := binary.LittleEndian.Uint32(data[off : off+4])
 	off += 4
 	if version != VectorVersion {
 		return fmt.Errorf("vectors.bin version mismatch: expected %d, got %d", VectorVersion, version)
 	}
-
 	// Model name
 	_, off, err = readStr(data, off)
 	if err != nil {
 		return fmt.Errorf("reading model name: %w", err)
 	}
-
 	// Count + dimension (both uint32, matching Python struct.pack("<II", ...))
 	if off+8 > len(data) {
 		return fmt.Errorf("invalid vectors file: truncated header")
@@ -513,15 +512,12 @@ func (cb *ContextBuilder) BuildContextWithDebug(query string) (*types.ContextWin
 }
 
 func (cb *ContextBuilder) writeContextToFile(ctx *types.ContextWindow) error {
-	fileName := fmt.Sprintf("context_debug_%d.txt", time.Now().UnixNano())
-
+	fileName := fmt.Sprintf("debug_embedding_pipeline_%s.txt", time.Now().Format("20060102_150405"))
 	f, err := os.Create(fileName)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-
-	// adjust this depending on your struct
 	_, err = f.WriteString(fmt.Sprintf("%+v\n", ctx))
 	return err
 }
@@ -551,11 +547,6 @@ func (cb *ContextBuilder) hydrateSourceCode(chunks []Chunk, sourceBudget int, ma
 
 	// Chunks are already in priority order from mmrSelect
 	for i, chunk := range chunks {
-		if chunk.Content != "" {
-			result[i] = chunk
-			continue
-		}
-		// Calculate dynamic max lines based on remaining budget
 		remaining := sourceBudget - usedTokens
 		if remaining <= 0 {
 			result[i] = chunk
@@ -564,7 +555,6 @@ func (cb *ContextBuilder) hydrateSourceCode(chunks []Chunk, sourceBudget int, ma
 
 		maxLines := maxLinesDefault
 		budgetFraction := float64(remaining) / float64(sourceBudget)
-
 		// Progressive reduction: higher priority chunks get more lines
 		if budgetFraction < 0.5 {
 			maxLines = maxLines / 2
@@ -580,25 +570,21 @@ func (cb *ContextBuilder) hydrateSourceCode(chunks []Chunk, sourceBudget int, ma
 		sourceCode, tokens := cb.readSourceLines(chunk.File, chunk.StartLine, chunk.EndLine, maxLines)
 
 		// Prepend source to KB metadata (keep metadata for call graph info)
-		if sourceCode == "" {
-			fmt.Printf("[DEBUG] No source found for %s:%d-%d\n", chunk.File, chunk.StartLine, chunk.EndLine)
-		} else {
-			fmt.Printf("[DEBUG] ✓ Loaded %d lines (%d tokens) from %s:%d-%d\n",
-				strings.Count(sourceCode, "\n")+1, tokens, chunk.File, chunk.StartLine, chunk.EndLine)
-			successCount++
-		}
-		if tokens > remaining {
-			// Budget exhausted, keep KB content only
-			cb.debugLog.Log("Chunk %d: source available but exceeds remaining budget (%d > %d)", i, tokens, remaining)
+		if sourceCode == "" || tokens > remaining {
+			if sourceCode == "" {
+				fmt.Printf("[DEBUG] No source found for %s:%d-%d\n", chunk.File, chunk.StartLine, chunk.EndLine)
+			} else {
+
+				cb.debugLog.Log("Chunk %d: source available but exceeds remaining budget (%d > %d)", i, tokens, remaining)
+			}
 			result[i] = chunk
 			continue
 		}
 
-		chunk.Content = fmt.Sprintf("```%s\n%s\n```\n\n%s",
+		chunk.Content = fmt.Sprintf("```%s\n%s\n```",
 			detectLanguage(chunk.File),
-			sourceCode,
-			chunk.Content)
-		chunk.Tokens += tokens
+			sourceCode)
+		chunk.Tokens = tokens
 		usedTokens += tokens
 		successCount++
 
@@ -623,7 +609,6 @@ func (cb *ContextBuilder) readSourceLines(filePath string, startLine, endLine, m
 	if endLine-startLine+1 > maxLines {
 		actualEnd = startLine + maxLines - 1
 	}
-
 	// Read source file
 	sourceFile := filepath.Join(cb.sourceRoot, filePath)
 	// Check if file exists
@@ -643,7 +628,6 @@ func (cb *ContextBuilder) readSourceLines(filePath string, startLine, endLine, m
 			filePath, len(lines), startLine, endLine)
 		return "", 0
 	}
-
 	// Extract range (1-indexed to 0-indexed)
 	start := startLine - 1
 	end := actualEnd
@@ -652,11 +636,9 @@ func (cb *ContextBuilder) readSourceLines(filePath string, startLine, endLine, m
 	}
 
 	relevantLines := lines[start:end]
-
-	// Strip comments and docstrings
 	lang := detectLanguage(filePath)
 	cleaned := stripCommentsAndDocs(relevantLines, lang)
-
+	// Strip comments and docstrings
 	code := strings.Join(cleaned, "\n")
 	tokens := len(code) / 4 // rough estimate: 4 chars per token
 
@@ -699,7 +681,6 @@ func stripCommentsAndDocs(lines []string, lang string) []string {
 				}
 				continue
 			}
-
 			// Strip inline comments
 			if idx := strings.Index(line, "#"); idx >= 0 {
 				line = line[:idx]
@@ -725,7 +706,6 @@ func stripCommentsAndDocs(lines []string, lang string) []string {
 					continue
 				}
 			}
-
 			// Strip inline comments //
 			if idx := strings.Index(line, "//"); idx >= 0 {
 				line = line[:idx]
@@ -778,21 +758,23 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 
 	intent := cb.classifyQueryIntent(query)
 	trace.Intent = intent
-	cb.debugLog.Log("Intent: %s (specificity: %.2f, confidence: %.2f)",
+	cb.debugLog.Log("Intent: %d (specificity: %.2f, confidence: %.2f)",
 		intent.Type, intent.Specificity, intent.Confidence)
 
 	budget := cb.allocateBudget(query, intent)
 	trace.Budget = budget
 	cb.debugLog.Log("Budget: %d tokens for context (total: %d)",
 		budget.ContextBudget, budget.MaxTokens)
-
 	// Always anchor on the queried symbol(s) first
 	anchors := cb.exactSymbolSearch(query)
 	if len(anchors) > 2 {
 		anchors = anchors[:2]
 	}
+	anchorFiles := make(map[string]bool)
+	for _, a := range anchors {
+		anchorFiles[a.File] = true
+	}
 	cb.debugLog.Log("Found %d exact anchors", len(anchors))
-
 	// For caller/callee intents do direct call-site scan
 	var callSiteResults []ScoredChunk
 	if intent.Type == IntentCallers || intent.Type == IntentCallees {
@@ -804,7 +786,6 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	candidates := cb.multiStrategySearch(query, candidateLimit, intent, trace)
 	trace.TotalCandidates = len(candidates)
 	cb.debugLog.Log("Multi-strategy search: %d candidates", len(candidates))
-
 	// Merge anchors + callsite hits
 	candidates = mergeWithPriority(anchors, callSiteResults, candidates)
 	cb.debugLog.Log("After merge: %d candidates", len(candidates))
@@ -826,7 +807,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 		} else {
 			trace.Warnings = append(trace.Warnings, "query embedding failed: "+err.Error())
 		}
-		selected = cb.mmrSelect(expanded, budget.ContextBudget, qEmb, trace)
+		selected = cb.mmrSelect(expanded, budget.ContextBudget, qEmb, anchorFiles, trace)
 	} else {
 		trace.SelectionMethod = "greedy"
 		selected = cb.selectChunks(expanded, budget.ContextBudget)
@@ -840,14 +821,12 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	}
 	cb.debugLog.Log("Selected %d chunks via %s", len(selected), trace.SelectionMethod)
 
-	// Hydrate KB content for lazy loading
 	if cb.lazyContent {
 		cb.hydrateContent(selected)
 		cb.debugLog.Log("Hydrated KB content for %d chunks", len(selected))
 	}
-
 	// Add actual source code (30% of budget)
-	sourceBudget := budget.ContextBudget * 30 / 100
+	sourceBudget := budget.ContextBudget * 65 / 100
 	selected = cb.hydrateSourceCode(selected, sourceBudget, maxLinesDefault)
 
 	ctx := cb.assembleContext(selected)
@@ -869,14 +848,22 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 // candidateLimitForIntent avoids pulling 120 candidates for narrow queries
 func (cb *ContextBuilder) candidateLimitForIntent(intent QueryIntent) int {
 	switch {
+	case intent.Type == IntentCallers || intent.Type == IntentCallees:
+		if intent.Specificity > 0.9 {
+			return 5
+		}
+		return 30
+	case intent.Type == IntentConcept || intent.Type == IntentFlow:
+		if intent.Specificity > 0.8 {
+			return 15
+		}
+		return 50
 	case intent.Specificity > 0.8:
-		return 20 // very specific query — exact symbol lookup dominates
+		return 20
 	case intent.Specificity > 0.5:
 		return 50
-	case intent.Type == IntentCallers || intent.Type == IntentCallees:
-		return 30 // call-site scan is already targeted
 	default:
-		return 80 // broad exploration query
+		return 80
 	}
 }
 
@@ -905,7 +892,7 @@ func (cb *ContextBuilder) classifyQueryIntent(query string) QueryIntent {
 
 	debugKW := []string{"error", "panic", "nil", "crash", "fail", "bug", "exception", "segfault", "undefined", "invalid"}
 	flowKW := []string{"trace", "flow", "lifecycle", "sequence", "step", "chain", "order", "when", "path"}
-	conceptKW := []string{"how", "why", "what", "explain", "describe", "understand", "difference", "between", "purpose"}
+	conceptKW := []string{"how", "why", "interact", "implement", "how does", "what", "explain", "describe", "understand", "difference", "between", "purpose"}
 
 	score := func(list []string) float64 {
 		s := 0.0
@@ -944,98 +931,156 @@ func (cb *ContextBuilder) classifyQueryIntent(query string) QueryIntent {
 			Symbols:     symbols,
 			Keywords:    kwds,
 			Specificity: 0.9,
-			Confidence:  0.9}
+			Confidence:  0.9,
+		}
 	case dbg > 0:
-		return QueryIntent{Type: IntentCallees,
+		return QueryIntent{
+			Type:        IntentDebug,
 			Symbols:     symbols,
 			Keywords:    kwds,
 			Specificity: specificity,
-			Confidence:  math.Min(1, dbg/2)}
+			Confidence:  math.Min(1, dbg/2),
+		}
 	case flow > 0:
-		return QueryIntent{Type: IntentCallees,
+		return QueryIntent{
+			Type:        IntentFlow,
 			Symbols:     symbols,
 			Keywords:    kwds,
 			Specificity: specificity,
-			Confidence:  math.Min(1, flow/2)}
+			Confidence:  math.Min(1, flow/2),
+		}
+	case concept > 1 && codeSymbols >= 1:
+		return QueryIntent{
+			Type:        IntentConcept,
+			Symbols:     symbols,
+			Keywords:    kwds,
+			Specificity: math.Min(0.9, specificity),
+			Confidence:  math.Min(1, concept/3),
+		}
+	case flow > 1 && codeSymbols >= 1:
+		return QueryIntent{
+			Type:        IntentFlow,
+			Symbols:     symbols,
+			Keywords:    kwds,
+			Specificity: math.Min(0.9, specificity),
+			Confidence:  math.Min(1, flow/2),
+		}
 	case codeSymbols >= 2 && len(words) <= 5:
+		// Short, symbol-heavy query → likely a "what does X call?"
 		return QueryIntent{
 			Type:        IntentCallees,
 			Symbols:     symbols,
 			Keywords:    kwds,
 			Specificity: 0.9,
-			Confidence:  0.85}
+			Confidence:  0.85,
+		}
 	case codeSymbols >= 1:
-		return QueryIntent{Type: IntentCallees,
+		// IntentSymbolExact look up the symbol, don't chase its dependencies.
+		return QueryIntent{
+			Type:        IntentSymbolExact,
 			Symbols:     symbols,
 			Keywords:    kwds,
 			Specificity: specificity,
-			Confidence:  0.7}
+			Confidence:  0.7,
+		}
 	case concept > 0:
-		return QueryIntent{Type: IntentCallees,
+		return QueryIntent{
+			Type:        IntentConcept,
 			Symbols:     symbols,
 			Keywords:    kwds,
 			Specificity: 0.2,
-			Confidence:  math.Min(1, concept/3)}
+			Confidence:  math.Min(1, concept/3),
+		}
 	default:
-		return QueryIntent{Type: IntentCallees,
+		return QueryIntent{
+			Type:        IntentConcept,
 			Symbols:     symbols,
 			Keywords:    kwds,
 			Specificity: 0.3,
-			Confidence:  0.5}
+			Confidence:  0.5,
+		}
 	}
 }
 
 //  Call-site direct search
 
+func buildCallSiteIndex(chunks []Chunk) callSiteIndex {
+	idx := make(callSiteIndex, 512)
+
+	for i, chunk := range chunks {
+		content := chunk.Content
+		if content == "" {
+			continue
+		}
+
+		for j := 0; j < len(content); {
+			paren := strings.IndexByte(content[j:], '(')
+			if paren < 0 {
+				break
+			}
+			paren += j
+
+			start := paren - 1
+			for start >= 0 && isIdentRune(content[start]) {
+				start--
+			}
+			start++
+
+			if start < paren {
+				sym := strings.ToLower(content[start:paren])
+				idx[sym] = append(idx[sym], i)
+			}
+			j = paren + 1
+		}
+	}
+	return idx
+}
+
+func isIdentRune(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
 // findCallSites does a literal string scan for ".symbol(" patterns across all
 // chunks. This is O(n × |symbols|) but is the single most reliable signal for
-// "who calls X" queries — run it first, before any fuzzy matching.
+// "who calls X" queries — this should run first, before any fuzzy matching.
 func (cb *ContextBuilder) findCallSites(query string, intent QueryIntent) []ScoredChunk {
 	symbols := extractPotentialSymbols(query)
 	results := make([]ScoredChunk, 0, 32)
-	seen := make(map[string]bool)
+	seen := make(map[int]bool)
 
 	for _, sym := range symbols {
-		// Match both method-call style (.spawn() ) and bare calls (spawn() )
-		patterns := []string{
-			"." + sym + "(",
-			sym + "(",
+		symLower := strings.ToLower(sym)
+
+		indices, ok := cb.callSites[symLower]
+		if !ok {
+			continue
 		}
-		for _, chunk := range cb.chunks {
-			content := chunk.Content
-			if content == "" && cb.kbData != nil {
-				content = cb.hydrateOne(chunk)
-			}
-			for _, pat := range patterns {
-				if strings.Contains(content, pat) {
-					if seen[chunk.ID] {
-						break
-					}
-					seen[chunk.ID] = true
 
-					// Prefer callers vs callees direction
-					matchDetail := "calls " + sym
-					score := 95.0
-					if intent.Type == IntentCallees && chunk.Name == sym {
-						// The definition itself — lower score for callees intent
-						score = 70.0
-						matchDetail = "definition of " + sym
-					}
-					// Penalise chunks whose name starts with underscore + sym
-					// (e.g. _spawn_vm, _spawn_console)
-					if strings.HasPrefix(strings.ToLower(chunk.Name), "_"+strings.ToLower(sym)) {
-						score -= 20.0
-					}
-
-					results = append(results, ScoredChunk{
-						Chunk:        chunk,
-						Score:        score,
-						MatchType:    "callsite",
-						MatchDetails: matchDetail,
-					})
-					break
-				}
+		for _, idx := range indices {
+			if seen[idx] {
+				continue
 			}
+			seen[idx] = true
+
+			chunk := cb.chunks[idx]
+
+			score := 95.0
+			matchDetail := "calls " + sym
+
+			if intent.Type == IntentCallees && strings.EqualFold(chunk.Name, sym) {
+				score = 70.0
+				matchDetail = "definition of " + sym
+			}
+			if strings.HasPrefix(strings.ToLower(chunk.Name), "_"+symLower) {
+				score -= 20.0
+			}
+
+			results = append(results, ScoredChunk{
+				Chunk:        chunk,
+				Score:        score,
+				MatchType:    "callsite",
+				MatchDetails: matchDetail,
+			})
 		}
 	}
 
@@ -1166,14 +1211,14 @@ func (cb *ContextBuilder) multiStrategySearch(
 	}
 
 	if cb.hasKB {
-		run("kb_exact", func() []ScoredChunk { return cb.kbExactLookup(query) }, 2.5)
+		run("kb_exact", func() []ScoredChunk { return cb.kbExactLookup(query, intent) }, 2.5)
 	}
 
 	run("exact", func() []ScoredChunk { return cb.exactSymbolSearch(query) }, 2.0)
 	run("partial", func() []ScoredChunk { return cb.partialIdentifierMatch(query) }, 1.5)
 
-	// Boost keyword match score for literal call patterns
 	kwTopK := int(float64(topK) * (0.4 + 0.3*intent.Budget()["keyword"]))
+	syms := extractPotentialSymbols(query)
 	run("keyword", func() []ScoredChunk {
 		var res []ScoredChunk
 		if cb.invertedIdx != nil {
@@ -1181,14 +1226,15 @@ func (cb *ContextBuilder) multiStrategySearch(
 		} else {
 			res = cb.keywordSearch(query, kwTopK)
 		}
-		// Boost chunks that contain a literal call pattern for any queried symbol
-		syms := extractPotentialSymbols(query)
 		for i := range res {
 			content := res[i].Content
 			if content == "" {
 				content = cb.hydrateOne(res[i].Chunk)
 			}
 			for _, sym := range syms {
+				if strings.EqualFold(res[i].Name, sym) {
+					continue
+				}
 				if strings.Contains(content, "."+sym+"(") || strings.Contains(content, sym+"(") {
 					res[i].Score += 25.0
 					break
@@ -1204,7 +1250,11 @@ func (cb *ContextBuilder) multiStrategySearch(
 		return res
 	}, 2.0)
 
-	if cb.hasEmbeddings {
+	skipSemantic := intent.Type == IntentCallers ||
+		intent.Type == IntentCallees ||
+		intent.Specificity > 0.85
+
+	if cb.hasEmbeddings && !skipSemantic {
 		semTopK := int(float64(topK) * (0.3 + 0.3*intent.Budget()["semantic"]))
 		run("semantic", func() []ScoredChunk {
 			qEmb, err := cb.queryEmbedder.EmbedQueryBinary(query)
@@ -1427,7 +1477,7 @@ func buildIVFIndex(embs [][]float32, k, maxIter int) *IVFIndex {
 //  MMR chunk selection
 
 func (cb *ContextBuilder) mmrSelect(
-	candidates []ScoredChunk, budget int, qEmb []float32, trace *DebugTrace,
+	candidates []ScoredChunk, budget int, qEmb []float32, anchorFiles map[string]bool, trace *DebugTrace,
 ) []Chunk {
 	if len(candidates) == 0 {
 		return nil
@@ -1451,29 +1501,68 @@ func (cb *ContextBuilder) mmrSelect(
 	}
 
 	simToQuery := func(c ScoredChunk) float64 {
+		base := 0.0
 		if qEmb != nil {
 			if e := embOf(c.ID); e != nil {
-				return cosineSimilarity(qEmb, e)
+				base = cosineSimilarity(qEmb, e)
 			}
 		}
-		return c.Score / maxSc
+		if base == 0 {
+			base = c.Score / maxSc
+		}
+		if anchorFiles[c.File] {
+			base = math.Min(1.0, base*1.25)
+		}
+		return base
 	}
 
 	simBetween := func(a, b ScoredChunk) float64 {
 		if ea, eb := embOf(a.ID), embOf(b.ID); ea != nil && eb != nil {
-			return cosineSimilarity(ea, eb)
+			sim := cosineSimilarity(ea, eb)
+
+			if a.File == b.File && sim > 0.4 {
+				dist := a.StartLine - b.StartLine
+				if dist < 0 {
+					dist = -dist
+				}
+				if dist > distantLineThreshold {
+					sim = math.Min(1.0, sim*simPenaltyFactor)
+				}
+			}
+			return sim
 		}
-		setA := make(map[string]bool, len(a.Symbols))
-		for _, s := range a.Symbols {
+
+		filtered := func(syms []string) []string {
+			out := make([]string, 0, len(syms))
+			for _, s := range syms {
+				if !cb.isBoilerplateSymbol(s) {
+					out = append(out, s)
+				}
+			}
+			return out
+		}
+
+		aSyms := filtered(a.Symbols)
+		bSyms := filtered(b.Symbols)
+
+		if len(aSyms) == 0 && len(bSyms) == 0 {
+			return 1.0
+		}
+		if len(aSyms) == 0 || len(bSyms) == 0 {
+			return 0.0
+		}
+
+		setA := make(map[string]bool, len(aSyms))
+		for _, s := range aSyms {
 			setA[s] = true
 		}
 		inter := 0
-		for _, s := range b.Symbols {
+		for _, s := range bSyms {
 			if setA[s] {
 				inter++
 			}
 		}
-		union := len(a.Symbols) + len(b.Symbols) - inter
+		union := len(aSyms) + len(bSyms) - inter
 		if union == 0 {
 			return 0
 		}
@@ -1482,44 +1571,52 @@ func (cb *ContextBuilder) mmrSelect(
 
 	remaining := make([]ScoredChunk, len(candidates))
 	copy(remaining, candidates)
+
 	selected := make([]Chunk, 0, 24)
 	selSC := make([]ScoredChunk, 0, 24)
 	tokenSum := 0
-	hdr := 20
 	chunkTraces := make([]ChunkTrace, 0, len(candidates))
 
 	for len(remaining) > 0 {
 		bestIdx, bestMMR := -1, -math.MaxFloat64
+
 		for i, c := range remaining {
 			rel := simToQuery(c)
+
 			maxRedund := 0.0
 			for _, sel := range selSC {
 				if r := simBetween(c, sel); r > maxRedund {
 					maxRedund = r
 				}
 			}
+
 			if mmr := mmrLambda*rel - (1-mmrLambda)*maxRedund; mmr > bestMMR {
 				bestMMR, bestIdx = mmr, i
 			}
 		}
+
 		if bestIdx < 0 {
 			break
 		}
 
 		pick := remaining[bestIdx]
 		remaining = append(remaining[:bestIdx], remaining[bestIdx+1:]...)
-		cost := pick.Tokens + hdr
 
+		cost := pick.Tokens + headerOverhead
 		ct := ChunkTrace{
-			ID: pick.ID, File: pick.File,
-			Lines:  [2]int{pick.StartLine, pick.EndLine},
-			Tokens: pick.Tokens, Score: pick.Score,
-			MatchType: pick.MatchType, MatchDetails: pick.MatchDetails,
-			Rank: len(selected) + 1,
+			ID:           pick.ID,
+			File:         pick.File,
+			Lines:        [2]int{pick.StartLine, pick.EndLine},
+			Tokens:       pick.Tokens,
+			Score:        pick.Score,
+			MatchType:    pick.MatchType,
+			MatchDetails: pick.MatchDetails,
+			Rank:         len(selected) + 1,
 		}
 
 		if tokenSum+cost > budget {
-			ct.Included, ct.ExcludeReason = false, "exceeds token budget"
+			ct.Included = false
+			ct.ExcludeReason = "exceeds token budget"
 			chunkTraces = append(chunkTraces, ct)
 			continue
 		}
@@ -1533,7 +1630,8 @@ func (cb *ContextBuilder) mmrSelect(
 		if n := len(selected); n > 1 && canMerge(selected[n-2], selected[n-1]) {
 			selected[n-2] = mergeChunks(selected[n-2], selected[n-1])
 			selected = selected[:n-1]
-			tokenSum -= hdr
+			selSC = selSC[:n-1]
+			tokenSum -= headerOverhead
 		}
 	}
 
@@ -1570,19 +1668,25 @@ func (cb *ContextBuilder) buildContextWithGraph(
 	if len(candidates) < topN {
 		topN = len(candidates)
 	}
+	const maxGraphExpansions = 15
+	relCount := 0
+
+outerLoop:
 	for i := 0; i < topN; i++ {
 		cand := candidates[i]
 		for _, sym := range cand.Symbols {
 			if rels, ok := cb.callGraph[sym]; ok {
 				for _, rel := range rels {
+					if relCount >= maxGraphExpansions {
+						break outerLoop
+					}
 					score := cand.Score
 
-					// Direction-aware scoring
 					switch {
 					case intent.Type == IntentCallers && rel.Type == "called_by":
-						score *= 1.2 // boost callers when that's what we want
+						score *= 1.2
 					case intent.Type == IntentCallees && rel.Type == "calls":
-						score *= 1.2 // boost callees when that's what we want
+						score *= 1.2
 					case rel.Type == "calls" || rel.Type == "called_by":
 						score *= 0.9
 					case rel.Distance <= 2:
@@ -1600,10 +1704,12 @@ func (cb *ContextBuilder) buildContextWithGraph(
 							}
 						}
 					}
+					relCount++ // count per relationship processed, not per symbol
 				}
 			}
 		}
 	}
+
 	result := make([]ScoredChunk, 0, len(expanded))
 	for _, sc := range expanded {
 		result = append(result, sc)
@@ -1648,13 +1754,15 @@ func (cb *ContextBuilder) buildContextWithoutGraph(candidates []ScoredChunk, bud
 	for _, h := range hot {
 		hotMap[h.file] = h.avgScore
 	}
-	for i := range candidates {
-		if _, ok := hotMap[candidates[i].File]; ok {
-			candidates[i].Score += 0.2
+	candidatesCopy := make([]ScoredChunk, len(candidates))
+	copy(candidatesCopy, candidates)
+	for i := range candidatesCopy {
+		if _, ok := hotMap[candidatesCopy[i].File]; ok {
+			candidatesCopy[i].Score += 0.2
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Score > candidates[j].Score })
-	return candidates
+	sort.Slice(candidatesCopy, func(i, j int) bool { return candidatesCopy[i].Score > candidatesCopy[j].Score })
+	return candidatesCopy
 }
 
 func (cb *ContextBuilder) assembleContext(chunks []Chunk) *types.ContextWindow {
@@ -1681,7 +1789,7 @@ func (cb *ContextBuilder) assembleContext(chunks []Chunk) *types.ContextWindow {
 
 //  KB helpers
 
-func (cb *ContextBuilder) kbExactLookup(query string) []ScoredChunk {
+func (cb *ContextBuilder) kbExactLookup(query string, intent QueryIntent) []ScoredChunk {
 	if !cb.hasKB {
 		return nil
 	}
@@ -1692,7 +1800,6 @@ func (cb *ContextBuilder) kbExactLookup(query string) []ScoredChunk {
 	for _, symbol := range potentialSymbols {
 		symLow := strings.ToLower(symbol)
 
-		// Fast path: kb_index FunctionsByName
 		if cb.kbIdx != nil {
 			if locs, ok := cb.kbIdx.FunctionsByName[symbol]; ok {
 				for _, loc := range locs {
@@ -1722,7 +1829,9 @@ func (cb *ContextBuilder) kbExactLookup(query string) []ScoredChunk {
 							MatchType:    "kb_function",
 							MatchDetails: "Function: " + fn.Name,
 						})
-						scored = append(scored, cb.expandFromKBFunction(fn, filePath, 110.0)...)
+						if intent.Type == IntentCallees {
+							scored = append(scored, cb.expandFromKBFunction(fn, filePath, 110.0)...)
+						}
 					}
 				}
 			}
@@ -1837,7 +1946,11 @@ func (cb *ContextBuilder) buildChunkFromKBClass(class KBClass, filePath string) 
 
 func (cb *ContextBuilder) expandFromKBFunction(fn KBFunction, filePath string, baseScore float64) []ScoredChunk {
 	exp := make([]ScoredChunk, 0)
+	const maxCallees = 5
 	for _, call := range fn.Calls {
+		if len(exp) >= maxCallees {
+			break
+		}
 		if call.DefinedIn == "" {
 			continue
 		}
@@ -1852,7 +1965,7 @@ func (cb *ContextBuilder) expandFromKBFunction(fn KBFunction, filePath string, b
 					}
 					exp = append(exp, ScoredChunk{
 						Chunk:        cb.buildChunkFromKBFunction(calledFn, call.DefinedIn),
-						Score:        baseScore * 0.85,
+						Score:        score,
 						Distance:     1,
 						MatchType:    "kb_called",
 						MatchDetails: "Called by " + fn.Name,
@@ -2093,7 +2206,7 @@ func (cb *ContextBuilder) selectChunks(scored []ScoredChunk, budget int) []Chunk
 
 func (cb *ContextBuilder) Close() error { return nil }
 
-//  Pure helpers (unchanged)
+//  Pure helpers
 
 func extractSymbolsFromContent(content, name string) []string {
 	syms := []string{}
@@ -2187,14 +2300,46 @@ func splitIdentifierToTokens(s string) []string {
 	return toks
 }
 
+// isCodeIdentifier returns true when w looks like a source-code identifier
+// rather than a plain English word. Matches snake_case, camelCase, and
+// PascalCase with ≥2 uppercase letters (e.g. BuildContext, KBIndex, IVFIndex).
+// Plain words like "how", "does", "work" return false.
+func isCodeIdentifier(w string) bool {
+	// snake_case: load_chunks, kb_index, QUERY_BATCH_SIZE
+	if strings.Contains(w, "_") && len(w) > 3 {
+		return true
+	}
+	// camelCase: buildContext, mmrSelect, loadChunksFromKB
+	prevLower := false
+	for _, r := range w {
+		if unicode.IsUpper(r) && prevLower {
+			return true
+		}
+		prevLower = unicode.IsLower(r)
+	}
+	// PascalCase with multiple capitals: BuildContext, IVFIndex, KBIndex
+	upperCount := 0
+	for _, r := range w {
+		if unicode.IsUpper(r) {
+			upperCount++
+		}
+	}
+	return upperCount >= 2
+}
+
+// extractPotentialSymbols extracts tokens that look like code identifiers from
+// the query. Plain English words are excluded so that queries like
+// "how does BuildContext work" don't pollute symbol searches with "how", "does",
+// and "work".
 func extractPotentialSymbols(query string) []string {
 	syms := make([]string, 0)
 	for _, w := range strings.Fields(query) {
 		w = strings.Trim(w, ".,!?;:'\"()[]{}")
-		if len(w) > 2 {
-			syms = append(syms, w)
-			syms = append(syms, splitIdentifierToTokens(w)...)
+		if len(w) <= 2 || !isCodeIdentifier(w) {
+			continue
 		}
+		syms = append(syms, w)
+		syms = append(syms, splitIdentifierToTokens(w)...)
 	}
 	return uniqueStrings(syms)
 }

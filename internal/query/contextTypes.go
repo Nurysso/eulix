@@ -11,6 +11,8 @@ import (
 )
 
 type QueryType int
+type IntentType int
+type callSiteIndex map[string][]int // symbol → []chunkIdx
 
 type Router struct {
 	eulixDir        string
@@ -68,6 +70,7 @@ type ContextBuilder struct {
 
 	// Chunks (Content field is empty when lazyContent is true)
 	chunks      []Chunk
+	callSites   callSiteIndex
 	symbolIndex map[string][]int
 	vectorMap   map[string]int
 	lazyContent bool // true: Content loaded on demand during assembleContext
@@ -86,8 +89,9 @@ type ContextBuilder struct {
 	debugLog     *DebugLogger
 
 	// Thread-safe trace storage
-	mu        sync.Mutex
-	lastTrace *DebugTrace
+	mu          sync.Mutex
+	lastTrace   *DebugTrace
+	boilerplate *BoilerplateDetector
 }
 
 type Chunk struct {
@@ -111,7 +115,7 @@ type DebugLogger struct {
 // It drives per-strategy budget weights so that, e.g., a pinpoint symbol
 // lookup gives almost all budget to KB/exact search rather than semantic.
 type QueryIntent struct {
-	Type           string
+	Type           IntentType
 	Symbols        []string
 	Keywords       []string
 	Specificity    float64 // 0 = broad question, 1 = pinpoint identifier
@@ -201,6 +205,15 @@ type InvertedIndex struct {
 // QueryEmbedder abstracts the binary embedding client for testability.
 type QueryEmbedder interface {
 	EmbedQueryBinary(query string) ([]float32, error)
+}
+
+type BoilerplateDetector struct {
+	// symbols whose document-frequency ratio exceeds the threshold
+	boilerplate map[string]bool
+	// raw DF counts, kept for diagnostics / threshold tuning
+	df map[string]int
+	// total number of chunks the detector was built from
+	totalChunks int
 }
 
 type Relationship struct {

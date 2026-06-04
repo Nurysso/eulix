@@ -1,3 +1,12 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package cli provides the command-line interface implementation for EULIX.
+/*
+This file is responsible for managing all the commands executed/supported
+by eulix and serves as a entry point for the project
+*/
 package cli
 
 import (

@@ -1,3 +1,21 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package embeddings provides the command-line interface implementation for EULIX.
+
+/*
+This file is responsible for the init command whcih is responsible
+for marking the project/folder ready to be used by EULIX
+OFC this can be skipped by manually calling parser and embedder
+but its best if we only use them seprately only for testing and
+developing purpose.
+
+If testing and developing chat/retrival (context window creation)
+use the checksum subcommand so that the latest metadata+embeddings
+is checked before retrival
+*/
+
 package embeddings
 
 import (
@@ -6,7 +24,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"os/exec"
+	"path/filepath"
 	// "unsafe"
 )
 
@@ -28,32 +48,6 @@ type QueryEmbeddingResult struct {
 	Model     string    `json:"model"`
 	Dimension int       `json:"dimension"`
 	Embedding []float32 `json:"embedding"`
-}
-
-// NewEmbedder creates a new embedder backed by the Rust eulix_embed binary
-// Parameters:
-//   - modelName: HuggingFace model name (e.g., "BAAI/bge-small-en-v1.5")
-//   - backend: execution backend ("cpu", "cuda", "auto") - currently only used for reference
-//   - dimension: expected embedding dimension
-func NewEmbedder(modelName, backend string, dimension int) (*Embedder, error) {
-	// Try to find eulix_embed binary in common locations
-	binaryPath, err := findEulixBinary()
-	if err != nil {
-		return nil, fmt.Errorf("eulix_embed binary not found: %w\n\n", err)
-	}
-
-	// Test the binary works
-	cmd := exec.Command(binaryPath, "--version")
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("eulix_embed binary test failed, --version didn't worked :/, try running eulix_embed manually ): %w", err)
-	}
-
-	return &Embedder{
-		binaryPath: binaryPath,
-		model:      modelName,
-		backend:    backend,
-		dimension:  dimension,
-	}, nil
 }
 
 // VectorWeaver creates a new query embedder
@@ -165,72 +159,88 @@ func (e *Embedder) Close() error {
 	return nil
 }
 
-// Helper function to find the eulix_embed binary
-func findEulixBinary() (string, error) {
-	// Common locations to search
-	locations := []string{
-		"./eulix_embed",
-		"./target/release/eulix_embed",
-		"../eulix_embed",
-		"../target/release/eulix_embed",
-		"../../eulix_embed",
-		"../../target/release/eulix_embed",
-		"/usr/local/bin/eulix_embed",
-		"eulix_embed", // In PATH
-	}
+// findVenvPython returns the Python interpreter inside ~/.Eulix/.venv,
+// falling back to the system Python if the venv is absent.
+func findVenvPython(homeDir string) (string, error) {
+	venvPath := filepath.Join(homeDir, ".Eulix", ".venv")
 
-	for _, path := range locations {
-		if _, err := exec.LookPath(path); err == nil {
-			return path, nil
+	// Venv-relative interpreter paths differ by OS
+	candidates := []string{
+		filepath.Join(venvPath, "bin", "python3"),        // Linux / macOS
+		filepath.Join(venvPath, "bin", "python"),         // Linux / macOS fallback
+		filepath.Join(venvPath, "Scripts", "python.exe"), // Windows
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
 		}
 	}
 
-	// Try using 'which' or 'where' command
-	var cmd *exec.Cmd
-	cmd = exec.Command("which", "eulix_embed")
-
-	if output, err := cmd.Output(); err == nil && len(output) > 0 {
-		return string(bytes.TrimSpace(output)), nil
+	// No venv found — fall back to whatever Python is on PATH
+	for _, name := range []string{"python3", "python"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p, nil
+		}
 	}
 
-	return "", fmt.Errorf("eulix_embed binary not found in any common location")
+	return "", fmt.Errorf("no Python interpreter found in venv (%s) or on PATH", venvPath)
+}
+
+// Helper function to find the eulix_embed binary
+func findEulixEmbed() (scriptPath string, pythonPath string, err error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
+
+	// Canonical install location: ~/.Eulix/eulix_embed.py
+	script := filepath.Join(homeDir, ".Eulix", "eulix_embed.py")
+	if _, err := os.Stat(script); err == nil {
+		python, err := findVenvPython(homeDir)
+		if err != nil {
+			return "", "", fmt.Errorf("found embed script but no usable Python: %w", err)
+		}
+		return script, python, nil
+	}
+
+	return "", "", fmt.Errorf("eulix_embed.py not found (expected at %s)", script)
 }
 
 // CosineSimilarity calculates cosine similarity between two vectors
 // Both vectors should be normalized (L2 norm = 1)
-func CosineSimilarity(a, b []float32) float64 {
-	if len(a) != len(b) {
-		return 0.0
-	}
+// func CosineSimilarity(a, b []float32) float64 {
+// 	if len(a) != len(b) {
+// 		return 0.0
+// 	}
 
-	var dotProduct float64
-	for i := range a {
-		dotProduct += float64(a[i] * b[i])
-	}
+// 	var dotProduct float64
+// 	for i := range a {
+// 		dotProduct += float64(a[i] * b[i])
+// 	}
 
-	return dotProduct
-}
+// 	return dotProduct
+// }
 
 // NormalizeVector performs L2 normalization on a vector
 // Returns a new normalized vector
-func NormalizeVector(vec []float32) []float32 {
-	var norm float32
-	for _, v := range vec {
-		norm += v * v
-	}
-	norm = float32(math.Sqrt(float64(norm)))
+// func NormalizeVector(vec []float32) []float32 {
+// 	var norm float32
+// 	for _, v := range vec {
+// 		norm += v * v
+// 	}
+// 	norm = float32(math.Sqrt(float64(norm)))
 
-	if norm == 0 {
-		return vec
-	}
+// 	if norm == 0 {
+// 		return vec
+// 	}
 
-	normalized := make([]float32, len(vec))
-	for i, v := range vec {
-		normalized[i] = v / norm
-	}
+// 	normalized := make([]float32, len(vec))
+// 	for i, v := range vec {
+// 		normalized[i] = v / norm
+// 	}
 
-	return normalized
-}
+// 	return normalized
+// }
 
 // BatchEmbed generates embeddings for multiple texts
 // Returns a slice of embeddings in the same order as input texts
