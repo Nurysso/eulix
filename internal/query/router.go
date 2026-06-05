@@ -214,7 +214,7 @@ func (r *Router) ensureContextBuilder() error {
 
 //  Main dispatch ─
 
-func (r *Router) Query(query string) (string, error) {
+func (r *Router) QueryEngine(query string) (string, error) {
 	if r.cache != nil && r.currentChecksum != "" {
 		if cached, found, err := r.cache.Get(query, r.currentChecksum); err == nil && found {
 			return cached, nil

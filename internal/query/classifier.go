@@ -1,3 +1,15 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package embeddings provides the command-line interface implementation for EULIX.
+
+/*
+Package query provides query classification functionality.
+This file is responsible for classifying user queries into different
+types such as location, usage, debugging, architecture, etc.
+*/
+
 package query
 
 import (
