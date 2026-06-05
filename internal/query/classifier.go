@@ -25,6 +25,11 @@ const (
 	QueryTypeExample
 	QueryTypeTesting
 	QueryTypeCodeGeneration
+	QueryTypeCallGraph QueryType = iota + 17
+	QueryTypeEntryPoints
+	QueryTypeFileStructure
+	QueryTypeTodos
+	QueryTypeMetrics
 )
 
 func (qt QueryType) String() string {
@@ -45,6 +50,11 @@ func (qt QueryType) String() string {
 		"Documentation",
 		"Example",
 		"Testing",
+		"CallGraph",
+		"EntryPoints",
+		"FileStructure",
+		"Todos",
+		"Metrics",
 	}[qt]
 }
 
@@ -65,7 +75,6 @@ type Entity struct {
 }
 
 type Classifier struct {
-	// Existing patterns
 	locationPattern       *regexp.Regexp
 	usagePattern          *regexp.Regexp
 	architecturePattern   *regexp.Regexp
@@ -87,6 +96,12 @@ type Classifier struct {
 	symbolPattern *regexp.Regexp
 	validSymbols  map[string]bool
 	validTypes    map[string]bool
+
+	callGraphPattern  *regexp.Regexp
+	entryPointPattern *regexp.Regexp
+	fileStructPattern *regexp.Regexp
+	todosPattern      *regexp.Regexp
+	metricsPattern    *regexp.Regexp
 }
 
 type SymbolIndex struct {
@@ -95,33 +110,34 @@ type SymbolIndex struct {
 
 func QuerySheriff(kbIndexPath string) (*Classifier, error) {
 	c := &Classifier{
-		locationPattern:       regexp.MustCompile(`(?i)^(where\s+(is|are|can\s+i\s+find)|find\s+the|show\s+me|locate)\s`),
-		usagePattern:          regexp.MustCompile(`(?i)(who|what|which).*(calls?|uses?|invokes?|depends\s+on|references?)`),
-		architecturePattern:   regexp.MustCompile(`(?i)(architecture|overall\s+structure|high[\s-]level|system\s+design|component\s+diagram|module\s+organization)`),
-		implementationPattern: regexp.MustCompile(`(?i)(implement|add\s+feature|create\s+new|build\s+a)`),
-		debugPattern:          regexp.MustCompile(`(?i)(why\s+(is|does|doesn't)|debug|error|bug|issue|problem|not\s+working|fails?|crash|exception)`),
-		comparisonPattern:     regexp.MustCompile(`(?i)(difference\s+between|compare|vs\.?|versus|similar\s+to|differs?\s+from|what's\s+the\s+difference)`),
-		dependencyPattern:     regexp.MustCompile(`(?i)(depends?\s+on|dependencies|required\s+by|imports?|external|third[\s-]party)`),
-		refactoringPattern:    regexp.MustCompile(`(?i)(refactor|improve|optimize|clean\s+up|restructure|simplify|better\s+way)`),
-		performancePattern:    regexp.MustCompile(`(?i)(performance|slow|fast|optimize|bottleneck|efficient|speed|latency|memory\s+usage)`),
-		dataFlowPattern:       regexp.MustCompile(`(?i)(data\s+flow|how\s+data|trace\s+data|data\s+path|value\s+propagat|passes?\s+through)`),
-		securityPattern:       regexp.MustCompile(`(?i)(security|vulnerable|sanitize|validation|injection|xss|csrf|authentication|authorization)`),
-		// documentationPattern:  regexp.MustCompile(`(?i)(document|comment|explain|describe|what\s+does|purpose\s+of|meant\s+to\s+do)`),
-		examplePattern: regexp.MustCompile(`(?i)(example|how\s+to\s+use|usage\s+example|sample|demonstrate|show\s+me\s+how)`),
-		testingPattern: regexp.MustCompile(`(?i)(test|unit\s+test|integration\s+test|mock|coverage|test\s+case)`),
-		codeGenPattern: regexp.MustCompile(`(?i)(show\s+me\s+code|write\s+code|code\s+example|sample\s+code|how\s+to\s+implement|generate\s+code)`),
-
-		symbolPattern: regexp.MustCompile(`\b[A-Z][a-z]+(?:[A-Z][a-z]+)*\b|\b[a-z_][a-z0-9_]*\b|\b[A-Z_][A-Z0-9_]+\b`),
-		validSymbols:  make(map[string]bool),
-		validTypes:    make(map[string]bool),
+		locationPattern:       regexp.MustCompile(`(?i)^(where\s+(is|are|can\s+i\s+find)|find\s+the|show\s+me|\blocate\b|\blocation\s+of\b)\s+`),
+		usagePattern:          regexp.MustCompile(`(?i)\b(who|what|which)\b.*\b(calls?|uses?|invokes?|depends\s+on|references?)\b`),
+		architecturePattern:   regexp.MustCompile(`(?i)\b(architecture|overall\s+structure|high[\s-]level|system\s+design|component\s+diagram|module\s+organization)\b`),
+		implementationPattern: regexp.MustCompile(`(?i)\b(implement\b|add\s+feature|create\s+new|build\s+a\b)`),
+		debugPattern:          regexp.MustCompile(`(?i)\b(why\s+(is|does|doesn't\b)|debug|error|bug|issue|problem|not\s+working|fails?|crash|exception)\b`),
+		comparisonPattern:     regexp.MustCompile(`(?i)\b(difference\s+between|compare\b|vs\.?\b|versus\b|similar\s+to|differs?\s+from|what's\s+the\s+difference)\b`),
+		dependencyPattern:     regexp.MustCompile(`(?i)\b(depends?\s+on|dependencies|required\s+by|imports?|external\b|third[\s-]party)\b`),
+		refactoringPattern:    regexp.MustCompile(`(?i)\b(refactor\b|improve\b|optimize\b|clean\s+up|restructure\b|simplify\b|better\s+way)\b`),
+		performancePattern:    regexp.MustCompile(`(?i)\b(performance|slow\b|fast\b|optimize\b|bottleneck|efficient\b|speed\b|latency|memory\s+usage)\b`),
+		dataFlowPattern:       regexp.MustCompile(`(?i)\b(data\s+flow|how\s+data|trace\s+data|data\s+path|value\s+propagat|passes?\s+through)\b`),
+		securityPattern:       regexp.MustCompile(`(?i)\b(security|vulnerable|sanitize|validation|injection|xss|csrf|authentication|authorization)\b`),
+		examplePattern:        regexp.MustCompile(`(?i)\b(example\b|how\s+to\s+use|usage\s+example|sample\b|demonstrate\b|show\s+me\s+how)\b`),
+		testingPattern:        regexp.MustCompile(`(?i)\b(test\b|unit\s+test|integration\s+test|mock\b|coverage\b|test\s+case)\b`),
+		codeGenPattern:        regexp.MustCompile(`(?i)\b(show\s+me\s+code|write\s+code|code\s+example|sample\s+code|how\s+to\s+implement|generate\s+code)\b`),
+		callGraphPattern:      regexp.MustCompile(`(?i)\b(call\s+graph|call\s+tree|who\s+calls|calls?\s+chain|callers?\s+of|callees?\s+of|call\s+hierarchy)\b`),
+		entryPointPattern:     regexp.MustCompile(`(?i)\b(entry\s+points?|endpoints?|api\s+routes?|cli\s+commands?|main\s+functions?)\b`),
+		fileStructPattern:     regexp.MustCompile(`(?i)\b(what('?s|\s+is)\s+in\s+file|contents?\s+of\s+file|functions?\s+in\s+file|classes?\s+in\s+file|show\s+file)\b`),
+		todosPattern:          regexp.MustCompile(`(?i)\b(todo\b|fixme\b|hack\b|security\s+note|technical\s+debt)\b`),
+		metricsPattern:        regexp.MustCompile(`(?i)\b(complexity|metrics?|loc|lines\s+of\s+code|importance|hotspot)\b`),
+		symbolPattern:         regexp.MustCompile(`[A-Z][a-zA-Z0-9]*(?:[A-Z][a-zA-Z0-9]*)*|[a-z][a-zA-Z0-9]{2,}`),
+		validSymbols:          make(map[string]bool),
+		validTypes:            make(map[string]bool),
 	}
-
 	if kbIndexPath != "" {
 		if err := c.loadSymbols(kbIndexPath); err != nil {
 			return nil, err
 		}
 	}
-
 	return c, nil
 }
 
@@ -335,6 +351,52 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Reasoning:    "Level 1: implementation pattern match",
 			NeedsContext: true,
 			Priority:     2,
+		}
+	}
+
+	if c.callGraphPattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeCallGraph,
+			Confidence:   0.95,
+			Reasoning:    "Level 1: call graph pattern",
+			NeedsContext: false,
+			Priority:     4,
+		}
+	}
+	if c.entryPointPattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeEntryPoints,
+			Confidence:   0.95,
+			Reasoning:    "Level 1: entry point pattern",
+			NeedsContext: false,
+			Priority:     4,
+		}
+	}
+	if c.fileStructPattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeFileStructure,
+			Confidence:   0.95,
+			Reasoning:    "Level 1: file structure pattern",
+			NeedsContext: false,
+			Priority:     5,
+		}
+	}
+	if c.todosPattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeTodos,
+			Confidence:   0.95,
+			Reasoning:    "Level 1: todos/security pattern",
+			NeedsContext: false,
+			Priority:     5,
+		}
+	}
+	if c.metricsPattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeMetrics,
+			Confidence:   0.95,
+			Reasoning:    "Level 1: metrics pattern",
+			NeedsContext: false,
+			Priority:     5,
 		}
 	}
 
