@@ -1,3 +1,15 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package embeddings provides the command-line interface implementation for EULIX.
+
+/*
+This file Identifies common/non-distinctive symbols
+(like "ctx", "err", "i", "j") that appear too frequently across code chunks,
+making them useless for distinguishing between different pieces of code.
+*/
+
 package query
 
 import (

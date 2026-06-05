@@ -1,3 +1,12 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package embeddings provides the command-line interface implementation for EULIX.
+
+/*
+This file is rthe main tui interface also manges formating of llm response.
+*/
 package tui
 
 import (
@@ -380,7 +389,7 @@ func (m Model) View() string {
 
 func (m Model) processQuery(q string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := m.router.Query(q)
+		result, err := m.router.QueryEngine(q)
 		return queryResultMsg{result: result, err: err}
 	}
 }
