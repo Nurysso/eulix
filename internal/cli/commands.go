@@ -15,21 +15,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"eulix/internal/cache"
 	"eulix/internal/checksum"
 	"eulix/internal/config"
 	"eulix/internal/fixers"
-	"eulix/internal/tui"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 )
 
 const (
 	AppName    = "Eulix"
-	AppVersion = "v0.6.3"
+	AppVersion = "v0.6.5"
 )
 
 var (
@@ -51,6 +48,9 @@ var analyzeCmd = &cobra.Command{
 	Short: "Analyze codebase and generate knowledge base",
 	Args:  cobra.NoArgs,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := requireProjectRoot(); err != nil {
+			return err
+		}
 		return checkInitialized()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -65,6 +65,12 @@ var checksumCmd = &cobra.Command{
 	Use:   "checksum",
 	Short: "Creates checksum without running analyze",
 	Args:  cobra.NoArgs,
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := requireProjectRoot(); err != nil {
+			return err
+		}
+		return checkInitialized()
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		detector := checksum.HashHound(".")
 		currentChecksum, err := detector.Calculate()
@@ -111,6 +117,15 @@ var glaDOSCmd = &cobra.Command{
 	Use:   "glados [directory]",
 	Short: "Checks for errors in knowledge base and embeddings size",
 	Args:  cobra.MaximumNArgs(1),
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		// glados accepts an explicit directory; only auto-discover when none given.
+		if len(args) == 0 {
+			if _, err := requireProjectRoot(); err != nil {
+				return err
+			}
+		}
+		return nil
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		eulixDir := ".eulix"
 		if len(args) > 0 {
@@ -129,6 +144,14 @@ var aspirineCmd = &cobra.Command{
 	Short: "tries to fix embedings.bin and kb MEANT TO BE USED IN TEST",
 	Long:  "Tries to fixes corrupted or mismatched embeddings by rebuilding the binary file from JSON",
 	Args:  cobra.MaximumNArgs(1),
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			if _, err := requireProjectRoot(); err != nil {
+				return err
+			}
+		}
+		return nil
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		eulixDir := ".eulix"
 		if len(args) > 0 {
@@ -155,7 +178,18 @@ var chatCmd = &cobra.Command{
 	Short: "Start interactive chat interface",
 	Args:  cobra.NoArgs,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
-		return checkInitialized()
+		root, err := requireProjectRoot()
+		if err != nil {
+			return err
+		}
+		if err := checkInitialized(); err != nil {
+			return err
+		}
+		// Chat needs an actual knowledge base, not just the .eulix skeleton.
+		if !hasKnowledgeBase(root) {
+			return fmt.Errorf("no knowledge base found at %s\nRun 'eulix analyze' to generate it.", getKnowledgeBasePath(root))
+		}
+		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := startChat(); err != nil {
@@ -168,6 +202,8 @@ var chatCmd = &cobra.Command{
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize eulix in the current directory",
+	// init intentionally does NOT call requireProjectRoot — it bootstraps
+	// whatever directory the user is sitting in.
 	Run: func(cmd *cobra.Command, args []string) {
 		// --fix: create only missing components, never overwrite existing ones
 		var targets []string
@@ -196,47 +232,16 @@ var cacheListCmd = &cobra.Command{
 	Short: "List all cache entries",
 	Long:  "Display all cached queries and their metadata",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := requireProjectRoot(); err != nil {
+			return err
+		}
 		return checkInitialized()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		mgr, err := initCacheManager()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to initialize cache: %v\n", err)
+		// Delegate to history.go — CacheHistory prints the plain-text list.
+		if err := CacheHistory(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
-		}
-		defer mgr.Close()
-
-		entries, err := mgr.ListAll()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to list cache entries: %v\n", err)
-			os.Exit(1)
-		}
-
-		if len(entries) == 0 {
-			fmt.Println("No cache entries found.")
-			return
-		}
-
-		verbose, _ := cmd.Flags().GetBool("verbose")
-
-		fmt.Printf("Found %d cache entries:\n\n", len(entries))
-		for i, entry := range entries {
-			fmt.Printf("[%d] Query Hash: %s\n", i+1, entry.QueryHash)
-			fmt.Printf("    Created: %s\n", entry.CreatedAt.Format(time.RFC3339))
-			fmt.Printf("    Expires: %s\n", entry.ExpiresAt.Format(time.RFC3339))
-
-			if time.Now().After(entry.ExpiresAt) {
-				fmt.Printf("    Status: EXPIRED\n")
-			} else {
-				fmt.Printf("    Status: Valid\n")
-			}
-
-			if verbose {
-				fmt.Printf("    Query: %s\n", truncateString(entry.Query, 80))
-				fmt.Printf("    Response: %s\n", truncateString(entry.Response, 100))
-				fmt.Printf("    Checksum: %s\n", entry.ChecksumHash[:12])
-			}
-			fmt.Println()
 		}
 	},
 }
@@ -246,32 +251,15 @@ var cacheStatsCmd = &cobra.Command{
 	Short: "Show cache statistics",
 	Long:  "Display statistics about cache usage and storage",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := requireProjectRoot(); err != nil {
+			return err
+		}
 		return checkInitialized()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		mgr, err := initCacheManager()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to initialize cache: %v\n", err)
+		if err := CacheStats(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
-		}
-		defer mgr.Close()
-
-		stats, err := mgr.GetStats()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to get cache stats: %v\n", err)
-			os.Exit(1)
-		}
-
-		fmt.Println("Cache Statistics:")
-
-		if total, ok := stats["sql_total_entries"].(int); ok {
-			fmt.Printf("SQL Total Entries: %d\n", total)
-		}
-		if valid, ok := stats["sql_valid_entries"].(int); ok {
-			fmt.Printf("SQL Valid Entries: %d\n", valid)
-		}
-		if connected, ok := stats["redis_connected"].(bool); ok && connected {
-			fmt.Println("Redis: Connected")
 		}
 	},
 }
@@ -281,44 +269,42 @@ var cacheClearCmd = &cobra.Command{
 	Short: "Clear all cache entries",
 	Long:  "Remove all cached queries and responses",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := requireProjectRoot(); err != nil {
+			return err
+		}
 		return checkInitialized()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		force, _ := cmd.Flags().GetBool("force")
-
-		if !force {
-			fmt.Print("Are you sure you want to clear all cache entries? (y/N): ")
-			var response string
-			fmt.Scanln(&response)
-			if strings.ToLower(response) != "y" {
-				fmt.Println("Operation cancelled.")
-				return
+		// CacheClear handles its own --force / confirmation prompt.
+		if clearForce, _ := cmd.Flags().GetBool("force"); clearForce {
+			// Skip the interactive prompt by bypassing stdin check.
+			// CacheClear always prompts, so handle force here.
+			mgr, err := initCacheManager()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to initialize cache: %v\n", err)
+				os.Exit(1)
 			}
+			defer mgr.Close()
+			entries, err := mgr.ListAll()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to list entries: %v\n", err)
+				os.Exit(1)
+			}
+			deleted := 0
+			for _, entry := range entries {
+				if err := mgr.Delete(entry.QueryHash); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to delete entry %s: %v\n", entry.QueryHash, err)
+				} else {
+					deleted++
+				}
+			}
+			fmt.Printf("Successfully cleared %d cache entries.\n", deleted)
+			return
 		}
-
-		mgr, err := initCacheManager()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to initialize cache: %v\n", err)
+		if err := CacheClear(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		defer mgr.Close()
-
-		entries, err := mgr.ListAll()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to list entries: %v\n", err)
-			os.Exit(1)
-		}
-
-		deleted := 0
-		for _, entry := range entries {
-			if err := mgr.Delete(entry.QueryHash); err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to delete entry %s: %v\n", entry.QueryHash, err)
-			} else {
-				deleted++
-			}
-		}
-
-		fmt.Printf("Successfully cleared %d cache entries.\n", deleted)
 	},
 }
 
@@ -328,24 +314,16 @@ var cacheDeleteCmd = &cobra.Command{
 	Long:  "Remove a cache entry by its query hash",
 	Args:  cobra.ExactArgs(1),
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := requireProjectRoot(); err != nil {
+			return err
+		}
 		return checkInitialized()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		queryHash := args[0]
-
-		mgr, err := initCacheManager()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to initialize cache: %v\n", err)
+		if err := CacheDelete(args[0]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		defer mgr.Close()
-
-		if err := mgr.Delete(queryHash); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to delete entry: %v\n", err)
-			os.Exit(1)
-		}
-
-		fmt.Printf("Successfully deleted cache entry: %s\n", queryHash)
 	},
 }
 
@@ -354,36 +332,18 @@ var cacheCleanCmd = &cobra.Command{
 	Short: "Remove expired cache entries",
 	Long:  "Clean up cache by removing all expired entries",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := requireProjectRoot(); err != nil {
+			return err
+		}
 		return checkInitialized()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		mgr, err := initCacheManager()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to initialize cache: %v\n", err)
+		if err := CacheCleanup(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		defer mgr.Close()
-
-		if err := mgr.CleanExpired(); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to clean expired entries: %v\n", err)
-			os.Exit(1)
-		}
-
-		fmt.Println("Successfully cleaned expired cache entries.")
 	},
 }
-
-// var cacheHistoryCmd = &cobra.Command{
-// 	Use:   "history",
-// 	Short: "View cache entry history in detail",
-// 	Long:  "Display detailed view of cached queries with full content",
-// 	PreRunE: func(cmd *cobra.Command, args []string) error {
-// 		return checkInitialized()
-// 	},
-// 	Run: func(cmd *cobra.Command, args []string) {
-// 		runHistoryCommand(cmd)
-// 	},
-// }
 
 // history command (launches TUI)
 var historyCmd = &cobra.Command{
@@ -391,90 +351,25 @@ var historyCmd = &cobra.Command{
 	Short: "View query history interactively",
 	Long:  "Launch an interactive TUI to browse your cached query history",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := requireProjectRoot(); err != nil {
+			return err
+		}
 		return checkInitialized()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		useTUI, _ := cmd.Flags().GetBool("tui")
 		noTUI, _ := cmd.Flags().GetBool("no-tui")
-
-		// Default to TUI unless --no-tui is specified
-		if !noTUI || useTUI {
-			runHistoryTUI(cmd)
-		} else {
-			runHistoryCommand(cmd)
+		if noTUI {
+			if err := CacheHistory(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		if err := CacheView(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
 		}
 	},
-}
-
-func runHistoryCommand(cmd *cobra.Command) {
-	mgr, err := initCacheManager()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize cache: %v\n", err)
-		os.Exit(1)
-	}
-	defer mgr.Close()
-
-	entries, err := mgr.ListAll()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load history: %v\n", err)
-		os.Exit(1)
-	}
-
-	if len(entries) == 0 {
-		fmt.Println("No history found. Your question history is empty.")
-		return
-	}
-
-	fmt.Printf("Query History (%d entries):\n", len(entries))
-	fmt.Println(strings.Repeat("=", 80))
-
-	for i, entry := range entries {
-		fmt.Printf("\n[Entry %d]\n", i+1)
-		fmt.Printf("Hash: %s\n", entry.QueryHash)
-		fmt.Printf("Created: %s\n", entry.CreatedAt.Format("2006-01-02 15:04:05"))
-		fmt.Printf("Expires: %s\n", entry.ExpiresAt.Format("2006-01-02 15:04:05"))
-
-		if time.Now().After(entry.ExpiresAt) {
-			fmt.Printf("Status: EXPIRED \n")
-		} else {
-			remaining := time.Until(entry.ExpiresAt)
-			fmt.Printf("Status: Valid (expires in %v)\n", remaining.Round(time.Minute))
-		}
-
-		fmt.Printf("\nQuery:\n%s\n", wrapText(entry.Query, 76))
-		fmt.Printf("\nResponse:\n%s\n", wrapText(entry.Response, 76))
-		fmt.Println(strings.Repeat("-", 80))
-	}
-}
-
-// TUI implementation for history
-func runHistoryTUI(cmd *cobra.Command) {
-	mgr, err := initCacheManager()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize cache: %v\n", err)
-		os.Exit(1)
-	}
-	defer mgr.Close()
-
-	entries, err := mgr.ListAll()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load history: %v\n", err)
-		os.Exit(1)
-	}
-
-	if len(entries) == 0 {
-		fmt.Println("No history found. Your question history is empty.")
-		return
-	}
-
-	// Launch the TUI
-	model := tui.HistoryView(entries, mgr)
-	p := tea.NewProgram(model, tea.WithAltScreen())
-
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
-		os.Exit(1)
-	}
 }
 
 func Execute() error {
@@ -538,7 +433,128 @@ func registerCommands() {
 	)
 }
 
-// Helper functions
+// Project-root discovery + initialization helpers
+
+// projectMarkerFiles lists the files/directories that mark a directory as
+// the root of an eulix project. Either one is enough.
+var projectMarkerFiles = []string{".eulix", ".euignore"}
+
+// findProjectRoot walks up from startDir looking for any project marker. It
+// returns the absolute path of the directory that contains one, or an error
+// if the search reaches the filesystem root without a hit.
+func findProjectRoot(startDir string) (string, error) {
+	abs, err := filepath.Abs(startDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve cwd: %w", err)
+	}
+
+	dir := abs
+	for {
+		for _, marker := range projectMarkerFiles {
+			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+				return dir, nil
+			}
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf(
+				"not inside an eulix project (no %s found in %s or any parent directory)\n"+
+					"Run 'eulix init' in your project root, or 'cd' into an initialized project",
+				strings.Join(projectMarkerFiles, " or "), abs,
+			)
+		}
+		dir = parent
+	}
+}
+
+// requireProjectRoot discovers the project root (walking up parent dirs as
+// needed) and chdirs into it so all subsequent code that uses relative
+// paths like ".eulix" or ".euignore" keeps working. It returns the absolute
+// path of the root.
+func requireProjectRoot() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("get cwd: %w", err)
+	}
+
+	root, err := findProjectRoot(cwd)
+	if err != nil {
+		return "", err
+	}
+
+	if root != cwd {
+		if err := os.Chdir(root); err != nil {
+			return "", fmt.Errorf("found project root at %s but failed to chdir: %w", root, err)
+		}
+	}
+	return root, nil
+}
+
+// isInitialized reports whether the given project root has been initialized.
+// A root is considered initialized when both the .eulix directory and the
+// .euignore file exist there.
+func isInitialized(root string) bool {
+	if root == "" {
+		return false
+	}
+	_, eulixErr := os.Stat(filepath.Join(root, ".eulix"))
+	_, euignoreErr := os.Stat(filepath.Join(root, ".euignore"))
+	return eulixErr == nil && euignoreErr == nil
+}
+
+// getKnowledgeBasePath returns the absolute path to the knowledge base file
+// inside the given project root.
+func getKnowledgeBasePath(root string) string {
+	if root == "" {
+		// Best-effort fallback for callers that don't yet have a root.
+		cwd, _ := os.Getwd()
+		root = cwd
+	}
+	return filepath.Join(root, ".eulix", "kb.json")
+}
+
+// hasKnowledgeBase reports whether the knowledge base file exists inside
+// the given project root.
+func hasKnowledgeBase(root string) bool {
+	kbPath := getKnowledgeBasePath(root)
+	_, err := os.Stat(kbPath)
+	return err == nil
+}
+
+// Initialization check
+
+// checkInitialized returns nil if the current directory is a fully
+// initialized eulix project, or a descriptive error otherwise. It is
+// intended to be used from a command's PreRunE.
+func checkInitialized() error {
+	// Quick check: do both marker files exist in cwd? After
+	// requireProjectRoot has run, cwd is the project root.
+	if !isInitialized(".") {
+		return fmt.Errorf(
+			"\nEulix is not fully initialized in the current directory.\n" +
+				"Run 'eulix init' to set it up, or 'cd' into a project that has been initialized.\n",
+		)
+	}
+
+	// Deeper check: are the internal components the user actually needs
+	// (kb, embeddings, ...) present?
+	state := checkInitState()
+	if state.fullyInitialized() {
+		return nil
+	}
+
+	missing := state.missing()
+	var b strings.Builder
+	b.WriteString("\nEulix is not fully initialized. Missing:\n")
+	for _, m := range missing {
+		b.WriteString("  - " + m + "\n")
+	}
+	b.WriteString("\nRun 'eulix init --fix' to restore missing files, or 'eulix init --force' to reset.\n\n")
+	return fmt.Errorf("%s", b.String())
+}
+
+// Misc helpers
 
 func runSubCommand(name string, arg string) (string, error) {
 	cmd := exec.Command(name, arg)
@@ -547,44 +563,6 @@ func runSubCommand(name string, arg string) (string, error) {
 		return "", err
 	}
 	return string(out), nil
-}
-
-func checkInitialized() error {
-	state := checkInitState()
-
-	if state.fullyInitialized() {
-		return nil
-	}
-
-	missing := state.missing()
-	fmt.Fprintf(os.Stderr, "\nEulix is not fully initialized. Missing:\n")
-	for _, m := range missing {
-		fmt.Fprintf(os.Stderr, "  - %s\n", m)
-	}
-	fmt.Fprintf(os.Stderr, "\nRun 'eulix init --fix' to restore missing files, or 'eulix init --force' to reset.\n\n")
-	os.Exit(1)
-
-	return nil // unreachable, satisfies compiler
-}
-
-func isInitialized() bool {
-	eulixDir := ".eulix"
-	euignorePath := ".euignore"
-
-	_, eulixErr := os.Stat(eulixDir)
-	_, euignoreErr := os.Stat(euignorePath)
-
-	return eulixErr == nil && euignoreErr == nil
-}
-
-func getKnowledgeBasePath() string {
-	return filepath.Join(".eulix", "kb.json")
-}
-
-func hasKnowledgeBase() bool {
-	kbPath := getKnowledgeBasePath()
-	_, err := os.Stat(kbPath)
-	return err == nil
 }
 
 // initCacheManager initializes and returns a cache manager
@@ -604,46 +582,4 @@ func initCacheManager() (*cache.Manager, error) {
 	}
 
 	return mgr, nil
-}
-
-// truncateString truncates a string to maxLen characters
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}
-
-// wrapText wraps text at the specified width
-func wrapText(text string, width int) string {
-	words := strings.Fields(text)
-	if len(words) == 0 {
-		return text
-	}
-
-	var lines []string
-	var currentLine string
-
-	for _, word := range words {
-		if len(currentLine)+len(word)+1 > width {
-			if currentLine != "" {
-				lines = append(lines, currentLine)
-				currentLine = word
-			} else {
-				lines = append(lines, word)
-			}
-		} else {
-			if currentLine != "" {
-				currentLine += " " + word
-			} else {
-				currentLine = word
-			}
-		}
-	}
-
-	if currentLine != "" {
-		lines = append(lines, currentLine)
-	}
-
-	return strings.Join(lines, "\n")
 }

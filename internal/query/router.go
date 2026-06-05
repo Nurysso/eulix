@@ -125,6 +125,12 @@ func QueryTrafficController(eulixDir string, cfg *config.Config, llmClient *llm.
 		return nil, fmt.Errorf("failed to load KB index: %w", err)
 	}
 
+	// in QueryTrafficController, after loading kbIndex:
+	kb, err := loadKBFull(eulixDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load KB index: %w", err)
+	}
+
 	callGraph, err := loadCallGraph(eulixDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load call graph: %w", err)
@@ -145,6 +151,7 @@ func QueryTrafficController(eulixDir string, cfg *config.Config, llmClient *llm.
 		contextBuilder: nil,
 		kbIndex:        kbIndex,
 		callGraph:      callGraph,
+		kb:             kb,
 	}, nil
 }
 
@@ -159,6 +166,18 @@ func loadKBIndex(eulixDir string) (*KBIndex, error) {
 		return nil, err
 	}
 	return &index, nil
+}
+func loadKBFull(eulixDir string) (*KnowledgeBase, error) {
+	path := filepath.Join(eulixDir, "kb.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var kb KnowledgeBase
+	if err := json.Unmarshal(data, &kb); err != nil {
+		return nil, err
+	}
+	return &kb, nil
 }
 
 func loadCallGraph(eulixDir string) (*CallGraph, error) {
@@ -278,6 +297,16 @@ func (r *Router) Query(query string) (string, error) {
 			return "", err
 		}
 		response, err = r.handleTesting(query, classification)
+	case QueryTypeCallGraph:
+		response, err = r.handleCallGraph(query, classification)
+	case QueryTypeEntryPoints:
+		response, err = r.handleEntryPoints(query, classification)
+	case QueryTypeFileStructure:
+		response, err = r.handleFileStructure(query, classification)
+	case QueryTypeTodos:
+		response, err = r.handleTodosQuery(query, classification)
+	case QueryTypeMetrics:
+		response, err = r.handleMetrics(query, classification)
 	default:
 		if err = r.ensureContextBuilder(); err != nil {
 			return "", err
@@ -862,6 +891,310 @@ func (r *Router) findTransitiveDependencies(funcName string, depth int) []string
 	return result
 }
 
+func (r *Router) handleCallGraph(query string, class *Classification) (string, error) {
+	entity := firstSymbolOrExtracted(class, query)
+	if entity == "" {
+		return "Could not identify a symbol for call graph analysis.", nil
+	}
+
+	fn, ok := r.callGraph.Functions[entity]
+	if !ok {
+		if matches := r.fuzzySearch(entity); len(matches) > 0 {
+			return fmt.Sprintf("'%s' not found. Did you mean: %s", entity, strings.Join(matches, ", ")), nil
+		}
+		return fmt.Sprintf("'%s' not found in call graph.", entity), nil
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Call graph for '%s'  (%s)\n", entity, fn.Location))
+
+	// Callers tree (inbound)
+	b.WriteString("\n┌─ Called by (inbound):\n")
+	if len(fn.CalledBy) == 0 {
+		b.WriteString("│  (none — likely an entry point or exported API)\n")
+	} else {
+		for _, caller := range fn.CalledBy {
+			b.WriteString(fmt.Sprintf("│  ← %s\n", caller))
+			// one level deeper
+			if callerFn, ok := r.callGraph.Functions[caller]; ok {
+				for _, grandCaller := range callerFn.CalledBy {
+					b.WriteString(fmt.Sprintf("│     ← %s\n", grandCaller))
+				}
+			}
+		}
+	}
+
+	// Callees tree (outbound)
+	b.WriteString("\n└─ Calls (outbound):\n")
+	if len(fn.Calls) == 0 {
+		b.WriteString("   (none — leaf function)\n")
+	} else {
+		for _, callee := range fn.Calls {
+			b.WriteString(fmt.Sprintf("   → %s\n", callee))
+			if calleeFn, ok := r.callGraph.Functions[callee]; ok {
+				for _, grandCallee := range calleeFn.Calls {
+					b.WriteString(fmt.Sprintf("      → %s\n", grandCallee))
+				}
+			}
+		}
+	}
+
+	// Fan-in / fan-out summary
+	b.WriteString(fmt.Sprintf("\nFan-in (callers) : %d\n", len(fn.CalledBy)))
+	b.WriteString(fmt.Sprintf("Fan-out (callees): %d\n", len(fn.Calls)))
+	if len(fn.CalledBy) == 0 {
+		b.WriteString("Note: No callers detected — treat as entry point.\n")
+	}
+	if len(fn.Calls) > 7 {
+		b.WriteString(fmt.Sprintf("⚠ High fan-out (%d) — consider splitting responsibilities.\n", len(fn.Calls)))
+	}
+
+	return b.String(), nil
+}
+
+func (r *Router) handleEntryPoints(_ string, _ *Classification) (string, error) {
+	if r.kb == nil {
+		// fall back to call graph: functions with no callers
+		var b strings.Builder
+		b.WriteString("Entry points (functions with no callers in call graph):\n\n")
+		count := 0
+		for name, fn := range r.callGraph.Functions {
+			if len(fn.CalledBy) == 0 {
+				b.WriteString(fmt.Sprintf("  • %s  @ %s\n", name, fn.Location))
+				count++
+			}
+		}
+		if count == 0 {
+			b.WriteString("  (none found — all functions have at least one caller)\n")
+		}
+		return b.String(), nil
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Entry points for %s:\n\n", r.kb.Metadata.ProjectName))
+
+	byType := make(map[string][]EntryPoint)
+	for _, ep := range r.kb.EntryPoints {
+		byType[ep.EntryType] = append(byType[ep.EntryType], ep)
+	}
+
+	for epType, eps := range byType {
+		b.WriteString(fmt.Sprintf("── %s ──\n", strings.ToUpper(epType)))
+		for _, ep := range eps {
+			if ep.Path != nil {
+				methods := strings.Join(ep.Methods, ", ")
+				b.WriteString(fmt.Sprintf("  [%s] %s → %s  (%s:%d)\n", methods, *ep.Path, ep.Handler, ep.File, ep.Line))
+			} else {
+				b.WriteString(fmt.Sprintf("  %s  (%s:%d)\n", ep.Handler, ep.File, ep.Line))
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	if r.kb.Patterns.ArchitectureStyle != nil {
+		b.WriteString(fmt.Sprintf("Architecture style : %s\n", *r.kb.Patterns.ArchitectureStyle))
+	}
+
+	return b.String(), nil
+}
+
+func (r *Router) handleFileStructure(query string, class *Classification) (string, error) {
+	if r.kb == nil {
+		return "Full KB (kb.json) not loaded — file structure query requires it.", nil
+	}
+
+	// Try to extract a filename from the query
+	target := extractFilePath(query)
+	if target == "" {
+		// List all files
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("Project: %s  (%d files, %d LOC)\n\n",
+			r.kb.Metadata.ProjectName, r.kb.Metadata.TotalFiles, r.kb.Metadata.TotalLOC))
+		for path, fd := range r.kb.Structure {
+			b.WriteString(fmt.Sprintf("  %s  [%s, %d LOC, %d fns, %d classes]\n",
+				path, fd.Language, fd.LOC, len(fd.Functions), len(fd.Classes)))
+		}
+		return b.String(), nil
+	}
+
+	// Find matching file (partial path match)
+	for path, fd := range r.kb.Structure {
+		if strings.Contains(path, target) {
+			return formatFileData(path, &fd), nil
+		}
+	}
+	return fmt.Sprintf("File matching '%s' not found in knowledge base.", target), nil
+}
+
+func formatFileData(path string, fd *FileData) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("File: %s  [%s, %d LOC]\n", path, fd.Language, fd.LOC))
+
+	if len(fd.Functions) > 0 {
+		b.WriteString(fmt.Sprintf("\nFunctions (%d):\n", len(fd.Functions)))
+		for _, fn := range fd.Functions {
+			b.WriteString(fmt.Sprintf("  • %s  (lines %d–%d, complexity %d, importance %.2f)\n",
+				fn.Name, fn.LineStart, fn.LineEnd, fn.Complexity, fn.ImportanceScore))
+		}
+	}
+
+	if len(fd.Classes) > 0 {
+		b.WriteString(fmt.Sprintf("\nClasses (%d):\n", len(fd.Classes)))
+		for _, cls := range fd.Classes {
+			b.WriteString(fmt.Sprintf("  • %s  (lines %d–%d, %d methods)\n",
+				cls.Name, cls.LineStart, cls.LineEnd, len(cls.Methods)))
+		}
+	}
+
+	if len(fd.Todos) > 0 {
+		b.WriteString(fmt.Sprintf("\nTODOs (%d):\n", len(fd.Todos)))
+		for _, td := range fd.Todos {
+			b.WriteString(fmt.Sprintf("  [%s] line %d: %s\n", td.Priority, td.Line, td.Text))
+		}
+	}
+
+	if len(fd.SecurityNotes) > 0 {
+		b.WriteString(fmt.Sprintf("\nSecurity notes (%d):\n", len(fd.SecurityNotes)))
+		for _, sn := range fd.SecurityNotes {
+			b.WriteString(fmt.Sprintf("  [%s] line %d: %s\n", sn.NoteType, sn.Line, sn.Description))
+		}
+	}
+
+	return b.String()
+}
+
+func (r *Router) handleTodosQuery(_ string, _ *Classification) (string, error) {
+	if r.kb == nil {
+		return "Full KB (kb.json) not loaded — TODO query requires it.", nil
+	}
+
+	type todoItem struct {
+		file     string
+		line     int
+		text     string
+		priority string
+	}
+	var high, medium, low []todoItem
+	var secNotes []struct {
+		file, noteType, desc string
+		line                 int
+	}
+
+	for path, fd := range r.kb.Structure {
+		for _, td := range fd.Todos {
+			item := todoItem{path, td.Line, td.Text, td.Priority}
+			switch td.Priority {
+			case "high":
+				high = append(high, item)
+			case "medium":
+				medium = append(medium, item)
+			default:
+				low = append(low, item)
+			}
+		}
+		for _, sn := range fd.SecurityNotes {
+			secNotes = append(secNotes, struct {
+				file, noteType, desc string
+				line                 int
+			}{path, sn.NoteType, sn.Description, sn.Line})
+		}
+	}
+
+	var b strings.Builder
+	if len(secNotes) > 0 {
+		b.WriteString(fmt.Sprintf("⚠ Security notes (%d):\n", len(secNotes)))
+		for _, sn := range secNotes {
+			b.WriteString(fmt.Sprintf("  [%s] %s:%d — %s\n", sn.noteType, sn.file, sn.line, sn.desc))
+		}
+		b.WriteString("\n")
+	}
+
+	printTodos := func(label string, items []todoItem) {
+		if len(items) == 0 {
+			return
+		}
+		b.WriteString(fmt.Sprintf("%s (%d):\n", label, len(items)))
+		for _, td := range items {
+			b.WriteString(fmt.Sprintf("  %s:%d — %s\n", td.file, td.line, td.text))
+		}
+		b.WriteString("\n")
+	}
+	printTodos("🔴 High priority TODOs", high)
+	printTodos("🟡 Medium priority TODOs", medium)
+	printTodos("⚪ Low priority TODOs", low)
+
+	if b.Len() == 0 {
+		return "No TODOs or security notes found in the knowledge base.", nil
+	}
+	return b.String(), nil
+}
+
+// Helper to handle the metric formatting
+func formatFunctionMetrics(fn KBFunction, path string) string {
+	return fmt.Sprintf(
+		"Metrics for %s (%s, lines %d–%d)\n  Cyclomatic complexity : %d\n  LOC                   : %d\n  Importance            : %.2f\n",
+		fn.Name, path, fn.LineStart, fn.LineEnd,
+		fn.Complexity, fn.LineEnd-fn.LineStart+1, fn.ImportanceScore,
+	)
+}
+
+func (r *Router) handleMetrics(query string, class *Classification) (string, error) {
+	if r.kb == nil {
+		return "Full KB (kb.json) not loaded — metrics query requires it.", nil
+	}
+
+	entity := firstSymbolOrExtracted(class, query)
+
+	if entity != "" {
+		for path, fd := range r.kb.Structure {
+			for _, fn := range fd.Functions {
+				if fn.Name == entity {
+					return formatFunctionMetrics(fn, path), nil
+				}
+			}
+			for _, cls := range fd.Classes {
+				for _, method := range cls.Methods {
+					if method.Name == entity {
+						return formatFunctionMetrics(method, path), nil
+					}
+				}
+			}
+		}
+	}
+
+	// Project-wide summary
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Project metrics: %s\n\n", r.kb.Metadata.ProjectName))
+	b.WriteString(fmt.Sprintf("  Files       : %d\n", r.kb.Metadata.TotalFiles))
+	b.WriteString(fmt.Sprintf("  Total LOC   : %d\n", r.kb.Metadata.TotalLOC))
+	b.WriteString(fmt.Sprintf("  Functions   : %d\n", r.kb.Metadata.TotalFunctions))
+	b.WriteString(fmt.Sprintf("  Languages   : %s\n", strings.Join(r.kb.Metadata.Languages, ", ")))
+	b.WriteString(fmt.Sprintf("  Parsed at   : %s\n\n", r.kb.Metadata.ParsedAt))
+	// Top 10 most complex functions
+	type fnEntry struct {
+		file string
+		fn   KBFunction
+	}
+	var all []fnEntry
+	for path, fd := range r.kb.Structure {
+		for _, fn := range fd.Functions {
+			all = append(all, fnEntry{path, fn})
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].fn.Complexity > all[j].fn.Complexity })
+
+	b.WriteString("Top 10 most complex functions:\n")
+	for i, e := range all {
+		if i >= 10 {
+			break
+		}
+		b.WriteString(fmt.Sprintf("  %2d. %s  (%s, complexity %d, importance %.2f)\n",
+			i+1, e.fn.Name, e.file, e.fn.Complexity, e.fn.ImportanceScore))
+	}
+
+	return b.String(), nil
+}
+
 func (r *Router) Close() error {
 	if r.contextBuilder != nil {
 		return r.contextBuilder.Close()
@@ -869,7 +1202,16 @@ func (r *Router) Close() error {
 	return nil
 }
 
-//  Entity extraction ─
+// Entity extraction ─
+func extractFilePath(query string) string {
+	// Look for something that looks like a file path: contains / or . with extension
+	for _, word := range strings.Fields(query) {
+		if strings.Contains(word, "/") || (strings.Contains(word, ".") && len(word) > 3) {
+			return word
+		}
+	}
+	return ""
+}
 
 func extractEntityName(query string) string {
 	words := strings.Fields(query)
