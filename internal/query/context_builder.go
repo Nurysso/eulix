@@ -1,3 +1,14 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package query is responsible for query identification,
+// running functions/tools based on query and build context window.
+
+/*
+This file is responsible for the creation of context window
+*/
+
 package query
 
 import (
@@ -95,8 +106,12 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	}
 	cb.debugLog.Log("Initializing ContextBuilder with source root: %s", sourceRoot)
 
-	eulixBinaryPath := filepath.Join(eulixDir, "..", "eulix_embed")
-	cb.queryEmbedder = embeddings.VectorWeaver(eulixBinaryPath, cfg.Embeddings.Model)
+	// eulixBinaryPath := filepath.Join(eulixDir, "..", "eulix_embed")
+	queryEmbedder, err := embeddings.VectorWeaver(cfg.Embeddings.Model)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize embedder: %w", err)
+	}
+	cb.queryEmbedder = queryEmbedder
 	// Load chunks from kb.json + kb_index.json (replaces embeddings.json)
 	if err := cb.loadChunksFromKB(); err != nil {
 		return nil, fmt.Errorf("failed to load chunks from KB: %w", err)
