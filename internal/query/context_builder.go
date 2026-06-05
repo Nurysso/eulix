@@ -1945,36 +1945,73 @@ func (cb *ContextBuilder) buildChunkFromKBClass(class KBClass, filePath string) 
 }
 
 func (cb *ContextBuilder) expandFromKBFunction(fn KBFunction, filePath string, baseScore float64) []ScoredChunk {
+	// Safe logging helper
+	log := func(format string, args ...interface{}) {
+		if cb.debugLog != nil {
+			cb.debugLog.Log(format, args...)
+		}
+	}
+
 	exp := make([]ScoredChunk, 0)
 	const maxCallees = 5
-	for _, call := range fn.Calls {
+
+	for i, call := range fn.Calls {
 		if len(exp) >= maxCallees {
 			break
 		}
-		if call.DefinedIn == "" {
+
+		log("Processing call %d: Callee=%s", i, call.Callee)
+
+		// Safe nil check for DefinedIn
+		if call.DefinedIn == nil {
+			log("Skipping call %s: DefinedIn is nil", call.Callee)
 			continue
 		}
-		if fs, ok := cb.kbData.Structure[call.DefinedIn]; ok {
-			for _, calledFn := range fs.Functions {
-				if calledFn.Name == call.Callee {
-					score := baseScore * 0.75
-					// Reward calles that live in same file as the caller
-					// they are cheaper to include and more likely to be relevant.
-					if call.DefinedIn == filePath {
-						score *= 1.03
-					}
-					exp = append(exp, ScoredChunk{
-						Chunk:        cb.buildChunkFromKBFunction(calledFn, call.DefinedIn),
-						Score:        score,
-						Distance:     1,
-						MatchType:    "kb_called",
-						MatchDetails: "Called by " + fn.Name,
-					})
-					break
+
+		definedIn := *call.DefinedIn
+		if definedIn == "" {
+			log("Skipping call %s: DefinedIn is empty", call.Callee)
+			continue
+		}
+
+		// Check if kbData exists
+		if cb.kbData == nil {
+			log("kbData is nil, cannot expand")
+			continue
+		}
+
+		fs, ok := cb.kbData.Structure[definedIn]
+		if !ok {
+			log("File not found: %s", definedIn)
+			continue
+		}
+
+		// Find the function
+		found := false
+		for _, calledFn := range fs.Functions {
+			if calledFn.Name == call.Callee {
+				score := baseScore * 0.75
+				if definedIn == filePath {
+					score *= 1.03
 				}
+				exp = append(exp, ScoredChunk{
+					Chunk:        cb.buildChunkFromKBFunction(calledFn, definedIn),
+					Score:        score,
+					Distance:     1,
+					MatchType:    "kb_called",
+					MatchDetails: "Called by " + fn.Name,
+				})
+				found = true
+				break
 			}
 		}
+
+		if !found {
+			log("Callee %s not found in file %s", call.Callee, definedIn)
+			// Continue to next call - no crash
+		}
 	}
+
 	return exp
 }
 
