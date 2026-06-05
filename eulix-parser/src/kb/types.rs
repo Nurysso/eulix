@@ -332,7 +332,7 @@ pub struct LanguageSpecificInfo {
     pub cpp: Option<CppInfo>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RustInfo {
     pub is_unsafe: bool,
     pub is_pub: bool,
@@ -348,16 +348,32 @@ pub struct RustInfo {
     pub unknown_attrs: Vec<String>, // catch-all for unrecognized #[...]
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GoInfo {
     pub is_exported: bool,             // name starts with uppercase
-    pub receiver_type: Option<String>, // e.g. "(*MyStruct)" for methods
+    pub receiver_type: Option<String>, // e.g. "*MyStruct" for pointer receivers
+    pub receiver_name: Option<String>, // e.g. "s" in `func (s *Server) Serve()`
     pub is_interface_method: bool,
-    pub build_tags: Vec<String>,    // //go:build linux && amd64
-    pub go_directives: Vec<String>, // //go:generate, //go:noescape etc.
+    pub spawns_goroutines: bool, // contains `go` statements
+    pub uses_channels: bool,     // sends/receives on a chan
+    pub uses_select: bool,       // contains a select statement
+    pub uses_mutex: bool,        // sync.Mutex / sync.RWMutex usage
+    pub uses_waitgroup: bool,    // sync.WaitGroup usage
+    pub uses_atomic: bool,       // sync/atomic usage
+    pub returns_error: bool,     // last return type is `error`
+    pub uses_panic: bool,
+    pub uses_recover: bool,
+    pub defer_count: usize,            // number of `defer` statements
+    pub type_params: Vec<String>,      // e.g. ["T any", "K comparable"]
+    pub type_constraints: Vec<String>, // e.g. ["comparable", "~int | ~string"]
+    pub build_tags: Vec<String>,       // //go:build linux && amd64
+    pub go_directives: Vec<String>,    // //go:generate, //go:noescape, //go:linkname …
+    pub uses_cgo: bool,                // import "C" present in file
+    pub embed_patterns: Vec<String>,   // //go:embed *.html → ["*.html"]
+    pub is_variadic: bool,             // last param is `...T`
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TypeScriptInfo {
     pub is_async: bool,
     pub is_exported: bool,
@@ -371,7 +387,8 @@ pub struct TypeScriptInfo {
     pub is_arrow_fn: bool,           // const foo = () => ...
     pub is_overload: bool,           // TS function overloads
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CInfo {
     pub is_static: bool, // file-scoped linkage
     pub is_inline: bool,
@@ -379,7 +396,8 @@ pub struct CInfo {
     pub is_variadic: bool,                  // printf-style ...
     pub calling_convention: Option<String>, // __cdecl, __stdcall etc.
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CppInfo {
     pub is_static: bool,
     pub is_inline: bool,
@@ -398,7 +416,7 @@ pub struct CppInfo {
 }
 
 /// Python-specific metadata for a function or class.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PythonInfo {
     pub is_dataclass: bool,
     pub is_staticmethod: bool,
