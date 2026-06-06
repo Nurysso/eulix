@@ -2,10 +2,10 @@ package fixers
 
 // Types for fixer packages
 type EmbeddingsFile struct {
-	Model       string      `json:"model"`
-	Dimension   int         `json:"dimension"`
-	TotalChunks int         `json:"total_chunks"`
-	Embeddings  []KBChunk   `json:"embeddings"`
+	Model       string    `json:"model"`
+	Dimension   int       `json:"dimension"`
+	TotalChunks int       `json:"total_chunks"`
+	Embeddings  []KBChunk `json:"embeddings"`
 }
 
 type KBChunk struct {
@@ -27,14 +27,14 @@ type Metadata struct {
 
 // Structures for kb.json (comprehensive codebase analysis)
 type KBFile struct {
-	Metadata         KBMetadata                  `json:"metadata"`
-	Structure        map[string]FileStructure    `json:"structure"`
-	CallGraph        CallGraph                   `json:"call_graph"`
-	DependencyGraph  DependencyGraph             `json:"dependency_graph"`
-	Indices          Indices                     `json:"indices"`
-	EntryPoints      []EntryPoint                `json:"entry_points"`
-	ExternalDeps     []ExternalDependency        `json:"external_dependencies"`
-	Patterns         Patterns                    `json:"patterns"`
+	Metadata        KBMetadata               `json:"metadata"`
+	Structure       map[string]FileStructure `json:"structure"`
+	CallGraph       CallGraph                `json:"call_graph"`
+	DependencyGraph DependencyGraph          `json:"dependency_graph"`
+	Indices         Indices                  `json:"indices"`
+	EntryPoints     []EntryPoint             `json:"entry_points"`
+	ExternalDeps    []ExternalDependency     `json:"external_dependencies"`
+	Patterns        Patterns                 `json:"patterns"`
 }
 
 type KBMetadata struct {
@@ -50,11 +50,11 @@ type KBMetadata struct {
 }
 
 type FileStructure struct {
-	Language   string        `json:"language"`
-	LOC        int           `json:"loc"`
-	Functions  []Function    `json:"functions"`
-	Classes    []Class       `json:"classes"`
-	GlobalVars []GlobalVar   `json:"global_vars"`
+	Language   string      `json:"language"`
+	LOC        int         `json:"loc"`
+	Functions  []Function  `json:"functions"`
+	Classes    []Class     `json:"classes"`
+	GlobalVars []GlobalVar `json:"global_vars"`
 }
 
 type Function struct {
@@ -119,11 +119,11 @@ type DepGraphEdge struct {
 }
 
 type Indices struct {
-	FunctionsByName   map[string][]string `json:"functions_by_name"`
-	FunctionsCalling  map[string][]string `json:"functions_calling"`
-	FunctionsByTag    map[string][]string `json:"functions_by_tag"`
-	TypesByName       map[string][]string `json:"types_by_name"`
-	FilesByCategory   map[string][]string `json:"files_by_category"`
+	FunctionsByName  map[string][]string `json:"functions_by_name"`
+	FunctionsCalling map[string][]string `json:"functions_calling"`
+	FunctionsByTag   map[string][]string `json:"functions_by_tag"`
+	TypesByName      map[string][]string `json:"types_by_name"`
+	FilesByCategory  map[string][]string `json:"files_by_category"`
 }
 
 type EntryPoint struct {

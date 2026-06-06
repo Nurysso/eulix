@@ -4,259 +4,427 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
-	"unsafe"
 )
 
 // AspirineOptions holds configuration for the Aspirine rebuild process
 type AspirineOptions struct {
 	NoBackup bool
 	Force    bool
+	// FixTarget selects which bin to rewrite if headers disagree.
+	// Valid values: "embeddings", "vectors", "".
+	// When empty and the files disagree, Aspirine will error out unless --force.
+	FixTarget string
 }
 
-// Aspirine rebuilds kb and embeddings and fixes problems like what always for me
+// Aspirine validates embeddings.bin and vectors.bin, checks them against
+// kb.json / kb_index.json, and repairs header corruption when possible.
 func Aspirine(eulixDir string, opts AspirineOptions) error {
-	// If no directory specified, default to .eulix
 	if eulixDir == "" {
 		eulixDir = ".eulix"
 	}
 
-	// Check if directory exists
 	if _, err := os.Stat(eulixDir); os.IsNotExist(err) {
-		fmt.Printf("❌ Directory not found: %s\n", eulixDir)
+		fmt.Printf("☓ Directory not found: %s\n", eulixDir)
 		fmt.Println("\nMake sure you've run 'eulix analyze' first to generate the knowledge base.")
 		return fmt.Errorf("directory not found: %s", eulixDir)
 	}
 
-	embJsonPath := filepath.Join(eulixDir, "embeddings.json")
+	fmt.Println("-- Aspirine — KB Binary Repair Tool--")
 	embBinPath := filepath.Join(eulixDir, "embeddings.bin")
+	vecBinPath := filepath.Join(eulixDir, "vectors.bin")
 
-	fmt.Println("🔧 Rebuilding embeddings.bin from embeddings.json")
-	fmt.Println("==================================================\n")
+	//  1. Read both bin files
+	fmt.Println("1. Reading binary files...")
 
-	// 1. Load embeddings.json
-	fmt.Println("1. Loading embeddings.json...")
-	data, err := os.ReadFile(embJsonPath)
+	embData, embHdr, embPayloadOff, err := readBinFull(embBinPath)
 	if err != nil {
-		fmt.Printf("❌ Failed to read embeddings.json: %v\n", err)
-		fmt.Println("\n💡 Make sure embeddings.json exists in the .eulix directory")
-		return fmt.Errorf("failed to read embeddings.json: %w", err)
+		fmt.Printf("   ☓ embeddings.bin: %v\n", err)
+		return fmt.Errorf("failed to read embeddings.bin: %w", err)
 	}
+	fmt.Printf("   ✓ embeddings.bin — model: %q  count: %d  dim: %d  magic: 0x%08X  ver: %d\n",
+		embHdr.ModelName, embHdr.Count, embHdr.Dim, embHdr.Magic, embHdr.Version)
 
-	var embFile EmbeddingsFile
-	if err := json.Unmarshal(data, &embFile); err != nil {
-		fmt.Printf("❌ Failed to parse embeddings.json: %v\n", err)
-		fmt.Println("\n💡 The JSON file may be corrupted. Try regenerating it with:")
-		fmt.Println("   eulix analyze")
-		return fmt.Errorf("failed to parse embeddings.json: %w", err)
+	vecData, vecHdr, vecPayloadOff, err := readBinFull(vecBinPath)
+	if err != nil {
+		fmt.Printf("   ☓ vectors.bin: %v\n", err)
+		return fmt.Errorf("failed to read vectors.bin: %w", err)
 	}
+	fmt.Printf("   ✓ vectors.bin    — model: %q  count: %d  dim: %d  magic: 0x%08X  ver: %d\n",
+		vecHdr.ModelName, vecHdr.Count, vecHdr.Dim, vecHdr.Magic, vecHdr.Version)
 
-	fmt.Printf("✅ Loaded embeddings metadata\n")
-	fmt.Printf("   Model: %s\n", embFile.Model)
-	fmt.Printf("   Dimension: %d\n", embFile.Dimension)
-	fmt.Printf("   Total Chunks: %d\n", embFile.TotalChunks)
-	fmt.Printf("   Actual Embeddings: %d\n", len(embFile.Embeddings))
+	//  2. Validate payload sizes
+	fmt.Println("\n2. Validating payload sizes...")
+	embOK := validatePayload("embeddings.bin", embData, embPayloadOff, embHdr)
+	vecOK := validatePayload("vectors.bin", vecData, vecPayloadOff, vecHdr)
 
-	// 2. Validate embeddings
-	fmt.Println("\n2. Validating embeddings...")
-	if len(embFile.Embeddings) == 0 {
-		fmt.Println("❌ No embeddings found in JSON file")
-		fmt.Println("\n💡 Regenerate embeddings with:")
-		fmt.Println("   eulix analyze")
-		return fmt.Errorf("no embeddings found")
-	}
+	//  3. Cross-file consistency
+	fmt.Println("\n3. Cross-file consistency...")
+	consistent := true
 
-	if embFile.Dimension <= 0 {
-		fmt.Println("❌ Invalid dimension in metadata")
-		return fmt.Errorf("invalid dimension: %d", embFile.Dimension)
-	}
-
-	// Check for dimension mismatches (common issue)
-	if embFile.Dimension < 100 {
-		fmt.Printf("⚠️  WARNING: Dimension %d seems suspiciously low\n", embFile.Dimension)
-		fmt.Println("   Most embedding models use 384, 768, or 1536 dimensions")
-		if !opts.Force {
-			fmt.Println("   Use --force flag to continue anyway")
-			return fmt.Errorf("dimension too low: %d", embFile.Dimension)
-		}
-	}
-
-	// Check total chunks mismatch
-	if embFile.TotalChunks != len(embFile.Embeddings) {
-		fmt.Printf("⚠️  WARNING: Metadata says %d chunks but found %d embeddings\n",
-			embFile.TotalChunks, len(embFile.Embeddings))
-		if !opts.Force {
-			fmt.Println("   Use --force flag to continue anyway")
-			return fmt.Errorf("chunk count mismatch")
-		}
-	}
-
-	// Check each embedding
-	invalidCount := 0
-	wrongDimCount := 0
-	var firstInvalid string
-
-	for i, chunk := range embFile.Embeddings {
-		if len(chunk.Embedding) == 0 {
-			if invalidCount == 0 {
-				firstInvalid = chunk.ID
-			}
-			invalidCount++
-		} else if len(chunk.Embedding) != embFile.Dimension {
-			if wrongDimCount == 0 {
-				fmt.Printf("⚠️  Chunk %d (%s) has wrong dimension: %d (expected %d)\n",
-					i, chunk.ID, len(chunk.Embedding), embFile.Dimension)
-			}
-			wrongDimCount++
-		}
-	}
-
-	if invalidCount > 0 {
-		fmt.Printf("❌ Found %d embeddings with no vectors (first: %s)\n",
-			invalidCount, firstInvalid)
-		fmt.Println("\n💡 The embeddings file is incomplete. Regenerate it with:")
-		fmt.Println("   eulix analyze")
-		return fmt.Errorf("found %d invalid embeddings", invalidCount)
-	}
-
-	if wrongDimCount > 0 {
-		fmt.Printf("❌ Found %d embeddings with wrong dimensions\n", wrongDimCount)
-		if !opts.Force {
-			fmt.Println("   Use --force flag to continue anyway")
-			return fmt.Errorf("found %d embeddings with wrong dimensions", wrongDimCount)
-		}
-	}
-
-	fmt.Printf("✅ All %d embeddings are valid (%d dimensions)\n",
-		len(embFile.Embeddings), embFile.Dimension)
-
-	// 3. Backup old embeddings.bin
-	if !opts.NoBackup {
-		fmt.Println("\n3. Backing up old embeddings.bin...")
-		if _, err := os.Stat(embBinPath); err == nil {
-			timestamp := fmt.Sprintf("%d", os.Getpid())
-			backupPath := fmt.Sprintf("%s.backup.%s", embBinPath, timestamp)
-			if err := os.Rename(embBinPath, backupPath); err != nil {
-				fmt.Printf("⚠️  Failed to backup: %v\n", err)
-			} else {
-				fmt.Printf("✅ Backed up to: %s\n", backupPath)
-			}
-		} else {
-			fmt.Println("ℹ️  No existing embeddings.bin found (will create new)")
-		}
+	if embHdr.Count != vecHdr.Count {
+		fmt.Printf("   ⚠  Count mismatch: embeddings=%d  vectors=%d\n", embHdr.Count, vecHdr.Count)
+		consistent = false
 	} else {
-		fmt.Println("\n3. Skipping backup (--no-backup flag set)")
+		fmt.Printf("   ✓ Counts match (%d)\n", embHdr.Count)
 	}
 
-	// 4. Write new embeddings.bin
-	fmt.Println("\n4. Writing new embeddings.bin...")
-	file, err := os.Create(embBinPath)
+	if embHdr.Dim != vecHdr.Dim {
+		fmt.Printf("   ⚠  Dim mismatch: embeddings=%d  vectors=%d\n", embHdr.Dim, vecHdr.Dim)
+		consistent = false
+	} else {
+		fmt.Printf("   ✓ Dimensions match (%d)\n", embHdr.Dim)
+	}
+
+	if embHdr.ModelName != vecHdr.ModelName {
+		fmt.Printf("   ⚠  Model mismatch: embeddings=%q  vectors=%q\n",
+			embHdr.ModelName, vecHdr.ModelName)
+		consistent = false
+	} else {
+		fmt.Printf("   ✓ Model names match (%s)\n", embHdr.ModelName)
+	}
+
+	if embHdr.Magic != vecHdr.Magic {
+		fmt.Printf("   ⚠  Magic mismatch: embeddings=0x%08X  vectors=0x%08X\n",
+			embHdr.Magic, vecHdr.Magic)
+		consistent = false
+	}
+
+	//  4. Cross-check against kb.json / kb_index.json
+	fmt.Println("\n4. Cross-checking against kb.json and kb_index.json...")
+	kbPath := filepath.Join(eulixDir, "kb.json")
+	if kb, kerr := loadKB(kbPath); kerr == nil {
+		kbFuncs := len(kb.Indices.FunctionsByName)
+		fmt.Printf("   kb.json — functions indexed: %d\n", kbFuncs)
+		crossCheckRatio("embeddings.bin", int(embHdr.Count), kbFuncs)
+		crossCheckRatio("vectors.bin", int(vecHdr.Count), kbFuncs)
+	} else {
+		fmt.Printf("   !  kb.json not readable (%v); skipping cross-check\n", kerr)
+	}
+
+	indexPath := filepath.Join(eulixDir, "kb_index.json")
+	if funcCount, typeCount, ierr := checkIndex(indexPath); ierr == nil {
+		fmt.Printf("   kb_index.json — functions: %d  types: %d\n", funcCount, typeCount)
+	} else {
+		fmt.Printf("   !  kb_index.json not readable (%v)\n", ierr)
+	}
+
+	//  5. Spot-check first/last vector for NaN / Inf
+	fmt.Println("\n5. Spot-checking vectors for NaN/Inf...")
+	spotCheck("embeddings.bin", embData, embPayloadOff, embHdr)
+	spotCheck("vectors.bin", vecData, vecPayloadOff, vecHdr)
+
+	//  6. Repair if needed
+	allGood := embOK && vecOK && consistent
+	if allGood {
+		fmt.Println("\n✓ Both binary files look healthy — no repair needed.")
+		return nil
+	}
+
+	fmt.Println("\n6. Repair plan...")
+
+	if !consistent && opts.FixTarget == "" && !opts.Force {
+		fmt.Println("   ☓ Files are inconsistent and no --fix-target specified.")
+		fmt.Println("      Re-run with --fix-target=embeddings or --fix-target=vectors")
+		fmt.Println("      to nominate which file's header is the authoritative source.")
+		return fmt.Errorf("inconsistent bin files; specify --fix-target to repair")
+	}
+
+	// Decide authoritative header + which file to rewrite.
+	var authHdr binHeader
+	var rewritePath string
+	var rewriteData []byte
+	var rewritePayloadOff int
+
+	switch opts.FixTarget {
+	case "embeddings":
+		// Rewrite vectors.bin header to match embeddings.bin
+		authHdr = embHdr
+		rewritePath = vecBinPath
+		rewriteData = vecData
+		rewritePayloadOff = vecPayloadOff
+	case "vectors":
+		// Rewrite embeddings.bin header to match vectors.bin
+		authHdr = vecHdr
+		rewritePath = embBinPath
+		rewriteData = embData
+		rewritePayloadOff = embPayloadOff
+	default:
+		// Force mode without a target: try to self-heal each file independently
+		// (payload size determines the real count).
+		if err := selfHeal(embBinPath, embData, embHdr, embPayloadOff, opts); err != nil {
+			fmt.Printf("   ☓ embeddings.bin self-heal failed: %v\n", err)
+		}
+		if err := selfHeal(vecBinPath, vecData, vecHdr, vecPayloadOff, opts); err != nil {
+			fmt.Printf("   ☓ vectors.bin self-heal failed: %v\n", err)
+		}
+		fmt.Println("\n✓ Repair attempted. Re-run Aspirine to verify.")
+		return nil
+	}
+
+	fmt.Printf("   Authority: %s header → rewriting %s\n", opts.FixTarget, filepath.Base(rewritePath))
+	return rewriteHeader(rewritePath, rewriteData, rewritePayloadOff, authHdr, opts)
+}
+
+//  Helpers
+
+// readBinFull reads a file, parses its header, and returns the raw bytes,
+// the parsed header, and the byte offset where the payload begins.
+func readBinFull(path string) ([]byte, binHeader, int, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Printf("❌ Failed to create file: %v\n", err)
-		return fmt.Errorf("failed to create file: %w", err)
+		return nil, binHeader{}, 0, err
 	}
-	defer file.Close()
+	hdr, off, err := readBinHeader(data)
+	if err != nil {
+		return nil, binHeader{}, 0, err
+	}
+	return data, hdr, off, nil
+}
 
-	// Write header: num_embeddings (uint32) + dimension (uint32)
-	numEmbeddings := uint32(len(embFile.Embeddings))
-	dimension := uint32(embFile.Dimension)
+// validatePayload checks that the payload contains exactly count entries,
+// each formatted as [4B id_len][id bytes][dim*4B float32 vector].
+// Returns true if the payload is well-formed.
+func validatePayload(name string, data []byte, payloadOff int, hdr binHeader) bool {
+	pos := payloadOff
+	for i := uint32(0); i < hdr.Count; i++ {
+		// Read id_len prefix
+		if pos+4 > len(data) {
+			fmt.Printf("   ⚠  %s: truncated at entry %d while reading id_len (byte %d)\n",
+				name, i, pos)
+			return false
+		}
+		idLen := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
+		pos += 4
 
-	headerBuf := make([]byte, 8)
-	binary.LittleEndian.PutUint32(headerBuf[0:4], numEmbeddings)
-	binary.LittleEndian.PutUint32(headerBuf[4:8], dimension)
+		// Skip id string
+		if pos+idLen > len(data) {
+			fmt.Printf("   ⚠  %s: truncated at entry %d while reading id (%d bytes, byte %d)\n",
+				name, i, idLen, pos)
+			return false
+		}
+		pos += idLen
 
-	if _, err := file.Write(headerBuf); err != nil {
-		fmt.Printf("❌ Failed to write header: %v\n", err)
-		return fmt.Errorf("failed to write header: %w", err)
+		// Skip vector
+		vecBytes := int(hdr.Dim) * 4
+		if pos+vecBytes > len(data) {
+			fmt.Printf("   ⚠  %s: truncated at entry %d while reading vector (byte %d)\n",
+				name, i, pos)
+			return false
+		}
+		pos += vecBytes
 	}
 
-	fmt.Printf("✅ Wrote header: %d embeddings × %d dimensions\n",
-		numEmbeddings, dimension)
+	trailing := len(data) - pos
+	if trailing != 0 {
+		fmt.Printf("   ⚠  %s: %d unexpected trailing bytes after %d entries\n",
+			name, trailing, hdr.Count)
+		return false
+	}
 
-	// Write each embedding vector
-	vectorBuf := make([]byte, 4) // float32 = 4 bytes
-	totalFloats := 0
+	fmt.Printf("   ✓ %s payload OK (%d entries, %d bytes)\n",
+		name, hdr.Count, len(data)-payloadOff)
+	return true
+}
 
-	fmt.Println("   Writing vectors...")
-	for i, chunk := range embFile.Embeddings {
-		for _, val := range chunk.Embedding {
-			binary.LittleEndian.PutUint32(vectorBuf, floatToUint32(val))
-			if _, err := file.Write(vectorBuf); err != nil {
-				fmt.Printf("❌ Failed to write embedding %d: %v\n", i, err)
-				return fmt.Errorf("failed to write embedding %d: %w", i, err)
+// spotCheck reads the first and last float32 vectors and flags NaN/Inf.
+// Scans entry-by-entry to handle the [id_len][id][vector] layout.
+func spotCheck(name string, data []byte, payloadOff int, hdr binHeader) {
+	if hdr.Count == 0 || hdr.Dim == 0 {
+		fmt.Printf("   ⚠  %s: empty — skipping spot check\n", name)
+		return
+	}
+
+	type entry struct {
+		id     string
+		vecOff int
+	}
+
+	// Seek to the nth entry by scanning — we only need first and last
+	seekEntry := func(target uint32) (entry, bool) {
+		pos := payloadOff
+		for i := uint32(0); i <= target; i++ {
+			if pos+4 > len(data) {
+				return entry{}, false
 			}
-			totalFloats++
+			idLen := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
+			pos += 4
+			if pos+idLen > len(data) {
+				return entry{}, false
+			}
+			id := string(data[pos : pos+idLen])
+			pos += idLen
+			vecOff := pos
+			vecBytes := int(hdr.Dim) * 4
+			if pos+vecBytes > len(data) {
+				return entry{}, false
+			}
+			pos += vecBytes
+			if i == target {
+				return entry{id: id, vecOff: vecOff}, true
+			}
 		}
+		return entry{}, false
+	}
 
-		// Progress indicator
-		if (i+1)%100 == 0 || i == len(embFile.Embeddings)-1 {
-			percent := float64(i+1) / float64(numEmbeddings) * 100
-			fmt.Printf("   Progress: %d/%d (%.1f%%)\n", i+1, numEmbeddings, percent)
+	checkVec := func(label string, e entry) {
+		vecBytes := int(hdr.Dim) * 4
+		bad := 0
+		for j := 0; j+4 <= vecBytes; j += 4 {
+			bits := binary.LittleEndian.Uint32(data[e.vecOff+j : e.vecOff+j+4])
+			f := math.Float32frombits(bits)
+			if math.IsNaN(float64(f)) || math.IsInf(float64(f), 0) {
+				bad++
+			}
+		}
+		if bad > 0 {
+			fmt.Printf("   ⚠  %s %s vector (%s): %d NaN/Inf out of %d\n",
+				name, label, e.id, bad, hdr.Dim)
+		} else {
+			fmt.Printf("   ✓ %s %s vector (%s): clean\n", name, label, e.id)
 		}
 	}
 
-	fmt.Printf("✅ Wrote %d total floats (%d embeddings × %d dims)\n",
-		totalFloats, numEmbeddings, dimension)
+	if first, ok := seekEntry(0); ok {
+		checkVec("first", first)
+	} else {
+		fmt.Printf("   ⚠  %s: could not seek to first entry\n", name)
+	}
 
-	// 5. Verify the new file
-	fmt.Println("\n5. Verifying new embeddings.bin...")
-	info, err := os.Stat(embBinPath)
+	if hdr.Count > 1 {
+		if last, ok := seekEntry(hdr.Count - 1); ok {
+			checkVec("last", last)
+		} else {
+			fmt.Printf("   ⚠  %s: could not seek to last entry\n", name)
+		}
+	}
+}
+
+// crossCheckRatio warns if the embedding count is wildly off vs indexed functions.
+func crossCheckRatio(name string, embCount, kbFuncs int) {
+	if kbFuncs == 0 {
+		return
+	}
+	ratio := float64(embCount) / float64(kbFuncs)
+	if ratio < 0.1 || ratio > 100 {
+		fmt.Printf("   ⚠  %s: %d embeddings vs %d indexed functions (ratio %.2f — unusual)\n",
+			name, embCount, kbFuncs, ratio)
+	} else {
+		fmt.Printf("   ✓ %s: %d embeddings vs %d indexed functions (ratio %.2f)\n",
+			name, embCount, kbFuncs, ratio)
+	}
+}
+
+// selfHeal infers the correct count from the payload length and rewrites the header.
+func selfHeal(path string, data []byte, hdr binHeader, payloadOff int, opts AspirineOptions) error {
+	if hdr.Dim == 0 {
+		return fmt.Errorf("dim is 0; cannot scan entries")
+	}
+
+	// Scan entry-by-entry to count what's actually there
+	pos := payloadOff
+	count := uint32(0)
+	for pos < len(data) {
+		if pos+4 > len(data) {
+			break
+		}
+		idLen := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
+		pos += 4
+		if pos+idLen > len(data) {
+			break
+		}
+		pos += idLen
+		vecBytes := int(hdr.Dim) * 4
+		if pos+vecBytes > len(data) {
+			break
+		}
+		pos += vecBytes
+		count++
+	}
+
+	trailing := len(data) - pos
+	if trailing != 0 {
+		fmt.Printf("   ⚠  %s: %d trailing bytes not part of any complete entry\n",
+			filepath.Base(path), trailing)
+	}
+
+	if count == hdr.Count {
+		fmt.Printf("   ✓ %s header already correct (count=%d)\n", filepath.Base(path), hdr.Count)
+		return nil
+	}
+
+	fmt.Printf("    %s: correcting count %d → %d\n", filepath.Base(path), hdr.Count, count)
+	corrected := hdr
+	corrected.Count = count
+	return rewriteHeader(path, data, payloadOff, corrected, opts)
+}
+
+// rewriteHeader backs up the file (unless NoBackup) then writes a new header
+// followed by the original payload unchanged.
+func rewriteHeader(path string, data []byte, payloadOff int, hdr binHeader, opts AspirineOptions) error {
+	if !opts.NoBackup {
+		backupPath := fmt.Sprintf("%s.backup.%d", path, os.Getpid())
+		if err := os.WriteFile(backupPath, data, 0644); err != nil {
+			fmt.Printf("   ⚠  Could not create backup %s: %v\n", backupPath, err)
+		} else {
+			fmt.Printf("   ✓ Backed up original to %s\n", backupPath)
+		}
+	}
+
+	newHeader := buildBinHeader(hdr)
+	payload := data[payloadOff:]
+
+	out, err := os.Create(path)
 	if err != nil {
-		fmt.Printf("❌ Failed to stat file: %v\n", err)
-		return fmt.Errorf("failed to stat file: %w", err)
+		return fmt.Errorf("could not open %s for writing: %w", path, err)
+	}
+	defer out.Close()
+
+	if _, err := out.Write(newHeader); err != nil {
+		return fmt.Errorf("header write failed: %w", err)
+	}
+	if _, err := out.Write(payload); err != nil {
+		return fmt.Errorf("payload write failed: %w", err)
 	}
 
-	expectedSize := 8 + (int(numEmbeddings) * int(dimension) * 4) // header + floats
-	actualSize := int(info.Size())
-
-	fmt.Printf("   Expected size: %d bytes (%.2f MB)\n",
-		expectedSize, float64(expectedSize)/(1024*1024))
-	fmt.Printf("   Actual size: %d bytes (%.2f MB)\n",
-		actualSize, float64(actualSize)/(1024*1024))
-
-	if actualSize != expectedSize {
-		fmt.Printf("❌ Size mismatch! File may be corrupted.\n")
-		fmt.Printf("   Difference: %d bytes\n", actualSize-expectedSize)
-		return fmt.Errorf("size mismatch: expected %d, got %d", expectedSize, actualSize)
-	}
-
-	// Read back and verify header
-	verifyData, err := os.ReadFile(embBinPath)
-	if err != nil {
-		fmt.Printf("❌ Failed to read back file: %v\n", err)
-		return fmt.Errorf("failed to verify file: %w", err)
-	}
-
-	verifyNumEmb := binary.LittleEndian.Uint32(verifyData[0:4])
-	verifyDim := binary.LittleEndian.Uint32(verifyData[4:8])
-
-	if verifyNumEmb != numEmbeddings || verifyDim != dimension {
-		fmt.Printf("❌ Header verification failed!\n")
-		fmt.Printf("   Expected: %d × %d\n", numEmbeddings, dimension)
-		fmt.Printf("   Got: %d × %d\n", verifyNumEmb, verifyDim)
-		return fmt.Errorf("header verification failed")
-	}
-
-	fmt.Printf("✅ Header verified: %d embeddings × %d dimensions\n",
-		verifyNumEmb, verifyDim)
-
-	// 6. Summary
-	sizeMB := float64(actualSize) / (1024 * 1024)
-	fmt.Printf("\n════════════════════════════════════════\n")
-	fmt.Printf("✅ Successfully rebuilt embeddings.bin!\n")
-	fmt.Printf("════════════════════════════════════════\n")
-	fmt.Printf("Location:   %s\n", embBinPath)
-	fmt.Printf("Size:       %.2f MB\n", sizeMB)
-	fmt.Printf("Format:     %d embeddings × %d dimensions\n", numEmbeddings, dimension)
-	fmt.Printf("Model:      %s\n", embFile.Model)
-	fmt.Printf("════════════════════════════════════════\n")
-	fmt.Println("\n🎉 Your embeddings.bin is ready! Run 'eulix chat' to use it.")
-
+	fmt.Printf("   ✓ Rewrote %s — count=%d  dim=%d  model=%q\n",
+		filepath.Base(path), hdr.Count, hdr.Dim, hdr.ModelName)
 	return nil
 }
 
-// Convert float32 to uint32 bits (for binary.LittleEndian.PutUint32)
-func floatToUint32(f float32) uint32 {
-	return *(*uint32)(unsafe.Pointer(&f))
+// buildBinHeader serialises a binHeader back to bytes.
+// Format: [4B magic][4B version][4B name_len][name bytes][4B count][4B dim]
+func buildBinHeader(hdr binHeader) []byte {
+	nameBytes := []byte(hdr.ModelName)
+	buf := make([]byte, 4+4+4+len(nameBytes)+4+4)
+	off := 0
+	binary.LittleEndian.PutUint32(buf[off:], hdr.Magic)
+	off += 4
+	binary.LittleEndian.PutUint32(buf[off:], hdr.Version)
+	off += 4
+	binary.LittleEndian.PutUint32(buf[off:], uint32(len(nameBytes)))
+	off += 4
+	copy(buf[off:], nameBytes)
+	off += len(nameBytes)
+	binary.LittleEndian.PutUint32(buf[off:], hdr.Count)
+	off += 4
+	binary.LittleEndian.PutUint32(buf[off:], hdr.Dim)
+	return buf
+}
+
+// loadKBForIndex is a thin wrapper used only inside this file to avoid
+// the import cycle that would arise from calling the GLaDOS-local loadKB.
+// (Remove if loadKB is already package-level in fixers.)
+func loadKBForIndex(path string) (*KBFile, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var kb KBFile
+	if err := json.Unmarshal(data, &kb); err != nil {
+		return nil, err
+	}
+	return &kb, nil
 }
