@@ -16,69 +16,29 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"eulix/internal/checksum"
 	"eulix/internal/config"
+	"eulix/internal/embeddings"
 )
-
-// getVenvPython validates the venv and returns the python binary path and a modified environment.
-func getVenvPython(venvPath string) (string, []string, error) {
-	// Point directly to the python executable, not the activate script
-	pythonPath := filepath.Join(venvPath, "bin", "python")
-
-	if _, err := os.Stat(pythonPath); err != nil {
-		return "", nil, fmt.Errorf("venv python not found at %s: %w", pythonPath, err)
-	}
-
-	// Check Python version - This will now work perfectly
-	cmd := exec.Command(pythonPath, "--version")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to check python version: %w", err)
-	}
-	versionStr := strings.TrimSpace(string(out))
-
-	if !strings.HasPrefix(versionStr, "Python 3.10") && !strings.HasPrefix(versionStr, "Python 3.11") {
-		return "", nil, fmt.Errorf("unsupported Python version: %s (want 3.10 or 3.11)", versionStr)
-	}
-
-	// Build modified environment: prepend venv bin to PATH
-	venvBin := filepath.Join(venvPath, "bin")
-	env := os.Environ()
-	newEnv := make([]string, 0, len(env)+1)
-	foundPath := false
-	for _, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			newEnv = append(newEnv, "PATH="+venvBin+string(os.PathListSeparator)+e[5:])
-			foundPath = true
-		} else {
-			newEnv = append(newEnv, e)
-		}
-	}
-	if !foundPath {
-		newEnv = append(newEnv, "PATH="+venvBin)
-	}
-	return pythonPath, newEnv, nil
-}
 
 func analyzeProject(projectPath string) error {
 	startTime := time.Now()
 
-	// Load config
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Venv activation & verification
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
+
+	// Resolve venv interpreter and environment using the shared helper.
 	venvPath := filepath.Join(homeDir, ".Eulix", ".venv")
-	pythonPath, venvEnv, err := getVenvPython(venvPath)
+	pythonPath, venvEnv, err := embeddings.GetVenvPython(venvPath)
 	if err != nil {
 		return fmt.Errorf("virtual environment setup failed: %w", err)
 	}
@@ -86,7 +46,6 @@ func analyzeProject(projectPath string) error {
 
 	eulixDir := filepath.Join(projectPath, ".eulix")
 
-	// Calculate checksum
 	detector := checksum.HashHound(projectPath)
 	currentChecksum, err := detector.Calculate()
 	if err != nil {
