@@ -71,6 +71,7 @@ mimalloc = { version = "*", features = ["secure"]  }
 # Security hardening
 secrecy = { version = "0.8", optional = true }  # For sensitive data handling
 sonic-rs = "0.5.8"
+indicatif = "0.18.4"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

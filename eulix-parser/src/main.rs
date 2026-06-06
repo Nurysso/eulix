@@ -60,8 +60,8 @@
 //! if only the raw parse output is needed.
 
 use clap::Parser;
+use indicatif::{ProgressBar, ProgressStyle};
 use mimalloc::MiMalloc;
-// use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
@@ -444,6 +444,18 @@ fn parse_directory(
         println!();
     }
 
+    let pb =
+        if verbose {
+            let pb = ProgressBar::new(files.len() as u64);
+            pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+        .unwrap()
+        .progress_chars("#>-"));
+            Some(pb)
+        } else {
+            None
+        };
+
     // Thread-safe stats collection
     let stats = Arc::new(Mutex::new(ParseStats::new()));
 
@@ -459,16 +471,18 @@ fn parse_directory(
 
             match parse_file(file_path, &path) {
                 Ok(result) => {
-                    if verbose {
-                        println!("\r   ✓ Parsed:  {:<80}", relative_path);
+                    if let Some(ref pb) = pb {
+                        pb.inc(1);
+                        pb.set_message(format!("Parsed: {}", relative_path));
                     }
                     stats.lock().unwrap().parsed.push(relative_path.clone());
                     Some(result)
                 }
                 Err(e) => {
                     let error_msg = e.to_string();
-                    if verbose {
-                        println!("\r   ✗ Failed:  {:<80} - {:<80}", relative_path, error_msg);
+                    if let Some(ref pb) = pb {
+                        pb.println(format!("   ✗ Failed: {} - {}", relative_path, e));
+                        pb.inc(1);
                     }
                     stats
                         .lock()
@@ -534,6 +548,9 @@ fn parse_directory(
         external_dependencies: vec![],
         patterns: PatternInfo::default(),
     };
+    if let Some(pb) = pb {
+        pb.finish_with_message("Parse complete!");
+    }
 
     Ok((kb, final_stats))
 }
