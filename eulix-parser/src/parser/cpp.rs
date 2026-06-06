@@ -40,7 +40,7 @@ static PRIVILEGE_CHANGE_RE: Lazy<Regex> = Lazy::new(|| {
 static WEAK_RANDOM_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"rand\(\)|random\(\)|std::rand\(\)").unwrap());
 static RAW_POINTER_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"new\s+(?!std::)(?!make_unique)(?!make_shared)\w+|delete\s+\w+").unwrap()
+    Regex::new(r"new\s+(?:std::|make_unique|make_shared)\w+|new\s+\w+|delete\s+\w+").unwrap()
 });
 static REINTERPRET_CAST_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"reinterpret_cast\s*<").unwrap());
