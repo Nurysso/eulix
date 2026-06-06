@@ -17,10 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"os/exec"
-	"path/filepath"
-	"strings"
 )
 
 // Embedder wraps the eulix_embed.py Python script for embedding generation.
@@ -45,69 +42,10 @@ type QueryEmbeddingResult struct {
 	Embedding []float32 `json:"embedding"`
 }
 
-// getVenvPython validates the venv at the given path and returns the Python
-// interpreter path and a venv-activated environment slice.
-// Mirrors the logic in cli/analyze.go so both callers behave identically.
-func getVenvPython(venvPath string) (string, []string, error) {
-	pythonPath := filepath.Join(venvPath, "bin", "python")
-	if _, err := os.Stat(pythonPath); err != nil {
-		return "", nil, fmt.Errorf("venv python not found at %s: %w", pythonPath, err)
-	}
-
-	out, err := exec.Command(pythonPath, "--version").Output()
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to check python version: %w", err)
-	}
-	ver := strings.TrimSpace(string(out))
-	if !strings.HasPrefix(ver, "Python 3.10") && !strings.HasPrefix(ver, "Python 3.11") {
-		return "", nil, fmt.Errorf("unsupported Python version: %s (want 3.10 or 3.11)", ver)
-	}
-
-	// Prepend venv bin to PATH so transitive imports resolve correctly.
-	venvBin := filepath.Join(venvPath, "bin")
-	env := os.Environ()
-	newEnv := make([]string, 0, len(env)+1)
-	foundPath := false
-	for _, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			newEnv = append(newEnv, "PATH="+venvBin+string(os.PathListSeparator)+e[5:])
-			foundPath = true
-		} else {
-			newEnv = append(newEnv, e)
-		}
-	}
-	if !foundPath {
-		newEnv = append(newEnv, "PATH="+venvBin)
-	}
-	return pythonPath, newEnv, nil
-}
-
-// findEulixEmbed locates eulix_embed.py and resolves a usable Python interpreter
-// from the canonical venv at ~/.Eulix/.venv.
-func findEulixEmbed() (scriptPath string, pythonPath string, venvEnv []string, err error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", "", nil, fmt.Errorf("cannot determine home directory: %w", err)
-	}
-
-	script := filepath.Join(homeDir, ".Eulix", "eulix_embed.py")
-	if _, err := os.Stat(script); err != nil {
-		return "", "", nil, fmt.Errorf("eulix_embed.py not found (expected at %s)", script)
-	}
-
-	venvPath := filepath.Join(homeDir, ".Eulix", ".venv")
-	python, env, err := getVenvPython(venvPath)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("found embed script but no usable Python: %w", err)
-	}
-
-	return script, python, env, nil
-}
-
 // VectorWeaver creates a new query embedder, locating the embed script and
 // venv interpreter automatically.
 func VectorWeaver(model string) (*Embedder, error) {
-	scriptPath, pythonPath, venvEnv, err := findEulixEmbed()
+	scriptPath, pythonPath, venvEnv, err := FindEulixEmbed()
 	if err != nil {
 		return nil, err
 	}
