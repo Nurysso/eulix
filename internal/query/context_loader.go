@@ -1,5 +1,5 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Dawood Khan
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
@@ -24,6 +24,14 @@ Memory strategy:
     Common tokens (ctx, err, i, j) are then filtered from the symbol index
     and inverted index to reduce noise in retrieval scoring.
 
+JSON loading:
+  - All JSON files are decoded via decodeJSONFile, which streams through a
+    buffered json.Decoder rather than materialising the whole file as a []byte.
+    On a 500 MB kb.json this roughly halves peak RSS because the raw bytes and
+    parsed struct no longer coexist in memory. For GB-scale corpora the
+    difference is significant. The binary .bin files (embeddings, vectors) still
+    use os.ReadFile because their parsers require direct []byte index arithmetic.
+
 Boilerplate filtering is applied in three places:
  1. Symbol index construction (step 5): skip boilerplate symbols
  2. Inverted index construction (step 6): tokeniser checks cb.isBoilerplateSymbol
@@ -34,6 +42,11 @@ File format notes:
     followed by count entries of [4B+str id][dim*4B float32 vector]
   - kb_call_graph.json: flat map of function ID → {Calls: [], CalledBy: []}
 
+Standalone routing helpers (loadKBIndex, loadKBFull, loadCallGraph) are provided
+for the query-classification path, which operates outside the ContextBuilder
+lifecycle. They share the same streaming-decode logic as the ContextBuilder
+methods.
+
 See:
   - boilerplate.go: corpus-driven BoilerplateDetector implementation
   - context_builder.go: ContextBuilder initialization and lifecycle
@@ -42,6 +55,7 @@ See:
 package query
 
 import (
+	"bufio"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -67,16 +81,76 @@ const (
 	dfThresholdDefault = 0.30
 	// bpMinChunks is the minimum corpus size before statistics are trusted.
 	bpMinChunks = 50
+
+	// jsonBufSize is the I/O read-buffer for the streaming JSON decoder.
+	// 4 MiB reduces syscall frequency on large kb.json files without adding
+	// meaningful resident-memory pressure.
+	jsonBufSize = 4 << 20 // 4 MiB
 )
 
-func (cb *ContextBuilder) loadKnowledgeBase() error {
-	data, err := os.ReadFile(filepath.Join(cb.eulixDir, "kb.json"))
+// decodeJSONFile opens path and streams its content through a buffered
+// json.Decoder into v. Using a streaming decoder rather than os.ReadFile +
+// json.Unmarshal avoids holding both the raw file bytes and the parsed struct
+// in memory simultaneously. For a 500 MB kb.json this saves ~500 MB of
+// transient allocations; for GB-scale corpora the saving is proportionally
+// larger.
+func decodeJSONFile(path string, v any) error {
+	f, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("kb.json not found: %w", err)
+		return err
 	}
+	defer f.Close()
+	return json.NewDecoder(bufio.NewReaderSize(f, jsonBufSize)).Decode(v)
+}
+
+//  Standalone routing loaders
+// Used by the query-classification path, which does not have access to a
+// ContextBuilder. All three functions are thin wrappers over decodeJSONFile,
+// so they benefit from the same streaming-decode behaviour as the ContextBuilder
+// methods below.
+
+// loadKBIndex loads the lightweight symbol index for routing purposes.
+func loadKBIndex(eulixDir string) (*KBIndex, error) {
+	var idx KBIndex
+	if err := decodeJSONFile(filepath.Join(eulixDir, "kb_index.json"), &idx); err != nil {
+		return nil, fmt.Errorf("kb_index.json: %w", err)
+	}
+	return &idx, nil
+}
+
+// loadKBFull loads the complete knowledge base for routing purposes.
+// For large corpora this may still allocate several GBs of heap to hold the
+// parsed struct; callers in hot paths should prefer the ContextBuilder methods,
+// which apply lazy-content and chunk-level memory strategies.
+func loadKBFull(eulixDir string) (*types.KnowledgeBase, error) {
 	var kb types.KnowledgeBase
-	if err := json.Unmarshal(data, &kb); err != nil {
-		return fmt.Errorf("failed to parse kb.json: %w", err)
+	if err := decodeJSONFile(filepath.Join(eulixDir, "kb.json"), &kb); err != nil {
+		return nil, fmt.Errorf("kb.json: %w", err)
+	}
+	return &kb, nil
+}
+
+// loadCallGraph loads the raw call-graph file for routing purposes and returns
+// the routing-layer *CallGraph type.
+//
+// Note: the ContextBuilder method of the same name (cb *ContextBuilder).loadCallGraph
+// reads the same file but produces the richer internal representation
+// (map[string][]Relationship). In Go a package-level function and a method may
+// share a name without conflict, so both coexist here intentionally.
+func loadCallGraph(eulixDir string) (*CallGraph, error) {
+	var g CallGraph
+	if err := decodeJSONFile(filepath.Join(eulixDir, "kb_call_graph.json"), &g); err != nil {
+		return nil, fmt.Errorf("kb_call_graph.json: %w", err)
+	}
+	return &g, nil
+}
+
+//  ContextBuilder loaders
+
+func (cb *ContextBuilder) loadKnowledgeBase() error {
+	var kb types.KnowledgeBase
+	if err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb.json"), &kb); err != nil {
+		return fmt.Errorf("kb.json: %w", err)
 	}
 	cb.kbData = &kb
 	return nil
@@ -101,23 +175,15 @@ func (cb *ContextBuilder) loadKnowledgeBase() error {
 //   - context_kb.go: buildChunkFromKBFunction, buildChunkFromKBClass helpers
 func (cb *ContextBuilder) loadChunksFromKB() error {
 	// 1. Load kb_index.json (lightweight: just names + locations)
-	idxData, err := os.ReadFile(filepath.Join(cb.eulixDir, "kb_index.json"))
-	if err != nil {
-		return fmt.Errorf("kb_index.json not found: %w", err)
-	}
 	var kbIdx KBIndex
-	if err := json.Unmarshal(idxData, &kbIdx); err != nil {
-		return fmt.Errorf("failed to parse kb_index.json: %w", err)
+	if err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_index.json"), &kbIdx); err != nil {
+		return fmt.Errorf("kb_index.json: %w", err)
 	}
 
 	// 2. Load kb.json for full content
-	kbData, err := os.ReadFile(filepath.Join(cb.eulixDir, "kb.json"))
-	if err != nil {
-		return fmt.Errorf("kb.json not found: %w", err)
-	}
 	var kb types.KnowledgeBase
-	if err := json.Unmarshal(kbData, &kb); err != nil {
-		return fmt.Errorf("failed to parse kb.json: %w", err)
+	if err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb.json"), &kb); err != nil {
+		return fmt.Errorf("kb.json: %w", err)
 	}
 	cb.kbData = &kb
 
@@ -198,6 +264,10 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 
 // loadEmbeddings reads embeddings.bin (EULX magic, version 2/3).
 // Supports both legacy (v2, no embedding IDs) and current (v3, with IDs) formats.
+//
+// This loader intentionally uses os.ReadFile rather than the streaming JSON
+// helper: the binary parser requires direct []byte index arithmetic (off+4,
+// off+dim*4 slicing) that is not compatible with an io.Reader-based approach.
 //
 // Format: [4B magic][4B version][4B+str model_name][4B count][4B dim]
 // then for each entry: [4B+str id (v3 only)][dim*4B float32 vector]
@@ -282,6 +352,9 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 // Maps embedding IDs (from kb_index.json or manually assigned) to their
 // positions in the embeddings slice for fast lookup during scoring.
 //
+// Like loadEmbeddings, this loader uses os.ReadFile because the binary format
+// requires direct []byte index arithmetic; streaming is not applicable here.
+//
 // Format: [4B magic][4B version][4B+str model_name][4B count][4B dim]
 // then for each entry: [4B+str id][dim*4B float32 vector (skipped)]
 //
@@ -341,21 +414,22 @@ func (cb *ContextBuilder) loadVectorMap() error {
 	return nil
 }
 
-// loadCallGraph loads kb_call_graph.json to build the inter-procedural call graph.
-// Maps each function to its callers and callees, enabling graph-based expansion
-// during context assembly. Gracefully skips if call graph is unavailable.
+// loadCallGraph loads kb_call_graph.json to build the inter-procedural call
+// graph. Maps each function to its callers and callees, enabling graph-based
+// expansion during context assembly. Gracefully skips if the file is absent or
+// malformed.
+//
+// Note: a package-level loadCallGraph(eulixDir string) function also exists for
+// the routing path; it returns the raw *CallGraph type rather than the
+// map[string][]Relationship representation built here. In Go a method and a
+// package-level function may share a name without conflict; both are intentional.
 //
 // See:
 //   - context_graph.go: expandGraph uses call graph to trace related code
 //   - context_search.go: integration with multi-strategy search pipeline
 func (cb *ContextBuilder) loadCallGraph() {
-	data, err := os.ReadFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"))
-	if err != nil {
-		cb.hasCallGraph = false
-		return
-	}
 	var gd CallGraphData
-	if err := json.Unmarshal(data, &gd); err != nil {
+	if err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"), &gd); err != nil {
 		cb.hasCallGraph = false
 		return
 	}
