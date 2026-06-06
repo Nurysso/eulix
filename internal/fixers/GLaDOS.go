@@ -9,16 +9,142 @@ import (
 	"strings"
 )
 
-// GLaDOS checks for knowledge base outputs and checks for embeddings size and other errors
+// binHeader holds the decoded header common to embeddings.bin and vectors.bin.
+type binHeader struct {
+	Magic     uint32
+	Version   uint32
+	ModelName string
+	Count     uint32
+	Dim       uint32
+}
+
+// readBinHeader parses [4B magic][4B version][4B+str model_name][4B count][4B dim]
+// from the start of data. Returns the header and the number of bytes consumed.
+func readBinHeader(data []byte) (binHeader, int, error) {
+	const minFixed = 4 + 4 + 4 // magic + version + name-length field
+	if len(data) < minFixed {
+		return binHeader{}, 0, fmt.Errorf("file too short for header (%d bytes)", len(data))
+	}
+
+	off := 0
+	magic := binary.LittleEndian.Uint32(data[off:])
+	off += 4
+	version := binary.LittleEndian.Uint32(data[off:])
+	off += 4
+
+	nameLen := int(binary.LittleEndian.Uint32(data[off:]))
+	off += 4
+	if len(data) < off+nameLen+8 { // +8 for count+dim
+		return binHeader{}, 0, fmt.Errorf("file too short: need %d bytes for name+count+dim, have %d",
+			off+nameLen+8, len(data))
+	}
+	modelName := string(data[off : off+nameLen])
+	off += nameLen
+
+	count := binary.LittleEndian.Uint32(data[off:])
+	off += 4
+	dim := binary.LittleEndian.Uint32(data[off:])
+	off += 4
+
+	return binHeader{
+		Magic:     magic,
+		Version:   version,
+		ModelName: modelName,
+		Count:     count,
+		Dim:       dim,
+	}, off, nil
+}
+
+// checkBinFile reads a .bin file and returns its header.
+// Retained for callers (e.g. Aspirine) that only need the header.
+func checkBinFile(path string) (binHeader, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return binHeader{}, err
+	}
+	hdr, _, err := readBinHeader(data)
+	return hdr, err
+}
+
+// checkBinFileFull reads a .bin file and returns the header, raw bytes, and
+// the byte offset at which the payload begins.
+func checkBinFileFull(path string) (hdr binHeader, data []byte, payloadOff int, err error) {
+	data, err = os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	hdr, payloadOff, err = readBinHeader(data)
+	return
+}
+
+// scanBinPayload walks the entry-by-entry payload of embeddings.bin / vectors.bin
+// and returns the inferred entry count and whether the file ended cleanly.
+// Format per entry: [4B id_len][id bytes][dim*4B float32 vector]
+func scanBinPayload(data []byte, payloadOff int, hdr binHeader) (inferredCount int, ok bool) {
+	pos := payloadOff
+	count := 0
+	for pos < len(data) {
+		if pos+4 > len(data) {
+			return count, false
+		}
+		idLen := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
+		pos += 4
+		if pos+idLen > len(data) {
+			return count, false
+		}
+		pos += idLen
+		vecBytes := int(hdr.Dim) * 4
+		if pos+vecBytes > len(data) {
+			return count, false
+		}
+		pos += vecBytes
+		count++
+	}
+	return count, pos == len(data)
+}
+
+// printBinDiagnostic prints header info and validates the payload for a single
+// .bin file, using the actual [id_len][id][vector] entry layout rather than
+// assuming a flat dense matrix.
+func printBinDiagnostic(label, path string) (binHeader, error) {
+	hdr, data, payloadOff, err := checkBinFileFull(path)
+	if err != nil {
+		fmt.Printf("   ☓ Failed to read %s: %v\n", label, err)
+		return binHeader{}, err
+	}
+
+	fmt.Printf("   ✓ Loaded %s\n", label)
+	fmt.Printf("      Magic:   0x%08X   Version: %d\n", hdr.Magic, hdr.Version)
+	fmt.Printf("      Model:   %s\n", hdr.ModelName)
+	fmt.Printf("      Count:   %d   Dim: %d\n", hdr.Count, hdr.Dim)
+
+	inferred, ok := scanBinPayload(data, payloadOff, hdr)
+	switch {
+	case !ok && inferred != int(hdr.Count):
+		fmt.Printf("   ⚠  Payload malformed: scanned %d complete entries before truncation (header says %d)\n",
+			inferred, hdr.Count)
+	case !ok:
+		fmt.Printf("   ⚠  Payload truncated after %d entries (header says %d)\n",
+			inferred, hdr.Count)
+	case inferred != int(hdr.Count):
+		fmt.Printf("   ⚠  Entry count mismatch: scanned %d entries, header says %d\n",
+			inferred, hdr.Count)
+	default:
+		payloadBytes := len(data) - payloadOff
+		fmt.Printf("   ✓ Payload OK — %d entries, %d payload bytes (avg %.0f bytes/entry incl. IDs)\n",
+			inferred, payloadBytes, float64(payloadBytes)/float64(max(inferred, 1)))
+	}
+	return hdr, nil
+}
+
+// GLaDOS checks for knowledge base outputs and validates file integrity.
 func GLaDOS(eulixDir string) error {
-	// If no directory specified, default to .eulix
 	if eulixDir == "" {
 		eulixDir = ".eulix"
 	}
 
-	// Check if directory exists
 	if _, err := os.Stat(eulixDir); os.IsNotExist(err) {
-		fmt.Printf("❌ Directory not found: %s\n", eulixDir)
+		fmt.Printf("☓ Directory not found: %s\n", eulixDir)
 		fmt.Println("\nMake sure you've run 'eulix analyze' first to generate the knowledge base.")
 		return fmt.Errorf("directory not found: %s", eulixDir)
 	}
@@ -27,220 +153,136 @@ func GLaDOS(eulixDir string) error {
 	fmt.Println("================================")
 	fmt.Printf("Analyzing: %s\n\n", eulixDir)
 
-	// 1. Check kb.json (codebase structure)
+	// 1. kb.json
 	fmt.Println("1. Checking kb.json (codebase structure)...")
 	kbPath := filepath.Join(eulixDir, "kb.json")
 	kb, err := loadKB(kbPath)
 	if err != nil {
-		fmt.Printf("❌ Failed to load kb.json: %v\n", err)
+		fmt.Printf("   ☓ Failed to load kb.json: %v\n", err)
 	} else {
-		fmt.Printf("✅ Loaded KB for project: %s\n", kb.Metadata.ProjectName)
-		fmt.Printf("   Languages: %v\n", kb.Metadata.Languages)
-		fmt.Printf("   Total files: %d\n", kb.Metadata.TotalFiles)
-		fmt.Printf("   Total LOC: %d\n", kb.Metadata.TotalLOC)
-		fmt.Printf("   Functions: %d, Classes: %d, Methods: %d\n",
+		fmt.Printf("   ✓ Loaded KB for project: %s\n", kb.Metadata.ProjectName)
+		fmt.Printf("      Languages:  %v\n", kb.Metadata.Languages)
+		fmt.Printf("      Files:      %d\n", kb.Metadata.TotalFiles)
+		fmt.Printf("      LOC:        %d\n", kb.Metadata.TotalLOC)
+		fmt.Printf("      Functions:  %d   Classes: %d   Methods: %d\n",
 			kb.Metadata.TotalFunctions, kb.Metadata.TotalClasses, kb.Metadata.TotalMethods)
-		fmt.Printf("   Entry points: %d\n", len(kb.EntryPoints))
-		fmt.Printf("   External dependencies: %d\n", len(kb.ExternalDeps))
-
-		// Show indices
-		fmt.Printf("   Index stats:\n")
-		fmt.Printf("     - Functions indexed: %d\n", len(kb.Indices.FunctionsByName))
-		fmt.Printf("     - Types indexed: %d\n", len(kb.Indices.TypesByName))
-		fmt.Printf("     - Call graph nodes: %d\n", len(kb.CallGraph.Nodes))
-		fmt.Printf("     - Call graph edges: %d\n", len(kb.CallGraph.Edges))
+		fmt.Printf("      Entry pts:  %d\n", len(kb.EntryPoints))
+		fmt.Printf("      Ext deps:   %d\n", len(kb.ExternalDeps))
+		fmt.Printf("      Index — functions: %d   types: %d\n",
+			len(kb.Indices.FunctionsByName), len(kb.Indices.TypesByName))
+		fmt.Printf("      Call graph — nodes: %d   edges: %d\n",
+			len(kb.CallGraph.Nodes), len(kb.CallGraph.Edges))
 	}
 
-	// 2. Check embeddings.json
-	fmt.Println("\n2. Checking embeddings.json...")
-	embJsonPath := filepath.Join(eulixDir, "embeddings.json")
-	embFile, chunks, err := loadEmbeddingsJSON(embJsonPath)
+	// 2. kb_call_graph.json
+	fmt.Println("\n2. Checking call graphs...")
+	cgPath := filepath.Join(eulixDir, "kb_call_graph.json")
+	cgNodes, cgEdges, err := checkCallGraph(cgPath)
 	if err != nil {
-		fmt.Printf("❌ Failed to load embeddings.json: %v\n", err)
+		fmt.Printf("   ☓ Failed to load kb_call_graph.json: %v\n", err)
 	} else {
-		fmt.Printf("✅ Loaded embeddings file\n")
-		fmt.Printf("   Model: %s\n", embFile.Model)
-		fmt.Printf("   Dimension: %d\n", embFile.Dimension)
-		fmt.Printf("   Total chunks: %d\n", embFile.TotalChunks)
-		fmt.Printf("   Actual embeddings: %d\n", len(chunks))
-
-		if embFile.TotalChunks != len(chunks) {
-			fmt.Printf("   ⚠️  WARNING: total_chunks (%d) != actual count (%d)\n",
-				embFile.TotalChunks, len(chunks))
-		}
-
-		// Check if embeddings are present
-		hasVectors := false
-		if len(chunks) > 0 && len(chunks[0].Embedding) > 0 {
-			hasVectors = true
-			fmt.Printf("   ✅ Embeddings contain %d-dimensional vectors\n", len(chunks[0].Embedding))
-		} else {
-			fmt.Println("   ⚠️  No embedding vectors found in JSON")
-		}
-
-		// Show sample chunks
-		fmt.Println("\n   📋 Sample chunks:")
-		for i := 0; i < 3 && i < len(chunks); i++ {
-			chunk := chunks[i]
-			fmt.Printf("\n   Chunk %d:\n", i+1)
-			fmt.Printf("     ID: %s\n", chunk.ID)
-			fmt.Printf("     Type: %s\n", chunk.ChunkType)
-			fmt.Printf("     File: %s (lines %d-%d)\n",
-				chunk.Metadata.FilePath, chunk.Metadata.LineStart, chunk.Metadata.LineEnd)
-			fmt.Printf("     Name: %s (complexity: %d)\n",
-				chunk.Metadata.Name, chunk.Metadata.Complexity)
-			fmt.Printf("     Content: %s...\n", truncate(chunk.Content, 80))
-			if hasVectors {
-				fmt.Printf("     Vector: [%.3f, %.3f, ...] (%d dims)\n",
-					chunk.Embedding[0], chunk.Embedding[1], len(chunk.Embedding))
-			}
-		}
-
-		// 3. Analyze chunk types
-		fmt.Println("\n3. Chunk type distribution:")
-		typeCount := make(map[string]int)
-		for _, chunk := range chunks {
-			typeCount[chunk.ChunkType]++
-		}
-		for chunkType, count := range typeCount {
-			fmt.Printf("   %s: %d (%.1f%%)\n",
-				chunkType, count, float64(count)/float64(len(chunks))*100)
-		}
-
-		// 4. Check for empty content
-		fmt.Println("\n4. Data quality checks:")
-		emptyCount := 0
-		shortCount := 0
-		for _, chunk := range chunks {
-			if len(chunk.Content) == 0 {
-				emptyCount++
-			} else if len(chunk.Content) < 50 {
-				shortCount++
-			}
-		}
-		if emptyCount > 0 {
-			fmt.Printf("   ⚠️  %d chunks with empty content\n", emptyCount)
-		} else {
-			fmt.Println("   ✅ No empty chunks")
-		}
-		if shortCount > 0 {
-			fmt.Printf("   ⚠️  %d chunks with very short content (<50 chars)\n", shortCount)
-		}
-
-		// 5. Test symbol search
-		fmt.Println("\n5. Testing symbol search...")
-		fmt.Println("\n5. its fine if all are not found its just a test")
-		testSymbols := []string{"main", "DownloadManager", "init", "setup", "handle", "auth"}
-		for _, symbol := range testSymbols {
-			found := findChunksWithSymbol(chunks, symbol)
-			if len(found) > 0 {
-				fmt.Printf("   ✅ '%s' found in %d chunk(s)\n", symbol, len(found))
-			} else {
-				fmt.Printf("   ❌ '%s' not found\n", symbol)
-			}
-		}
+		fmt.Printf("   ✓ Loaded call graph\n")
+		fmt.Printf("      Nodes: %d   Edges: %d\n", cgNodes, cgEdges)
 	}
 
-	// 6. Check embeddings.bin
-	fmt.Println("\n6. Checking embeddings.bin...")
-	embBinPath := filepath.Join(eulixDir, "embeddings.bin")
-	numEmb, dim, err := checkEmbeddingsBin(embBinPath)
-	if err != nil {
-		fmt.Printf("❌ Failed to load embeddings.bin: %v\n", err)
-	} else {
-		fmt.Printf("✅ Loaded binary embeddings\n")
-		fmt.Printf("   Count: %d embeddings\n", numEmb)
-		fmt.Printf("   Dimension: %d\n", dim)
-
-		// Compare with JSON
-		if len(chunks) > 0 {
-			if numEmb != len(chunks) {
-				fmt.Printf("   ⚠️  WARNING: Binary has %d but JSON has %d embeddings\n",
-					numEmb, len(chunks))
-			} else {
-				fmt.Println("   ✅ Binary count matches JSON count")
-			}
-
-			if embFile != nil && dim != embFile.Dimension {
-				fmt.Printf("   ⚠️  WARNING: Binary dim (%d) != JSON dim (%d)\n",
-					dim, embFile.Dimension)
-			} else {
-				fmt.Println("   ✅ Dimensions match")
-			}
-		}
-	}
-
-	// 7. Check kb_index.json
-	fmt.Println("\n7. Checking kb_index.json...")
+	// 3. kb_index.json
+	fmt.Println("\n3. Checking indexes...")
 	indexPath := filepath.Join(eulixDir, "kb_index.json")
-	funcCount, typeCount, err := checkIndex(indexPath)
+	funcCount, typeCount2, err := checkIndex(indexPath)
 	if err != nil {
-		fmt.Printf("❌ Failed to load kb_index.json: %v\n", err)
+		fmt.Printf("   ☓ Failed to load kb_index.json: %v\n", err)
 	} else {
-		fmt.Printf("✅ Loaded index\n")
-		fmt.Printf("   Functions: %d\n", funcCount)
-		fmt.Printf("   Types: %d\n", typeCount)
+		fmt.Printf("   ✓ Loaded index\n")
+		fmt.Printf("      Functions: %d   Types: %d\n", funcCount, typeCount2)
 	}
 
-	// 8. File sizes
-	fmt.Println("\n8. File sizes:")
-	files := []string{"kb.json", "embeddings.json", "embeddings.bin", "kb_index.json", "kb_call_graph.json"}
+	// 4. embeddings.bin
+	fmt.Println("\n4. Checking embeddings.bin...")
+	embBinPath := filepath.Join(eulixDir, "embeddings.bin")
+	embHdr, embErr := printBinDiagnostic("embeddings.bin", embBinPath)
+
+	// 5. vectors.bin
+	fmt.Println("\n5. Checking vectors.bin...")
+	vecBinPath := filepath.Join(eulixDir, "vectors.bin")
+	vecHdr, vecErr := printBinDiagnostic("vectors.bin", vecBinPath)
+
+	// 6. Cross-file consistency
+	fmt.Println("\n6. Cross-file consistency checks:")
+	if embErr == nil && vecErr == nil {
+		if embHdr.Count != vecHdr.Count {
+			fmt.Printf("   ⚠  Count mismatch: embeddings.bin=%d  vectors.bin=%d\n",
+				embHdr.Count, vecHdr.Count)
+		} else {
+			fmt.Printf("   ✓ Chunk counts match (%d)\n", embHdr.Count)
+		}
+		if embHdr.Dim != vecHdr.Dim {
+			fmt.Printf("   ⚠  Dim mismatch: embeddings.bin=%d  vectors.bin=%d\n",
+				embHdr.Dim, vecHdr.Dim)
+		} else {
+			fmt.Printf("   ✓ Dimensions match (%d)\n", embHdr.Dim)
+		}
+		if embHdr.ModelName != vecHdr.ModelName {
+			fmt.Printf("   ⚠  Model mismatch: embeddings.bin=%q  vectors.bin=%q\n",
+				embHdr.ModelName, vecHdr.ModelName)
+		} else {
+			fmt.Printf("   ✓ Model names match (%s)\n", embHdr.ModelName)
+		}
+	}
+
+	if kb != nil && embErr == nil {
+		kbFuncs := len(kb.Indices.FunctionsByName)
+		embCount := int(embHdr.Count)
+		ratio := float64(embCount) / float64(max(kbFuncs, 1))
+		if ratio < 0.1 || ratio > 100 {
+			fmt.Printf("   ⚠  Unusual ratio: %d embeddings vs %d indexed functions\n",
+				embCount, kbFuncs)
+		} else {
+			fmt.Printf("   ✓ Embedding count (%d) looks reasonable relative to %d indexed functions\n",
+				embCount, kbFuncs)
+		}
+	}
+
+	// 7. File sizes
+	fmt.Println("\n7. File sizes:")
+	files := []string{"kb.json", "kb_call_graph.json", "kb_index.json", "embeddings.bin", "vectors.bin"}
 	for _, file := range files {
 		path := filepath.Join(eulixDir, file)
-		if info, err := os.Stat(path); err == nil {
+		if info, serr := os.Stat(path); serr == nil {
 			sizeMB := float64(info.Size()) / (1024 * 1024)
-			fmt.Printf("   %s: %.2f MB\n", file, sizeMB)
+			fmt.Printf("   %-20s %.2f MB\n", file, sizeMB)
 		} else {
-			fmt.Printf("   %s: NOT FOUND\n", file)
+			fmt.Printf("   %-20s NOT FOUND\n", file)
 		}
 	}
-	fmt.Println("\n✅ Diagnostic complete!")
 
+	fmt.Println("\n✓ Diagnostic complete!")
 	return nil
 }
+
+//  Loaders
 
 func loadKB(path string) (*KBFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-
 	var kb KBFile
 	if err := json.Unmarshal(data, &kb); err != nil {
 		return nil, err
 	}
-
 	return &kb, nil
 }
 
-func loadEmbeddingsJSON(path string) (*EmbeddingsFile, []KBChunk, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var embFile EmbeddingsFile
-	if err := json.Unmarshal(data, &embFile); err != nil {
-		return nil, nil, err
-	}
-
-	return &embFile, embFile.Embeddings, nil
-}
-
-func checkEmbeddingsBin(path string) (int, int, error) {
+func checkCallGraph(path string) (nodes, edges int, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, 0, err
 	}
-
-	if len(data) < 8 {
-		return 0, 0, fmt.Errorf("invalid embeddings file: too short")
+	var cg CallGraph
+	if err := json.Unmarshal(data, &cg); err != nil {
+		return 0, 0, err
 	}
-
-	numEmbeddings := binary.LittleEndian.Uint32(data[0:4])
-	dimension := binary.LittleEndian.Uint32(data[4:8])
-
-	return int(numEmbeddings), int(dimension), nil
+	return len(cg.Nodes), len(cg.Edges), nil
 }
 
 func checkIndex(path string) (int, int, error) {
@@ -248,40 +290,14 @@ func checkIndex(path string) (int, int, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-
 	var index Indices
 	if err := json.Unmarshal(data, &index); err != nil {
 		return 0, 0, err
 	}
-
 	return len(index.FunctionsByName), len(index.TypesByName), nil
 }
 
-func findChunksWithSymbol(chunks []KBChunk, symbol string) []KBChunk {
-	var found []KBChunk
-	symbolLower := strings.ToLower(symbol)
-
-	for _, chunk := range chunks {
-		// Check in metadata name
-		if strings.Contains(strings.ToLower(chunk.Metadata.Name), symbolLower) {
-			found = append(found, chunk)
-			continue
-		}
-
-		// Check in chunk ID
-		if strings.Contains(strings.ToLower(chunk.ID), symbolLower) {
-			found = append(found, chunk)
-			continue
-		}
-
-		// Check in content (slower)
-		if strings.Contains(strings.ToLower(chunk.Content), symbolLower) {
-			found = append(found, chunk)
-		}
-	}
-
-	return found
-}
+//  Helpers
 
 func truncate(s string, maxLen int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
@@ -290,4 +306,11 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen]
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
