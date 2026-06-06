@@ -106,7 +106,7 @@ func HistoryView(entries []cache.CacheEntry, manager *cache.Manager) CacheViewer
 	}
 
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
-	l.Title = "Cache History"
+	l.Title = "Eulix [BETA] Cache History"
 	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(true)
 

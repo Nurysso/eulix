@@ -174,6 +174,7 @@ func startChat() error {
 	}
 
 	// Initialize query router (embeddings will be lazy-loaded)
+	fmt.Println("#####===---,,..This BETA VERSION..,,---===######")
 	fmt.Println("Initializing query system...")
 	router, err := query.QueryTrafficController(eulixDir, cfg, llmClient, cacheManager)
 	if err != nil {
