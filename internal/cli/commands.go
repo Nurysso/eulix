@@ -19,6 +19,7 @@ import (
 	"eulix/internal/cache"
 	"eulix/internal/checksum"
 	"eulix/internal/config"
+	"eulix/internal/embeddings"
 	"eulix/internal/fixers"
 
 	"github.com/spf13/cobra"
@@ -26,7 +27,7 @@ import (
 
 const (
 	AppName    = "Eulix"
-	AppVersion = "v0.6.5"
+	AppVersion = "v0.6.6"
 )
 
 var (
@@ -36,13 +37,17 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "eulix",
-	Short: "Eulix - AI-powered code assistant",
-	Long:  `Eulix is an intelligent CLI tool for understanding and querying your codebase.`,
+	Short: "Eulix [Beta] - Turn your codebase into a searchable book",
+	Long: `Eulix is an intelligent CLI tool for understanding and querying your codebase.
+
+Turn your codebase into a searchable book. Ask questions about your code,
+get accurate answers using local/cloud ML and LLMs.
+
+Eulix is currently in beta.`,
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd: true,
 	},
 }
-
 var analyzeCmd = &cobra.Command{
 	Use:   "analyze",
 	Short: "Analyze codebase and generate knowledge base",
@@ -90,17 +95,58 @@ var versionCMD = &cobra.Command{
 	Short: "Displays version of eulix and eulix_parser, eulix_embed",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("%s: %s \n", AppName, AppVersion)
+		fmt.Printf("%s: %s\n", AppName, AppVersion)
 
-		components := []string{"eulix_parser", "eulix_embed"}
+		// eulix_parser native binary, call directly
+		if output, err := runSubCommand("eulix_parser", "--version"); err != nil {
+			fmt.Fprintf(os.Stderr, "eulix_parser: [Error] %v\n", err)
+		} else {
+			fmt.Printf("%s", output)
+		}
 
-		for _, bin := range components {
-			output, err := runSubCommand(bin, "--version")
-			if err != nil {
-				fmt.Printf("%s: [Error] %v\n", bin, err)
-				continue
+		// eulix_embed Python script, must go through the venv
+		scriptPath, pythonPath, venvEnv, err := embeddings.FindEulixEmbed()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "eulix_embed: [Error] %v\n", err)
+			return
+		}
+		proc := exec.Command(pythonPath, scriptPath, "--version")
+		proc.Env = venvEnv
+		if output, err := proc.Output(); err != nil {
+			fmt.Fprintf(os.Stderr, "eulix_embed: [Error] %v\n", err)
+		} else {
+			fmt.Printf("eulix_embed: %s\n", strings.TrimSpace(string(output)))
+		}
+	},
+}
+
+var embedCMD = &cobra.Command{
+	Use:   "embed [flags]",
+	Short: "Run the eulix_embed pipeline (Python venv)",
+	// Pass-through flags forwarded to eulix_embed.py
+	DisableFlagParsing: true,
+	Run: func(cmd *cobra.Command, args []string) {
+		scriptPath, pythonPath, venvEnv, err := embeddings.FindEulixEmbed()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "eulix embed: setup failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Build: python3 ~/.Eulix/eulix_embed.py [args...]
+		cmdArgs := append([]string{scriptPath}, args...)
+		proc := exec.Command(pythonPath, cmdArgs...)
+		proc.Env = venvEnv
+		proc.Stdin = os.Stdin
+		proc.Stdout = os.Stdout
+		proc.Stderr = os.Stderr
+
+		if err := proc.Run(); err != nil {
+			// Preserve the Python exit code if available
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				os.Exit(exitErr.ExitCode())
 			}
-			fmt.Printf("%s: %s", bin, output)
+			fmt.Fprintf(os.Stderr, "eulix embed: run failed: %v\n", err)
+			os.Exit(1)
 		}
 	},
 }
@@ -379,7 +425,7 @@ func Execute() error {
 func init() {
 	setupFlags()
 	setupCacheCommands()
-	disableDefaultHelp()
+	// disableDefaultHelp()
 	registerCommands()
 }
 
@@ -411,12 +457,12 @@ func setupCacheCommands() {
 	)
 }
 
-func disableDefaultHelp() {
-	rootCmd.SetHelpCommand(&cobra.Command{
-		Use:    "no-help",
-		Hidden: true,
-	})
-}
+// func disableDefaultHelp() {
+// 	rootCmd.SetHelpCommand(&cobra.Command{
+// 		Use:    "no-help",
+// 		Hidden: true,
+// 	})
+// }
 
 func registerCommands() {
 	rootCmd.AddCommand(
@@ -430,6 +476,7 @@ func registerCommands() {
 		aspirineCmd,
 		cacheCmd,
 		historyCmd,
+		embedCMD,
 	)
 }
 

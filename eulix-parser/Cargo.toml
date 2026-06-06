@@ -1,8 +1,8 @@
 [package]
 name = "eulix-parser"
-version = "0.6.8"
+version = "0.6.9"
 edition = "2021"
-authors = ["Eulix Team"]
+authors = ["dawood Nurysso@proton.me"]
 description = "Fast, secure code parser for multiple languages using tree-sitter"
 license = "GPLV3"
 repository = "https://github.com/Nurysso/eulix"

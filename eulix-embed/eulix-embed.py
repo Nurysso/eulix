@@ -56,13 +56,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 
-import numpy as np
-import torch
-import torch.nn.functional as F
-from transformers import AutoModel, AutoTokenizer
-from tqdm import tqdm
 import ijson.common
-from collections import Counter
 
 # Optional fast JSON backend
 try:
@@ -97,6 +91,24 @@ except ImportError:
     except ImportError:
         raise ImportError("ijson ObjectBuilder not found — if using \"uv\" use uv pip install ijson")
 
+def _require_ml():
+    """
+    Import and return (np, torch, F, AutoModel, AutoTokenizer, tqdm).
+    Called once inside EmbeddingGenerator.__init__; results are stored on the
+    instance so no re-import penalty on subsequent calls.
+    """
+    import numpy as np
+    import torch
+    import torch.nn.functional as F
+    from transformers import AutoModel, AutoTokenizer
+    from tqdm import tqdm
+    return np, torch, F, AutoModel, AutoTokenizer, tqdm
+
+
+def _require_numpy():
+    """Lightweight path: only numpy (used by save_*/load_* bin helpers)."""
+    import numpy as np
+    return np
 
 # Constants — mirrors Rust exactly
 BUCKETS_STANDARD: List[int] = [32, 64, 128, 192, 256, 384, 512]
@@ -105,7 +117,7 @@ BUCKETS_JINA: List[int] = [32, 64, 128, 192, 256, 384, 512, 768, 1024, 2048, 409
 BINARY_MAGIC = b"EULX"
 BINARY_VERSION = 3
 # VECTOR_MAGIC = b"EULX"
-Version = "0.3.3" # different from Binary and vector magic
+Version = "0.3.4" # different from Binary and vector magic
 
 # Dataclass slots: Python ≥3.10 natively; earlier versions fall back gracefully.
 _DC_KW: Dict[str, Any] = {"slots": True} if sys.version_info >= (3, 10) else {}
@@ -828,6 +840,14 @@ class EmbeddingGenerator:
         normalize: bool = True,
         use_bucketing: bool = True,
     ):
+        np, torch, F, AutoModel, AutoTokenizer, tqdm = _require_ml()
+        # stash on self so _embed_batch / generate_vectors can use them
+        # without re-importing (Python caches in sys.modules; this is free)
+        self._np = np
+        self._torch = torch
+        self._F = F
+        self._tqdm = tqdm
+
         self.model_name = model_name
         self.normalize = normalize
         try:
@@ -936,10 +956,14 @@ class EmbeddingGenerator:
         counts = mask_exp.sum(dim=1).clamp(min=1e-9)
         return summed / counts
 
-    @torch.no_grad()
     def _embed_batch(
         self, texts: List[str], fixed_len: Optional[int] = None
     ) -> np.ndarray:
+
+        torch = self._torch
+        F     = self._F
+        np    = self._np
+
         if self._use_st:
             encode_kwargs: Dict[str, Any] = dict(
                 convert_to_numpy=True,
@@ -962,14 +986,17 @@ class EmbeddingGenerator:
             tok_kwargs["max_length"] = fixed_len
             tok_kwargs["padding"] = "max_length"
 
-        enc = self.tokenizer(texts, **tok_kwargs).to(self.device)
-        out = self.model(**enc)
-        emb = self._mean_pool(out.last_hidden_state, enc["attention_mask"])
-        if self.normalize:
-            emb = F.normalize(emb, p=2, dim=-1)
-        return emb.cpu().float().numpy()
+        with torch.no_grad():
+            enc = self.tokenizer(texts, **tok_kwargs).to(self.device)
+            out = self.model(**enc)
+            emb = self._mean_pool(out.last_hidden_state, enc["attention_mask"])
+            if self.normalize:
+                emb = F.normalize(emb, p=2, dim=-1)
+            return emb.cpu().float().numpy()
 
     def generate_vectors(self, chunks: List[Chunk]) -> Dict[str, np.ndarray]:
+        np    = self._np
+        tqdm  = self._tqdm
         total = len(chunks)
         print(
             f" Processing {total} chunks (batch={self.batch_size},"
@@ -1096,7 +1123,7 @@ Save embeddings to a custom binary format for efficient storage and retrieval.
         limited to 0xFFFF) to maintain 4-byte alignment for the vector data, improving
         memory access performance on modern hardware.
 """
-
+    np = _require_numpy()
     with open(path, "wb") as fh:
         fh.write(BINARY_MAGIC)
         fh.write(struct.pack("<I", BINARY_VERSION))
@@ -1116,6 +1143,7 @@ Save embeddings to a custom binary format for efficient storage and retrieval.
 
 
 def load_embeddings_bin(path: Path):
+    np = _require_numpy()
     with open(path, "rb") as fh:
         magic = fh.read(4)
         version, = struct.unpack("<I", fh.read(4))
@@ -1150,6 +1178,7 @@ def save_vectors_bin(
     dimension: int,
     store: Dict[str, np.ndarray],
 ) -> None:
+    np = _require_numpy()
     with open(path, "wb") as fh:
         fh.write(BINARY_MAGIC)
         fh.write(struct.pack("<I", BINARY_VERSION))
@@ -1170,6 +1199,7 @@ def save_vectors_bin(
 def load_vectors_bin(
     path: Path,
 ) -> Tuple[str, int, Dict[str, np.ndarray]]:
+    np = _require_numpy()
     with open(path, "rb") as fh:
         magic = fh.read(4)
         if magic != BINARY_MAGIC:
@@ -1740,6 +1770,7 @@ def check_duplicate_ids(path: Path | str) -> List[str]:
     return dupes
 
 def cmd_compare(args: argparse.Namespace) -> None:
+    np = _require_numpy()
     print("Comparing embeddings.bin ↔ vectors.bin...\n")
     emb_path = Path(args.emb)
     vec_path = Path(args.vec)
@@ -1801,7 +1832,7 @@ def main() -> None:
         sys.exit(0)
 
     if len(sys.argv) == 2 and sys.argv[1] in ("--version", "-V"):
-        print(f"eulix-embed version {Version}")
+        print(f"{Version}\n")
         sys.exit(0)
     command = sys.argv[1]
     valid_commands = ("embed", "query", "compare", "ijson-backend", "version")

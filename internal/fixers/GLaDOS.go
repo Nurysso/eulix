@@ -1,3 +1,12 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package Fixers makes an atempt to fix files present in .eulix
+// Incase they are corrupted
+
+// This file is reponsible for Glasdos command that checks wether the
+// analyze output was correct or not
 package fixers
 
 import (

@@ -134,8 +134,18 @@ func MainModel(router *query.Router, cfg *config.Config, cacheManager *cache.Man
 		router:       router,
 		config:       cfg,
 		cacheManager: cacheManager,
+		// TODO add /status command
 		messages: []Message{
-			{Role: "system", Content: "Welcome to Eulix AI Code Assistant\n\nI can help you understand and navigate your codebase.\n\nTry asking:\n  - What does this function do?\n  - Explain the authentication flow\n  - Show me error handling patterns\n\nType /help to see available commands"},
+			{
+				Role: "system",
+				Content: "Eulix [Beta] initialized.\n\n" +
+					"Your codebase is now a searchable book. I am your AI assistant dedicated to helping you navigate, understand, and query your code.\n\n" +
+					"Try asking:\n" +
+					"  - 'What does this function do?'\n" +
+					"  - 'Explain the authentication flow in this module.'\n" +
+					"  - 'Find where the database connection is initialized.'\n\n" +
+					"Type /help to see available commands.",
+			},
 		},
 	}
 }
