@@ -1,6 +1,10 @@
 //  Copyright (C) 2026 Dawood Khan
 //  SPDX-License-Identifier: GPL-3.0-or-later
+// Package embeddings provides the command-line interface implementation for EULIX.
 
+/*
+This file is responsible for finding and executing python venv.
+*/
 package embeddings
 
 import (
