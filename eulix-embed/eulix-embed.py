@@ -53,6 +53,10 @@ from functools import partial
 from collections import defaultdict, deque, Counter
 from dataclasses import dataclass
 from enum import Enum
+import io
+import os
+from concurrent.futures import ThreadPoolExecutor, Future
+import threading
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 
@@ -117,7 +121,7 @@ BUCKETS_JINA: List[int] = [32, 64, 128, 192, 256, 384, 512, 768, 1024, 2048, 409
 BINARY_MAGIC = b"EULX"
 BINARY_VERSION = 3
 # VECTOR_MAGIC = b"EULX"
-Version = "0.3.4" # different from Binary and vector magic
+Version = "0.3.5" # different from Binary and vector magic
 
 # Dataclass slots: Python ≥3.10 natively; earlier versions fall back gracefully.
 _DC_KW: Dict[str, Any] = {"slots": True} if sys.version_info >= (3, 10) else {}
@@ -166,7 +170,7 @@ class Chunk:
 
 # SINGLE-PASS KB STREAMING  (replaces load_kb_metadata + stream_kb_structure)
 
-def _stream_kb(path: Path, *, need_graphs: bool = False) -> Generator:
+def _stream_kb(path: Path) -> Generator:
     """
     Single-pass generator over the Knowledge Base JSON using ijson.parse().
 
@@ -311,11 +315,6 @@ def _stream_kb(path: Path, *, need_graphs: bool = False) -> Generator:
                                 dg_builder = None
                 continue
 
-            # All other top-level keys (indices, call_graph nodes when
-            # need_graphs=False, etc.) are silently discarded here.
-
-
-
 # CHUNKER — mirrors chunker.rs logic exactly
 
 def _truncate_content(content: str, max_size: int) -> str:
@@ -344,141 +343,145 @@ def _generate_tags(func: Dict[str, Any], base_tag: str) -> List[str]:
 
 
 def _fmt_function_with_context(func: Dict, file_path: str, remove_comments: bool) -> str:
-    out: List[str] = []
-    out.append(f"// File: {file_path}")
-    out.append(f"// Function: {func['name']}")
+    buf = io.StringIO()
+    w=buf.write
+    w(f"// File: {file_path}")
+    w(f"// Function: {func['name']}")
     # Testing for context window Accuracy if it changes if docstrings arent provided
     if remove_comments:
         if func.get("docstring"):
-            out.append(f"// Description: {func['docstring']}")
-    out.append(f"// Lines: {func.get('line_start', 0)}-{func.get('line_end', 0)}")
-    out.append(f"// Complexity: {func.get('complexity', 0)}")
-    out.append("")
-    out.append(func.get("signature", ""))
-    out.append("")
+            w(f"// Description: {func['docstring']}")
+    w(f"// Lines: {func.get('line_start', 0)}-{func.get('line_end', 0)}")
+    w(f"// Complexity: {func.get('complexity', 0)}")
+    w("")
+    w(func.get("signature", ""))
+    w("")
 
     params = func.get("params", [])
     if params:
-        out.append("Parameters:")
+        w("Parameters:")
         for p in params:
             dv = f" = {p['default_value']}" if p.get("default_value") else ""
-            out.append(f"  - {p['name']}: {p.get('type_annotation', '')}{dv}")
-        out.append("")
+            w(f"  - {p['name']}: {p.get('type_annotation', '')}{dv}")
+        w("")
 
     if func.get("return_type"):
-        out.append(f"Returns: {func['return_type']}")
-        out.append("")
+        w(f"Returns: {func['return_type']}")
+        w("")
 
     calls = func.get("calls", [])
     if calls:
-        out.append("Calls:")
+        w("Calls:")
         for c in calls[:10]:
-            out.append(f"  - {c['callee']} (line {c['line']})")
+            w(f"  - {c['callee']} (line {c['line']})")
         if len(calls) > 10:
-            out.append(f"  ... and {len(calls) - 10} more")
-        out.append("")
+            w(f"  ... and {len(calls) - 10} more")
+        w("")
 
     called_by = func.get("called_by", [])
     if called_by:
-        out.append("Called by:")
+        w("Called by:")
         for c in called_by[:5]:
-            out.append(f"  - {c['function']} in {c['file']}")
+            w(f"  - {c['function']} in {c['file']}")
         if len(called_by) > 5:
-            out.append(f"  ... and {len(called_by) - 5} more")
-        out.append("")
+            w(f"  ... and {len(called_by) - 5} more")
+        w("")
 
     cf = func.get("control_flow", {})
     if cf.get("complexity", 0) > 0:
-        out.append(
+        w(
             f"Control flow: {len(cf.get('branches', []))} branches, "
             f"{len(cf.get('loops', []))} loops"
         )
 
     exc = func.get("exceptions", {})
     if exc.get("raises") or exc.get("handles"):
-        out.append("Exceptions:")
+        w("Exceptions:")
         if exc.get("raises"):
-            out.append(f"  Raises: {', '.join(exc['raises'])}")
+            w(f"  Raises: {', '.join(exc['raises'])}")
         if exc.get("handles"):
-            out.append(f"  Handles: {', '.join(exc['handles'])}")
-        out.append("")
+            w(f"  Handles: {', '.join(exc['handles'])}")
+        w("")
 
-    return "\n".join(out)
+    return buf.getvalue()
 
 
 def _fmt_method_with_class_ctx(method: Dict, cls: Dict, file_path: str, remove_comments: bool) -> str:
-    out: List[str] = []
-    out.append(f"// File: {file_path}")
-    out.append(f"// Class: {cls['name']}")
-    out.append(f"// Method: {method['name']}")
+    buf = io.StringIO()
+    w=buf.write
+    w(f"// File: {file_path}")
+    w(f"// Class: {cls['name']}")
+    w(f"// Method: {method['name']}")
     # Testing for context window Accuracy if it changes if docstrings arent provided
     if remove_comments:
         if method.get("docstring"):
-            out.append(f"// Description: {method['docstring']}")
-    out.append("")
+            w(f"// Description: {method['docstring']}")
+    w("")
     if cls.get("bases"):
-        out.append(f"// Inherits from: {', '.join(cls['bases'])}")
-    out.append("")
-    out.append(_fmt_function_with_context(method, file_path, remove_comments))
-    return "\n".join(out)
+        w(f"// Inherits from: {', '.join(cls['bases'])}")
+    w("")
+    w(_fmt_function_with_context(method, file_path, remove_comments))
+    return buf.getvalue()
 
 
 def _fmt_class_overview(cls: Dict, file_path: str, remove_comments: bool) -> str:
-    out: List[str] = []
-    out.append(f"// File: {file_path}")
-    out.append(f"// Class: {cls['name']}")
+    buf = io.StringIO()
+    w=buf.write
+    w(f"// File: {file_path}")
+    w(f"// Class: {cls['name']}")
     # Testing for context window Accuracy if it changes if docstrings arent provided
     if remove_comments:
         if cls.get("docstring"):
-            out.append(f"// Description: {cls['docstring']}")
-    out.append(f"// Lines: {cls.get('line_start', 0)}-{cls.get('line_end', 0)}")
-    out.append("")
+            w(f"// Description: {cls['docstring']}")
+    w(f"// Lines: {cls.get('line_start', 0)}-{cls.get('line_end', 0)}")
+    w("")
     if cls.get("bases"):
-        out.append(f"Inherits from: {', '.join(cls['bases'])}")
-        out.append("")
+        w(f"Inherits from: {', '.join(cls['bases'])}")
+        w("")
     attrs = cls.get("attributes", [])
     if attrs:
-        out.append("Attributes:")
+        w("Attributes:")
         for a in attrs:
-            out.append(f"  - {a['name']}: {a.get('type_annotation', '')}")
-        out.append("")
+            w(f"  - {a['name']}: {a.get('type_annotation', '')}")
+        w("")
     methods = cls.get("methods", [])
     if methods:
-        out.append(f"Methods ({len(methods)}):")
+        w(f"Methods ({len(methods)}):")
         for m in methods:
             async_tag = " (async)" if m.get("is_async") else ""
-            out.append(f"  - {m['name']}{async_tag}")
-        out.append("")
-    return "\n".join(out)
+            w(f"  - {m['name']}{async_tag}")
+        w("")
+    return buf.getvalue()
 
 
 def _fmt_file_summary(file_path: str, fs: Dict) -> str:
-    out: List[str] = []
-    out.append(f"File: {file_path}")
-    out.append(f"Language: {fs.get('language', '')}")
-    out.append(f"Lines of code: {fs.get('loc', 0)}")
-    out.append("")
+    buf = io.StringIO()
+    w=buf.write
+    w(f"File: {file_path}")
+    w(f"Language: {fs.get('language', '')}")
+    w(f"Lines of code: {fs.get('loc', 0)}")
+    w("")
     imports = fs.get("imports", [])
     if imports:
-        out.append("Imports:")
+        w("Imports:")
         for imp in imports:
-            out.append(f"  - {imp['module']} ({imp.get('type', '')})")
-        out.append("")
+            w(f"  - {imp['module']} ({imp.get('type', '')})")
+        w("")
     funcs = fs.get("functions", [])
     if funcs:
-        out.append(f"Functions: {len(funcs)}")
+        w(f"Functions: {len(funcs)}")
         for f in funcs[:10]:
-            out.append(f"  - {f['name']}")
+            w(f"  - {f['name']}")
         if len(funcs) > 10:
-            out.append(f"  ... and {len(funcs) - 10} more")
-        out.append("")
+            w(f"  ... and {len(funcs) - 10} more")
+        w("")
     classes = fs.get("classes", [])
     if classes:
-        out.append(f"Classes: {len(classes)}")
+        w(f"Classes: {len(classes)}")
         for c in classes:
-            out.append(f"  - {c['name']}")
-        out.append("")
-    return "\n".join(out)
+            w(f"  - {c['name']}")
+        w("")
+    return buf.getvalue()
 
 # USED FOR testing no comments and docstring in embedder and vector
 # to see how it effects context window creation
@@ -556,9 +559,10 @@ def chunk_one_file_no_comm(
             chunk_one_file_no_comm.has_printed_info = True    # Functions (regular + entry points)
     for func in fs.get("functions", []):
         fid = func["id"]
-        if fid in seen_ids:
-            continue
+        before = len(seen_ids)
         seen_ids.add(fid)
+        if len(seen_ids) == before:
+            continue
 
         # Build raw content, then clean, then truncate
         raw_content = _fmt_function_with_context(func, file_path, remove_comments)
@@ -664,8 +668,8 @@ def chunk_one_file_no_comm(
         fid = f"file:{file_path}"
         if fid not in seen_ids:
             seen_ids.add(fid)
-            raw_summary = _fmt_file_summary(file_path, fs)
-            cleaned_summary = clean_content(raw_summary, lang)
+            # raw_summary = _fmt_file_summary(file_path, fs)
+            cleaned_summary = clean_content(summary, lang)
             summary_content = _truncate_content(cleaned_summary, max_size)
             chunks.append(
                 Chunk(
@@ -707,9 +711,10 @@ def chunk_one_file(
     #  Functions (regular + entry points)
     for func in fs.get("functions", []):
         fid = func["id"]
-        if fid in seen_ids:
-            continue
+        before = len(seen_ids)
         seen_ids.add(fid)
+        if len(seen_ids) == before:
+            continue
 
         content = _truncate_content(_fmt_function_with_context(func, file_path, remove_comments), max_size)
 
@@ -856,16 +861,16 @@ class EmbeddingGenerator:
                     # Distinguish NVIDIA vs AMD ROCm
                     if torch.version.hip is not None:
                         self.device = torch.device("cuda")
-                        print("  ✓ AMD GPU detected — using ROCm/HIP")
+                        print("  ✓ AMD GPU detected — using ROCm/HIP", file=sys.stderr)
                     else:
                         self.device = torch.device("cuda")
-                        print("  ✓ NVIDIA GPU detected — using CUDA")
+                        print("  ✓ NVIDIA GPU detected — using CUDA", file=sys.stderr)
                 elif torch.backends.mps.is_available():
                     self.device = torch.device("mps")
-                    print("  ✓ Apple MPS detected")
+                    print("  ✓ Apple MPS detected", file=sys.stderr)
                 else:
                     self.device = torch.device("cpu")
-                    print("  ℹ No GPU detected — using CPU")
+                    print("  ℹ No GPU detected — using CPU", file=sys.stderr)
             else:
                 self.device = torch.device(device)
             if batch_size is None:
@@ -874,9 +879,9 @@ class EmbeddingGenerator:
 
             self.use_bucketing = use_bucketing and self.device.type in ("cuda", "mps")
 
-            print(f"     Model:      {model_name}")
-            print(f"     Batch size: {self.batch_size}")
-            print(f"     Bucketing:  {'enabled' if self.use_bucketing else 'disabled'}")
+            print(f"     Model:      {model_name}", file=sys.stderr)
+            print(f"     Batch size: {self.batch_size}", file=sys.stderr)
+            print(f"     Bucketing:  {'enabled' if self.use_bucketing else 'disabled'}", file=sys.stderr)
 
             is_jina = "jina" in model_name.lower()
 
@@ -889,7 +894,7 @@ class EmbeddingGenerator:
                     self.tokenizer = self._st_model.tokenizer
                     self.model = None
                     self._use_st = True
-                    print("     Jina v2: loaded via sentence-transformers")
+                    print("     Jina v2: loaded via sentence-transformers", file=sys.stderr)
                 except ImportError:
                     raise ImportError(
                         "Jina v2 models require sentence-transformers.\n"
@@ -933,14 +938,14 @@ class EmbeddingGenerator:
             except Exception as e:
                 raise RuntimeError(f"Failed to probe embedding dimension: {e}")
 
-            print(f"     Dimension:  {self._dimension}")
-            print("  ✓ Embedding generator ready!")
+            print(f"     Dimension:  {self._dimension}", file=sys.stderr)
+            print("  ✓ Embedding generator ready!", file=sys.stderr)
         except RuntimeError as e:
-            print("f\nError: {e}")
-            print("\nTips:")
-            print("  - Use a valid model name from Hugging Face (e.g., 'sentence-transformers/all-MiniLM-L6-v2')")
-            print("  - Check your internet connection")
-            print("  - Run `huggingface-cli login` if the model is private/gated")
+            print("f\nError: {e}", file=sys.stderr)
+            print("\nTips:", file=sys.stderr)
+            print("  - Use a valid model name from Hugging Face (e.g., 'sentence-transformers/all-MiniLM-L6-v2')", file=sys.stderr)
+            print("  - Check your internet connection", file=sys.stderr)
+            print("  - Run `huggingface-cli login` if the model is private/gated", file=sys.stderr)
             sys.exit(1)
 
     @property
@@ -949,8 +954,8 @@ class EmbeddingGenerator:
 
     @staticmethod
     def _mean_pool(
-        last_hidden: torch.Tensor, attention_mask: torch.Tensor
-    ) -> torch.Tensor:
+        last_hidden: "torch.Tensor", attention_mask: "torch.Tensor"
+    ) -> "torch.Tensor":
         mask_exp = attention_mask.unsqueeze(-1).float()
         summed = (last_hidden * mask_exp).sum(dim=1)
         counts = mask_exp.sum(dim=1).clamp(min=1e-9)
@@ -958,7 +963,7 @@ class EmbeddingGenerator:
 
     def _embed_batch(
         self, texts: List[str], fixed_len: Optional[int] = None
-    ) -> np.ndarray:
+    ) -> "np.ndarray":
 
         torch = self._torch
         F     = self._F
@@ -994,7 +999,7 @@ class EmbeddingGenerator:
                 emb = F.normalize(emb, p=2, dim=-1)
             return emb.cpu().float().numpy()
 
-    def generate_vectors(self, chunks: List[Chunk]) -> Dict[str, np.ndarray]:
+    def generate_vectors(self, chunks: List[Chunk]) -> Dict[str, "np.ndarray"]:
         np    = self._np
         tqdm  = self._tqdm
         total = len(chunks)
@@ -1011,7 +1016,7 @@ class EmbeddingGenerator:
             (i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)
         ]
 
-        results: List[Tuple[int, np.ndarray]] = []
+        results: List[Tuple[int, "np.ndarray"]] = []
 
         bar = tqdm(
             total=total,
@@ -1061,7 +1066,7 @@ class EmbeddingGenerator:
         results.sort(key=lambda x: x[0])
         indexed_sorted = sorted(indexed, key=lambda x: x[0])
 
-        store: Dict[str, np.ndarray] = {}
+        store: Dict[str, "np.ndarray"] = {}
         duplicates: List[str] = []                           # track duplicates
         for (orig_idx, emb), (i, _, chunk) in zip(results, indexed_sorted):
             if chunk.id in store:
@@ -1077,7 +1082,7 @@ class EmbeddingGenerator:
 
         return store
 
-    def embed_query(self, query: str) -> np.ndarray:
+    def embed_query(self, query: str) -> "np.ndarray":
         return self._embed_batch([query])[0]
 
 
@@ -1099,7 +1104,7 @@ def save_embeddings_bin(
     path: Path,
     model_name: str,
     dimension: int,
-    entries: List[Tuple[str, np.ndarray]],
+    entries: List[Tuple[str, "np.ndarray"]],
 ) -> None:
     """
 Save embeddings to a custom binary format for efficient storage and retrieval.
@@ -1172,255 +1177,58 @@ def load_embeddings_bin(path: Path):
         print(f"  successfully read {len(entries)} / {count} entries")
 
 
+
 def save_vectors_bin(
     path: Path,
     model_name: str,
-    dimension: int,
-    store: Dict[str, np.ndarray],
+    ids: List[str],          # ordered; position == vector index in embeddings.bin
 ) -> None:
-    np = _require_numpy()
+    """
+    Save a vector ID index (no float data).
+
+    File Format (Little-Endian):
+    =============================
+    Offset   | Size     | Field       | Description
+    ---------|----------|-------------|-----------------------------
+    0        | 4        | magic       | "EULX" file signature
+    4        | 4        | version     | Format version (currently 1)
+    8        | variable | model_name  | 4-byte len + UTF-8 bytes
+    8+mlen   | 4        | count       | Number of IDs
+    12+mlen  | variable | id_data     | Repeated for each ID:
+             |          |   4 bytes   | id_len (uint32 LE)
+             |          |   id_len    | UTF-8 chunk ID
+    """
     with open(path, "wb") as fh:
         fh.write(BINARY_MAGIC)
         fh.write(struct.pack("<I", BINARY_VERSION))
         _write_str(fh, model_name)
-        fh.write(struct.pack("<II", len(store), dimension))
-        for eid, vec in store.items():
+        fh.write(struct.pack("<I", len(ids)))
+        for eid in ids:
             eid_bytes = eid.encode("utf-8")
             if len(eid_bytes) > 0xFFFF:
                 raise ValueError(f"Chunk ID too long ({len(eid_bytes)} bytes): {eid[:80]}...")
             fh.write(struct.pack("<I", len(eid_bytes)))
             fh.write(eid_bytes)
-            arr = np.asarray(vec, dtype=np.float32)
-            if arr.shape != (dimension,):
-                raise ValueError(f"Vector shape mismatch for {eid}: {arr.shape} vs ({dimension},)")
-            fh.write(arr.tobytes())
 
 
-def load_vectors_bin(
-    path: Path,
-) -> Tuple[str, int, Dict[str, np.ndarray]]:
-    np = _require_numpy()
+def load_vectors_bin(path: Path) -> Tuple[str, List[str]]:
+    """
+    Load a vector ID index.
+
+    Returns:
+        (model_name, ids)  — ids[i] is the chunk ID at vector index i.
+    """
     with open(path, "rb") as fh:
         magic = fh.read(4)
         if magic != BINARY_MAGIC:
-            raise ValueError(f"Bad magic: {magic!r}")
+            raise ValueError(f"Bad magic: {magic!r} (expected {BINARY_VERSION!r})")
         (version,) = struct.unpack("<I", fh.read(4))
+        if version != BINARY_VERSION:
+            raise ValueError(f"Unsupported vectors.bin version: {version}")
         model_name = _read_str(fh)
-        count, dim = struct.unpack("<II", fh.read(8))
-        store: Dict[str, np.ndarray] = {}
-        for idx in range(count):
-            eid = _read_str(fh) if version >= 2 else f"vec_{idx}"
-            raw = fh.read(dim * 4)
-            store[eid] = np.frombuffer(raw, dtype=np.float32).copy()
-    return model_name, dim, store
-
-
-# CONTEXT INDEX — mirrors context.rs
-# Accepts only the metadata subset (no structure / full graphs).
-# Graph edges are passed in pre-collected to avoid duplicating chunk content.
-
-
-def build_context_index(
-    meta: Dict,
-    chunks: List[Chunk],
-    dimension: int,
-    *,
-    cg_edges: Optional[List[Dict]] = None,
-    dep_edges: Optional[List[Dict]] = None,
-    include_chunks: bool = False,
-    debug: bool= False,
-) -> Dict:
-    """
-    Build the context index.
-
-    include_chunks=False (default):  omit per-chunk content → saves ~500 MB+
-    include_chunks=True  (--save-json): include content for context.json
-
-    cg_edges / dep_edges are passed in pre-collected by the pipeline;
-    they are NOT loaded from meta (which no longer holds them).
-    """
-    entry_point_ids = {ep["function"] for ep in meta.get("entry_points", [])}
-    chunk_types_count: Dict[str, int] = defaultdict(int)
-    tags_index: Dict[str, List[str]] = defaultdict(list)
-
-    # Build per-chunk records — content only when saving JSON
-    context_chunks = []
-    for c in chunks:
-        chunk_types_count[c.chunk_type.value] += 1
-        for t in c.tags:
-            tags_index[t].append(c.id)
-        if include_chunks:
-            rec: Dict[str, Any] = {
-                "id": c.id,
-                "chunk_type": c.chunk_type.value,
-                "content": c.content,
-                "metadata": {
-                    "file_path": c.metadata.file_path,
-                    "language": c.metadata.language,
-                    "line_start": c.metadata.line_start,
-                    "line_end": c.metadata.line_end,
-                    "name": c.metadata.name,
-                    "complexity": c.metadata.complexity,
-                    "is_entry_point": c.id in entry_point_ids,
-                },
-                "tags": c.tags,
-                "importance_score": c.importance_score,
-            }
-            context_chunks.append(rec)
-
-    # Relationships from streamed edges
-    relationships: List[Dict] = []
-    for edge in cg_edges or []:
-        relationships.append(
-            {
-                "from": edge["from"],
-                "to": edge["to"],
-                "rel_type": edge.get("edge_type", "uses"),
-                "conditional": edge.get("conditional", False),
-            }
-        )
-    for edge in dep_edges or []:
-        relationships.append(
-            {
-                "from": edge["from"],
-                "to": edge["to"],
-                "rel_type": edge.get("edge_type", "imports"),
-                "conditional": False,
-            }
-        )
-
-    # ── BFS call-graph depth ─────────────────────────────────────────────────
-
-    # Deduplicate edges before building adj — parser emits duplicate call sites
-    # (same from→to at different line numbers) which bloat traversal for free.
-    seen_edges: Set[Tuple[str, str]] = set()
-    adj: Dict[str, List[str]] = defaultdict(list)
-    for edge in cg_edges or []:
-        key = (edge["from"], edge["to"])
-        if key not in seen_edges:
-            seen_edges.add(key)
-            adj[edge["from"]].append(edge["to"])
-
-    PREFIXES = ("func_", "method_", "struct_", "class_", "module_")
-
-    def _strip(node_id: str) -> str:
-        for pfx in PREFIXES:
-            if node_id.startswith(pfx):
-                return node_id[len(pfx):]
-        return node_id
-
-    name_to_ids: Dict[str, List[str]] = defaultdict(list)
-    for node_id in adj:
-        name_to_ids[_strip(node_id)].append(node_id)
-
-    def _resolve_ep(ep: Dict) -> List[str]:
-        if ep["function"] in adj:
-            return [ep["function"]]
-        candidates = name_to_ids.get(ep["function"], [])
-        ep_file = ep.get("file", "")
-        if ep_file and len(candidates) > 1:
-            filtered = [
-                c for c in candidates
-                if ep_file in c or ep_file.split("/")[-1] in c
-            ]
-            if filtered:
-                return filtered
-        return candidates
-
-    # Resolve entry points → adj node IDs
-    bfs_roots: Set[str] = set()
-    unresolved: List[str] = []
-    for ep in meta.get("entry_points", []):
-        resolved = _resolve_ep(ep)
-        if resolved:
-            bfs_roots.update(resolved)
-        else:
-            unresolved.append(f"{ep['function']!r} ({ep.get('file', '')})")
-
-    if unresolved and debug:
-        for u in unresolved:
-            print(f"  [INFO] {u} is a bootstrap entry point with no call graph "
-                  f"edges — excluded from BFS (expected for main functions)")
-
-    # Fallback: graph roots = nodes never appearing as a call target
-    using_fallback = False
-    if not bfs_roots:
-        all_targets: Set[str] = {e["to"] for e in cg_edges or []}
-        graph_roots = [n for n in adj if n not in all_targets]
-        print(f"  [INFO] Bootstrap entry points have no call graph edges. "
-              f"Using {len(graph_roots)} graph root(s) for BFS depth calculation.")
-        bfs_roots.update(graph_roots)
-        using_fallback = True
-
-    if debug:
-        print(f"  [DEBUG] cg_edges (raw)   : {len(cg_edges or [])}")
-        print(f"  [DEBUG] cg_edges (deduped): {len(seen_edges)}")
-        print(f"  [DEBUG] adj nodes         : {len(adj)}")
-        print(f"  [DEBUG] bfs_roots         : {len(bfs_roots)}"
-              f"{' (fallback)' if using_fallback else ''}")
-        for k, vs in list(adj.items())[:3]:
-            print(f"  [DEBUG]   adj sample: {k!r} -> {vs[:3]}")
-
-    # BFS — track depth per node, guard against cycles with visited_global
-    max_depth = 0
-    visited_global: Set[str] = set()
-
-    for root in bfs_roots:
-        if root in visited_global:
-            continue
-        q: deque[Tuple[str, int]] = deque([(root, 0)])
-        visited_local: Set[str] = {root}
-        while q:
-            node, depth = q.popleft()
-            visited_global.add(node)
-            if depth > max_depth:
-                max_depth = depth
-            for nb in adj.get(node, []):
-                if nb not in visited_local:        # cycle guard per-root
-                    visited_local.add(nb)
-                    q.append((nb, depth + 1))
-
-    if debug:
-        print(f"  [DEBUG] max_depth: {max_depth}")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    entry_points_info = [
-        {
-            "id": ep["function"],
-            "entry_type": ep.get("entry_type", ""),
-            "function_name": ep.get("handler", ""),
-            "file": ep.get("file", ""),
-            "path": ep.get("path"),
-        }
-        for ep in meta.get("entry_points", [])
-    ]
-
-    n_cg_edges = len(cg_edges) if cg_edges else 0
-    n_ep = len(meta.get("entry_points", []))
-
-    result: Dict[str, Any] = {
-        "metadata": {
-            "project_name": meta.get("metadata", {}).get("project_name", ""),
-            "total_chunks": len(chunks),
-            "chunk_types": dict(chunk_types_count),
-            "embedding_dimension": dimension,
-            "languages": meta.get("metadata", {}).get("languages", []),
-            "architecture_style": meta.get("patterns", {}).get("architecture_style"),
-        },
-        "relationships": relationships,
-        "tags": dict(tags_index),
-        "call_graph_summary": {
-            "total_edges": n_cg_edges,
-            "entry_points_count": n_ep,
-            "max_depth": max_depth,
-        },
-        "entry_points": entry_points_info,
-    }
-    if include_chunks:
-        result["chunks"] = context_chunks
-    return result
-
-
+        (count,) = struct.unpack("<I", fh.read(4))
+        ids: List[str] = [_read_str(fh) for _ in range(count)]
+    return model_name, ids
 
 # PIPELINE
 class EmbeddingPipeline:
@@ -1478,50 +1286,93 @@ class EmbeddingPipeline:
         cg_edges: List[Dict] = []
         dep_edges: List[Dict] = []
         seen_ids: Set[str] = set()
+        seen_ids_lock = threading.Lock()
 
         n_files = n_funcs = n_classes = n_methods = 0
         ct_counts: Dict[str, int] = defaultdict(int)
 
-        # entry_point helpers — populated once we receive the 'entry_points' meta key
+        # entry_point helpers populated once we receive the 'entry_points' meta key
         entry_point_ids: Set[str] = set()
         entry_points_by_id: Dict[str, Any] = {}
+        entry_points_resolved = False
 
-        for event_type, *payload in _stream_kb(kb_path, need_graphs=self.save_json):
-            if event_type == "meta":
-                key, value = payload
-                meta[key] = value
-                # Build entry-point lookups as soon as we have them
-                if key == "entry_points":
-                    entry_point_ids = {ep["function"] for ep in value}
-                    entry_points_by_id = {ep["function"]: ep for ep in value}
+        pending_files: list[tuple[str, dict]] = []
 
-            elif event_type == "structure":
-                file_path, fs = payload
-                n_files += 1
-                n_funcs += len(fs.get("functions", []))
-                n_classes += len(fs.get("classes", []))
-                n_methods += sum(
-                    len(c.get("methods", [])) for c in fs.get("classes", [])
-                )
-                for chunk in chunk_strategy(
-                    file_path,
-                    fs,
-                    entry_point_ids,
-                    entry_points_by_id,
-                    self.max_chunk_size,
-                    seen_ids,
-                    self.remove_comments,
-                ):
+        MAX_INFLIGHT = 32
+        inflight: deque[Future] = deque()
+
+        def _submit(file_path: str, fs: dict) -> Future:
+            ep_ids    = entry_point_ids
+            ep_by_ids = entry_points_by_id
+            max_size  = self.max_chunk_size
+            remove    = self.remove_comments
+            def _work():
+                local_seen: Set[str] = set()
+                return chunk_strategy(file_path, fs, ep_ids, ep_by_ids, max_size, local_seen, remove)
+            return executor.submit(_work)
+        def _harvest(fut: Future) -> None:
+            """Drain one future into chunks. called in main thread"""
+            for chunk in fut.result():
+                if chunk.id not in seen_ids:
+                    seen_ids.add(chunk.id)
                     ct_counts[chunk.chunk_type.value] += 1
                     chunks.append(chunk)
-                # fs is now unreferenced → immediately eligible for GC
+        def _drain_inflight(max_remaining: int = 0) -> None:
+            """Harvest completed futures, block if queue too full."""
+            while len(inflight) > max_remaining:
+                _harvest(inflight.popleft())
 
-            elif event_type == "cg_edge":
-                cg_edges.append(payload[0])
+        N_WORKERS = min(4, (os.cpu_count() or 4))
+        with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
+            for event_type, *payload in _stream_kb(kb_path):
+                if event_type == "meta":
+                    key, value = payload
+                    meta[key] = value
+                    # Build entry-point lookups as soon as we have them
+                    if key == "entry_points":
+                        entry_point_ids = {ep["function"] for ep in value}
+                        entry_points_by_id = {ep["function"]: ep for ep in value}
+                        entry_points_resolved = True
+                        # Flush files we saw before entry_points arrived
+                        for fp, fs in pending_files:
+                            inflight.append(_submit(fp, fs))
+                        pending_files.clear()
 
-            elif event_type == "dep_edge":
-                dep_edges.append(payload[0])
+                elif event_type == "structure":
+                    file_path, fs = payload
+                    n_files += 1
+                    n_funcs   += len(fs.get("functions", []))
+                    n_classes += len(fs.get("classes", []))
+                    n_methods += sum(len(c.get("methods", [])) for c in fs.get("classes", []))
 
+                    if not entry_points_resolved:
+                        pending_files.append((file_path, fs))
+                    else:
+                        inflight.append(_submit(file_path, fs))
+
+                    # Harvest completed futures periodically — keeps RAM bounded
+                    # and avoids letting inflight queue grow to 50k+ items
+                    if len(inflight) >= MAX_INFLIGHT:
+                        _drain_inflight(max_remaining=MAX_INFLIGHT // 2)
+                # for chunk in chunk_strategy(
+                #     file_path,
+                #     fs,
+                #     entry_point_ids,
+                #     entry_points_by_id,
+                #     self.max_chunk_size,
+                #     seen_ids,
+                #     self.remove_comments,
+                # ):
+                #     ct_counts[chunk.chunk_type.value] += 1
+                #     chunks.append(chunk)
+                # # fs is now unreferenced → immediately eligible for GC
+
+            # elif event_type == "cg_edge":
+            #     cg_edges.append(payload[0])
+
+            # elif event_type == "dep_edge":
+            #     dep_edges.append(payload[0])
+            _drain_inflight(max_remaining=0)
         step12_time = time.time() - t
 
         ep_count = len(meta.get("entry_points", []))
@@ -1532,8 +1383,6 @@ class EmbeddingPipeline:
         print(f"       Methods:      {n_methods}")
         print(f"       Entry Points: {ep_count}")
         print(f"       Total Chunks: {len(chunks)}")
-        print(f"       CG edges:     {len(cg_edges)} (streamed)")
-        print(f"       Dep edges:    {len(dep_edges)} (streamed)")
         print(f"       Chunk Breakdown:")
         for ct, cnt in sorted(ct_counts.items()):
             print(f"         {ct + ':':<22} {cnt}")
@@ -1557,29 +1406,8 @@ class EmbeddingPipeline:
         print(f"       Dimension:      {dim}")
         print(f"       Time:           {time.time() - t:.2f}s\n")
 
-        #  Step 4: Context index
-        print("STEP 4: Building Context Index")
-        print(sep)
-        t = time.time()
-        ctx_index = build_context_index(
-            meta,
-            chunks,
-            dim,
-            cg_edges=cg_edges,
-            dep_edges=dep_edges,
-            include_chunks=self.save_json,
-            debug=self.debug,
-        )
-        # Edges lists no longer needed
-        del cg_edges, dep_edges
-        gc.collect()
-        print(f"  [OK] Context index built")
-        print(f"       Tags:           {len(ctx_index['tags'])}")
-        print(f"       Relationships:  {len(ctx_index['relationships'])}")
-        print(f"       Time:           {time.time() - t:.2f}s\n")
-
-        #  Step 5: Write output files ─
-        print("STEP 5: Writing Output Files")
+        #  Step 4: Write output files ─
+        print("STEP 4: Writing Output Files")
         print(sep)
         t = time.time()
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1597,7 +1425,7 @@ class EmbeddingPipeline:
         print(f"  [OK] embeddings.bin  ({emb_bin.stat().st_size / 1_048_576:.2f} MB)")
 
         vec_bin = output_dir / "vectors.bin"
-        save_vectors_bin(vec_bin, self.generator.model_name, dim, vector_store)
+        save_vectors_bin(vec_bin, self.generator.model_name, [eid for eid, _ in entries])
         print(f"  [OK] vectors.bin     ({vec_bin.stat().st_size / 1_048_576:.2f} MB)")
 
         if self.save_json:
@@ -1646,16 +1474,159 @@ class EmbeddingPipeline:
         print(f"  Model:          {self.generator.model_name}")
         print(f"  Dimension:      {dim}")
         print(f"  Total Chunks:   {len(chunks)}")
-        print(f"  Relationships:  {len(ctx_index['relationships'])}")
-        print(f"  Entry Points:   {len(ctx_index['entry_points'])}")
-        print(f"  Call Depth:     {ctx_index['call_graph_summary']['max_depth']}")
         print(f"  Total Time:     {total_elapsed:.2f}s")
         print(SEP)
         print("  PIPELINE COMPLETED SUCCESSFULLY")
         print(f"{SEP}\n")
 
 
-# CLI
+# [EXPERIMENTAL FOR NOW]
+# SERVE MODE — long-lived stdin/stdout embedding server
+
+def cmd_serve(args: argparse.Namespace) -> None:
+    """
+    Long-lived embedding server.  Keeps the model loaded in memory and handles
+    one query per line, making it far cheaper than spawning a new process per
+    call (which would reload the model every time).
+
+    Protocol — newline-delimited JSON on stdin / stdout:
+      stdin  (one JSON object per line):
+        {"query": "<text>"}
+            → embed the query text; reply with the vector
+        {"queries": ["<text>", ...]}
+            → batch embed; reply with a list of vectors (same order)
+        {"ping": true}
+            → health-check; reply {"pong": true, "model": "...", "dim": N}
+        {"shutdown": true}
+            → flush stdout and exit cleanly (exit code 0)
+
+      stdout (one JSON object per line per request):
+        {"embedding":  [f32, ...], "dimension": N, "model": "..."}
+        {"embeddings": [[f32, ...], ...], "dimension": N, "model": "..."}
+        {"pong": true, "model": "...", "dim": N}
+        {"error": "<message>"}          ← on any per-request failure
+
+    Stderr receives all human-readable startup/progress messages so the parent
+    process can separate them from the protocol stream.
+
+    Usage:
+        python eulix_embed.py serve -m sentence-transformers/all-MiniLM-L6-v2
+    """
+    # All diagnostic output goes to stderr — stdout is the protocol channel.
+    _err = sys.stderr
+
+    print("  EULIX EMBED — SERVE MODE", file=_err)
+    print(f"  Model:  {args.model}", file=_err)
+    if args.device:
+        print(f"  Device: {args.device}", file=_err)
+    print("  Loading model…", file=_err)
+
+    try:
+        gen = EmbeddingGenerator(
+            model_name=args.model,
+            device=args.device,
+            batch_size=args.batch_size,
+        )
+    except SystemExit:
+        # EmbeddingGenerator already printed the error to stderr
+        sys.exit(1)
+
+    # Signal readiness to the parent process — one line on stdout.
+    _ready: Dict[str, Any] = {
+        "ready": True,
+        "model": gen.model_name,
+        "dim": gen.dimension,
+    }
+    print(json.dumps(_ready), flush=True)
+    print(f"  ✓ Ready — listening on stdin (dim={gen.dimension})", file=_err)
+
+    stdin  = sys.stdin
+    stdout = sys.stdout
+
+    for raw_line in stdin:
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue  # skip blank lines (e.g. keep-alive pings from some callers)
+
+        # Parse request
+        try:
+            req: Dict[str, Any] = json.loads(raw_line)
+        except json.JSONDecodeError as exc:
+            _reply: Dict[str, Any] = {"error": f"invalid JSON: {exc}"}
+            print(_json_dumps(_reply), flush=True)
+            continue
+
+        # Dispatch
+        try:
+            # Health-check
+            if req.get("ping"):
+                resp: Dict[str, Any] = {
+                    "pong": True,
+                    "model": gen.model_name,
+                    "dim": gen.dimension,
+                }
+                print(_json_dumps(resp), flush=True)
+                continue
+
+            # Clean shutdown
+            if req.get("shutdown"):
+                print(_json_dumps({"shutdown": "ok"}), flush=True)
+                stdout.flush()
+                print("  Shutting down (received shutdown request).", file=_err)
+                sys.exit(0)
+
+            # Batch embed: {"queries": ["text1", "text2", ...]}
+            if "queries" in req:
+                queries = req["queries"]
+                if not isinstance(queries, list) or not all(
+                    isinstance(q, str) for q in queries
+                ):
+                    raise ValueError(
+                        '"queries" must be a JSON array of strings'
+                    )
+                if not queries:
+                    raise ValueError('"queries" array is empty')
+
+                # _embed_batch handles lists natively
+                embs = gen._embed_batch(queries)
+                resp = {
+                    "embeddings": [e.tolist() for e in embs],
+                    "dimension": gen.dimension,
+                    "model": gen.model_name,
+                }
+                print(_json_dumps(resp), flush=True)
+                continue
+
+            # Single embed: {"query": "text"}
+            if "query" in req:
+                query = req["query"]
+                if not isinstance(query, str):
+                    raise ValueError('"query" must be a string')
+                if not query:
+                    raise ValueError('"query" is empty')
+
+                emb = gen.embed_query(query)
+                resp = {
+                    "embedding": emb.tolist(),
+                    "dimension": gen.dimension,
+                    "model": gen.model_name,
+                }
+                print(_json_dumps(resp), flush=True)
+                continue
+
+            # Unknown request shape
+            raise ValueError(
+                'request must contain "query", "queries", "ping", or "shutdown"'
+            )
+
+        except Exception as exc:
+            err_resp: Dict[str, Any] = {"error": str(exc)}
+            print(_json_dumps(err_resp), flush=True)
+            print(f"  [WARN] request error: {exc}", file=_err)
+            continue
+
+    # stdin closed (parent process exited / pipe broken)
+    print("  stdin closed — exiting.", file=_err)
 
 
 def print_help() -> None:
@@ -1667,7 +1638,8 @@ USAGE:
 
 COMMANDS:
     embed    Generate embeddings for a knowledge base (default)
-    query    Generate embedding for a query string
+    query    Generate embedding for a query string (one-shot)
+    serve    Long-lived stdin/stdout embedding server (avoids model reload)
     compare  Compare embeddings.bin with vectors.bin
 
 EMBED OPTIONS:
@@ -1684,6 +1656,29 @@ QUERY OPTIONS:
     -q / --query     <TEXT>    Query text to embed
     -m / --model     <NAME>    HuggingFace model name
     -f / --format    <FMT>     json | binary                  [default: json]
+
+SERVE OPTIONS:
+    -m / --model     <NAME>    HuggingFace model name         [default: all-MiniLM-L6-v2]
+    -d / --device    <DEVICE>  cuda / mps / cpu               [default: auto]
+    -b / --batch-size <N>      Batch size for "queries" reqs  [default: auto]
+
+    Protocol — newline-delimited JSON on stdin/stdout:
+      Send:  {"query": "some text"}
+      Recv:  {"embedding": [...], "dimension": 384, "model": "..."}
+
+      Send:  {"queries": ["text1", "text2"]}
+      Recv:  {"embeddings": [[...], [...]], "dimension": 384, "model": "..."}
+
+      Send:  {"ping": true}
+      Recv:  {"pong": true, "model": "...", "dim": 384}
+
+      Send:  {"shutdown": true}
+      Recv:  {"shutdown": "ok"}   (process exits cleanly)
+
+    On startup, the server emits one ready line to stdout before accepting input:
+      {"ready": true, "model": "...", "dim": 384}
+
+    All human-readable logs (model loading, warnings) go to stderr.
 
 PERFORMANCE TIPS:
     pip install ijson[yajl2_cffi]   # 10× faster C-backend for JSON streaming
@@ -1745,12 +1740,12 @@ def cmd_query(args: argparse.Namespace) -> None:
         print(_json_dumps(out, indent=True))
     elif args.format == "binary":
         sys.stdout.buffer.write(struct.pack("<I", len(emb)))
-        sys.stdout.buffer.write(emb.astype(np.float32).tobytes())
+        sys.stdout.buffer.write(emb.astype("float32").tobytes())
     else:
         print(f"[ERROR] Unknown format '{args.format}'", file=sys.stderr)
         sys.exit(1)
 
-def check_duplicate_ids(path: Path | str) -> List[str]:
+def check_duplicate_ids(path: Path) -> List[str]:
     with open(path, "rb") as f:
         f.read(4); f.read(4)  # magic + version
         n = struct.unpack("<I", f.read(4))[0]; f.read(n)  # model name
@@ -1775,35 +1770,8 @@ def cmd_compare(args: argparse.Namespace) -> None:
     emb_path = Path(args.emb)
     vec_path = Path(args.vec)
 
-    _, dim_e, emb_entries = load_embeddings_bin(emb_path)
-    _, dim_v, vec_store = load_vectors_bin(vec_path)
-
-    issues: List[str] = []
-    print(f"embeddings.bin: {len(emb_entries)} entries, dim={dim_e}")
-    print(f"vectors.bin:    {len(vec_store)} entries, dim={dim_v}")
-
-    if dim_e != dim_v:
-        issues.append(f"Dimension mismatch: {dim_e} vs {dim_v}")
-    if len(emb_entries) != len(vec_store):
-        issues.append(f"Count mismatch: {len(emb_entries)} vs {len(vec_store)}")
-
-# evec is short for embedding vector
-    for eid, evec in emb_entries[:5]:
-        if eid in vec_store:
-            diff = np.abs(evec - vec_store[eid]).max()
-            status = "✓" if diff < 1e-5 else "✗"
-            print(f"  {status} {eid[:60]:60s}  max_diff={diff:.2e}")
-            if diff >= 1e-5:
-                issues.append(f"Vector mismatch for {eid}")
-
-    if issues:
-        print("\n✗ ISSUES:")
-        for iss in issues:
-            print(f"  - {iss}")
-        check_duplicate_ids(emb_path)
-        sys.exit(1)
-    else:
-        print("\n✓ All checks passed.")
+    load_embeddings_bin(emb_path)
+    load_vectors_bin(vec_path)
 
 def check_python_version():
     # Define your allowed Python boundaries
@@ -1834,14 +1802,15 @@ def main() -> None:
     if len(sys.argv) == 2 and sys.argv[1] in ("--version", "-V"):
         print(f"{Version}\n")
         sys.exit(0)
+
     command = sys.argv[1]
-    valid_commands = ("embed", "query", "compare", "ijson-backend", "version")
+    valid_commands = ("embed", "query", "serve", "compare", "ijson-backend", "version")
     if command not in valid_commands:
         print_help()
         sys.exit(1)
 
     # Check Python version only for commands that need ML libraries
-    if command in ("embed", "query", "compare"):
+    if command in ("embed", "query", "serve", "compare"):
         check_python_version()
 
     p = argparse.ArgumentParser(add_help=False)
@@ -1865,12 +1834,30 @@ def main() -> None:
     qp.add_argument("-m", "--model", default="sentence-transformers/all-MiniLM-L6-v2")
     qp.add_argument("-f", "--format", default="json")
 
+    # ── serve subparser ───────────────────────────────────────────────────────
+    sp = sub.add_parser("serve")
+    sp.add_argument(
+        "-m", "--model",
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        help="HuggingFace model name",
+    )
+    sp.add_argument(
+        "-d", "--device",
+        default=None,
+        help="cuda / mps / cpu  (default: auto-detect)",
+    )
+    sp.add_argument(
+        "-b", "--batch-size",
+        type=int,
+        default=None,
+        help="Batch size for 'queries' requests (default: auto)",
+    )
+
     cp = sub.add_parser("compare")
     cp.add_argument("emb", nargs="?", default="embeddings/embeddings.bin")
     cp.add_argument("vec", nargs="?", default="embeddings/vectors.bin")
 
     tp = sub.add_parser("ijson-backend")
-    # tp.add_argument("--short", action="store_true", help="aditional infos")
 
     # Add version subparser
     vp = sub.add_parser("version")
@@ -1886,6 +1873,8 @@ def main() -> None:
         cmd_embed(args)
     elif args.command == "query":
         cmd_query(args)
+    elif args.command == "serve":
+        cmd_serve(args)
     elif args.command == "compare":
         cmd_compare(args)
     elif args.command == "ijson-backend":
