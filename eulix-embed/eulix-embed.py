@@ -1277,20 +1277,17 @@ class EmbeddingPipeline:
         print(f"{SEP}\n")
         self._check_disk_space(output_dir, kb_path)
         #  Step 1 + 2: Single-pass KB scan + chunk generation
+        #  Step 1 + 2: Single-pass KB scan + chunk generation
         print("STEP 1+2: Knowledge Base scan + Chunk generation (single pass)")
         print(sep)
         t = time.time()
 
         meta: Dict[str, Any] = {}
         chunks: List[Chunk] = []
-        cg_edges: List[Dict] = []
-        dep_edges: List[Dict] = []
         seen_ids: Set[str] = set()
-        seen_ids_lock = threading.Lock()
 
         n_files = n_funcs = n_classes = n_methods = 0
         ct_counts: Dict[str, int] = defaultdict(int)
-
         # entry_point helpers populated once we receive the 'entry_points' meta key
         entry_point_ids: Set[str] = set()
         entry_points_by_id: Dict[str, Any] = {}
@@ -1310,6 +1307,7 @@ class EmbeddingPipeline:
                 local_seen: Set[str] = set()
                 return chunk_strategy(file_path, fs, ep_ids, ep_by_ids, max_size, local_seen, remove)
             return executor.submit(_work)
+
         def _harvest(fut: Future) -> None:
             """Drain one future into chunks. called in main thread"""
             for chunk in fut.result():
@@ -1317,8 +1315,9 @@ class EmbeddingPipeline:
                     seen_ids.add(chunk.id)
                     ct_counts[chunk.chunk_type.value] += 1
                     chunks.append(chunk)
+
         def _drain_inflight(max_remaining: int = 0) -> None:
-            """Harvest completed futures, block if queue too full."""
+            # Build entry-point lookups as soon as we have them
             while len(inflight) > max_remaining:
                 _harvest(inflight.popleft())
 
@@ -1333,14 +1332,13 @@ class EmbeddingPipeline:
                         entry_point_ids = {ep["function"] for ep in value}
                         entry_points_by_id = {ep["function"]: ep for ep in value}
                         entry_points_resolved = True
-                        # Flush files we saw before entry_points arrived
                         for fp, fs in pending_files:
                             inflight.append(_submit(fp, fs))
                         pending_files.clear()
 
                 elif event_type == "structure":
                     file_path, fs = payload
-                    n_files += 1
+                    n_files   += 1
                     n_funcs   += len(fs.get("functions", []))
                     n_classes += len(fs.get("classes", []))
                     n_methods += sum(len(c.get("methods", [])) for c in fs.get("classes", []))
@@ -1350,29 +1348,22 @@ class EmbeddingPipeline:
                     else:
                         inflight.append(_submit(file_path, fs))
 
-                    # Harvest completed futures periodically — keeps RAM bounded
-                    # and avoids letting inflight queue grow to 50k+ items
                     if len(inflight) >= MAX_INFLIGHT:
                         _drain_inflight(max_remaining=MAX_INFLIGHT // 2)
-                # for chunk in chunk_strategy(
-                #     file_path,
-                #     fs,
-                #     entry_point_ids,
-                #     entry_points_by_id,
-                #     self.max_chunk_size,
-                #     seen_ids,
-                #     self.remove_comments,
-                # ):
-                #     ct_counts[chunk.chunk_type.value] += 1
-                #     chunks.append(chunk)
-                # # fs is now unreferenced → immediately eligible for GC
 
-            # elif event_type == "cg_edge":
-            #     cg_edges.append(payload[0])
+            # Flush any files that arrived before the entry_points key
+            # (or if the KB has no entry_points key at all)
+            if pending_files:
+                print(
+                    f"  [WARN] 'entry_points' key not seen before structure entries "
+                    f"— flushing {len(pending_files)} pending files with empty entry point set"
+                )
+                for fp, fs in pending_files:
+                    inflight.append(_submit(fp, fs))
+                pending_files.clear()
 
-            # elif event_type == "dep_edge":
-            #     dep_edges.append(payload[0])
             _drain_inflight(max_remaining=0)
+
         step12_time = time.time() - t
 
         ep_count = len(meta.get("entry_points", []))
@@ -1834,7 +1825,6 @@ def main() -> None:
     qp.add_argument("-m", "--model", default="sentence-transformers/all-MiniLM-L6-v2")
     qp.add_argument("-f", "--format", default="json")
 
-    # ── serve subparser ───────────────────────────────────────────────────────
     sp = sub.add_parser("serve")
     sp.add_argument(
         "-m", "--model",
@@ -1881,7 +1871,7 @@ def main() -> None:
         ijson_check()
     elif args.command == "version":
         if hasattr(args, 'short') and args.short:
-            print("0.3.3")
+            print(Version)
         else:
             print(f"eulix-embed version {Version}")
             print(f"Python: {sys.version.split()[0]}")
