@@ -19,9 +19,14 @@ is checked before retrival
 package cli
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
+
+	"eulix/internal/config"
+
+	"github.com/BurntSushi/toml"
 )
 
 const (
@@ -79,8 +84,7 @@ func initializeProject(force bool, targets []string) error {
 
 	// --- Partially initialized: warn and prompt ---
 	if !force && (state.hasConfig || state.hasDir || state.hasEuignore) {
-		missing := state.missing()
-		if len(missing) > 0 {
+		if missing := state.missing(); len(missing) > 0 {
 			fmt.Println("Eulix is partially initialized. The following components are missing:")
 			for _, m := range missing {
 				fmt.Printf("  - %s\n", m)
@@ -95,11 +99,7 @@ func initializeProject(force bool, targets []string) error {
 	// --- Determine what to write ---
 	writeAll := force || (!state.hasConfig && !state.hasDir && !state.hasEuignore)
 	shouldWrite := func(name string) bool {
-		if writeAll {
-			return true
-		}
-		// targets == nil means "fill in missing"
-		if targets == nil {
+		if writeAll || targets == nil {
 			return true
 		}
 		for _, t := range targets {
@@ -121,66 +121,27 @@ func initializeProject(force bool, targets []string) error {
 	}
 
 	// 2. .euignore
-	if shouldWrite("euignore") || !state.hasEuignore {
-		defaultIgnore := `# Eulix ignore patterns
-node_modules/
-.git/
-*.test.go
-vendor/
-dist/
-test/
-build/
-`
-		if !state.hasEuignore || force {
-			if err := os.WriteFile(euignorePath, []byte(defaultIgnore), 0644); err != nil {
-				return fmt.Errorf("failed to create %s: %w", euignorePath, err)
-			}
-			created = append(created, fmt.Sprintf("  - %-20s (ignore patterns)", euignorePath))
+	if (shouldWrite("euignore") || !state.hasEuignore) && (!state.hasEuignore || force) {
+		defaultIgnore := "# Eulix ignore patterns\n" +
+			"node_modules/\n" +
+			".git/\n" +
+			"*.test.go\n" +
+			"vendor/\n" +
+			"dist/\n" +
+			"test/\n" +
+			"build/\n"
+		if err := os.WriteFile(euignorePath, []byte(defaultIgnore), 0644); err != nil {
+			return fmt.Errorf("failed to create %s: %w", euignorePath, err)
 		}
+		created = append(created, fmt.Sprintf("  - %-20s (ignore patterns)", euignorePath))
 	}
 
-	// 3. eulix.toml
-	if shouldWrite("config") || !state.hasConfig {
-		defaultConfig := `# Eulix Configuration
-[project]
-path = "."
-
-[parser]
-threads = 4
-
-[embeddings]
-model = "BAAI/bge-small-en-v1.5"
-
-[llm]
-local       = true
-provider    = "ollama"
-model       = "llama3.2:3b"
-max_tokens  = 8192
-temperature = 0.7
-baseURL     = "http://localhost:11434"
-
-[cache]
-
-[cache.redis]
-enabled  = false
-url      = "redis://localhost:6379"
-ttl_hours = 6
-
-[cache.sql]
-enabled = true
-driver  = "sqlite"
-dsn     = ".eulix/history.db"
-
-[checksum]
-change_threshold       = 0.10
-force_reanalyze_threshold = 0.30
-`
-		if !state.hasConfig || force {
-			if err := os.WriteFile(configPath, []byte(defaultConfig), 0644); err != nil {
-				return fmt.Errorf("failed to create config: %w", err)
-			}
-			created = append(created, fmt.Sprintf("  - %-20s (configuration)", configPath))
+	// 3. eulix.toml serialized from DefaultConfig() so it never drifts
+	if (shouldWrite("config") || !state.hasConfig) && (!state.hasConfig || force) {
+		if err := writeDefaultConfig(configPath); err != nil {
+			return fmt.Errorf("failed to create config: %w", err)
 		}
+		created = append(created, fmt.Sprintf("  - %-20s (configuration)", configPath))
 	}
 
 	// --- Feedback ---
@@ -189,18 +150,29 @@ force_reanalyze_threshold = 0.30
 	} else {
 		fmt.Println("Eulix initialized successfully!")
 	}
-
 	if len(created) > 0 {
 		fmt.Println("\nCreated/Updated:")
 		for _, c := range created {
 			fmt.Println(c)
 		}
 	}
-
 	fmt.Println("\nNext steps:")
 	fmt.Println("  1. Edit eulix.toml to configure your setup")
 	fmt.Println("  2. Run 'eulix analyze' to analyze your codebase")
 	fmt.Println("  3. Run 'eulix chat' to start querying")
-
 	return nil
+}
+
+// writeDefaultConfig serializes DefaultConfig() to TOML at dst.
+// It uses BurntSushi/toml's encoder so the output is always in sync
+// with the actual Config struct no hardcoded strings to maintain.
+func writeDefaultConfig(dst string) error {
+	cfg := config.DefaultConfig()
+	var buf bytes.Buffer
+	buf.WriteString("# Eulix Configuration\n\n")
+	enc := toml.NewEncoder(&buf)
+	if err := enc.Encode(cfg); err != nil {
+		return fmt.Errorf("failed to encode config: %w", err)
+	}
+	return os.WriteFile(dst, buf.Bytes(), 0644)
 }
