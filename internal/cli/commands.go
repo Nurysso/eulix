@@ -21,6 +21,10 @@ import (
 	"eulix/internal/config"
 	"eulix/internal/embeddings"
 	"eulix/internal/fixers"
+	"eulix/internal/llm"
+	"eulix/internal/query"
+
+	// "eulix/internal/llm"
 
 	"github.com/spf13/cobra"
 )
@@ -159,6 +163,58 @@ var configCmd = &cobra.Command{
 	},
 }
 
+// cmd/query.go (or wherever the command is defined)
+
+var queryCmd = &cobra.Command{
+	Use:   "query [question]",
+	Short: "Build context prompt for LLM queries, or answer non‑LLM queries directly",
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := requireProjectRoot(); err != nil {
+			return err
+		}
+		return checkInitialized()
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "Please provide a query.")
+			return
+		}
+		userQuery := strings.Join(args, " ")
+
+		// Load config, LLM client, cache, etc. (same as startChat)
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+			return
+		}
+		eulixDir := ".eulix"
+		// ... checksum check (optional) ...
+
+		llmClient, err := llm.MouthClient(cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "LLM init failed: %v\n", err)
+			return
+		}
+		// Cache may be nil if not configured
+		cacheManager, _ := cache.CacheController(cfg) // handle error appropriately
+
+		router, err := query.QueryTrafficController(eulixDir, cfg, llmClient, cacheManager)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to init router: %v\n", err)
+			return
+		}
+		defer router.Close()
+
+		// Get either the prompt or the direct answer
+		result, err := router.PromptOrAnswer(userQuery)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return
+		}
+
+		fmt.Println(result)
+	},
+}
 var glaDOSCmd = &cobra.Command{
 	Use:   "glados [directory]",
 	Short: "Checks for errors in knowledge base and embeddings size",
@@ -471,6 +527,7 @@ func registerCommands() {
 		initCmd,
 		analyzeCmd,
 		chatCmd,
+		queryCmd,
 		configCmd,
 		glaDOSCmd,
 		aspirineCmd,

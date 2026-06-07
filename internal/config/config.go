@@ -40,7 +40,7 @@ type ParserConfig struct {
 type EmbeddingsConfig struct {
 	Model     string `toml:"model"`
 	Dimension int    `toml:"dimension"`
-	VenvPath  string `toml:"venvPath"`
+	// VenvPath  string `toml:"venvPath"`
 }
 
 type LLMConfig struct {
@@ -51,6 +51,7 @@ type LLMConfig struct {
 	MaxTokens   int     `toml:"max_tokens"`
 	Temperature float64 `toml:"temperature"`
 	BaseURL     string  `toml:"baseURL"`
+	Endpoint    string  `toml:"endpoint"`
 }
 
 type CacheConfig struct {
@@ -81,7 +82,7 @@ func Load() (*Config, error) {
 	// Try to read from eulix.toml
 	if _, err := toml.DecodeFile("eulix.toml", &cfg); err != nil {
 		// Return default config
-		cfg = *defaultConfig()
+		cfg = *DefaultConfig()
 	}
 
 	// Resolve project path to absolute path (cross-platform)
@@ -112,14 +113,14 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
-func defaultConfig() *Config {
+func DefaultConfig() *Config {
 	// Get current working directory
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "."
 	}
-	home, _ := os.UserHomeDir()
-	PathVenv := filepath.Join(home, ".Eulix", ".venv")
+	// home, _ := os.UserHomeDir()
+	// PathVenv := filepath.Join(home, ".Eulix", ".venv")
 	return &Config{
 		Project: ProjectConfig{
 			Path:        cwd,
@@ -132,7 +133,7 @@ func defaultConfig() *Config {
 		Embeddings: EmbeddingsConfig{
 			Model:     "BAAI/bge-base-en-v1.5",
 			Dimension: 768,
-			VenvPath:  PathVenv,
+			// VenvPath:  PathVenv,
 		},
 		LLM: LLMConfig{
 			Local:       true,
@@ -141,6 +142,7 @@ func defaultConfig() *Config {
 			MaxTokens:   8192,
 			Temperature: 0.7,
 			BaseURL:     "http://localhost:11434",
+			Endpoint:    "",
 		},
 		Cache: CacheConfig{
 			Redis: RedisConfig{
