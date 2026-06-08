@@ -9,16 +9,26 @@ Mirrors eulix_parser out exactly
 package types
 
 type KnowledgeBase struct {
-	Metadata             KBMetadata           `json:"metadata"`
-	Structure            map[string]FileData  `json:"structure"`
-	CallGraph            KBCallGraph          `json:"call_graph"`
-	Indices              KBIndices            `json:"indices"`
-	EntryPoints          []EntryPoint         `json:"entry_points"`
-	DependencyGraph      DependencyGraph      `json:"dependency_graph"`
-	ExternalDependencies []ExternalDependency `json:"external_dependencies"`
-	Patterns             PatternInfo          `json:"patterns"`
+	Metadata  KBMetadata          `json:"metadata"`
+	Structure map[string]FileData `json:"structure"`
+	CallGraph KBCallGraph         `json:"call_graph"`
+	// Indices              KBIndices            `json:"indices"`
+	// EntryPoints          []EntryPoint         `json:"entry_points"`
+	// DependencyGraph      DependencyGraph      `json:"dependency_graph"`
+	// ExternalDependencies []ExternalDependency `json:"external_dependencies"`
+	// Patterns             PatternInfo          `json:"patterns"`
 }
 
+type IndexRef struct {
+	Indices            KBIndices          `json:"indices"`
+	EntryPoint         EntryPoint         `json:"entry_points"`
+	ExternalDependency ExternalDependency `json:"external_dependencies"`
+	Patterns           PatternInfo        `json:"patterns"`
+}
+type CGReg struct {
+	Nodes CallGraphNode `json:"nodes"`
+	Edges CallGraphEdge `json:"edges"`
+}
 type KBMetadata struct {
 	ProjectName    string   `json:"project_name"`
 	Version        string   `json:"version"`

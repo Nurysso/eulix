@@ -1,4 +1,15 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package query manages query routing and retrival for EULIX.
+
 //go:build unix
+
+/*
+This file is responsible for mmap on unix based system uses
+MADV_SEQUENTIAL for improved performance
+*/
 
 package query
 
