@@ -22,7 +22,7 @@
 #   - embeddings.bin / vectors.bin: binary format v3
 #     header: magic(4) + version(4) + model_name_len(4) + model_name +
 #             count(4) + dimension(4) + [id_len(4) + id_bytes + f32*dim] * N
-#   - context.json and embeddings.json are optional (--save-json flag)
+#   - embeddings.json are optional (--save-json flag)
 #   - Bucketing logic mirrors Rust exactly
 #
 # PERFORMANCE vs original Python port:
@@ -121,7 +121,7 @@ BUCKETS_JINA: List[int] = [32, 64, 128, 192, 256, 384, 512, 768, 1024, 2048, 409
 BINARY_MAGIC = b"EULX"
 BINARY_VERSION = 3
 # VECTOR_MAGIC = b"EULX"
-Version = "0.3.5" # different from Binary and vector magic
+Version = "0.3.6" # different from Binary and vector magic
 
 # Dataclass slots: Python ≥3.10 natively; earlier versions fall back gracefully.
 _DC_KW: Dict[str, Any] = {"slots": True} if sys.version_info >= (3, 10) else {}
@@ -177,8 +177,6 @@ def _stream_kb(path: Path) -> Generator:
     Yields one of:
       ('meta',      key: str,       value: Any)        — small top-level keys
       ('structure', file_path: str, file_struct: dict) — one per source file
-      ('cg_edge',   edge: dict)                        — call-graph edges
-      ('dep_edge',  edge: dict)                        — dep-graph edges
 
     Memory profile
 
@@ -198,9 +196,7 @@ def _stream_kb(path: Path) -> Generator:
     # Keys whose entire value is small enough to buffer in RAM.
     COLLECT_KEYS: Set[str] = {
         "metadata",
-        "entry_points",
-        "patterns",
-        "external_dependencies",
+        "structure"
     }
 
     top_key: Optional[str] = None
@@ -214,16 +210,6 @@ def _stream_kb(path: Path) -> Generator:
     st_builder: Optional[_OB] = None
     st_depth: int = 0
 
-    #  State for streaming call_graph.edges ─
-    cg_sub: Optional[str] = None   # sub-key inside call_graph ("nodes"/"edges")
-    cg_builder: Optional[_OB] = None
-    cg_depth: int = 0
-
-    #  State for streaming dependency_graph.edges
-    dg_sub: Optional[str] = None
-    dg_builder: Optional[_OB] = None
-    dg_depth: int = 0
-
     with open(path, "rb") as fh:
         for prefix, event, value in ijson.parse(fh, use_float=True):
 
@@ -232,9 +218,7 @@ def _stream_kb(path: Path) -> Generator:
                 top_key = value
                 # Reset all sub-key trackers
                 col_builder = None
-                cg_sub = None
-                dg_sub = None
-                if value in COLLECT_KEYS:
+                if value in "metadata":
                     col_builder = _OB()
                     col_depth = 0
                 continue
@@ -342,15 +326,11 @@ def _generate_tags(func: Dict[str, Any], base_tag: str) -> List[str]:
     return sorted(set(tags))
 
 
-def _fmt_function_with_context(func: Dict, file_path: str, remove_comments: bool) -> str:
+def _fmt_function_with_context(func: Dict, file_path: str) -> str:
     buf = io.StringIO()
     w=buf.write
     w(f"// File: {file_path}")
     w(f"// Function: {func['name']}")
-    # Testing for context window Accuracy if it changes if docstrings arent provided
-    if remove_comments:
-        if func.get("docstring"):
-            w(f"// Description: {func['docstring']}")
     w(f"// Lines: {func.get('line_start', 0)}-{func.get('line_end', 0)}")
     w(f"// Complexity: {func.get('complexity', 0)}")
     w("")
@@ -406,33 +386,25 @@ def _fmt_function_with_context(func: Dict, file_path: str, remove_comments: bool
     return buf.getvalue()
 
 
-def _fmt_method_with_class_ctx(method: Dict, cls: Dict, file_path: str, remove_comments: bool) -> str:
+def _fmt_method_with_class_ctx(method: Dict, cls: Dict, file_path: str) -> str:
     buf = io.StringIO()
     w=buf.write
     w(f"// File: {file_path}")
     w(f"// Class: {cls['name']}")
     w(f"// Method: {method['name']}")
-    # Testing for context window Accuracy if it changes if docstrings arent provided
-    if remove_comments:
-        if method.get("docstring"):
-            w(f"// Description: {method['docstring']}")
     w("")
     if cls.get("bases"):
         w(f"// Inherits from: {', '.join(cls['bases'])}")
     w("")
-    w(_fmt_function_with_context(method, file_path, remove_comments))
+    w(_fmt_function_with_context(method, file_path))
     return buf.getvalue()
 
 
-def _fmt_class_overview(cls: Dict, file_path: str, remove_comments: bool) -> str:
+def _fmt_class_overview(cls: Dict, file_path: str) -> str:
     buf = io.StringIO()
     w=buf.write
     w(f"// File: {file_path}")
     w(f"// Class: {cls['name']}")
-    # Testing for context window Accuracy if it changes if docstrings arent provided
-    if remove_comments:
-        if cls.get("docstring"):
-            w(f"// Description: {cls['docstring']}")
     w(f"// Lines: {cls.get('line_start', 0)}-{cls.get('line_end', 0)}")
     w("")
     if cls.get("bases"):
@@ -537,26 +509,35 @@ def clean_content(content: str, lang: str) -> str:
     return content
 
 
-def chunk_one_file_no_comm(
+def _drop_docstrings(fs: dict) -> None:
+    """
+    Mutate fs in-place, removing docstring fields before chunking.
+    Called in the worker thread inside _submit — fs is exclusively owned
+    by that closure so mutation is safe.
+    """
+    for func in fs.get("functions", []):
+        func.pop("docstring", None)
+    for cls in fs.get("classes", []):
+        cls.pop("docstring", None)
+        for method in cls.get("methods", []):
+            method.pop("docstring", None)
+
+
+def chunk_one_file(
     file_path: str,
     fs: Dict[str, Any],
-    entry_point_ids: Set[str],
-    entry_points_by_id: Dict[str, Any],
     max_size: int,
     seen_ids: Set[str],
-    remove_comments: bool,
 ) -> List[Chunk]:
     """
     Produce all Chunk objects for a single file struct.
-    Mutates seen_ids so duplicate IDs across files are skipped.
-    The file_struct dict (fs) is discarded by the caller after this returns.
+    Docstrings are stripped by _drop_docstrings() in _submit before this
+    is called, so they never appear in chunk content or stay in RAM.
     """
     chunks: List[Chunk] = []
     lang = fs.get("language", "")
 
-    if not getattr(chunk_one_file_no_comm, "has_printed_info", False):
-            print("\033[1;31;40m [INFO] stripping down license headers, comments, docstrings\n  USED FOR TESTINF ACCURACY OF CONTEXT WINDOW CREATION IF IT IS EFFECTED REMOVE IT \033[0m")
-            chunk_one_file_no_comm.has_printed_info = True    # Functions (regular + entry points)
+    # Functions
     for func in fs.get("functions", []):
         fid = func["id"]
         before = len(seen_ids)
@@ -564,64 +545,42 @@ def chunk_one_file_no_comm(
         if len(seen_ids) == before:
             continue
 
-        # Build raw content, then clean, then truncate
-        raw_content = _fmt_function_with_context(func, file_path, remove_comments)
-        cleaned = clean_content(raw_content, lang)
-        content = _truncate_content(cleaned, max_size)
-
-        if fid in entry_point_ids:
-            ep = entry_points_by_id.get(fid, {})
-            chunks.append(
-                Chunk(
-                    id=fid,
-                    chunk_type=ChunkType.entry_point,
-                    content=content,
-                    metadata=ChunkMetadata(
-                        file_path=file_path,
-                        language=lang,
-                        line_start=func.get("line_start"),
-                        line_end=func.get("line_end"),
-                        name=func["name"],
-                        complexity=func.get("complexity"),
-                    ),
-                    tags=_generate_tags(func, ep.get("entry_type", "entrypoint")),
-                    importance_score=1.0,
-                )
+        chunks.append(
+            Chunk(
+                id=fid,
+                chunk_type=ChunkType.function,
+                content=_truncate_content(
+                    _fmt_function_with_context(func, file_path),
+                    max_size,
+                ),
+                metadata=ChunkMetadata(
+                    file_path=file_path,
+                    language=lang,
+                    line_start=func.get("line_start"),
+                    line_end=func.get("line_end"),
+                    name=func["name"],
+                    complexity=func.get("complexity"),
+                ),
+                tags=_generate_tags(func, "function"),
+                importance_score=func.get("importance_score", 0.5),
             )
-        else:
-            chunks.append(
-                Chunk(
-                    id=fid,
-                    chunk_type=ChunkType.function,
-                    content=content,
-                    metadata=ChunkMetadata(
-                        file_path=file_path,
-                        language=lang,
-                        line_start=func.get("line_start"),
-                        line_end=func.get("line_end"),
-                        name=func["name"],
-                        complexity=func.get("complexity"),
-                    ),
-                    tags=_generate_tags(func, "function"),
-                    importance_score=func.get("importance_score", 0.5),
-                )
-            )
+        )
 
-    # ----- Classes + methods -----
+    # Classes + methods
     for cls in fs.get("classes", []):
         cid = cls["id"]
         if cid in seen_ids:
             continue
         seen_ids.add(cid)
 
-        # Class overview
-        raw_class = _fmt_class_overview(cls, file_path, remove_comments)
-        class_content = _truncate_content(clean_content(raw_class, lang), max_size)
         chunks.append(
             Chunk(
                 id=cid,
                 chunk_type=ChunkType.class_,
-                content=class_content,
+                content=_truncate_content(
+                    _fmt_class_overview(cls, file_path),
+                    max_size,
+                ),
                 metadata=ChunkMetadata(
                     file_path=file_path,
                     language=lang,
@@ -635,20 +594,20 @@ def chunk_one_file_no_comm(
             )
         )
 
-        # Methods inside this class
         for method in cls.get("methods", []):
             mid = method["id"]
             if mid in seen_ids:
                 continue
             seen_ids.add(mid)
 
-            raw_method = _fmt_method_with_class_ctx(method, cls, file_path, remove_comments)
-            method_content = _truncate_content(clean_content(raw_method, lang), max_size)
             chunks.append(
                 Chunk(
                     id=mid,
                     chunk_type=ChunkType.method,
-                    content=method_content,
+                    content=_truncate_content(
+                        _fmt_method_with_class_ctx(method, cls, file_path),
+                        max_size,
+                    ),
                     metadata=ChunkMetadata(
                         file_path=file_path,
                         language=lang,
@@ -667,148 +626,6 @@ def chunk_one_file_no_comm(
     if summary.strip():
         fid = f"file:{file_path}"
         if fid not in seen_ids:
-            seen_ids.add(fid)
-            # raw_summary = _fmt_file_summary(file_path, fs)
-            cleaned_summary = clean_content(summary, lang)
-            summary_content = _truncate_content(cleaned_summary, max_size)
-            chunks.append(
-                Chunk(
-                    id=fid,
-                    chunk_type=ChunkType.file,
-                    content=summary_content,
-                    metadata=ChunkMetadata(
-                        file_path=file_path,
-                        language=lang,
-                        line_start=1,
-                        line_end=fs.get("loc"),
-                        name=file_path,
-                        complexity=None,
-                    ),
-                    tags=["file", lang],
-                    importance_score=0.5,
-                )
-            )
-
-    return chunks
-
-def chunk_one_file(
-    file_path: str,
-    fs: Dict[str, Any],
-    entry_point_ids: Set[str],
-    entry_points_by_id: Dict[str, Any],
-    max_size: int,
-    seen_ids: Set[str],
-    remove_comments: bool,
-) -> List[Chunk]:
-    """
-    Produce all Chunk objects for a single file struct.
-    Mutates seen_ids so duplicate IDs across files are skipped.
-    The file_struct dict (fs) is discarded by the caller after this returns.
-    """
-    chunks: List[Chunk] = []
-    lang = fs.get("language", "")
-
-    #  Functions (regular + entry points)
-    for func in fs.get("functions", []):
-        fid = func["id"]
-        before = len(seen_ids)
-        seen_ids.add(fid)
-        if len(seen_ids) == before:
-            continue
-
-        content = _truncate_content(_fmt_function_with_context(func, file_path, remove_comments), max_size)
-
-        if fid in entry_point_ids:
-            ep = entry_points_by_id.get(fid, {})
-            chunks.append(
-                Chunk(
-                    id=fid,
-                    chunk_type=ChunkType.entry_point,
-                    content=content,
-                    metadata=ChunkMetadata(
-                        file_path=file_path,
-                        language=lang,
-                        line_start=func.get("line_start"),
-                        line_end=func.get("line_end"),
-                        name=func["name"],
-                        complexity=func.get("complexity"),
-                    ),
-                    tags=_generate_tags(func, ep.get("entry_type", "entrypoint")),
-                    importance_score=1.0,
-                )
-            )
-        else:
-            chunks.append(
-                Chunk(
-                    id=fid,
-                    chunk_type=ChunkType.function,
-                    content=content,
-                    metadata=ChunkMetadata(
-                        file_path=file_path,
-                        language=lang,
-                        line_start=func.get("line_start"),
-                        line_end=func.get("line_end"),
-                        name=func["name"],
-                        complexity=func.get("complexity"),
-                    ),
-                    tags=_generate_tags(func, "function"),
-                    importance_score=func.get("importance_score", 0.5),
-                )
-            )
-
-    #  Classes + methods
-    for cls in fs.get("classes", []):
-        cid = cls["id"]
-        if cid in seen_ids:
-            continue
-        seen_ids.add(cid)
-        chunks.append(
-            Chunk(
-                id=cid,
-                chunk_type=ChunkType.class_,
-                content=_truncate_content(_fmt_class_overview(cls, file_path, remove_comments), max_size),
-                metadata=ChunkMetadata(
-                    file_path=file_path,
-                    language=lang,
-                    line_start=cls.get("line_start"),
-                    line_end=cls.get("line_end"),
-                    name=cls["name"],
-                    complexity=None,
-                ),
-                tags=["class", lang],
-                importance_score=0.7,
-            )
-        )
-        for method in cls.get("methods", []):
-            mid = method["id"]
-            if mid in seen_ids:
-                continue
-            seen_ids.add(mid)
-            chunks.append(
-                Chunk(
-                    id=mid,
-                    chunk_type=ChunkType.method,
-                    content=_truncate_content(
-                        _fmt_method_with_class_ctx(method, cls, file_path, remove_comments), max_size
-                    ),
-                    metadata=ChunkMetadata(
-                        file_path=file_path,
-                        language=lang,
-                        line_start=method.get("line_start"),
-                        line_end=method.get("line_end"),
-                        name=f"{cls['name']}.{method['name']}",
-                        complexity=method.get("complexity"),
-                    ),
-                    tags=_generate_tags(method, "method"),
-                    importance_score=method.get("importance_score", 0.5),
-                )
-            )
-
-    #  File summary
-    summary = _fmt_file_summary(file_path, fs)
-    if summary.strip():
-        fid = f"file:{file_path}"
-        if fid not in seen_ids:      # guard file chunks too, just in case
             seen_ids.add(fid)
             chunks.append(
                 Chunk(
@@ -829,7 +646,6 @@ def chunk_one_file(
             )
 
     return chunks
-
 
 # PYTORCH EMBEDDER
 
@@ -1104,7 +920,8 @@ def save_embeddings_bin(
     path: Path,
     model_name: str,
     dimension: int,
-    entries: List[Tuple[str, "np.ndarray"]],
+    entries,                  # Iterable[Tuple[str, np.ndarray]] — list or generator
+    count: Optional[int] = None,
 ) -> None:
     """
 Save embeddings to a custom binary format for efficient storage and retrieval.
@@ -1129,13 +946,15 @@ Save embeddings to a custom binary format for efficient storage and retrieval.
         memory access performance on modern hardware.
 """
     np = _require_numpy()
+    if count is None:
+        entries = list(entries)   # fallback: materialise (old behaviour)
+        count = len(entries)
     with open(path, "wb") as fh:
         fh.write(BINARY_MAGIC)
         fh.write(struct.pack("<I", BINARY_VERSION))
         _write_str(fh, model_name)
-        fh.write(struct.pack("<II", len(entries), dimension))
+        fh.write(struct.pack("<II", count, dimension))
         for eid, vec in entries:
-            # Guard against IDs that would corrupt the length prefix
             eid_bytes = eid.encode("utf-8")
             if len(eid_bytes) > 0xFFFF:
                 raise ValueError(f"Chunk ID too long ({len(eid_bytes)} bytes): {eid[:80]}...")
@@ -1145,6 +964,7 @@ Save embeddings to a custom binary format for efficient storage and retrieval.
             if arr.shape != (dimension,):
                 raise ValueError(f"Vector shape mismatch for {eid}: {arr.shape} vs ({dimension},)")
             fh.write(arr.tobytes())
+
 
 
 def load_embeddings_bin(path: Path):
@@ -1239,13 +1059,11 @@ class EmbeddingPipeline:
         device: Optional[str] = None,
         batch_size: Optional[int] = None,
         save_json: bool = False,
-        remove_comments: bool = False,
         debug: bool = False,
     ):
         self.max_chunk_size = max_chunk_size
         self.save_json = save_json
         self.debug = debug
-        self.remove_comments = remove_comments
         self.generator = EmbeddingGenerator(
             model_name=model_name,
             device=device,
@@ -1268,16 +1086,16 @@ class EmbeddingPipeline:
         t_total = time.time()
         SEP = "=" * 70
         sep = "-" * 70
-        chunk_strategy = chunk_one_file_no_comm if args.remove_comments else chunk_one_file
+
         print(f"\n{SEP}")
         print("  EULIX EMBED — EMBEDDING PIPELINE (Python/PyTorch)")
         print(f"  ijson backend : {ijson.backend}")
         print(f"  orjson        : {'yes' if _HAS_ORJSON else 'no (stdlib json)'}")
         print(f"  Chunk slots   : {'yes' if _DC_KW else 'no (Python <3.10)'}")
         print(f"{SEP}\n")
+
         self._check_disk_space(output_dir, kb_path)
-        #  Step 1 + 2: Single-pass KB scan + chunk generation
-        #  Step 1 + 2: Single-pass KB scan + chunk generation
+        # Step 1+2: Single-pass KB scan + chunk generation
         print("STEP 1+2: Knowledge Base scan + Chunk generation (single pass)")
         print(sep)
         t = time.time()
@@ -1285,27 +1103,22 @@ class EmbeddingPipeline:
         meta: Dict[str, Any] = {}
         chunks: List[Chunk] = []
         seen_ids: Set[str] = set()
-
         n_files = n_funcs = n_classes = n_methods = 0
         ct_counts: Dict[str, int] = defaultdict(int)
-        # entry_point helpers populated once we receive the 'entry_points' meta key
-        entry_point_ids: Set[str] = set()
-        entry_points_by_id: Dict[str, Any] = {}
-        entry_points_resolved = False
-
-        pending_files: list[tuple[str, dict]] = []
 
         MAX_INFLIGHT = 32
         inflight: deque[Future] = deque()
 
         def _submit(file_path: str, fs: dict) -> Future:
-            ep_ids    = entry_point_ids
-            ep_by_ids = entry_points_by_id
-            max_size  = self.max_chunk_size
-            remove    = self.remove_comments
+            max_size = self.max_chunk_size
             def _work():
+                _drop_docstrings(fs)
                 local_seen: Set[str] = set()
-                return chunk_strategy(file_path, fs, ep_ids, ep_by_ids, max_size, local_seen, remove)
+                return chunk_one_file(
+                    file_path, fs,
+                    # frozenset(), {},
+                    max_size, local_seen,
+                )
             return executor.submit(_work)
 
         def _harvest(fut: Future) -> None:
@@ -1327,14 +1140,6 @@ class EmbeddingPipeline:
                 if event_type == "meta":
                     key, value = payload
                     meta[key] = value
-                    # Build entry-point lookups as soon as we have them
-                    if key == "entry_points":
-                        entry_point_ids = {ep["function"] for ep in value}
-                        entry_points_by_id = {ep["function"]: ep for ep in value}
-                        entry_points_resolved = True
-                        for fp, fs in pending_files:
-                            inflight.append(_submit(fp, fs))
-                        pending_files.clear()
 
                 elif event_type == "structure":
                     file_path, fs = payload
@@ -1343,53 +1148,39 @@ class EmbeddingPipeline:
                     n_classes += len(fs.get("classes", []))
                     n_methods += sum(len(c.get("methods", [])) for c in fs.get("classes", []))
 
-                    if not entry_points_resolved:
-                        pending_files.append((file_path, fs))
-                    else:
-                        inflight.append(_submit(file_path, fs))
+                    inflight.append(_submit(file_path, fs))
 
                     if len(inflight) >= MAX_INFLIGHT:
                         _drain_inflight(max_remaining=MAX_INFLIGHT // 2)
 
-            # Flush any files that arrived before the entry_points key
-            # (or if the KB has no entry_points key at all)
-            if pending_files:
-                print(
-                    f"  [WARN] 'entry_points' key not seen before structure entries "
-                    f"— flushing {len(pending_files)} pending files with empty entry point set"
-                )
-                for fp, fs in pending_files:
-                    inflight.append(_submit(fp, fs))
-                pending_files.clear()
-
             _drain_inflight(max_remaining=0)
 
         step12_time = time.time() - t
+        n_chunks = len(chunks)   # snapshot before any del
 
-        ep_count = len(meta.get("entry_points", []))
         print(f"  [OK] KB scanned + chunked in single pass")
         print(f"       Files:        {n_files}")
         print(f"       Functions:    {n_funcs}")
         print(f"       Classes:      {n_classes}")
         print(f"       Methods:      {n_methods}")
-        print(f"       Entry Points: {ep_count}")
-        print(f"       Total Chunks: {len(chunks)}")
+        print(f"       Total Chunks: {n_chunks}")
         print(f"       Chunk Breakdown:")
         for ct, cnt in sorted(ct_counts.items()):
             print(f"         {ct + ':':<22} {cnt}")
         print(f"       Time:         {step12_time:.2f}s\n")
-
         # Free per-file metadata and seen_ids — no longer needed
         del seen_ids
         gc.collect()
 
-        #  Step 3: Embeddings ─
+        # Step 3: Embeddings
         print("STEP 3: Generating Embeddings")
         print(sep)
         t = time.time()
+
         vector_store = self.generator.generate_vectors(chunks)
-        dim = self.generator.dimension
+        dim    = self.generator.dimension
         vec_mb = len(vector_store) * dim * 4 / 1_048_576
+
         print(f"  [OK] Embeddings generated")
         print(f"       Total Vectors:  {len(vector_store)}")
         print(f"       Vector Size:    {vec_mb:.2f} MB (in-memory)")
@@ -1397,79 +1188,89 @@ class EmbeddingPipeline:
         print(f"       Dimension:      {dim}")
         print(f"       Time:           {time.time() - t:.2f}s\n")
 
-        #  Step 4: Write output files ─
+        # Step 4: Write output files
         print("STEP 4: Writing Output Files")
         print(sep)
         t = time.time()
         output_dir.mkdir(parents=True, exist_ok=True)
-        missing = [c.id for c in chunks if c.id not in vector_store]
+
+        ordered_ids = [c.id for c in chunks if c.id in vector_store]
+        missing     = [c.id for c in chunks if c.id not in vector_store]
         if missing:
             print(f"  [WARN] {len(missing)} chunks missing from vector store:")
             for mid in missing[:10]:
                 print(f"         {mid}")
             if len(missing) > 10:
                 print(f"         ... and {len(missing) - 10} more")
-        entries = [(c.id, vector_store[c.id]) for c in chunks if c.id in vector_store]
+
+        # Build metadata lookup before freeing chunks (used by --save-json)
+        chunk_meta: Dict[str, Any] = {}
+        if self.save_json:
+            chunk_meta = {
+                c.id: {
+                    "file_path":  c.metadata.file_path,
+                    "language":   c.metadata.language,
+                    "line_start": c.metadata.line_start,
+                    "line_end":   c.metadata.line_end,
+                    "name":       c.metadata.name,
+                    "complexity": c.metadata.complexity,
+                }
+                for c in chunks
+                if c.id in vector_store
+            }
+
+        del chunks
+        gc.collect()
 
         emb_bin = output_dir / "embeddings.bin"
-        save_embeddings_bin(emb_bin, self.generator.model_name, dim, entries)
+        save_embeddings_bin(
+            emb_bin,
+            self.generator.model_name,
+            dim,
+            ((eid, vector_store[eid]) for eid in ordered_ids),
+            count=len(ordered_ids),
+        )
         print(f"  [OK] embeddings.bin  ({emb_bin.stat().st_size / 1_048_576:.2f} MB)")
-
-        vec_bin = output_dir / "vectors.bin"
-        save_vectors_bin(vec_bin, self.generator.model_name, [eid for eid, _ in entries])
-        print(f"  [OK] vectors.bin     ({vec_bin.stat().st_size / 1_048_576:.2f} MB)")
 
         if self.save_json:
             emb_json = output_dir / "embeddings.json"
             emb_data: Dict[str, Any] = {
-                "model": self.generator.model_name,
-                "dimension": dim,
-                "total_chunks": len(entries),
+                "model":        self.generator.model_name,
+                "dimension":    dim,
+                "total_chunks": len(ordered_ids),
                 "embeddings": [
                     {
-                        "id": eid,
-                        "embedding": vec.tolist(),
-                        "metadata": next(
-                            (
-                                {
-                                    "file_path": c.metadata.file_path,
-                                    "language": c.metadata.language,
-                                    "line_start": c.metadata.line_start,
-                                    "line_end": c.metadata.line_end,
-                                    "name": c.metadata.name,
-                                    "complexity": c.metadata.complexity,
-                                }
-                                for c in chunks
-                                if c.id == eid
-                            ),
-                            {},
-                        ),
+                        "id":        eid,
+                        "embedding": vector_store[eid].tolist(),
+                        "metadata":  chunk_meta.get(eid, {}),
                     }
-                    for eid, vec in entries
+                    for eid in ordered_ids
                 ],
             }
             emb_json.write_text(_json_dumps(emb_data, indent=True))
             print(f"  [OK] embeddings.json ({emb_json.stat().st_size / 1_048_576:.2f} MB)")
 
-            ctx_json = output_dir / "context.json"
-            ctx_json.write_text(_json_dumps(ctx_index, indent=True))
-            print(f"  [OK] context.json    ({ctx_json.stat().st_size / 1_048_576:.2f} MB)")
+        del vector_store
+        gc.collect()
+
+        vec_bin = output_dir / "vectors.bin"
+        save_vectors_bin(vec_bin, self.generator.model_name, ordered_ids)
+        print(f"  [OK] vectors.bin     ({vec_bin.stat().st_size / 1_048_576:.2f} MB)")
 
         print(f"       Time:           {time.time() - t:.2f}s\n")
 
-        #  Summary
+        # Summary
         total_elapsed = time.time() - t_total
         print(SEP)
         print("  PIPELINE SUMMARY")
         print(SEP)
         print(f"  Model:          {self.generator.model_name}")
         print(f"  Dimension:      {dim}")
-        print(f"  Total Chunks:   {len(chunks)}")
+        print(f"  Total Chunks:   {n_chunks}")
         print(f"  Total Time:     {total_elapsed:.2f}s")
         print(SEP)
         print("  PIPELINE COMPLETED SUCCESSFULLY")
         print(f"{SEP}\n")
-
 
 # [EXPERIMENTAL FOR NOW]
 # SERVE MODE — long-lived stdin/stdout embedding server
@@ -1640,7 +1441,7 @@ EMBED OPTIONS:
     --device         <DEVICE>  cuda / mps / cpu               [default: auto]
     --batch-size     <N>       Batch size                     [default: auto]
     --max-chunk      <N>       Max chunk chars                [default: 2000]
-    --save-json                Also write embeddings.json + context.json
+    --save-json                Also write embeddings.json
                                (enables graph edge streaming)
 
 QUERY OPTIONS:
@@ -1705,7 +1506,6 @@ def cmd_embed(args: argparse.Namespace) -> None:
         device=args.device,
         batch_size=args.batch_size,
         save_json=args.save_json,
-        remove_comments=args.remove_comments,
         debug=args.debug,
     )
     kb_path = Path(args.kb_path)

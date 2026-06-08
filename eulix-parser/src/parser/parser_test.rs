@@ -6,8 +6,8 @@ mod parser_tests {
     use crate::kb::go::GoParser;
     use crate::kb::python::PythonParser;
     use crate::kb::rust::RustParser;
-    use crate::kb::types::*;
     use crate::kb::typescript::TypeScriptParser;
+    use crate::struc::kb_struct::*;
     use std::collections::HashMap;
 
     // HELPERS

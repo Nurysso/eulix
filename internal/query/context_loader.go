@@ -55,9 +55,7 @@ See:
 package query
 
 import (
-	"bufio"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -85,7 +83,7 @@ const (
 	// jsonBufSize is the I/O read-buffer for the streaming JSON decoder.
 	// 4 MiB reduces syscall frequency on large kb.json files without adding
 	// meaningful resident-memory pressure.
-	jsonBufSize = 4 << 20 // 4 MiB
+	jsonBufSize = 1 << 20 // 1 MiB
 )
 
 // decodeJSONFile opens path and streams its content through a buffered
@@ -94,14 +92,6 @@ const (
 // in memory simultaneously. For a 500 MB kb.json this saves ~500 MB of
 // transient allocations; for GB-scale corpora the saving is proportionally
 // larger.
-func decodeJSONFile(path string, v any) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return json.NewDecoder(bufio.NewReaderSize(f, jsonBufSize)).Decode(v)
-}
 
 //  Standalone routing loaders
 // Used by the query-classification path, which does not have access to a
@@ -187,7 +177,7 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 	}
 	cb.kbData = &kb
 
-	// 3. Build chunk slice
+	// 3. Build chunk slice + hydrate index simultaneously
 	total := 0
 	for _, fs := range kb.Structure {
 		total += len(fs.Functions) + len(fs.Classes)
@@ -198,35 +188,55 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 
 	cb.lazyContent = total > lazyContentLimit
 	cb.chunks = make([]Chunk, 0, total)
+	cb.hydrateIdx = make(map[string]map[[2]int]func() string, len(kb.Structure))
 
 	for filePath, fs := range kb.Structure {
+		fileIdx := make(map[[2]int]func() string)
+
+		// Functions
 		for _, fn := range fs.Functions {
 			c := cb.buildChunkFromKBFunction(fn, filePath)
 			if cb.lazyContent {
+				// Store the content builder BEFORE clearing Content
+				fnCopy := fn
+				fileIdx[[2]int{c.StartLine, c.EndLine}] = func() string {
+					return cb.buildChunkFromKBFunction(fnCopy, filePath).Content
+				}
 				c.Content = ""
 			}
 			cb.chunks = append(cb.chunks, c)
 		}
+
+		// Classes
 		for _, cls := range fs.Classes {
 			cc := cb.buildChunkFromKBClass(cls, filePath)
 			if cb.lazyContent {
+				clsCopy := cls
+				fileIdx[[2]int{cc.StartLine, cc.EndLine}] = func() string {
+					return cb.buildChunkFromKBClass(clsCopy, filePath).Content
+				}
 				cc.Content = ""
 			}
 			cb.chunks = append(cb.chunks, cc)
+
+			// Methods
 			for _, m := range cls.Methods {
 				mc := cb.buildChunkFromKBFunction(m, filePath)
 				if cb.lazyContent {
+					mCopy := m
+					fileIdx[[2]int{mc.StartLine, mc.EndLine}] = func() string {
+						return cb.buildChunkFromKBFunction(mCopy, filePath).Content
+					}
 					mc.Content = ""
 				}
 				cb.chunks = append(cb.chunks, mc)
 			}
 		}
+
+		cb.hydrateIdx[filePath] = fileIdx
 	}
 
 	// 4. Boilerplate detector
-	// Built here, over the complete chunk corpus, so that document-frequency
-	// counts are accurate. Everything downstream (symbol index, inverted index,
-	// simBetween) can call cb.isBoilerplateSymbol to skip noisy tokens.
 	cb.boilerplate = NewBoilerplateDetector(cb.chunks, dfThresholdDefault, bpMinChunks)
 	cb.debugLog.Log("Boilerplate detector: %d symbols filtered (threshold=%.2f, corpus=%d) top: %v",
 		len(cb.boilerplate.boilerplate),
@@ -236,8 +246,6 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 	)
 
 	// 5. Symbol index (boilerplate-filtered)
-	// Skipping boilerplate symbols here halves the index size on typical Go/Python
-	// codebases (ctx, err, ok, i, j are in nearly every chunk).
 	cb.symbolIndex = make(map[string][]int, len(cb.chunks)*2)
 	for i, c := range cb.chunks {
 		for _, sym := range c.Symbols {
@@ -249,8 +257,6 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 	}
 
 	// 6. Inverted index (large corpora only)
-	// buildInvertedIndexFromKB is expected to call cb.isBoilerplateSymbol
-	// internally when tokenising chunk content — see its implementation.
 	if len(cb.chunks) > invIdxThreshold {
 		cb.invertedIdx = cb.buildInvertedIndexFromKB(&kb)
 	}
@@ -314,9 +320,12 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	numEmb := int(binary.LittleEndian.Uint32(data[off : off+4]))
 	dim := int(binary.LittleEndian.Uint32(data[off+4 : off+8]))
 	off += 8
-
-	if dim != cb.config.Embeddings.Dimension {
-		return fmt.Errorf("dimension mismatch: expected %d, got %d", cb.config.Embeddings.Dimension, dim)
+	expectedDim := cb.config.Embeddings.Dimension
+	if dim == 0 {
+		return fmt.Errorf("embeddings.bin has dim=0: file is corrupt or was written by an incompatible version, please regenerate")
+	}
+	if dim != expectedDim {
+		return fmt.Errorf("dimension mismatch: file has %d, model expects %d", dim, expectedDim)
 	}
 
 	cb.embeddings = make([][]float32, numEmb)
@@ -366,50 +375,36 @@ func (cb *ContextBuilder) loadVectorMap() error {
 	if err != nil {
 		return fmt.Errorf("vectors.bin not found: %w", err)
 	}
-	if len(data) < 8 {
-		return fmt.Errorf("invalid vectors file: too short (%d bytes)", len(data))
+	if len(data) < 12 {
+		return fmt.Errorf("invalid vectors.bin: too short (%d bytes)", len(data))
 	}
-
 	off := 0
-	if string(data[off:off+4]) != VectorMagic {
-		return fmt.Errorf("wrong magic bytes in vectors.bin: %q", data[off:off+4])
+	if string(data[off:off+4]) != MagicBytes {
+		return fmt.Errorf("wrong magic in vectors.bin: %q", data[off:off+4])
 	}
 	off += 4
-
 	version := binary.LittleEndian.Uint32(data[off : off+4])
 	off += 4
-	if version != VectorVersion {
-		return fmt.Errorf("vectors.bin version mismatch: expected %d, got %d", VectorVersion, version)
+	if version != BinaryVersion {
+		return fmt.Errorf("vectors.bin version mismatch: expected %d, got %d", BinaryVersion, version)
 	}
-
 	_, off, err = readStr(data, off)
 	if err != nil {
 		return fmt.Errorf("reading model name: %w", err)
 	}
-
-	if off+8 > len(data) {
-		return fmt.Errorf("invalid vectors file: truncated header")
+	if off+4 > len(data) {
+		return fmt.Errorf("invalid vectors.bin: truncated header")
 	}
 	count := int(binary.LittleEndian.Uint32(data[off : off+4]))
-	dim := int(binary.LittleEndian.Uint32(data[off+4 : off+8]))
-	off += 8
-
+	off += 4
 	cb.vectorMap = make(map[string]int, count)
 	for i := 0; i < count; i++ {
 		var id string
-		if version >= 2 {
-			id, off, err = readStr(data, off)
-			if err != nil {
-				return fmt.Errorf("reading id at index %d: %w", i, err)
-			}
-		} else {
-			id = fmt.Sprintf("vec_%d", i)
-		}
-		if off+dim*4 > len(data) {
-			return fmt.Errorf("unexpected EOF skipping vector at index %d", i)
+		id, off, err = readStr(data, off)
+		if err != nil {
+			return fmt.Errorf("reading id at index %d: %w", i, err)
 		}
 		cb.vectorMap[id] = i
-		off += dim * 4
 	}
 	return nil
 }

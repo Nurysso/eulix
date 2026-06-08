@@ -91,8 +91,13 @@ func (cb *ContextBuilder) GetLastTrace() *DebugTrace {
 // Uses timestamp in filename for uniqueness.
 // Intended for offline analysis; not used in production path.
 func (cb *ContextBuilder) writeContextToFile(ctx *types.ContextWindow) error {
+	logDir := filepath.Join(cb.config.Project.Path, ".eulix", "debug")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return err
+	}
 	fileName := fmt.Sprintf("debug_embedding_pipeline_%s.txt", time.Now().Format("20060102_150405"))
-	f, err := os.Create(fileName)
+	logPath := filepath.Join(logDir, fileName)
+	f, err := os.Create(logPath)
 	if err != nil {
 		return err
 	}

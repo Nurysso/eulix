@@ -12,11 +12,6 @@ model = "microsoft/codebert-base"
 dimension = 768
 
 [llm]
-# To use Anthropic Claude instead, change to:
-# local = false
-# provider = "anthropic"
-# model = "claude-3-5-sonnet-20241022"
-# api_key = ""  # or set ANTHROPIC_API_KEY environment variable
 local       = true
 provider    = "ollama"
 model       = "qwen2.5-coder:7b"

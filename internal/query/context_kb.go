@@ -291,8 +291,8 @@ func (cb *ContextBuilder) hydrateContent(chunks []Chunk) {
 	}
 }
 
-// hydrateOne retrieves the full text for a single chunk from kbData.
-// Does not modify the input chunk; caller must reassign the result.
+// hydrateOne returns the Content for a chunk that was lazily stored.
+// Uses the pre-built hydrateIdx for O(1) lookup instead of linear scan.
 // Used internally by hydrateContent and during call-site scanning in lazy mode.
 //
 // Lookup strategy:
@@ -305,25 +305,14 @@ func (cb *ContextBuilder) hydrateContent(chunks []Chunk) {
 //   - hydrateContent: Batch hydration wrapper
 //   - buildCallSiteIndex: Call-site discovery in lazy mode
 //   - context_loader.go: lazyContent threshold decision
+
 func (cb *ContextBuilder) hydrateOne(c Chunk) string {
-	if cb.kbData == nil {
+	if cb.hydrateIdx == nil {
 		return ""
 	}
-	if fs, ok := cb.kbData.Structure[c.File]; ok {
-		for _, fn := range fs.Functions {
-			if fn.LineStart == c.StartLine && fn.LineEnd == c.EndLine {
-				return cb.buildChunkFromKBFunction(fn, c.File).Content
-			}
-		}
-		for _, cls := range fs.Classes {
-			if cls.LineStart == c.StartLine && cls.LineEnd == c.EndLine {
-				return cb.buildChunkFromKBClass(cls, c.File).Content
-			}
-			for _, m := range cls.Methods {
-				if m.LineStart == c.StartLine && m.LineEnd == c.EndLine {
-					return cb.buildChunkFromKBFunction(m, c.File).Content
-				}
-			}
+	if fileIdx, ok := cb.hydrateIdx[c.File]; ok {
+		if builder, ok := fileIdx[[2]int{c.StartLine, c.EndLine}]; ok {
+			return builder()
 		}
 	}
 	return ""

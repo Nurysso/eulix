@@ -27,6 +27,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -207,24 +208,35 @@ func resolveProvider(l config.LLMConfig) string {
 	return p
 }
 
-func (c *Client) LlmResponse(context *types.ContextWindow, userQuery string) (string, error) {
-	prompt := c.buildPrompt(context, userQuery)
+func (c *Client) LlmResponse(prompt string) (string, error) {
+	// Debug logging
 	if c.config.Project.DebugConfig {
-		fileName := fmt.Sprintf("Debug_Prompt_%s.txt", time.Now().Format("20060102_150405"))
-		f, err := os.Create(fileName)
+		logDir := filepath.Join(c.config.Project.Path, ".eulix")
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			return "", fmt.Errorf("failed to create debug directory: %w", err)
+		}
+
+		logFile := filepath.Join(logDir, "llmdebug.log")
+		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			return "", fmt.Errorf("failed to create debug file: %w", err)
+			return "", fmt.Errorf("failed to open debug log file: %w", err)
 		}
 		defer f.Close()
 
-		_, err = f.WriteString(fmt.Sprintf("%+v\n", prompt))
-		if err != nil {
-			return "", fmt.Errorf("failed to write debug prompt: %w", err)
-		}
+		debugEntry := fmt.Sprintf("\n%s\n=== LLM DEBUG ENTRY ===\nTimestamp: %s\nProvider: %s\nModel: %s\n\n=== PROMPT ===\n%s\n=== END PROMPT ===\n%s\n",
+			strings.Repeat("=", 80),
+			time.Now().Format("2006-01-02 15:04:05"),
+			resolveProvider(c.config.LLM),
+			c.config.LLM.Model,
+			prompt,
+			strings.Repeat("=", 80))
 
-		// Optionally, continue or return? If debug mode should stop here:
-		return "", nil
+		if _, err := f.WriteString(debugEntry); err != nil {
+			return "", fmt.Errorf("failed to write debug entry: %w", err)
+		}
 	}
+
+	// Use the prompt directly
 	switch p := resolveProvider(c.config.LLM); {
 	case p == ProviderAnthropic:
 		return c.queryAnthropic(prompt)
@@ -233,7 +245,6 @@ func (c *Client) LlmResponse(context *types.ContextWindow, userQuery string) (st
 	case p == ProviderGemini:
 		return c.queryGemini(prompt)
 	default:
-		// openai + all OpenAI-compatible servers (lm-studio, groq, together, vllm…)
 		return c.queryOpenAI(prompt)
 	}
 }

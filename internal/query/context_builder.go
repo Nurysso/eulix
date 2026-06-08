@@ -60,8 +60,6 @@ import (
 const (
 	BinaryVersion = uint32(3)
 	MagicBytes    = "EULX"
-	VectorVersion = uint32(3)
-	VectorMagic   = "EULX"
 )
 
 //  Constructor
@@ -143,7 +141,17 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	trace.Intent = intent
 	cb.debugLog.Log("Intent: %d (specificity: %.2f, confidence: %.2f)",
 		intent.Type, intent.Specificity, intent.Confidence)
-
+	var qEmb []float32
+	skipSemantic := intent.Type == IntentCallers ||
+		intent.Type == IntentCallees ||
+		intent.Specificity > 0.85
+	if cb.hasEmbeddings && !skipSemantic {
+		if emb, err := cb.queryEmbedder.EmbedQueryBinary(query); err == nil {
+			qEmb = emb
+		} else {
+			trace.Warnings = append(trace.Warnings, "query embedding failed: "+err.Error())
+		}
+	}
 	budget := cb.allocateBudget(query, intent)
 	trace.Budget = budget
 	cb.debugLog.Log("Budget: %d tokens for context (total: %d)",
@@ -166,7 +174,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	}
 
 	candidateLimit := cb.candidateLimitForIntent(intent)
-	candidates := cb.multiStrategySearch(query, candidateLimit, intent, trace)
+	candidates := cb.multiStrategySearch(query, candidateLimit, intent, trace, qEmb)
 	trace.TotalCandidates = len(candidates)
 	cb.debugLog.Log("Multi-strategy search: %d candidates", len(candidates))
 	// Merge anchors + callsite hits
@@ -184,12 +192,6 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	var selected []Chunk
 	if cb.hasEmbeddings {
 		trace.SelectionMethod = "mmr"
-		var qEmb []float32
-		if emb, err := cb.queryEmbedder.EmbedQueryBinary(query); err == nil {
-			qEmb = emb
-		} else {
-			trace.Warnings = append(trace.Warnings, "query embedding failed: "+err.Error())
-		}
 		selected = cb.mmrSelect(expanded, budget.ContextBudget, qEmb, anchorFiles, trace)
 	} else {
 		trace.SelectionMethod = "greedy"
