@@ -12,152 +12,267 @@ except the analyze command.
 package embeddings
 
 import (
-	"bytes"
-	"encoding/binary"
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os/exec"
+	"sync"
+	"time"
 )
 
-// Embedder wraps the eulix_embed.py Python script for embedding generation.
-// This ensures consistent embeddings with the KB generation pipeline.
+// Embedder holds a long-lived eulix_embed.py serve subprocess.
+// The Python process keeps the model loaded between calls, so each
+// EmbedQueryBinary call costs only the encode() time (~5-50ms) rather
+// than a full Python+torch startup (~3-5s).
+//
+// Protocol: newline-delimited JSON on stdin/stdout.
+//
+//	Send:    {"query": "text"}\n
+//	Receive: {"embedding": [f32,...], "dimension": N, "model": "..."}\n
+//	Error:   {"error": "message"}\n
 type Embedder struct {
-	scriptPath string
-	pythonPath string
-	venvEnv    []string
-	model      string
-	backend    string
-	dimension  int
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout *bufio.Scanner
+	enc    *json.Encoder
+	mu     sync.Mutex
+	model  string
+	dim    int
 }
 
 // QueryEmbedder is an alias for Embedder to maintain compatibility.
 type QueryEmbedder = Embedder
 
-// QueryEmbeddingResult represents the JSON output from eulix_embed.
-type QueryEmbeddingResult struct {
-	Query     string    `json:"query"`
-	Model     string    `json:"model"`
-	Dimension int       `json:"dimension"`
-	Embedding []float32 `json:"embedding"`
+// serveReadyMsg is what the Python serve command writes to stdout
+// as its first line when the model is loaded and ready.
+type serveReadyMsg struct {
+	Ready bool   `json:"ready"`
+	Model string `json:"model"`
+	Dim   int    `json:"dim"`
 }
 
-// VectorWeaver creates a new query embedder, locating the embed script and
-// venv interpreter automatically.
+// serveRequest is what we send to the Python process on stdin.
+type serveRequest struct {
+	Query string `json:"query"`
+}
+
+// serveResponse is what the Python process writes to stdout per request.
+type serveResponse struct {
+	Embedding []float32 `json:"embedding"`
+	Dimension int       `json:"dimension"`
+	Model     string    `json:"model"`
+	Error     string    `json:"error"`
+}
+
+// VectorWeaver starts eulix_embed.py in serve mode and waits for the model
+// to finish loading. The subprocess stays alive for the lifetime of the
+// returned Embedder; call Close() when done.
 func VectorWeaver(model string) (*Embedder, error) {
 	scriptPath, pythonPath, venvEnv, err := FindEulixEmbed()
 	if err != nil {
 		return nil, err
 	}
-	return &Embedder{
-		scriptPath: scriptPath,
-		pythonPath: pythonPath,
-		venvEnv:    venvEnv,
-		model:      model,
-		dimension:  0,
-	}, nil
+
+	cmd := exec.Command(pythonPath, scriptPath, "serve", "-m", model)
+	cmd.Env = venvEnv
+
+	// Pipe stdin so we can send JSON requests.
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdin pipe: %w", err)
+	}
+
+	// Pipe stdout so we can read JSON responses.
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+
+	// Discard stderr — the Python serve command writes human-readable
+	// progress there (e.g. "Loading model…", "✓ Ready"). We don't parse it.
+	// If you want to see it, replace with os.Stderr.
+	cmd.Stderr = nil // inherits /dev/null; swap to os.Stderr to debug
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start eulix_embed serve: %w", err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	// Increase scanner buffer for large embedding responses.
+	// 768-dim = ~25 KB JSON; 3072-dim = ~100 KB JSON. 4 MB is safe.
+	scanner.Buffer(make([]byte, 4*1024*1024), 4*1024*1024)
+
+	e := &Embedder{
+		cmd:    cmd,
+		stdin:  stdin,
+		stdout: scanner,
+		enc:    json.NewEncoder(stdin),
+		model:  model,
+	}
+
+	// The Python serve command writes its ready JSON as the FIRST line on
+	// stdout (not stderr). Block here until we see it or timeout.
+	if err := e.waitReady(); err != nil {
+		cmd.Process.Kill()
+		return nil, fmt.Errorf("embed process failed to start: %w", err)
+	}
+
+	return e, nil
+}
+
+// waitReady reads the first JSON line from the subprocess stdout and checks
+// that it is the ready signal. Returns an error if it times out or the
+// response is not the expected ready message.
+func (e *Embedder) waitReady() error {
+	done := make(chan error, 1)
+
+	go func() {
+		if !e.stdout.Scan() {
+			err := e.stdout.Err()
+			if err == nil {
+				err = fmt.Errorf("subprocess stdout closed before ready signal")
+			}
+			done <- err
+			return
+		}
+
+		line := e.stdout.Bytes()
+		var msg serveReadyMsg
+		if err := json.Unmarshal(line, &msg); err != nil {
+			done <- fmt.Errorf("unexpected first line from embed process: %s", line)
+			return
+		}
+		if !msg.Ready {
+			done <- fmt.Errorf("embed process sent non-ready first message: %s", line)
+			return
+		}
+		e.dim = msg.Dim
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(60 * time.Second):
+		// 60s is generous: large models (bge-m3, nomic) can take 20-30s on
+		// first load from disk on a cold page cache.
+		return fmt.Errorf("timed out after 60s waiting for embed process ready signal")
+	}
+}
+
+// EmbedQueryBinary embeds a single query string and returns the float32 vector.
+// Sends {"query": "..."} on stdin and reads {"embedding": [...]} from stdout.
+// Thread-safe via mutex; only one request in flight at a time.
+func (e *Embedder) EmbedQueryBinary(query string) ([]float32, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Send the request as a single JSON line.
+	req := serveRequest{Query: query}
+	if err := e.enc.Encode(req); err != nil {
+		return nil, fmt.Errorf("write to embed process: %w", err)
+	}
+
+	// Read exactly one JSON line back.
+	if !e.stdout.Scan() {
+		err := e.stdout.Err()
+		if err == nil {
+			err = fmt.Errorf("embed process stdout closed unexpectedly")
+		}
+		return nil, fmt.Errorf("read from embed process: %w", err)
+	}
+
+	var resp serveResponse
+	if err := json.Unmarshal(e.stdout.Bytes(), &resp); err != nil {
+		return nil, fmt.Errorf("parse embed response: %w\nraw: %s", err, e.stdout.Bytes())
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("embed process error: %s", resp.Error)
+	}
+	if len(resp.Embedding) == 0 {
+		return nil, fmt.Errorf("embed process returned empty embedding")
+	}
+
+	e.dim = resp.Dimension
+	return resp.Embedding, nil
+}
+
+// Close sends a clean shutdown to the Python process and waits for it to exit.
+func (e *Embedder) Close() error {
+	// Ask the server to shut down gracefully first.
+	_ = e.enc.Encode(map[string]bool{"shutdown": true})
+	e.stdin.Close()
+	return e.cmd.Wait()
 }
 
 // Embed generates an embedding vector for the given text.
-// Uses binary output for performance; call EmbedQuery for JSON (debug) output.
 func (e *Embedder) Embed(text string) ([]float32, error) {
 	return e.EmbedQueryBinary(text)
 }
 
-// EmbedQuery generates an embedding using JSON output (for debugging).
-func (e *Embedder) EmbedQuery(query string) ([]float32, error) {
-	cmd := exec.Command(
-		e.pythonPath, e.scriptPath,
-		"query",
-		"-q", query,
-		"-m", e.model,
-		"-f", "json",
-	)
-	cmd.Env = e.venvEnv
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("eulix_embed failed: %w\nstderr: %s", err, stderr.String())
-	}
-
-	var result QueryEmbeddingResult
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse embedding result: %w", err)
-	}
-
-	if e.dimension != result.Dimension {
-		e.dimension = result.Dimension
-	}
-	return result.Embedding, nil
-}
-
-// EmbedQueryBinary generates an embedding using binary output (faster, recommended).
-func (e *Embedder) EmbedQueryBinary(query string) ([]float32, error) {
-	cmd := exec.Command(
-		e.pythonPath, e.scriptPath,
-		"query",
-		"-q", query,
-		"-m", e.model,
-		"-f", "binary",
-	)
-	cmd.Env = e.venvEnv
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("eulix_embed failed: %w\nstderr: %s", err, stderr.String())
-	}
-
-	data := stdout.Bytes()
-	if len(data) < 4 {
-		return nil, fmt.Errorf("invalid binary output: too short")
-	}
-
-	dimension := binary.LittleEndian.Uint32(data[0:4])
-	expectedSize := 4 + int(dimension)*4
-	if len(data) != expectedSize {
-		return nil, fmt.Errorf("invalid binary output: expected %d bytes, got %d", expectedSize, len(data))
-	}
-
-	if e.dimension != int(dimension) {
-		e.dimension = int(dimension)
-	}
-
-	embedding := make([]float32, dimension)
-	offset := 4
-	for i := range embedding {
-		bits := binary.LittleEndian.Uint32(data[offset : offset+4])
-		embedding[i] = math.Float32frombits(bits)
-		offset += 4
-	}
-	return embedding, nil
-}
-
-// GetDimension returns the embedding dimension (0 until first Embed call).
-func (e *Embedder) GetDimension() int { return e.dimension }
+// GetDimension returns the embedding dimension (0 until ready signal received).
+func (e *Embedder) GetDimension() int { return e.dim }
 
 // GetModel returns the model name.
 func (e *Embedder) GetModel() string { return e.model }
 
-// Close cleans up resources (no-op for command-based embedder).
-func (e *Embedder) Close() error { return nil }
-
-// BatchEmbed generates embeddings for multiple texts in order.
+// BatchEmbed embeds multiple texts sequentially.
+// For large batches, consider using BatchEmbedBatch to send a single
+// {"queries": [...]} request to the Python server instead.
 func (e *Embedder) BatchEmbed(texts []string) ([][]float32, error) {
-	embeddings := make([][]float32, len(texts))
+	result := make([][]float32, len(texts))
 	for i, text := range texts {
 		emb, err := e.Embed(text)
 		if err != nil {
-			return nil, fmt.Errorf("failed to embed text %d: %w", i, err)
+			return nil, fmt.Errorf("embed text %d: %w", i, err)
 		}
-		embeddings[i] = emb
+		result[i] = emb
 	}
-	return embeddings, nil
+	return result, nil
+}
+
+// BatchEmbedBatch sends all texts in a single request to the Python server,
+// which is more efficient than calling Embed in a loop for large batches.
+func (e *Embedder) BatchEmbedBatch(texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	type batchRequest struct {
+		Queries []string `json:"queries"`
+	}
+	type batchResponse struct {
+		Embeddings [][]float32 `json:"embeddings"`
+		Dimension  int         `json:"dimension"`
+		Model      string      `json:"model"`
+		Error      string      `json:"error"`
+	}
+
+	if err := e.enc.Encode(batchRequest{Queries: texts}); err != nil {
+		return nil, fmt.Errorf("write batch request: %w", err)
+	}
+
+	if !e.stdout.Scan() {
+		err := e.stdout.Err()
+		if err == nil {
+			err = fmt.Errorf("stdout closed")
+		}
+		return nil, fmt.Errorf("read batch response: %w", err)
+	}
+
+	var resp batchResponse
+	if err := json.Unmarshal(e.stdout.Bytes(), &resp); err != nil {
+		return nil, fmt.Errorf("parse batch response: %w", err)
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("batch embed error: %s", resp.Error)
+	}
+	return resp.Embeddings, nil
 }
 
 // VerifyConsistency checks that the embedder produces deterministic results.
@@ -175,7 +290,7 @@ func (e *Embedder) VerifyConsistency(testText string) error {
 	}
 	for i := range emb1 {
 		if math.Abs(float64(emb1[i]-emb2[i])) > 1e-6 {
-			return fmt.Errorf("embeddings not consistent at index %d: %f vs %f", i, emb1[i], emb2[i])
+			return fmt.Errorf("embedding not deterministic at index %d: %f vs %f", i, emb1[i], emb2[i])
 		}
 	}
 	return nil
@@ -185,9 +300,6 @@ func (e *Embedder) VerifyConsistency(testText string) error {
 func (e *Embedder) GetModelInfo() map[string]interface{} {
 	return map[string]interface{}{
 		"model":     e.model,
-		"backend":   e.backend,
-		"dimension": e.dimension,
-		"script":    e.scriptPath,
-		"python":    e.pythonPath,
+		"dimension": e.dim,
 	}
 }
