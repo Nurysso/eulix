@@ -3,7 +3,7 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::kb::types::*;
+use crate::struc::kb_struct::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

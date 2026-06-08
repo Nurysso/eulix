@@ -3,7 +3,7 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::kb::types::*;
+use crate::struc::kb_struct::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -153,7 +153,7 @@ impl Analyzer {
             .par_iter()
             .flat_map(|chunk| {
                 let mut local_nodes = Vec::with_capacity(chunk.len() * 10);
-                for (filepath, filedata) in chunk.iter() {
+                for (_filepath, filedata) in chunk.iter() {
                     for func in &filedata.functions {
                         local_nodes.push((
                             func.id.clone(),
@@ -217,7 +217,7 @@ impl Analyzer {
 
         // (File index logic remains same, but omitted for brevity to focus on Phase 2)
         let file_list: Vec<String> = structure.keys().cloned().collect();
-        let file_map: HashMap<String, usize> = file_list
+        let _file_map: HashMap<String, usize> = file_list
             .iter()
             .enumerate()
             .map(|(i, f)| (f.clone(), i))
