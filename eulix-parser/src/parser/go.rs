@@ -3,7 +3,7 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::kb::types::*;
+use crate::struc::kb_struct::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -193,7 +193,7 @@ impl GoParser {
                 "method_declaration" => {
                     // Method - has receiver
                     // eprintln!("  Found method_declaration");
-                    let (receiver_type, receiver_name) = self.parse_receiver(&child);
+                    let (receiver_type, _receiver_name) = self.parse_receiver(&child);
                     let struct_context = receiver_type.as_deref().unwrap_or("");
 
                     if let Some(func) = self.parse_function(&child, struct_context) {
@@ -369,7 +369,7 @@ impl GoParser {
         // Print children structure
         let mut rc = receiver.walk();
         for child in receiver.children(&mut rc) {
-            let child_text = self.get_node_text(&child);
+            // let _child_text = self.get_node_text(&child);
             // eprintln!(
             //     "      Receiver child: kind='{}', text='{}'",
             //     child.kind(),
