@@ -35,7 +35,31 @@ type Router struct {
 	kbIndex         *KBIndex
 	callGraph       *CallGraph
 	kb              *types.KnowledgeBase
+	index           *types.IndexRef
+	metricsIdx      *metricsIndex // pre-built; nil until kb is loaded
+	cgIdx           *callGraphIndex
 	currentChecksum string
+}
+
+type metricsIndex struct {
+	topComplex  []fnEntry          // top-N by complexity, pre-sorted
+	summary     projectSummary     // project-wide counters
+	byName      map[string]fnEntry // name → first match
+	entryPoints []types.EntryPoint
+}
+
+type callGraphIndex struct {
+	mu    sync.RWMutex
+	cache map[string]string // entity → pre-rendered two-level tree string
+}
+
+type projectSummary struct {
+	name      string
+	files     int
+	loc       int
+	functions int
+	languages string
+	parsedAt  string
 }
 
 type match struct {
@@ -118,9 +142,11 @@ type ContextBuilder struct {
 	debugLog     *DebugLogger
 
 	// Thread-safe trace storage
-	mu          sync.Mutex
-	lastTrace   *DebugTrace
+	mu        sync.Mutex
+	lastTrace *DebugTrace
+
 	boilerplate *BoilerplateDetector
+	hydrateIdx  map[string]map[[2]int]func() string // file -> (start,end) -> content builder
 }
 
 type Chunk struct {

@@ -34,14 +34,14 @@ import (
 	"eulix/internal/llm"
 )
 
-func QueryTrafficController(eulixDir string, cfg *config.Config, llmClient *llm.Client, cacheManager *cache.Manager) (*Router, error) {
+func QueryTrafficController(
+	eulixDir string,
+	cfg *config.Config,
+	llmClient *llm.Client,
+	cacheManager *cache.Manager,
+) (*Router, error) {
+	// Always load these (they're smaller)
 	kbIndex, err := loadKBIndex(eulixDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load KB index: %w", err)
-	}
-
-	// in QueryTrafficController, after loading kbIndex:
-	kb, err := loadKBFull(eulixDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load KB index: %w", err)
 	}
@@ -51,8 +51,7 @@ func QueryTrafficController(eulixDir string, cfg *config.Config, llmClient *llm.
 		return nil, fmt.Errorf("failed to load call graph: %w", err)
 	}
 
-	kbIndexPath := filepath.Join(eulixDir, "kb_index.json")
-	classifier, err := QuerySheriff(kbIndexPath)
+	classifier, err := QuerySheriff(filepath.Join(eulixDir, "kb_index.json"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create classifier: %w", err)
 	}
@@ -66,11 +65,59 @@ func QueryTrafficController(eulixDir string, cfg *config.Config, llmClient *llm.
 		contextBuilder: nil,
 		kbIndex:        kbIndex,
 		callGraph:      callGraph,
-		kb:             kb,
+		kb:             nil, // Load lazily when needed
+		cgIdx:          newCallGraphIndex(),
 	}, nil
 }
 
-//  Main dispatch ─
+func (r *Router) PromptOrAnswer(query string) (string, error) {
+	classification := r.classifier.Classify(query)
+
+	// ── Non‑LLM queries – return direct answer ──
+	switch classification.Type {
+	case QueryTypeLocation:
+		return r.handleLocation(query, classification)
+	case QueryTypeUsage:
+		return r.handleUsage(query, classification)
+	case QueryTypeDependency:
+		return r.handleDependency(query, classification)
+	case QueryTypeCallGraph:
+		return r.handleCallGraph(query, classification)
+	case QueryTypeEntryPoints:
+		return r.handleEntryPoints(query, classification)
+	case QueryTypeFileStructure:
+		return r.handleFileStructure(query)
+	case QueryTypeTodos:
+		return r.handleTodosQuery(query, classification)
+	case QueryTypeMetrics:
+		return r.handleMetrics(query, classification)
+	case QueryTypeCodeGeneration:
+		return r.handleCodeGeneration()
+	}
+
+	// LLM queries – build context + return the full prompt
+	if err := r.ensureContextBuilder(); err != nil {
+		return "", err
+	}
+
+	ctx, err := r.contextBuilder.BuildContext(query)
+	if err != nil {
+		return "", fmt.Errorf("failed to build context: %w", err)
+	}
+
+	src := hasSourceCode(ctx)
+	taskBody := getTaskBody(r, query, classification)
+
+	// Build the complete prompt with context and CoT
+	contextPrompt := r.llmClient.BuildFullPrompt(ctx, query)
+	cotPrompt := BuildPromptString(query, classification, src, taskBody)
+
+	// Combine context inventory + CoT prompt
+	fullPrompt := contextPrompt + "\n\n" + cotPrompt
+	return fullPrompt, nil
+}
+
+// Main dispatch
 
 func (r *Router) QueryEngine(query string) (string, error) {
 	if r.cache != nil && r.currentChecksum != "" {
@@ -160,7 +207,7 @@ func (r *Router) QueryEngine(query string) (string, error) {
 	case QueryTypeEntryPoints:
 		response, err = r.handleEntryPoints(query, classification)
 	case QueryTypeFileStructure:
-		response, err = r.handleFileStructure(query, classification)
+		response, err = r.handleFileStructure(query)
 	case QueryTypeTodos:
 		response, err = r.handleTodosQuery(query, classification)
 	case QueryTypeMetrics:

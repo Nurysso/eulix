@@ -31,7 +31,7 @@ import (
 
 const (
 	AppName    = "Eulix"
-	AppVersion = "v0.6.6"
+	AppVersion = "v0.6.8"
 )
 
 var (
@@ -188,7 +188,7 @@ var queryCmd = &cobra.Command{
 			return
 		}
 		eulixDir := ".eulix"
-		// ... checksum check (optional) ...
+		// checksum check (todo)
 
 		llmClient, err := llm.MouthClient(cfg)
 		if err != nil {
@@ -206,6 +206,7 @@ var queryCmd = &cobra.Command{
 		defer router.Close()
 
 		// Get either the prompt or the direct answer
+		// answer from non llm queries and prompt for llm based queries
 		result, err := router.PromptOrAnswer(userQuery)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
