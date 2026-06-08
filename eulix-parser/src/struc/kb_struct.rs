@@ -6,6 +6,29 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// kb.json structure
+#[derive(Serialize)]
+pub struct KnowledgeBaseSimplifiedRef<'a> {
+    pub metadata: &'a Metadata,
+    pub structure: &'a HashMap<String, FileData>,
+}
+
+// kb_index.json(*_indesx.json) structure
+#[derive(Serialize)]
+pub struct IndexDataRef<'a> {
+    pub indices: &'a Indices,
+    pub entry_points: &'a [EntryPoint],
+    pub external_dependencies: &'a [ExternalDependency],
+    pub patterns: &'a PatternInfo,
+}
+
+// kb_call_graph.json (*_call_graph.json) structure
+#[derive(Serialize)]
+pub struct CallGraphRef<'a> {
+    pub nodes: &'a [CallGraphNode],
+    pub edges: &'a [CallGraphEdge],
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KnowledgeBase {
     pub metadata: Metadata,

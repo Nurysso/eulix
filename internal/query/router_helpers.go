@@ -61,10 +61,30 @@ func hasSourceCode(ctx *types.ContextWindow) bool {
 // firstSymbolOrExtracted returns the first classified symbol or falls back to
 // heuristic extraction from the raw query string.
 func firstSymbolOrExtracted(class *Classification, query string) string {
-	if len(class.Symbols) > 0 {
-		return class.Symbols[0]
+	// Words that are metrics commands, not actual symbols
+	metricsCommands := map[string]bool{
+		"metrics":    true,
+		"summary":    true,
+		"overall":    true,
+		"project":    true,
+		"statistics": true,
 	}
-	return extractEntityName(query)
+
+	if len(class.Symbols) > 0 {
+		candidate := class.Symbols[0]
+		// If this looks like a metrics command rather than a symbol, don't return it
+		if !metricsCommands[strings.ToLower(candidate)] {
+			return candidate
+		}
+		// Fall through to extract from query instead
+	}
+
+	extracted := extractEntityName(query)
+	// Also check extracted value against metrics commands
+	if metricsCommands[strings.ToLower(extracted)] {
+		return ""
+	}
+	return extracted
 }
 
 func (r *Router) findTransitiveDependencies(funcName string, depth int) []string {
@@ -211,6 +231,10 @@ func (r *Router) fuzzySearch(entity string) []string {
 		out = append(out, fmt.Sprintf("%s (%s)", m.name, m.typ))
 	}
 	return out
+}
+
+func newCallGraphIndex() *callGraphIndex {
+	return &callGraphIndex{cache: make(map[string]string, 256)}
 }
 
 func fuzzyScore(pattern, target string) int {

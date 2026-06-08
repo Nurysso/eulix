@@ -70,11 +70,20 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-mod kb;
 mod parser;
+mod struc;
 mod utils;
 
-use kb::types::*;
+use crate::struc::kb_struct::CallGraph;
+use crate::struc::kb_struct::CallGraphRef;
+use crate::struc::kb_struct::DependencyGraph;
+use crate::struc::kb_struct::FileData;
+use crate::struc::kb_struct::IndexDataRef;
+use crate::struc::kb_struct::Indices;
+use crate::struc::kb_struct::KnowledgeBase;
+use crate::struc::kb_struct::KnowledgeBaseSimplifiedRef;
+use crate::struc::kb_struct::Metadata;
+use crate::struc::kb_struct::PatternInfo;
 use parser::analyze::Analyzer;
 use parser::c;
 use parser::cpp;
@@ -189,6 +198,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &bin_hash,
     )?;
 
+    // Store metadata before it might be moved
+    let metadata = kb.metadata.clone();
+
     if args.verbose {
         println!("\n{}", "─".repeat(64));
         println!("Parsing Complete!");
@@ -203,7 +215,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if !args.no_analyze {
-        // Phase 2: Analyze and build indices (parallel where possible)
+        // Phase 2: Analyze and build indices
         if args.verbose {
             println!("\n PHASE 2: BUILDING CALL GRAPH & INDICES");
             println!("{}", "─".repeat(64));
@@ -247,14 +259,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!("{}", "═".repeat(64));
         }
-
         // Phase 4: Write outputs
         if args.verbose {
             println!("\n PHASE 4: WRITING OUTPUT FILES");
             println!("{}", "─".repeat(64));
         }
 
-        // Determine output directory and file
         let output_path = Path::new(&args.output);
         let output_dir = if let Some(parent) = output_path.parent() {
             parent
@@ -272,38 +282,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let summary_path = output_dir.join(format!("{}_summary.json", base_name));
         let callgraph_path = output_dir.join(format!("{}_call_graph.json", base_name));
 
-        // Serialize all four in parallel
+        // Zero-copy views — no clone, no extra allocation
+        let kb_ref = KnowledgeBaseSimplifiedRef {
+            metadata: &kb.metadata,
+            structure: &kb.structure,
+        };
+        let index_ref = IndexDataRef {
+            indices: &kb.indices,
+            entry_points: &kb.entry_points,
+            external_dependencies: &kb.external_dependencies,
+            patterns: &kb.patterns,
+        };
+        let cg_ref = CallGraphRef {
+            nodes: &kb.call_graph.nodes,
+            edges: &kb.call_graph.edges,
+        };
+
+        // Serialize all four in parallel — each worker borrows its own ref
         let ((kb_json, index_json), (summary_json, callgraph_json)) = rayon::join(
             || {
                 rayon::join(
-                    || sonic_rs::to_string(&kb).expect("Failed to serialize kb"),
-                    || sonic_rs::to_string(&kb.indices).expect("Failed to serialize indices"),
+                    || sonic_rs::to_string(&kb_ref).expect("Failed to serialize kb"),
+                    || sonic_rs::to_string(&index_ref).expect("Failed to serialize indices"),
                 )
             },
             || {
                 rayon::join(
                     || sonic_rs::to_string_pretty(&summary).expect("Failed to serialize summary"),
-                    || sonic_rs::to_string(&kb.call_graph).expect("Failed to serialize call_graph"),
+                    || sonic_rs::to_string(&cg_ref).expect("Failed to serialize call_graph"),
                 )
             },
         );
 
         // Write all four files in parallel
-        let files: Vec<(&Path, &str)> = vec![
-            (output_path, kb_json.as_str()),
-            (&index_path, index_json.as_str()),
-            (&summary_path, summary_json.as_str()),
-            (&callgraph_path, callgraph_json.as_str()),
+        let files: Vec<(&Path, &str, &str)> = vec![
+            (output_path, "knowledge base", kb_json.as_str()),
+            (&index_path, "index", index_json.as_str()),
+            (&summary_path, "summary", summary_json.as_str()),
+            (&callgraph_path, "call graph", callgraph_json.as_str()),
         ];
 
         let write_errors: Vec<String> = files
             .par_iter()
-            .filter_map(|(path, json)| {
+            .filter_map(|(path, name, json)| {
                 let result = fs::File::create(path).and_then(|f| {
                     let mut w = BufWriter::new(f);
                     w.write_all(json.as_bytes())
                 });
-                result.err().map(|e| format!("{}: {}", path.display(), e))
+                result
+                    .err()
+                    .map(|e| format!("{} ({}): {}", path.display(), name, e))
             })
             .collect();
 
@@ -314,17 +342,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if args.verbose {
-            for (path, _) in &files {
+            for (path, name, _) in &files {
                 if path.exists() {
                     let size = fs::metadata(path)?.len();
-                    println!("   ✓ {} ({:.2} KB)", path.display(), size as f64 / 1024.0);
+                    println!(
+                        "   ✓ {}: {} ({:.2} KB)",
+                        name,
+                        path.display(),
+                        size as f64 / 1024.0
+                    );
                 }
             }
-        }
-
-        if args.verbose {
             println!("{}", "═".repeat(64));
-            print_final_summary(&kb, &stats, start_time.elapsed().as_secs_f64());
+            print_final_summary(&metadata, &stats, start_time.elapsed().as_secs_f64());
         } else {
             println!(
                 "✓ Parsed {} files ({} LOC) in {:.2}s → {}",
@@ -335,7 +365,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     } else {
-        // Only write basic kb.json without analysis
+        // Write only kb.json without analysis
         if args.verbose {
             println!("\n WRITING OUTPUT (ANALYSIS SKIPPED)");
             println!("{}", "─".repeat(64));
@@ -346,19 +376,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fs::create_dir_all(parent)?;
         }
 
-        let kb_json = serde_json::to_string(&kb)?;
+        // Write simplified KnowledgeBase
+        let kb_simplified = KnowledgeBaseSimplifiedRef {
+            metadata: &kb.metadata,
+            structure: &kb.structure,
+        };
+
+        let kb_json = serde_json::to_string(&kb_simplified)?;
         fs::write(output_path, kb_json)?;
 
         if args.verbose {
             let size = fs::metadata(output_path)?.len();
             println!("   ✓ {} ({:.2} KB)", args.output, size as f64 / 1024.0);
             println!("{}", "═".repeat(64));
-            print_final_summary(&kb, &stats, start_time.elapsed().as_secs_f64());
+            print_final_summary(&metadata, &stats, start_time.elapsed().as_secs_f64());
         } else {
             println!(
                 "✓ Parsed {} files ({} LOC) in {:.2}s → {} (no analysis)",
-                kb.metadata.total_files,
-                kb.metadata.total_loc,
+                metadata.total_files,
+                metadata.total_loc,
                 start_time.elapsed().as_secs_f64(),
                 args.output
             );
@@ -368,35 +404,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn print_final_summary(kb: &KnowledgeBase, stats: &ParseStats, total_time: f64) {
+fn print_final_summary(metadata: &Metadata, stats: &ParseStats, total_time: f64) {
     println!("EXECUTION TIME");
     println!("   Total:                  {:.2}s", total_time);
     println!();
 
     println!("CODE METRICS");
-    println!("   Files Processed:        {}", kb.metadata.total_files);
-    println!("   Total Lines of Code:    {}", kb.metadata.total_loc);
-    println!("   Functions:              {}", kb.metadata.total_functions);
-    println!("   Classes:                {}", kb.metadata.total_classes);
-    println!("   Methods:                {}", kb.metadata.total_methods);
+    println!("   Files Processed:        {}", metadata.total_files);
+    println!("   Total Lines of Code:    {}", metadata.total_loc);
+    println!("   Functions:              {}", metadata.total_functions);
+    println!("   Classes:                {}", metadata.total_classes);
+    println!("   Methods:                {}", metadata.total_methods);
     println!();
 
     println!("LANGUAGES DETECTED");
-    for lang in &kb.metadata.languages {
+    for lang in &metadata.languages {
         println!("   • {}", lang);
     }
     println!();
-
-    println!(" ANALYSIS RESULTS");
-    println!("   Call Graph Nodes:       {}", kb.call_graph.nodes.len());
-    println!("   Call Graph Edges:       {}", kb.call_graph.edges.len());
-    println!("   Entry Points:           {}", kb.entry_points.len());
-    println!(
-        "   External Dependencies:  {}",
-        kb.external_dependencies.len()
-    );
-    println!();
-
     if !stats.failed.is_empty() {
         println!();
         println!("[!]  FAILED FILES:");
@@ -411,7 +436,6 @@ fn print_final_summary(kb: &KnowledgeBase, stats: &ParseStats, total_time: f64) 
     println!("   ✗ Failed:               {} files", stats.failed.len());
     println!(" Analysis complete!");
 }
-
 fn parse_directory(
     dir: &str,
     languages: &str,
