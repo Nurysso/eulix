@@ -44,6 +44,7 @@ Trace output (ChunkTrace) captures:
 package query
 
 import (
+	"fmt"
 	"math"
 	"sort"
 )
@@ -56,8 +57,32 @@ const (
 )
 
 func (cb *ContextBuilder) mmrSelect(
-	candidates []ScoredChunk, budget int, qEmb []float32, anchorFiles map[string]bool, trace *DebugTrace,
+	candidates []ScoredChunk,
+	budget int,
+	qEmb []float32,
+	anchorFiles map[string]bool,
+	trace *DebugTrace,
+	gate PathGate,
 ) []Chunk {
+	// Pre-filter candidates through the gate before the MMR loop.
+	// This is a second line of defence: multiStrategySearch already
+	// ran applyGate per strategy, but multiBoost accumulation across
+	// strategies can resurrect off-path chunks that each individually
+	// slipped through. Filtering here is cheap (one pass, pre-loop).
+	if gate.active {
+		filtered := make([]ScoredChunk, 0, len(candidates))
+		for _, c := range candidates {
+			if gate.Pass(c.File) {
+				c.Score *= gate.Boost(c.File)
+				filtered = append(filtered, c)
+			}
+		}
+		candidates = filtered
+		if trace != nil {
+			trace.Warnings = append(trace.Warnings,
+				fmt.Sprintf("gate filtered to %d candidates", len(candidates)))
+		}
+	}
 	if len(candidates) == 0 {
 		return nil
 	}

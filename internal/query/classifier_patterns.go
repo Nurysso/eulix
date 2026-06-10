@@ -89,10 +89,5 @@ func QuerySheriff(kbIndexPath string) (*Classifier, error) {
 		validSymbols:          make(map[string]bool),
 		validTypes:            make(map[string]bool),
 	}
-	if kbIndexPath != "" {
-		if err := c.loadSymbols(kbIndexPath); err != nil {
-			return nil, err
-		}
-	}
 	return c, nil
 }
