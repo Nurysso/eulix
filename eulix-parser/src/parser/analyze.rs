@@ -696,37 +696,35 @@ impl Analyzer {
 
     /// Analyze external dependencies - OPTIMIZED
     fn analyze_external_deps(kb: &KnowledgeBase) -> Vec<ExternalDependency> {
-        // Collect all dependencies in parallel without locks
         let all_deps: Vec<_> = kb
             .structure
             .par_iter()
             .flat_map(|(filepath, filedata)| {
-                let mut local_deps = Vec::new();
-                for import in &filedata.imports {
-                    if import.import_type == "external" {
-                        local_deps.push((import.module.clone(), filepath.clone()));
-                    }
-                }
-                local_deps
+                filedata
+                    .imports
+                    .iter()
+                    .filter(|i| i.import_type != "internal" && i.import_type != "cgo")
+                    .map(|i| (i.module.clone(), filepath.clone(), i.import_type.clone()))
+                    .collect::<Vec<_>>()
             })
             .collect();
 
         // Build dependency map from collected data
-        let mut deps_map: HashMap<String, HashSet<String>> = HashMap::new();
-        for (module, filepath) in all_deps {
-            deps_map
+        // (files, import_type) — import_type from first occurrence wins
+        let mut deps_map: HashMap<String, (HashSet<String>, String)> = HashMap::new();
+        for (module, filepath, import_type) in all_deps {
+            let entry = deps_map
                 .entry(module)
-                .or_insert_with(HashSet::new)
-                .insert(filepath);
+                .or_insert_with(|| (HashSet::new(), import_type));
+            entry.0.insert(filepath);
         }
 
-        // Convert to vec
         deps_map
             .into_iter()
-            .map(|(name, files)| ExternalDependency {
+            .map(|(name, (files, import_type))| ExternalDependency {
                 name,
                 version: None,
-                source: "imports".to_string(),
+                source: import_type, // "stdlib" | "external"
                 import_count: files.len(),
                 used_by: files.into_iter().collect(),
             })
@@ -830,17 +828,21 @@ impl Analyzer {
             .iter()
             .map(|ep| format!("{}:{}", ep.file, ep.line))
             .collect();
+        // for debuging level 3 todo
+        // for d in &kb.external_dependencies {
+        //     println!("DEP: {:?}  LANGS: {:?}", d.name, summary.languages);
+        // }
         summary.dependencies = DependencyInfo {
             stdlib: kb
                 .external_dependencies
                 .iter()
-                .filter(|d| Self::is_stdlib(&d.name))
+                .filter(|d| d.source == "stdlib")
                 .map(|d| d.name.clone())
                 .collect(),
             third_party: kb
                 .external_dependencies
                 .iter()
-                .filter(|d| !Self::is_stdlib(&d.name))
+                .filter(|d| d.source == "external")
                 .map(|d| d.name.clone())
                 .collect(),
         };
@@ -849,28 +851,52 @@ impl Analyzer {
         summary
     }
 
-    fn is_stdlib(module: &str) -> bool {
-        let stdlib = [
-            "os",
-            "sys",
-            "re",
-            "json",
-            "datetime",
-            "time",
-            "collections",
-            "itertools",
-            "functools",
-            "pathlib",
-            "subprocess",
-            "threading",
-            "asyncio",
-            "typing",
-            "math",
-            "random",
-            "hashlib",
-            "uuid",
-        ];
-        stdlib.contains(&module)
+    pub fn generate_metrics<'a>(kb: &'a KnowledgeBase, k: usize) -> MetricsReport<'a> {
+        use std::cmp::Ordering;
+
+        // Flat iterator over every function and method in the KB.
+        let mut metrics: Vec<FunctionMetric<'a>> = kb
+            .structure
+            .iter()
+            .flat_map(|(file, fd)| {
+                let top_level = fd.functions.iter().map(move |f| FunctionMetric {
+                    name: &f.name,
+                    file: file.as_str(),
+                    complexity: f.complexity,
+                    importance_score: f.importance_score,
+                    line_start: f.line_start,
+                    line_end: f.line_end,
+                });
+                let methods = fd.classes.iter().flat_map(move |c| {
+                    c.methods.iter().map(move |m| FunctionMetric {
+                        name: &m.name,
+                        file: file.as_str(),
+                        complexity: m.complexity,
+                        importance_score: m.importance_score,
+                        line_start: m.line_start,
+                        line_end: m.line_end,
+                    })
+                });
+                top_level.chain(methods)
+            })
+            .collect();
+
+        metrics.sort_unstable_by(|a, b| {
+            b.complexity
+                .cmp(&a.complexity)
+                .then_with(|| {
+                    b.importance_score
+                        .partial_cmp(&a.importance_score)
+                        .unwrap_or(Ordering::Equal)
+                })
+                .then_with(|| a.name.cmp(b.name))
+        });
+        metrics.truncate(k);
+
+        MetricsReport {
+            metadata: &kb.metadata,
+            top_complex_functions: metrics,
+        }
     }
 
     fn categorize_files(structure: &HashMap<String, FileData>) -> HashMap<String, Vec<String>> {
