@@ -77,6 +77,8 @@ mod utils;
 use crate::struc::kb_struct::CallGraph;
 use crate::struc::kb_struct::CallGraphRef;
 use crate::struc::kb_struct::DependencyGraph;
+use crate::struc::kb_struct::EntryPointsRef;
+use crate::struc::kb_struct::ExternalDepsRef;
 use crate::struc::kb_struct::FileData;
 use crate::struc::kb_struct::IndexDataRef;
 use crate::struc::kb_struct::Indices;
@@ -84,6 +86,7 @@ use crate::struc::kb_struct::KnowledgeBase;
 use crate::struc::kb_struct::KnowledgeBaseSimplifiedRef;
 use crate::struc::kb_struct::Metadata;
 use crate::struc::kb_struct::PatternInfo;
+use crate::struc::kb_struct::PatternsRef;
 use parser::analyze::Analyzer;
 use parser::c;
 use parser::cpp;
@@ -251,10 +254,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let summary_start = Instant::now();
         let summary = Analyzer::generate_summary(&kb);
+        const TOP_K: usize = 20;
+        let metrics = Analyzer::generate_metrics(&kb, TOP_K);
 
         if args.verbose {
             println!(
-                " Summary generated in {:.2}s",
+                " Summary + metrics generated in {:.2}s",
                 summary_start.elapsed().as_secs_f64()
             );
             println!("{}", "═".repeat(64));
@@ -281,6 +286,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let index_path = output_dir.join(format!("{}_index.json", base_name));
         let summary_path = output_dir.join(format!("{}_summary.json", base_name));
         let callgraph_path = output_dir.join(format!("{}_call_graph.json", base_name));
+        let metrics_path = output_dir.join(format!("{}_metrics.json", base_name));
+        let ep_path = output_dir.join(format!("{}_entry_points.json", base_name));
+        let deps_path = output_dir.join(format!("{}_external_deps.json", base_name));
+        let patterns_path = output_dir.join(format!("{}_patterns.json", base_name));
 
         // Zero-copy views — no clone, no extra allocation
         let kb_ref = KnowledgeBaseSimplifiedRef {
@@ -289,27 +298,65 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let index_ref = IndexDataRef {
             indices: &kb.indices,
-            entry_points: &kb.entry_points,
-            external_dependencies: &kb.external_dependencies,
-            patterns: &kb.patterns,
         };
         let cg_ref = CallGraphRef {
             nodes: &kb.call_graph.nodes,
             edges: &kb.call_graph.edges,
         };
+        let ep_ref = EntryPointsRef {
+            entry_points: &kb.entry_points,
+        };
+        let deps_ref = ExternalDepsRef {
+            external_dependencies: &kb.external_dependencies,
+        };
+        let pat_ref = PatternsRef {
+            patterns: &kb.patterns,
+        };
 
         // Serialize all four in parallel — each worker borrows its own ref
-        let ((kb_json, index_json), (summary_json, callgraph_json)) = rayon::join(
+        let (
+            (kb_json, index_json),
+            ((summary_json, callgraph_json), (metrics_json, (ep_json, (deps_json, patterns_json)))),
+        ) = rayon::join(
             || {
                 rayon::join(
-                    || sonic_rs::to_string(&kb_ref).expect("Failed to serialize kb"),
-                    || sonic_rs::to_string(&index_ref).expect("Failed to serialize indices"),
+                    || sonic_rs::to_string(&kb_ref).expect("serialize kb"),
+                    || sonic_rs::to_string(&index_ref).expect("serialize indices"),
                 )
             },
             || {
                 rayon::join(
-                    || sonic_rs::to_string_pretty(&summary).expect("Failed to serialize summary"),
-                    || sonic_rs::to_string(&cg_ref).expect("Failed to serialize call_graph"),
+                    || {
+                        rayon::join(
+                            || sonic_rs::to_string_pretty(&summary).expect("serialize summary"),
+                            || sonic_rs::to_string(&cg_ref).expect("serialize call_graph"),
+                        )
+                    },
+                    || {
+                        rayon::join(
+                            || sonic_rs::to_string_pretty(&metrics).expect("serialize metrics"),
+                            || {
+                                rayon::join(
+                                    || {
+                                        sonic_rs::to_string(&ep_ref)
+                                            .expect("serialize entry_points")
+                                    },
+                                    || {
+                                        rayon::join(
+                                            || {
+                                                sonic_rs::to_string(&deps_ref)
+                                                    .expect("serialize external_deps")
+                                            },
+                                            || {
+                                                sonic_rs::to_string(&pat_ref)
+                                                    .expect("serialize patterns")
+                                            },
+                                        )
+                                    },
+                                )
+                            },
+                        )
+                    },
                 )
             },
         );
@@ -320,16 +367,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             (&index_path, "index", index_json.as_str()),
             (&summary_path, "summary", summary_json.as_str()),
             (&callgraph_path, "call graph", callgraph_json.as_str()),
+            (&metrics_path, "metrics", metrics_json.as_str()),
+            (&ep_path, "entry points", ep_json.as_str()),
+            (&deps_path, "external deps", deps_json.as_str()),
+            (&patterns_path, "patterns", patterns_json.as_str()),
         ];
 
         let write_errors: Vec<String> = files
             .par_iter()
             .filter_map(|(path, name, json)| {
-                let result = fs::File::create(path).and_then(|f| {
-                    let mut w = BufWriter::new(f);
-                    w.write_all(json.as_bytes())
-                });
-                result
+                fs::File::create(path)
+                    .and_then(|f| {
+                        let mut w = BufWriter::new(f);
+                        w.write_all(json.as_bytes())
+                    })
                     .err()
                     .map(|e| format!("{} ({}): {}", path.display(), name, e))
             })

@@ -17,9 +17,6 @@ pub struct KnowledgeBaseSimplifiedRef<'a> {
 #[derive(Serialize)]
 pub struct IndexDataRef<'a> {
     pub indices: &'a Indices,
-    pub entry_points: &'a [EntryPoint],
-    pub external_dependencies: &'a [ExternalDependency],
-    pub patterns: &'a PatternInfo,
 }
 
 // kb_call_graph.json (*_call_graph.json) structure
@@ -27,6 +24,40 @@ pub struct IndexDataRef<'a> {
 pub struct CallGraphRef<'a> {
     pub nodes: &'a [CallGraphNode],
     pub edges: &'a [CallGraphEdge],
+}
+
+#[derive(Serialize)]
+pub struct EntryPointsRef<'a> {
+    pub entry_points: &'a [EntryPoint],
+}
+
+/// kb_external_deps.json
+#[derive(Serialize)]
+pub struct ExternalDepsRef<'a> {
+    pub external_dependencies: &'a [ExternalDependency],
+}
+
+/// kb_patterns.json
+#[derive(Serialize)]
+pub struct PatternsRef<'a> {
+    pub patterns: &'a PatternInfo,
+}
+
+/// kb_metrics.json metadata + top-K complex functions
+#[derive(Serialize)]
+pub struct MetricsReport<'a> {
+    pub metadata: &'a Metadata,
+    pub top_complex_functions: Vec<FunctionMetric<'a>>,
+}
+
+#[derive(Serialize)]
+pub struct FunctionMetric<'a> {
+    pub name: &'a str,
+    pub file: &'a str,
+    pub complexity: usize,
+    pub importance_score: f32,
+    pub line_start: usize,
+    pub line_end: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

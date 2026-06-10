@@ -34,7 +34,7 @@ type Router struct {
 	contextBuilder  *ContextBuilder
 	kbIndex         *KBIndex
 	callGraph       *CallGraph
-	kb              *types.KnowledgeBase
+	kb              *types.KnowledgeBaseRef
 	index           *types.IndexRef
 	metricsIdx      *metricsIndex // pre-built; nil until kb is loaded
 	cgIdx           *callGraphIndex
@@ -134,7 +134,7 @@ type ContextBuilder struct {
 
 	// Knowledge base and call graph
 	hasKB        bool
-	kbData       *types.KnowledgeBase
+	kbData       *types.KnowledgeBaseRef
 	hasCallGraph bool
 	callGraph    map[string][]Relationship
 	kbIdx        *KBIndex
@@ -252,9 +252,10 @@ type Posting struct {
 // InvertedIndex maps lowercase terms to sorted posting lists.
 // Lookup cost is O(|unique query terms|) rather than O(n_chunks × |terms|).
 type InvertedIndex struct {
-	mu       sync.RWMutex
-	Postings map[string][]Posting
-	DocCount int
+	mu             sync.RWMutex
+	Postings       map[string][]Posting
+	DocCount       int
+	AvgChunkTokens float64
 }
 
 // QueryEmbedder abstracts the binary embedding client for testability.
