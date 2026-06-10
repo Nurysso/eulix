@@ -42,7 +42,7 @@ File format notes:
     followed by count entries of [4B+str id][dim*4B float32 vector]
   - kb_call_graph.json: flat map of function ID → {Calls: [], CalledBy: []}
 
-Standalone routing helpers (loadKBIndex, loadKBFull, loadCallGraph) are provided
+Standalone routing helpers (loadKBIndex, loadCallGraph) are provided
 for the query-classification path, which operates outside the ContextBuilder
 lifecycle. They share the same streaming-decode logic as the ContextBuilder
 methods.
@@ -60,6 +60,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
+	"time"
 
 	"eulix/internal/types"
 )
@@ -86,6 +88,37 @@ const (
 	jsonBufSize = 1 << 20 // 1 MiB
 )
 
+// logFileLoad wraps a file load operation with timing + RSS delta logging.
+// Usage:
+//
+//	done := cb.logFileLoad("kb.json")
+//	err := decodeJSONFile(path, &kb)
+//	done(err)
+func (cb *ContextBuilder) logFileLoad(name string) func(error) {
+	var memBefore runtime.MemStats
+	runtime.ReadMemStats(&memBefore)
+	t0 := time.Now()
+	cb.debugLog.Log("[LOAD] %-30s opening  (heap: %d MB)",
+		name, memBefore.HeapInuse/1024/1024)
+
+	return func(err error) {
+		var memAfter runtime.MemStats
+		runtime.ReadMemStats(&memAfter)
+		elapsed := time.Since(t0)
+		heapDelta := int64(memAfter.HeapInuse) - int64(memBefore.HeapInuse)
+		if err != nil {
+			cb.debugLog.Log("[LOAD] %-30s FAILED   (%v) elapsed=%v",
+				name, err, elapsed)
+		} else {
+			cb.debugLog.Log("[LOAD] %-30s done     elapsed=%-10v heap_delta=+%d MB total_heap=%d MB",
+				name, elapsed,
+				heapDelta/1024/1024,
+				memAfter.HeapInuse/1024/1024,
+			)
+		}
+	}
+}
+
 // decodeJSONFile opens path and streams its content through a buffered
 // json.Decoder into v. Using a streaming decoder rather than os.ReadFile +
 // json.Unmarshal avoids holding both the raw file bytes and the parsed struct
@@ -108,18 +141,6 @@ func loadKBIndex(eulixDir string) (*KBIndex, error) {
 	return &idx, nil
 }
 
-// loadKBFull loads the complete knowledge base for routing purposes.
-// For large corpora this may still allocate several GBs of heap to hold the
-// parsed struct; callers in hot paths should prefer the ContextBuilder methods,
-// which apply lazy-content and chunk-level memory strategies.
-func loadKBFull(eulixDir string) (*types.KnowledgeBase, error) {
-	var kb types.KnowledgeBase
-	if err := decodeJSONFile(filepath.Join(eulixDir, "kb.json"), &kb); err != nil {
-		return nil, fmt.Errorf("kb.json: %w", err)
-	}
-	return &kb, nil
-}
-
 // loadCallGraph loads the raw call-graph file for routing purposes and returns
 // the routing-layer *CallGraph type.
 //
@@ -138,8 +159,11 @@ func loadCallGraph(eulixDir string) (*CallGraph, error) {
 //  ContextBuilder loaders
 
 func (cb *ContextBuilder) loadKnowledgeBase() error {
-	var kb types.KnowledgeBase
-	if err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb.json"), &kb); err != nil {
+	done := cb.logFileLoad("kb.json")
+	var kb types.KnowledgeBaseRef
+	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb.json"), &kb)
+	done(err)
+	if err != nil {
 		return fmt.Errorf("kb.json: %w", err)
 	}
 	cb.kbData = &kb
@@ -164,18 +188,23 @@ func (cb *ContextBuilder) loadKnowledgeBase() error {
 //   - boilerplate.go: NewBoilerplateDetector and isBoilerplateSymbol
 //   - context_kb.go: buildChunkFromKBFunction, buildChunkFromKBClass helpers
 func (cb *ContextBuilder) loadChunksFromKB() error {
-	// 1. Load kb_index.json (lightweight: just names + locations)
+	// 1 kb_index.json
+	done := cb.logFileLoad("kb_index.json")
 	var kbIdx KBIndex
-	if err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_index.json"), &kbIdx); err != nil {
+	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_index.json"), &kbIdx)
+	done(err)
+	if err != nil {
 		return fmt.Errorf("kb_index.json: %w", err)
 	}
 
-	// 2. Load kb.json for full content
-	var kb types.KnowledgeBase
-	if err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb.json"), &kb); err != nil {
+	// 2. kb.json
+	done = cb.logFileLoad("kb.json")
+	var kb types.KnowledgeBaseRef
+	err = decodeJSONFile(filepath.Join(cb.eulixDir, "kb.json"), &kb)
+	done(err)
+	if err != nil {
 		return fmt.Errorf("kb.json: %w", err)
 	}
-	cb.kbData = &kb
 
 	// 3. Build chunk slice + hydrate index simultaneously
 	total := 0
@@ -237,7 +266,8 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 	}
 
 	// 4. Boilerplate detector
-	cb.boilerplate = NewBoilerplateDetector(cb.chunks, dfThresholdDefault, bpMinChunks)
+	// cb.boilerplate = NewBoilerplateDetector(cb.chunks, dfThresholdDefault, bpMinChunks)
+	cb.buildBoilerplateFromKB(&kb)
 	cb.debugLog.Log("Boilerplate detector: %d symbols filtered (threshold=%.2f, corpus=%d) top: %v",
 		len(cb.boilerplate.boilerplate),
 		dfThresholdDefault,
@@ -262,9 +292,21 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 	}
 
 	cb.kbIdx = &kbIdx
-	cb.callSites = buildCallSiteIndex(cb.chunks)
-	cb.debugLog.Log("Built call-site index with %d entries", len(cb.callSites))
+	cb.hasKB = cb.kbData != nil
+	kb = types.KnowledgeBaseRef{}
+	runtime.GC()
 
+	// Load call graph and build call site index
+	done = cb.logFileLoad("kb_call_graph.json")
+	var callGraph types.CallGraphRef
+	err = decodeJSONFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"), &callGraph)
+	done(err)
+	if err != nil {
+		return fmt.Errorf("kb_call_graph.json: %w", err)
+	}
+
+	cb.callSites = buildCallSiteIndexFromGraph(&callGraph, cb.chunks)
+	cb.debugLog.Log("Built call-site index with %d entries", len(cb.callSites))
 	return nil
 }
 
@@ -286,7 +328,9 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 //   - context_vectorIVF.go: buildIVFIndex and vectorSearchIVF
 //   - context_search.go: vectorSearch integration point
 func (cb *ContextBuilder) loadEmbeddings() error {
+	done := cb.logFileLoad("embeddings.bin")
 	data, err := os.ReadFile(filepath.Join(cb.eulixDir, "embeddings.bin"))
+	done(err)
 	if err != nil {
 		return fmt.Errorf("embeddings.bin not found: %w", err)
 	}
@@ -302,17 +346,17 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 
 	version := binary.LittleEndian.Uint32(data[off : off+4])
 	off += 4
-	if version != 2 && version != 3 {
+	if version != 3 && version != 4 {
 		return fmt.Errorf("unsupported embeddings.bin version: %d", version)
 	}
-	if version != BinaryVersion {
-		return fmt.Errorf("version mismatch: expected %d, got %d", BinaryVersion, version)
-	}
 
-	_, off, err = readStr(data, off)
+	// Read model name
+	modelName, n, err := readStr(data, off)
 	if err != nil {
 		return fmt.Errorf("reading model name: %w", err)
 	}
+	off = n
+	_ = modelName // could validate against config
 
 	if off+8 > len(data) {
 		return fmt.Errorf("invalid embeddings file: truncated header")
@@ -320,39 +364,103 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	numEmb := int(binary.LittleEndian.Uint32(data[off : off+4]))
 	dim := int(binary.LittleEndian.Uint32(data[off+4 : off+8]))
 	off += 8
-	expectedDim := cb.config.Embeddings.Dimension
+
+	// Check for quantization flag (version 4 only)
+	quantized := false
+	if version == 4 {
+		if off >= len(data) {
+			return fmt.Errorf("missing quantization flag")
+		}
+		quantized = data[off] == 1
+		off++ // Skip quantization flag
+	}
+
 	if dim == 0 {
 		return fmt.Errorf("embeddings.bin has dim=0: file is corrupt or was written by an incompatible version, please regenerate")
 	}
-	if dim != expectedDim {
-		return fmt.Errorf("dimension mismatch: file has %d, model expects %d", dim, expectedDim)
+
+	// Validate header
+	if err := validateEmbeddingsHeader(numEmb, dim, quantized, len(data)); err != nil {
+		return err
 	}
 
 	cb.embeddings = make([][]float32, numEmb)
-	ids := make([]string, numEmb)
+	// ids := make([]string, numEmb)
 
+	var embID string
 	for i := 0; i < numEmb; i++ {
-		if version >= 3 {
-			ids[i], off, err = readStr(data, off)
-			if err != nil {
-				return fmt.Errorf("reading id at index %d: %w", i, err)
-			}
-		} else {
-			ids[i] = fmt.Sprintf("embedding_%d", i)
+		// Read ID (present in version >=3)
+		embID, off, err = readStr(data, off) // _ is replacement for ids
+		_ = embID
+		if err != nil {
+			return fmt.Errorf("reading id at index %d: %w", i, err)
 		}
-		if off+dim*4 > len(data) {
-			return fmt.Errorf("unexpected EOF reading vector at index %d", i)
-		}
+
 		emb := make([]float32, dim)
-		for j := range emb {
-			emb[j] = math.Float32frombits(binary.LittleEndian.Uint32(data[off : off+4]))
+		if quantized {
+			// SQ8 format: 4-byte scale + dim bytes of int8
+			if off+4 > len(data) {
+				return fmt.Errorf("unexpected EOF reading scale at index %d", i)
+			}
+			scale := math.Float32frombits(binary.LittleEndian.Uint32(data[off : off+4]))
 			off += 4
+
+			if off+dim > len(data) {
+				return fmt.Errorf("unexpected EOF reading quantized vector at index %d (need %d bytes, have %d)", i, dim, len(data)-off)
+			}
+
+			// Dequantize int8 -> float32
+			for j := 0; j < dim; j++ {
+				emb[j] = float32(int8(data[off+j])) * scale
+			}
+			off += dim
+			cb.embeddings[i] = emb
+		} else {
+			// Float32 format: dim * 4 bytes
+			if off+dim*4 > len(data) {
+				return fmt.Errorf("unexpected EOF reading vector at index %d", i)
+			}
+			for j := 0; j < dim; j++ {
+				emb[j] = math.Float32frombits(binary.LittleEndian.Uint32(data[off : off+4]))
+				off += 4
+			}
+			cb.embeddings[i] = emb
 		}
-		cb.embeddings[i] = emb
 	}
 
+	// Build IVF index if needed
 	if numEmb > ivfBuildThreshold {
 		cb.ivfIndex = buildIVFIndex(cb.embeddings, ivfNClusters, ivfKMeansIter)
+	}
+	return nil
+}
+
+func validateEmbeddingsHeader(numEmb, dim int, quantized bool, fileLen int) error {
+	// Calculate min entry size
+	var minEntryBytes int
+	if quantized {
+		// SQ8: 4B id-len + id bytes + 4B scale + dim bytes
+		minEntryBytes = 4 + 1 + 4 + dim // minimum 1-char ID
+	} else {
+		// Float32: 4B id-len + id bytes + dim*4 bytes
+		minEntryBytes = 4 + 1 + dim*4 // minimum 1-char ID
+	}
+	maxPossible := fileLen / minEntryBytes
+	if numEmb > maxPossible+1 { // +1 for rounding
+		format := "float32"
+		if quantized {
+			format = "SQ8 int8"
+		}
+		return fmt.Errorf(
+			"embeddings.bin: numEmb=%d is impossible given file size %d bytes, dim=%d, format=%s (max possible ~%d); file is likely corrupt — regenerate with eulix-embed",
+			numEmb, fileLen, dim, format, maxPossible,
+		)
+	}
+	if dim > 8192 {
+		return fmt.Errorf("embeddings.bin: dim=%d exceeds sanity limit 8192", dim)
+	}
+	if numEmb > 10_000_000 {
+		return fmt.Errorf("embeddings.bin: numEmb=%d exceeds sanity limit 10M", numEmb)
 	}
 	return nil
 }
@@ -371,7 +479,9 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 //   - context_search.go: vectorSearch uses vectorMap to locate embeddings by chunk ID
 //   - context_kb.go: chunk ID assignment during KB loading
 func (cb *ContextBuilder) loadVectorMap() error {
+	done := cb.logFileLoad("vectors.bin")
 	data, err := os.ReadFile(filepath.Join(cb.eulixDir, "vectors.bin"))
+	done(err)
 	if err != nil {
 		return fmt.Errorf("vectors.bin not found: %w", err)
 	}
@@ -423,8 +533,11 @@ func (cb *ContextBuilder) loadVectorMap() error {
 //   - context_graph.go: expandGraph uses call graph to trace related code
 //   - context_search.go: integration with multi-strategy search pipeline
 func (cb *ContextBuilder) loadCallGraph() {
+	done := cb.logFileLoad("kb_call_graph.json")
 	var gd CallGraphData
-	if err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"), &gd); err != nil {
+	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"), &gd)
+	done(err)
+	if err != nil {
 		cb.hasCallGraph = false
 		return
 	}

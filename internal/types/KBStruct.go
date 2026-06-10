@@ -8,15 +8,9 @@ Mirrors eulix_parser out exactly
 */
 package types
 
-type KnowledgeBase struct {
+type KnowledgeBaseRef struct {
 	Metadata  KBMetadata          `json:"metadata"`
 	Structure map[string]FileData `json:"structure"`
-	CallGraph KBCallGraph         `json:"call_graph"`
-	// Indices              KBIndices            `json:"indices"`
-	// EntryPoints          []EntryPoint         `json:"entry_points"`
-	// DependencyGraph      DependencyGraph      `json:"dependency_graph"`
-	// ExternalDependencies []ExternalDependency `json:"external_dependencies"`
-	// Patterns             PatternInfo          `json:"patterns"`
 }
 
 type IndexRef struct {
@@ -25,10 +19,22 @@ type IndexRef struct {
 	ExternalDependency ExternalDependency `json:"external_dependencies"`
 	Patterns           PatternInfo        `json:"patterns"`
 }
-type CGReg struct {
-	Nodes CallGraphNode `json:"nodes"`
-	Edges CallGraphEdge `json:"edges"`
+type CallGraphRef struct {
+	Nodes []CallGraphNode `json:"nodes"`
+	Edges []CallGraphEdge `json:"edges"`
 }
+
+type EntryPointsRef struct {
+	EntryPoint EntryPoint `json:"entry_points"`
+}
+type ExternalDependencyRef struct {
+	ExternalDependency ExternalDependency `json:"external_dependencies"`
+}
+type MetricsRef struct {
+	Metadata KBMetadata  `json:"metadata"`
+	Patterns PatternInfo `json:"patterns"`
+}
+
 type KBMetadata struct {
 	ProjectName    string   `json:"project_name"`
 	Version        string   `json:"version"`
@@ -213,16 +219,20 @@ type KBCallGraph struct {
 	Edges []CallGraphEdge `json:"edges"`
 }
 
-type CallGraphNode struct {
-	ID       string `json:"id"`
-	NodeType string `json:"node_type"`
-	File     string `json:"file"`
+type CallGraphEdge struct {
+	From         string `json:"from"`
+	To           string `json:"to"`
+	EdgeType     string `json:"edge_type"`
+	Conditional  bool   `json:"conditional"`
+	CallSiteLine int    `json:"call_site_line"`
 }
 
-type CallGraphEdge struct {
-	From     string `json:"from"`
-	To       string `json:"to"`
-	EdgeType string `json:"edge_type"`
+type CallGraphNode struct {
+	ID                string `json:"id"`
+	NodeType          string `json:"node_type"`
+	File              string `json:"file"`
+	IsEntryPoint      bool   `json:"is_entry_point"`
+	CallCountEstimate int    `json:"call_count_estimate"`
 }
 
 type DependencyGraph struct {
@@ -245,6 +255,9 @@ type GraphEdge struct {
 type KBIndices struct {
 	FunctionsByName  map[string][]string `json:"functions_by_name"`
 	FunctionsCalling map[string][]string `json:"functions_calling"`
+	FunctionsByTag   map[string][]string `json:"functions_by_tag"`
+	TypesByName      map[string][]string `json:"types_by_name"`
+	FilesByCategory  map[string][]string `json:"files_by_category"`
 }
 
 type EntryPoint struct {

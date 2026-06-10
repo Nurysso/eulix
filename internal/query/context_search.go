@@ -54,11 +54,37 @@ See:
 package query
 
 import (
+	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"eulix/internal/types"
 )
+
+// explicitAnchorPatterns covers the common ways a user pins a location:
+//
+//	full path + line:   drivers/gpu/drm/amd/display/dc/dml/dcn32_fpu.c:847
+//	filename + line:    dcn32_fpu.c:847
+//	filename + func:    dcn32_fpu.c calculate_wm_and_dlg
+//	func + line:        calculate_wm_and_dlg:847  (rarer but valid)
+//	bare path fragment: drivers/gpu/drm/amd/display  (directory prefix)
+var (
+	rePathLine = regexp.MustCompile(`([\w./-]+\.\w+):(\d+)`)
+	reFuncLine = regexp.MustCompile(`(\w{4,}):(\d+)`)
+	reFilename = regexp.MustCompile(`([\w-]+\.(?:c|h|go|rs|py|ts|cpp|hpp)):(\b)`)
+	rePathFrag = regexp.MustCompile(`((?:\w+/){2,}\w+)`)
+)
+
+// ExplicitAnchor describes a user-specified location extracted from the query.
+type ExplicitAnchor struct {
+	File     string
+	FuncName string
+	Line     int
+	Score    float64
+}
 
 // multiStrategySearch orchestrates five orthogonal retrieval strategies and
 // merges their results into a single ranked list.
@@ -104,9 +130,33 @@ func (cb *ContextBuilder) multiStrategySearch(
 ) []ScoredChunk {
 	all := make(map[string]ScoredChunk, topK*2)
 
+	anchors := extractExplicitAnchors(query)
+	gate := buildPathGate(anchors)
+	if len(anchors) > 0 {
+		cb.debugLog.Log("Explicit anchors: %d, gate active: %v (required: %v)", len(anchors), gate.active, gate.required)
+		for _, a := range anchors {
+			cb.debugLog.Log("  anchor: file=%q func=%q line=%q score=%.0f", a.File, a.FuncName, a.Line, a.Score)
+		}
+		anchorsHits := cb.explicitAnchorSearch(anchors)
+		anchorsHits = gate.applyGate(anchorsHits)
+		cb.debugLog.Log("Anchors search: %d hits", len(anchorsHits))
+		for _, sc := range anchorsHits {
+			all[sc.ID] = sc
+		}
+		highConfidence := 0
+		for _, sc := range anchorsHits {
+			if sc.Score >= 250.0 {
+				highConfidence++
+			}
+		}
+		if highConfidence > 0 && topK < highConfidence+20 {
+			topK = highConfidence + 20
+		}
+	}
 	run := func(name string, fn func() []ScoredChunk, multiBoost float64) {
 		t0 := time.Now()
 		results := fn()
+		results = gate.applyGate(results)
 		st := StrategyTrace{Name: name, Found: len(results), Duration: time.Since(t0)}
 		sum := 0.0
 		for _, m := range results {
@@ -141,7 +191,7 @@ func (cb *ContextBuilder) multiStrategySearch(
 	run("keyword", func() []ScoredChunk {
 		var res []ScoredChunk
 		if cb.invertedIdx != nil {
-			res = cb.invertedKeywordSearch(query, kwTopK)
+			res = cb.invertedKeywordSearchBM25(query, kwTopK)
 		} else {
 			res = cb.keywordSearch(query, kwTopK)
 		}
@@ -194,6 +244,7 @@ func (cb *ContextBuilder) multiStrategySearch(
 	for _, sc := range all {
 		result = append(result, sc)
 	}
+	boostBySubsystemPath(result, query)
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].MatchType == "exact" && result[j].MatchType != "exact" {
 			return true
@@ -495,7 +546,7 @@ func (cb *ContextBuilder) keywordSearch(query string, topK int) []ScoredChunk {
 //   - InvertedIndex: Postings lists and term frequency data structure
 //   - keywordSearch: Linear scan alternative
 //   - extractQueryKeywords / extractPotentialSymbols: Query tokenization
-func (cb *ContextBuilder) invertedKeywordSearch(query string, topK int) []ScoredChunk {
+func (cb *ContextBuilder) invertedKeywordSearchTFIDF(query string, topK int) []ScoredChunk {
 	if cb.invertedIdx == nil {
 		return cb.keywordSearch(query, topK)
 	}
@@ -523,6 +574,65 @@ func (cb *ContextBuilder) invertedKeywordSearch(query string, topK int) []Scored
 		}
 	}
 
+	for _, sym := range symbols {
+		symLow := strings.ToLower(sym)
+		for idx := range scores {
+			if strings.ToLower(cb.chunks[idx].Name) == symLow {
+				scores[idx] += 20.0
+			}
+		}
+	}
+
+	result := make([]ScoredChunk, 0, len(scores))
+	for idx, score := range scores {
+		result = append(result, ScoredChunk{
+			Chunk:        cb.chunks[idx],
+			Score:        score,
+			MatchDetails: strings.Join(uniqueStrings(matched[idx]), ", "),
+		})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Score > result[j].Score })
+	if len(result) > topK {
+		result = result[:topK]
+	}
+	return result
+}
+
+func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int) []ScoredChunk {
+	if cb.invertedIdx == nil {
+		return cb.keywordSearch(query, topK)
+	}
+
+	keywords := extractQueryKeywords(strings.ToLower(query))
+	symbols := extractPotentialSymbols(query)
+	terms := uniqueStrings(append(keywords, symbols...))
+
+	cb.invertedIdx.mu.RLock()
+	defer cb.invertedIdx.mu.RUnlock()
+
+	n := cb.invertedIdx.DocCount
+	avgLen := cb.invertedIdx.AvgChunkTokens
+	if avgLen == 0 {
+		avgLen = 100 // safe fallback if field not yet populated
+	}
+
+	scores := make(map[int]float64, topK*4)
+	matched := make(map[int][]string, topK*4)
+
+	for _, term := range terms {
+		posts := cb.invertedIdx.Postings[strings.ToLower(term)]
+		if len(posts) == 0 {
+			continue
+		}
+		df := len(posts)
+		for _, p := range posts {
+			chunkLen := cb.chunks[p.ChunkIdx].Tokens
+			scores[p.ChunkIdx] += bm25Score(p.TF, df, n, chunkLen, avgLen)
+			matched[p.ChunkIdx] = append(matched[p.ChunkIdx], term)
+		}
+	}
+
+	// Exact name bonus on top of BM25 (unchanged from before)
 	for _, sym := range symbols {
 		symLow := strings.ToLower(sym)
 		for idx := range scores {
@@ -595,6 +705,70 @@ func buildCallSiteIndex(chunks []Chunk) callSiteIndex {
 	return idx
 }
 
+func buildCallSiteIndexFromGraph(graph *types.CallGraphRef, chunks []Chunk) callSiteIndex {
+	// node ID → file, built from nodes array
+	nodeFile := make(map[string]string, len(graph.Nodes))
+	for _, n := range graph.Nodes {
+		nodeFile[n.ID] = n.File
+	}
+
+	// file → sorted chunk indices for line-range lookup
+	byFile := make(map[string][]int, len(chunks))
+	for i, c := range chunks {
+		byFile[c.File] = append(byFile[c.File], i)
+	}
+
+	idx := make(callSiteIndex, 1024)
+
+	for _, edge := range graph.Edges {
+		if edge.EdgeType != "calls" {
+			continue
+		}
+		callee := strings.ToLower(edge.To)
+		if len(callee) <= 1 {
+			continue
+		}
+
+		// Attribute to the *caller's* chunk (the chunk containing the call site),
+		// not the callee's chunk — consistent with what buildCallSiteIndexFromKB did.
+		callerFile := nodeFile[edge.From]
+		chunkIdxs := byFile[callerFile]
+		if len(chunkIdxs) == 0 {
+			continue
+		}
+
+		ci := findChunkForLine(chunks, chunkIdxs, edge.CallSiteLine)
+		idx[callee] = append(idx[callee], ci)
+	}
+
+	// Deduplicate
+	for sym, idxs := range idx {
+		seen := make(map[int]bool, len(idxs))
+		deduped := idxs[:0]
+		for _, i := range idxs {
+			if !seen[i] {
+				seen[i] = true
+				deduped = append(deduped, i)
+			}
+		}
+		idx[sym] = deduped
+	}
+	return idx
+}
+
+func findChunkForLine(chunks []Chunk, chunkIdxs []int, line int) int {
+	if line == 0 {
+		return chunkIdxs[0] // no line info, fall back to first chunk in file
+	}
+	for _, ci := range chunkIdxs {
+		c := chunks[ci]
+		if c.StartLine <= line && line <= c.EndLine {
+			return ci
+		}
+	}
+	return chunkIdxs[0] // line out of range (off-by-one, generated edge), best effort
+}
+
 // vectorSearch performs brute-force semantic search over all embeddings.
 // Compares query embedding against all chunk embeddings using cosine similarity.
 // Returns chunks with similarity >= threshold, sorted by score descending, limited to topK.
@@ -624,4 +798,203 @@ func (cb *ContextBuilder) vectorSearch(qEmb []float32, topK int, threshold float
 		scored = scored[:topK]
 	}
 	return scored
+}
+
+func boostBySubsystemPath(result []ScoredChunk, query string) {
+	// Extract lowercase path tokens from the query (words that look
+	// like directory/subsystem names: all-lowercase, length 3-20,
+	// no CamelCase, no underscores at start).
+	words := strings.Fields(strings.ToLower(query))
+	pathTokens := make([]string, 0, 4)
+	for _, w := range words {
+		// Strip punctuation
+		w = strings.Trim(w, "().,;:")
+		if len(w) >= 3 && len(w) <= 20 && !strings.HasPrefix(w, "_") {
+			pathTokens = append(pathTokens, w)
+		}
+	}
+	if len(pathTokens) == 0 {
+		return
+	}
+
+	for i := range result {
+		fileLow := strings.ToLower(result[i].File)
+		matches := 0
+		for _, tok := range pathTokens {
+			if strings.Contains(fileLow, tok) {
+				matches++
+			}
+		}
+		if matches >= 2 {
+			result[i].Score *= 1.0 + 0.15*float64(matches)
+		} else if matches == 1 {
+			result[i].Score *= 1.08
+		}
+	}
+}
+
+// extractExplicitAnchors parses the query for any explicit file/line/func
+// references and returns them ranked by specificity.
+func extractExplicitAnchors(query string) []ExplicitAnchor {
+	anchors := make([]ExplicitAnchor, 0, 2)
+	seen := make(map[string]bool)
+
+	add := func(a ExplicitAnchor) {
+		key := fmt.Sprintf("%s:%s:%d", a.File, a.FuncName, a.Line)
+		if !seen[key] {
+			seen[key] = true
+			anchors = append(anchors, a)
+		}
+	}
+
+	// Tier 1 — file path + line number (highest specificity)
+	for _, m := range rePathLine.FindAllStringSubmatch(query, -1) {
+		line := 0
+		fmt.Sscanf(m[2], "%d", &line)
+		add(ExplicitAnchor{File: m[1], Line: line, Score: 200.0})
+	}
+
+	// Tier 2 — bare filename (with extension) anywhere in query
+	for _, m := range reFilename.FindAllStringSubmatch(query, -1) {
+		add(ExplicitAnchor{File: m[1], Score: 150.0})
+	}
+
+	// Tier 3 — path fragment (two or more slash-separated components)
+	for _, m := range rePathFrag.FindAllStringSubmatch(query, -1) {
+		// Skip if already covered by a tier-1 match
+		covered := false
+		for _, a := range anchors {
+			if strings.Contains(a.File, m[1]) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			add(ExplicitAnchor{File: m[1], Score: 120.0})
+		}
+	}
+
+	// Tier 4 — funcName:lineNum without a file (rarer, e.g. from a stack trace)
+	for _, m := range reFuncLine.FindAllStringSubmatch(query, -1) {
+		// Only fire if it doesn't overlap with a tier-1 match
+		alreadyCovered := false
+		for _, a := range anchors {
+			if a.File != "" && strings.HasSuffix(a.File, m[1]) {
+				alreadyCovered = true
+				break
+			}
+		}
+		if !alreadyCovered {
+			line := 0
+			fmt.Sscanf(m[2], "%d", &line)
+			add(ExplicitAnchor{FuncName: m[1], Line: line, Score: 130.0})
+		}
+	}
+
+	return anchors
+}
+
+// explicitAnchorSearch resolves ExplicitAnchors against the chunk index.
+// Resolution order for each anchor:
+//  1. Exact file path match + line contained in chunk range  (score: anchor.Score * 1.5)
+//  2. File path suffix match + line contained               (score: anchor.Score * 1.2)
+//  3. File path suffix match, no line                       (score: anchor.Score)
+//  4. Path fragment anywhere in file path                   (score: anchor.Score * 0.8)
+//  5. FuncName-only anchor resolved via symbolIndex         (score: anchor.Score)
+func (cb *ContextBuilder) explicitAnchorSearch(anchors []ExplicitAnchor) []ScoredChunk {
+	if len(anchors) == 0 {
+		return nil
+	}
+
+	results := make([]ScoredChunk, 0, len(anchors)*3)
+	seen := make(map[string]bool)
+
+	add := func(sc ScoredChunk) {
+		if !seen[sc.ID] {
+			seen[sc.ID] = true
+			results = append(results, sc)
+		} else {
+			// Keep the higher score if we hit the same chunk via multiple anchors
+			for i, r := range results {
+				if r.ID == sc.ID && sc.Score > r.Score {
+					results[i].Score = sc.Score
+					results[i].MatchDetails = sc.MatchDetails
+					break
+				}
+			}
+		}
+	}
+
+	for _, anchor := range anchors {
+		if anchor.File != "" {
+			fileLow := strings.ToLower(anchor.File)
+
+			for i := range cb.chunks {
+				c := &cb.chunks[i]
+				cFileLow := strings.ToLower(c.File)
+
+				var score float64
+				var detail string
+
+				switch {
+				case cFileLow == fileLow && anchor.Line > 0 &&
+					c.StartLine <= anchor.Line && anchor.Line <= c.EndLine:
+					// Exact file + line inside chunk — highest confidence
+					score = anchor.Score * 1.5
+					detail = fmt.Sprintf("exact file+line %s:%d", anchor.File, anchor.Line)
+
+				case strings.HasSuffix(cFileLow, fileLow) && anchor.Line > 0 &&
+					c.StartLine <= anchor.Line && anchor.Line <= c.EndLine:
+					// Suffix file match + line inside chunk
+					score = anchor.Score * 1.2
+					detail = fmt.Sprintf("suffix file+line %s:%d", anchor.File, anchor.Line)
+
+				case strings.HasSuffix(cFileLow, fileLow) && anchor.Line == 0:
+					// Filename match, no line — include all chunks from this file
+					score = anchor.Score
+					detail = fmt.Sprintf("filename match %s", anchor.File)
+
+				case strings.Contains(cFileLow, fileLow) && anchor.Line == 0:
+					// Fragment anywhere in path
+					score = anchor.Score * 0.8
+					detail = fmt.Sprintf("path fragment %s", anchor.File)
+
+				default:
+					continue
+				}
+
+				add(ScoredChunk{
+					Chunk:        *c,
+					Score:        score,
+					MatchType:    "anchor",
+					MatchDetails: detail,
+				})
+			}
+		}
+
+		// FuncName-only anchor (e.g. from funcName:line without a file)
+		if anchor.FuncName != "" && anchor.File == "" {
+			fnLow := strings.ToLower(anchor.FuncName)
+			if idxs, ok := cb.symbolIndex[fnLow]; ok {
+				for _, idx := range idxs {
+					c := cb.chunks[idx]
+					score := anchor.Score
+					detail := fmt.Sprintf("symbol anchor %s", anchor.FuncName)
+					if anchor.Line > 0 && c.StartLine <= anchor.Line && anchor.Line <= c.EndLine {
+						score *= 1.3
+						detail = fmt.Sprintf("symbol+line anchor %s:%d", anchor.FuncName, anchor.Line)
+					}
+					add(ScoredChunk{
+						Chunk: c, Score: score,
+						MatchType: "anchor", MatchDetails: detail,
+					})
+				}
+			}
+		}
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+	return results
 }
