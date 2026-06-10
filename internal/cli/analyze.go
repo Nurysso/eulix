@@ -81,6 +81,7 @@ func analyzeProject(projectPath string) error {
 		"-k", kbPath,
 		"-o", embeddingsPath,
 		"-m", cfg.Embeddings.Model,
+		"--quantize",
 	)
 	embedCmd.Stdout = os.Stdout
 	embedCmd.Stderr = os.Stderr
