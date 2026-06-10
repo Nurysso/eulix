@@ -45,7 +45,7 @@ import argparse
 import gc
 import re
 import json
-import struct
+import struct as _struct
 import shutil
 import time
 import site
@@ -65,18 +65,22 @@ import ijson.common
 # Optional fast JSON backend
 try:
     import orjson as _orjson
+
     # Pre-bind the serialization functions
     if hasattr(_orjson, "OPT_INDENT_2"):
         _json_dumps_no_indent = partial(_orjson.dumps, option=0)
-        _json_dumps_indent   = partial(_orjson.dumps, option=_orjson.OPT_INDENT_2)
-    else:   # fallback for older orjson versions
+        _json_dumps_indent = partial(_orjson.dumps, option=_orjson.OPT_INDENT_2)
+    else:  # fallback for older orjson versions
         _json_dumps_no_indent = lambda obj: _orjson.dumps(obj).decode()
-        _json_dumps_indent   = lambda obj: _orjson.dumps(obj, option=_orjson.OPT_INDENT_2).decode()
+        _json_dumps_indent = lambda obj: _orjson.dumps(
+            obj, option=_orjson.OPT_INDENT_2
+        ).decode()
     _HAS_ORJSON = True
 except ImportError:
     _HAS_ORJSON = False
     _json_dumps_no_indent = partial(json.dumps, indent=None)
-    _json_dumps_indent   = partial(json.dumps, indent=2)
+    _json_dumps_indent = partial(json.dumps, indent=2)
+
 
 # Define the wrapper function once
 def _json_dumps(obj: Any, *, indent: bool = False) -> str:
@@ -86,6 +90,7 @@ def _json_dumps(obj: Any, *, indent: bool = False) -> str:
     else:
         return _json_dumps_no_indent(obj)
 
+
 # ijson ObjectBuilder — used by the single-pass state machine
 try:
     from ijson.common import ObjectBuilder as _OB
@@ -93,7 +98,10 @@ except ImportError:
     try:
         from ijson import ObjectBuilder as _OB  # type: ignore[no-redef]
     except ImportError:
-        raise ImportError("ijson ObjectBuilder not found — if using \"uv\" use uv pip install ijson")
+        raise ImportError(
+            'ijson ObjectBuilder not found — if using "uv" use uv pip install ijson'
+        )
+
 
 def _require_ml():
     """
@@ -106,25 +114,29 @@ def _require_ml():
     import torch.nn.functional as F
     from transformers import AutoModel, AutoTokenizer
     from tqdm import tqdm
+
     return np, torch, F, AutoModel, AutoTokenizer, tqdm
 
 
 def _require_numpy():
     """Lightweight path: only numpy (used by save_*/load_* bin helpers)."""
     import numpy as np
+
     return np
+
 
 # Constants — mirrors Rust exactly
 BUCKETS_STANDARD: List[int] = [32, 64, 128, 192, 256, 384, 512]
 BUCKETS_JINA: List[int] = [32, 64, 128, 192, 256, 384, 512, 768, 1024, 2048, 4096, 8192]
 
 BINARY_MAGIC = b"EULX"
-BINARY_VERSION = 3
+BINARY_VERSION = 4
 # VECTOR_MAGIC = b"EULX"
-Version = "0.3.6" # different from Binary and vector magic
+Version = "0.3.7"  # different from Binary and vector magic
 
 # Dataclass slots: Python ≥3.10 natively; earlier versions fall back gracefully.
 _DC_KW: Dict[str, Any] = {"slots": True} if sys.version_info >= (3, 10) else {}
+
 
 # Snap-to-bucket helper — identical to Rust
 def snap_to_bucket(seq_len: int, buckets: List[int]) -> int:
@@ -133,6 +145,28 @@ def snap_to_bucket(seq_len: int, buckets: List[int]) -> int:
             return b
     return buckets[-1]
 
+
+def _sq8_encode(vec: "np.ndarray") -> tuple["np.ndarray", float]:
+    """
+    Scalar-quantize a float32 vector to int8.
+
+    Returns (int8_vec, scale) where:
+        dequantized ≈ int8_vec.astype(float32) * scale
+        scale       = max(|vec|) / 127.0
+    Handles zero vectors safely.
+    """
+    np = _require_numpy()
+    amax = np.abs(vec).max()
+    if amax < 1e-9:
+        return np.zeros(len(vec), dtype=np.int8), 1.0
+    scale = float(amax) / 127.0
+    q = np.clip(np.round(vec / scale), -127, 127).astype(np.int8)
+    return q, scale
+
+
+def _sq8_decode(q: "np.ndarray", scale: float) -> "np.ndarray":
+    """Dequantize int8 → float32."""
+    return q.astype(np.float32) * scale
 
 
 # ChunkType
@@ -146,6 +180,7 @@ class ChunkType(str, Enum):
 
 
 # Chunk / ChunkMetadata — mirrors Rust structs, with __slots__ for RAM
+
 
 @dataclass(**_DC_KW)
 class ChunkMetadata:
@@ -167,8 +202,8 @@ class Chunk:
     importance_score: float
 
 
-
 # SINGLE-PASS KB STREAMING  (replaces load_kb_metadata + stream_kb_structure)
+
 
 def _stream_kb(path: Path) -> Generator:
     """
@@ -194,10 +229,7 @@ def _stream_kb(path: Path) -> Generator:
       Here we read the file exactly once and skip or stream-parse every key.
     """
     # Keys whose entire value is small enough to buffer in RAM.
-    COLLECT_KEYS: Set[str] = {
-        "metadata",
-        "structure"
-    }
+    COLLECT_KEYS: Set[str] = {"metadata", "structure"}
 
     top_key: Optional[str] = None
 
@@ -213,12 +245,12 @@ def _stream_kb(path: Path) -> Generator:
     with open(path, "rb") as fh:
         for prefix, event, value in ijson.parse(fh, use_float=True):
 
-            #  New top-level key
+            #  top-level key
             if prefix == "" and event == "map_key":
                 top_key = value
                 # Reset all sub-key trackers
                 col_builder = None
-                if value in "metadata":
+                if value == "metadata":
                     col_builder = _OB()
                     col_depth = 0
                 continue
@@ -258,48 +290,9 @@ def _stream_kb(path: Path) -> Generator:
                             st_fp = None
                 continue
 
-            #  Stream call_graph edges (only when caller needs them)
-            if top_key == "call_graph":
-                # Only promote the direct sub-keys of call_graph (not nested ones)
-                if prefix == "call_graph" and event == "map_key":
-                    cg_sub = value
-                elif cg_sub == "edges":
-                    if event == "start_map" and cg_builder is None:
-                        cg_builder = _OB()
-                        cg_builder.event(event, value)
-                        cg_depth = 1
-                    elif cg_builder is not None:
-                        cg_builder.event(event, value)
-                        if event in ("start_map", "start_array"):
-                            cg_depth += 1
-                        elif event in ("end_map", "end_array"):
-                            cg_depth -= 1
-                            if cg_depth == 0:
-                                yield ("cg_edge", cg_builder.value)
-                                cg_builder = None
-                continue
-
-            #  Stream dependency_graph edges
-            if top_key == "dependency_graph":
-                if prefix == "dependency_graph" and event == "map_key":
-                    dg_sub = value
-                elif dg_sub == "edges":
-                    if event == "start_map" and dg_builder is None:
-                        dg_builder = _OB()
-                        dg_builder.event(event, value)
-                        dg_depth = 1
-                    elif dg_builder is not None:
-                        dg_builder.event(event, value)
-                        if event in ("start_map", "start_array"):
-                            dg_depth += 1
-                        elif event in ("end_map", "end_array"):
-                            dg_depth -= 1
-                            if dg_depth == 0:
-                                yield ("dep_edge", dg_builder.value)
-                                dg_builder = None
-                continue
 
 # CHUNKER — mirrors chunker.rs logic exactly
+
 
 def _truncate_content(content: str, max_size: int) -> str:
     safe_max = min(max_size, 2000)
@@ -328,7 +321,7 @@ def _generate_tags(func: Dict[str, Any], base_tag: str) -> List[str]:
 
 def _fmt_function_with_context(func: Dict, file_path: str) -> str:
     buf = io.StringIO()
-    w=buf.write
+    w = buf.write
     w(f"// File: {file_path}")
     w(f"// Function: {func['name']}")
     w(f"// Lines: {func.get('line_start', 0)}-{func.get('line_end', 0)}")
@@ -388,7 +381,7 @@ def _fmt_function_with_context(func: Dict, file_path: str) -> str:
 
 def _fmt_method_with_class_ctx(method: Dict, cls: Dict, file_path: str) -> str:
     buf = io.StringIO()
-    w=buf.write
+    w = buf.write
     w(f"// File: {file_path}")
     w(f"// Class: {cls['name']}")
     w(f"// Method: {method['name']}")
@@ -402,7 +395,7 @@ def _fmt_method_with_class_ctx(method: Dict, cls: Dict, file_path: str) -> str:
 
 def _fmt_class_overview(cls: Dict, file_path: str) -> str:
     buf = io.StringIO()
-    w=buf.write
+    w = buf.write
     w(f"// File: {file_path}")
     w(f"// Class: {cls['name']}")
     w(f"// Lines: {cls.get('line_start', 0)}-{cls.get('line_end', 0)}")
@@ -428,7 +421,7 @@ def _fmt_class_overview(cls: Dict, file_path: str) -> str:
 
 def _fmt_file_summary(file_path: str, fs: Dict) -> str:
     buf = io.StringIO()
-    w=buf.write
+    w = buf.write
     w(f"File: {file_path}")
     w(f"Language: {fs.get('language', '')}")
     w(f"Lines of code: {fs.get('loc', 0)}")
@@ -455,6 +448,7 @@ def _fmt_file_summary(file_path: str, fs: Dict) -> str:
         w("")
     return buf.getvalue()
 
+
 # USED FOR testing no comments and docstring in embedder and vector
 # to see how it effects context window creation
 def strip_comments(content: str, lang: str) -> str:
@@ -463,49 +457,54 @@ def strip_comments(content: str, lang: str) -> str:
         # Remove # comments (but not # inside strings – simple version)
         lines = []
         for line in content.splitlines():
-            if '#' in line:
+            if "#" in line:
                 # crude: remove from first # not in quotes
                 in_string = False
                 quote_char = None
                 new_line = []
                 for i, ch in enumerate(line):
-                    if ch in ('"', "'") and (i == 0 or line[i-1] != '\\'):
+                    if ch in ('"', "'") and (i == 0 or line[i - 1] != "\\"):
                         if not in_string:
                             in_string = True
                             quote_char = ch
                         elif ch == quote_char:
                             in_string = False
-                    elif ch == '#' and not in_string:
+                    elif ch == "#" and not in_string:
                         break
                     new_line.append(ch)
-                lines.append(''.join(new_line).rstrip())
+                lines.append("".join(new_line).rstrip())
             else:
                 lines.append(line)
-        return '\n'.join(lines)
+        return "\n".join(lines)
     elif lang in ("c", "cpp", "java", "go", "javascript", "typescript", "rust"):
         # Remove // and /* */ comments
         # Simple regex (not perfect for strings, but good enough for KB)
-        content = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)
-        content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+        content = re.sub(r"//.*?$", "", content, flags=re.MULTILINE)
+        content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
         return content
     return content
+
 
 def clean_boilerplate(text: str) -> str:
     lines = text.splitlines()
     filtered = []
     for line in lines:
         lower = line.lower()
-        if any(x in lower for x in ("license", "copyright", "todo", "fixme", "note:", "author:")):
+        if any(
+            x in lower
+            for x in ("license", "copyright", "todo", "fixme", "note:", "author:")
+        ):
             continue
         if line.strip().startswith(("// SPDX", "/* SPDX")):
             continue
         filtered.append(line)
     return "\n".join(filtered)
 
+
 def clean_content(content: str, lang: str) -> str:
     """Remove comments and boilerplate from content before truncation."""
-    content = strip_comments(content, lang)      # remove //, /* */, # comments
-    content = clean_boilerplate(content)         # remove license, TODO, etc.
+    content = strip_comments(content, lang)  # remove //, /* */, # comments
+    content = clean_boilerplate(content)  # remove license, TODO, etc.
     return content
 
 
@@ -647,7 +646,9 @@ def chunk_one_file(
 
     return chunks
 
+
 # PYTORCH EMBEDDER
+
 
 class EmbeddingGenerator:
     """Wraps a HuggingFace model for batched embedding generation.
@@ -656,7 +657,7 @@ class EmbeddingGenerator:
     def __init__(
         self,
         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-        device: Optional[str] = None, # type: ignore
+        device: Optional[str] = None,  # type: ignore
         batch_size: Optional[int] = None,
         normalize: bool = True,
         use_bucketing: bool = True,
@@ -697,7 +698,10 @@ class EmbeddingGenerator:
 
             print(f"     Model:      {model_name}", file=sys.stderr)
             print(f"     Batch size: {self.batch_size}", file=sys.stderr)
-            print(f"     Bucketing:  {'enabled' if self.use_bucketing else 'disabled'}", file=sys.stderr)
+            print(
+                f"     Bucketing:  {'enabled' if self.use_bucketing else 'disabled'}",
+                file=sys.stderr,
+            )
 
             is_jina = "jina" in model_name.lower()
 
@@ -710,7 +714,10 @@ class EmbeddingGenerator:
                     self.tokenizer = self._st_model.tokenizer
                     self.model = None
                     self._use_st = True
-                    print("     Jina v2: loaded via sentence-transformers", file=sys.stderr)
+                    print(
+                        "     Jina v2: loaded via sentence-transformers",
+                        file=sys.stderr,
+                    )
                 except ImportError:
                     raise ImportError(
                         "Jina v2 models require sentence-transformers.\n"
@@ -745,11 +752,13 @@ class EmbeddingGenerator:
                     self._dimension = test_emb.shape[-1]
                 else:
                     with torch.no_grad():
-                        dummy = self.tokenizer("hello", return_tensors="pt", padding=True).to(
-                            self.device
-                        )
+                        dummy = self.tokenizer(
+                            "hello", return_tensors="pt", padding=True
+                        ).to(self.device)
                         out = self.model(**dummy)
-                        emb = self._mean_pool(out.last_hidden_state, dummy["attention_mask"])
+                        emb = self._mean_pool(
+                            out.last_hidden_state, dummy["attention_mask"]
+                        )
                         self._dimension = emb.shape[-1]
             except Exception as e:
                 raise RuntimeError(f"Failed to probe embedding dimension: {e}")
@@ -759,9 +768,15 @@ class EmbeddingGenerator:
         except RuntimeError as e:
             print("f\nError: {e}", file=sys.stderr)
             print("\nTips:", file=sys.stderr)
-            print("  - Use a valid model name from Hugging Face (e.g., 'sentence-transformers/all-MiniLM-L6-v2')", file=sys.stderr)
+            print(
+                "  - Use a valid model name from Hugging Face (e.g., 'sentence-transformers/all-MiniLM-L6-v2')",
+                file=sys.stderr,
+            )
             print("  - Check your internet connection", file=sys.stderr)
-            print("  - Run `huggingface-cli login` if the model is private/gated", file=sys.stderr)
+            print(
+                "  - Run `huggingface-cli login` if the model is private/gated",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
     @property
@@ -782,8 +797,8 @@ class EmbeddingGenerator:
     ) -> "np.ndarray":
 
         torch = self._torch
-        F     = self._F
-        np    = self._np
+        F = self._F
+        np = self._np
 
         if self._use_st:
             encode_kwargs: Dict[str, Any] = dict(
@@ -816,8 +831,8 @@ class EmbeddingGenerator:
             return emb.cpu().float().numpy()
 
     def generate_vectors(self, chunks: List[Chunk]) -> Dict[str, "np.ndarray"]:
-        np    = self._np
-        tqdm  = self._tqdm
+        np = self._np
+        tqdm = self._tqdm
         total = len(chunks)
         print(
             f" Processing {total} chunks (batch={self.batch_size},"
@@ -851,7 +866,9 @@ class EmbeddingGenerator:
             print(f"     Shape buckets active: {len(bucket_map)}")
             # blen is short for Bucket Length
             for blen in sorted(bucket_map):
-                print(f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks")
+                print(
+                    f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks"
+                )
 
             for blen in sorted(bucket_map):
                 items = bucket_map[blen]
@@ -883,14 +900,16 @@ class EmbeddingGenerator:
         indexed_sorted = sorted(indexed, key=lambda x: x[0])
 
         store: Dict[str, "np.ndarray"] = {}
-        duplicates: List[str] = []                           # track duplicates
+        duplicates: List[str] = []  # track duplicates
         for (orig_idx, emb), (i, _, chunk) in zip(results, indexed_sorted):
             if chunk.id in store:
                 duplicates.append(chunk.id)
             store[chunk.id] = emb
 
-        if duplicates:                                       # surface them loudly
-            print(f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:")
+        if duplicates:  # surface them loudly
+            print(
+                f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:"
+            )
             for did in duplicates[:10]:
                 print(f"         {did}")
             if len(duplicates) > 10:
@@ -907,101 +926,137 @@ class EmbeddingGenerator:
 
 def _write_str(fh, s: str) -> None:
     b = s.encode("utf-8")
-    fh.write(struct.pack("<I", len(b)))
+    fh.write(_struct.pack("<I", len(b)))
     fh.write(b)
 
 
 def _read_str(fh) -> str:
-    (n,) = struct.unpack("<I", fh.read(4))
+    (n,) = _struct.unpack("<I", fh.read(4))
     return fh.read(n).decode("utf-8")
 
 
 def save_embeddings_bin(
-    path: Path,
+    path: "Path",
     model_name: str,
     dimension: int,
-    entries,                  # Iterable[Tuple[str, np.ndarray]] — list or generator
-    count: Optional[int] = None,
+    entries,  # Iterable[Tuple[str, np.ndarray]]
+    count: "Optional[int]" = None,
+    quantize: bool = False,
 ) -> None:
     """
-Save embeddings to a custom binary format for efficient storage and retrieval.
+    Save embeddings binary.  v4 format adds a 1-byte quant flag
+    immediately after the dimension field.
 
-    File Format (Little-Endian):
-    =============================
-    Offset  | Size (bytes) | Field                    | Description
-    --------|--------------|--------------------------|-------------------------------
-    0       | 4            | magic                    | "EULX" file signature
-    4       | 4            | version                  | Format version (currently 3)
-    8       | 4            | model_name_len           | Length of model name string
-    12      | variable     | model_name               | UTF-8 encoded model name
-    12+len  | 4            | num_embeddings           | Number of embeddings in file
-    16+len  | 4            | dimension                | Vector dimension (e.g., 384)
-    20+len  | variable     | embedding_data           | Repeated for each embedding:
-            |              |   - 4 bytes: id_len       | Length of ID string
-            |              |   - id_len bytes: id      | UTF-8 encoded identifier
-            |              |   - dimension*4 bytes:    | Float32 vector in row-major order
-    Note:
-        The binary format intentionally uses 32-bit length prefixes (even though IDs are
-        limited to 0xFFFF) to maintain 4-byte alignment for the vector data, improving
-        memory access performance on modern hardware.
-"""
+    File Layout (Little-Endian):
+    ─────────────────────────────────────────────────────────
+    4  bytes  magic          "EULX"
+    4  bytes  version        4
+    4+n bytes model_name     uint32 len + UTF-8
+    4  bytes  count          number of embeddings
+    4  bytes  dimension      vector length (floats)
+    1  byte   quantized      0 = float32, 1 = SQ8 int8
+    ─── per embedding ───────────────────────────────────────
+    4  bytes  id_len
+    id_len    id             UTF-8
+    if quantized:
+      4  bytes  scale        float32 (little-endian)
+      dim bytes quantized    int8 * dim
+    else:
+      dim*4    vector        float32 * dim
+    ─────────────────────────────────────────────────────────
+    """
     np = _require_numpy()
     if count is None:
-        entries = list(entries)   # fallback: materialise (old behaviour)
+        entries = list(entries)
         count = len(entries)
-    with open(path, "wb") as fh:
+
+    quant_flag = b"\x01" if quantize else b"\x00"
+
+    with open(path, "wb") as raw:
+        fh = io.BufferedWriter(raw, buffer_size=4*1024*1024)
         fh.write(BINARY_MAGIC)
-        fh.write(struct.pack("<I", BINARY_VERSION))
+        fh.write(_struct.pack("<I", BINARY_VERSION))
         _write_str(fh, model_name)
-        fh.write(struct.pack("<II", count, dimension))
+        fh.write(_struct.pack("<II", count, dimension))
+        fh.write(quant_flag)
+
         for eid, vec in entries:
             eid_bytes = eid.encode("utf-8")
             if len(eid_bytes) > 0xFFFF:
-                raise ValueError(f"Chunk ID too long ({len(eid_bytes)} bytes): {eid[:80]}...")
-            fh.write(struct.pack("<I", len(eid_bytes)))
+                raise ValueError(f"Chunk ID too long: {eid[:80]}...")
+            fh.write(_struct.pack("<I", len(eid_bytes)))
             fh.write(eid_bytes)
+
             arr = np.asarray(vec, dtype=np.float32)
             if arr.shape != (dimension,):
-                raise ValueError(f"Vector shape mismatch for {eid}: {arr.shape} vs ({dimension},)")
-            fh.write(arr.tobytes())
+                raise ValueError(
+                    f"Shape mismatch for {eid}: {arr.shape} vs ({dimension},)"
+                )
+            if quantize:
+                q, scale = _sq8_encode(arr)
+                fh.write(_struct.pack("<f", scale))  # 4 bytes
+                fh.write(q.tobytes())  # dim bytes (int8)
+            else:
+                fh.write(arr.tobytes())  # dim*4 bytes
+            fh.flush()
 
 
+def load_embeddings_bin(path: "Path", dequantize: bool = True):
+    """
+    Load embeddings.bin — handles v3 (float32) and v4 (float32 or SQ8).
 
-def load_embeddings_bin(path: Path):
-    np = _require_numpy()
+    Returns list of (id, float32_array) when dequantize=True (default),
+    or (id, int8_array, scale) when dequantize=False and file is quantized.
+    """
     with open(path, "rb") as fh:
         magic = fh.read(4)
-        version, = struct.unpack("<I", fh.read(4))
+        if magic != BINARY_MAGIC:
+            raise ValueError(f"Bad magic: {magic!r}")
+        (version,) = _struct.unpack("<I", fh.read(4))
         model_name = _read_str(fh)
-        count, dim = struct.unpack("<II", fh.read(8))
+        count, dim = _struct.unpack("<II", fh.read(8))
+
+        quantized = False
+        if version == 4:
+            quantized = fh.read(1) == b"\x01"
+        elif version != 3:
+            raise ValueError(f"Unsupported embeddings.bin version: {version}")
+
         print(f"  magic={magic}, version={version}, model={model_name}")
-        print(f"  count={count}, dim={dim}")
-        print(f"  expected file size: {8 + len(model_name.encode()) + 4 + count * (4 + dim * 4)} bytes (approx)")
-        print(f"  actual file size:   {path.stat().st_size} bytes")
+        print(f"  count={count}, dim={dim}, quantized={quantized}")
 
         entries = []
         for idx in range(count):
             pos = fh.tell()
             try:
                 eid = _read_str(fh)
-                raw = fh.read(dim * 4)
-                if len(raw) != dim * 4:
-                    print(f"  [ERROR] entry {idx} at byte {pos}: expected {dim*4} bytes, got {len(raw)}")
-                    break
-                vec = np.frombuffer(raw, dtype=np.float32).copy()
-                entries.append((eid, vec))
+                if quantized:
+                    (scale,) = _struct.unpack("<f", fh.read(4))
+                    raw = fh.read(dim)
+                    q = _np.frombuffer(raw, dtype=_np.int8).copy()
+                    if dequantize:
+                        entries.append((eid, _sq8_decode(q, scale)))
+                    else:
+                        entries.append((eid, q, scale))
+                else:
+                    raw = fh.read(dim * 4)
+                    if len(raw) != dim * 4:
+                        print(f"  [ERROR] entry {idx} @{pos}: short read")
+                        break
+                    vec = _np.frombuffer(raw, dtype=_np.float32).copy()
+                    entries.append((eid, vec))
             except Exception as e:
-                print(f"  [ERROR] entry {idx} at byte {pos}: {e}")
+                print(f"  [ERROR] entry {idx} @{pos}: {e}")
                 break
 
         print(f"  successfully read {len(entries)} / {count} entries")
-
+        return model_name, entries
 
 
 def save_vectors_bin(
     path: Path,
     model_name: str,
-    ids: List[str],          # ordered; position == vector index in embeddings.bin
+    ids: List[str],  # ordered; position == vector index in embeddings.bin
 ) -> None:
     """
     Save a vector ID index (no float data).
@@ -1020,14 +1075,16 @@ def save_vectors_bin(
     """
     with open(path, "wb") as fh:
         fh.write(BINARY_MAGIC)
-        fh.write(struct.pack("<I", BINARY_VERSION))
+        fh.write(_struct.pack("<I", BINARY_VERSION))
         _write_str(fh, model_name)
-        fh.write(struct.pack("<I", len(ids)))
+        fh.write(_struct.pack("<I", len(ids)))
         for eid in ids:
             eid_bytes = eid.encode("utf-8")
             if len(eid_bytes) > 0xFFFF:
-                raise ValueError(f"Chunk ID too long ({len(eid_bytes)} bytes): {eid[:80]}...")
-            fh.write(struct.pack("<I", len(eid_bytes)))
+                raise ValueError(
+                    f"Chunk ID too long ({len(eid_bytes)} bytes): {eid[:80]}..."
+                )
+            fh.write(_struct.pack("<I", len(eid_bytes)))
             fh.write(eid_bytes)
 
 
@@ -1042,13 +1099,14 @@ def load_vectors_bin(path: Path) -> Tuple[str, List[str]]:
         magic = fh.read(4)
         if magic != BINARY_MAGIC:
             raise ValueError(f"Bad magic: {magic!r} (expected {BINARY_VERSION!r})")
-        (version,) = struct.unpack("<I", fh.read(4))
+        (version,) = _struct.unpack("<I", fh.read(4))
         if version != BINARY_VERSION:
             raise ValueError(f"Unsupported vectors.bin version: {version}")
         model_name = _read_str(fh)
-        (count,) = struct.unpack("<I", fh.read(4))
+        (count,) = _struct.unpack("<I", fh.read(4))
         ids: List[str] = [_read_str(fh) for _ in range(count)]
     return model_name, ids
+
 
 # PIPELINE
 class EmbeddingPipeline:
@@ -1059,10 +1117,12 @@ class EmbeddingPipeline:
         device: Optional[str] = None,
         batch_size: Optional[int] = None,
         save_json: bool = False,
+        quantize: bool = False,  # fixed typo: quanize → quantize
         debug: bool = False,
     ):
         self.max_chunk_size = max_chunk_size
         self.save_json = save_json
+        self.quantize = quantize  # stored on self
         self.debug = debug
         self.generator = EmbeddingGenerator(
             model_name=model_name,
@@ -1070,19 +1130,241 @@ class EmbeddingPipeline:
             batch_size=batch_size,
         )
 
-    def _check_disk_space(self, output_dir: Path, kb_path: Path, estimated_chunks: int = None) -> None:
-        free = shutil.disk_usage(output_dir.parent if not output_dir.exists() else output_dir).free
-        kb_size = kb_path.stat().st_size
-        # Rough estimate: 2× KB size for both bin files + 20% headroom
-        required = int(kb_size * 2.2)
-        free_gb = free / 1_073_741_824
-        req_gb  = required / 1_073_741_824
-        print(f"Disk space:  {free_gb:.1f} GB free, ~{req_gb:.1f} GB estimated required")
-        if free < required:
-            print(f"  [ERROR] Insufficient disk space — need ~{req_gb:.1f} GB, have {free_gb:.1f} GB")
-            sys.exit(1)
+    def generate_vectors_streaming(
+        self,
+        gen: "EmbeddingGenerator",
+        chunks: "List[Chunk]",
+    ):
+        import numpy as _np
+        from tqdm import tqdm as _tqdm
 
-    def process(self, kb_path: Path, output_dir: Path, args: argparse.Namespace) -> None:
+        total = len(chunks)
+        is_jina = "jina" in gen.model_name.lower()
+        buckets = BUCKETS_JINA if is_jina else BUCKETS_STANDARD
+
+        # Build (orig_idx, est_tokens, chunk) triples
+        indexed = [(i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)]
+
+        # We need to yield in original order, but bucketing processes out-of-order.
+        # Collect results[(orig_idx, vec)] then sort once — same as before but
+        # we free them immediately after yielding.
+        results: "List[Tuple[int, np.ndarray]]" = []
+
+        bar = _tqdm(
+            total=total,
+            unit="chunk",
+            desc="     Embedding",
+            dynamic_ncols=True,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+        )
+
+        import time as _time
+
+        t0 = _time.time()
+
+        if gen.use_bucketing:
+            from collections import defaultdict as _dd
+
+            bucket_map: dict = _dd(list)
+            for orig_idx, est_tokens, chunk in indexed:
+                b = snap_to_bucket(est_tokens, buckets)
+                bucket_map[b].append((orig_idx, chunk))
+
+            for blen in sorted(bucket_map):
+                items = bucket_map[blen]
+                bar.set_postfix(bucket=blen, refresh=False)
+                for start in range(0, len(items), gen.batch_size):
+                    batch = items[start : start + gen.batch_size]
+                    texts = [c.content for _, c in batch]
+                    embs = gen._embed_batch(texts, fixed_len=blen)
+                    for (orig_idx, _), emb in zip(batch, embs):
+                        results.append((orig_idx, emb))
+                    bar.update(len(batch))
+        else:
+            indexed.sort(key=lambda x: x[1], reverse=True)
+            for start in range(0, len(indexed), gen.batch_size):
+                batch = indexed[start : start + gen.batch_size]
+                texts = [c.content for _, _, c in batch]
+                embs = gen._embed_batch(texts)
+                for (orig_idx, _, _), emb in zip(batch, embs):
+                    results.append((orig_idx, emb))
+                bar.update(len(batch))
+
+        bar.close()
+        elapsed = _time.time() - t0
+        print(f"  ✓ Completed all embeddings in {elapsed:.2f}s")
+        print(f"     Average: {total / max(elapsed, 1e-6):.1f} chunks/sec")
+
+        # Sort by original index → yield in chunk order (no dict needed)
+        results.sort(key=lambda x: x[0])
+        indexed_sorted = sorted(indexed, key=lambda x: x[0])
+
+        seen: set = set()
+        for (orig_idx, vec), (i, _, chunk) in zip(results, indexed_sorted):
+            if chunk.id in seen:
+                continue  # skip duplicates (same dedup as before)
+            seen.add(chunk.id)
+            yield chunk.id, vec
+
+    def _check_disk_space(
+        self, output_dir: Path, kb_path: Path, n_chunks: Optional[int] = None
+    ) -> None:
+        """
+        Estimate disk space requirements based on actual KB structure.
+
+        For quantized: ~ (dimension + 4) bytes per vector + ID overhead
+        For float32:   ~ dimension * 4 bytes per vector + ID overhead
+        """
+        free = shutil.disk_usage(
+            output_dir.parent if not output_dir.exists() else output_dir
+        ).free
+
+        # Try to estimate from kb.json without full parse
+        if n_chunks is None:
+            try:
+                import ijson
+
+                chunk_count = 0
+                with open(kb_path, "rb") as fh:
+                    # Quick scan - count IDs without loading everything
+                    parser = ijson.parse(fh)
+                    for prefix, event, value in parser:
+                        # Count function, class, method IDs
+                        if (
+                            prefix.endswith(".functions.item.id")
+                            or prefix.endswith(".classes.item.id")
+                            or prefix.endswith(".methods.item.id")
+                        ):
+                            chunk_count += 1
+                        # Stop after reasonable sample or end
+                        if chunk_count > 0 and prefix and "item" in prefix:
+                            # Rough estimate: sample first 1000, then extrapolate
+                            if chunk_count >= 1000:
+                                # Estimate total file size ratio
+                                file_size_mb = kb_path.stat().st_size / 1_048_576
+                                # Rough heuristic: ~40KB per chunk in JSON
+                                estimated_total = int(
+                                    file_size_mb * 25
+                                )  # ~40KB per chunk
+                                chunk_count = max(chunk_count, estimated_total)
+                                break
+            except Exception:
+                # Fallback: assume 100 chunks per MB of JSON
+                chunk_count = n_chunks or (kb_path.stat().st_size // 10_000)
+        else:
+            chunk_count = n_chunks
+
+        dim = self.generator.dimension
+
+        # Calculate actual required space
+        if self.quantize:
+            # SQ8: 1 byte per dimension + 4 bytes scale per vector
+            bytes_per_vector = dim + 4
+            quant_suffix = " (SQ8 int8)"
+        else:
+            # float32: 4 bytes per dimension
+            bytes_per_vector = dim * 4
+            quant_suffix = " (float32)"
+
+        # ID overhead: avg ID length (~50 chars) + 4 bytes length prefix
+        avg_id_len = 50
+        bytes_per_id = avg_id_len + 4
+
+        # Total space for embeddings + vectors + 20% headroom
+        embeddings_size = chunk_count * bytes_per_vector
+        vectors_size = chunk_count * bytes_per_id
+        required = int((embeddings_size + vectors_size) * 1.2)
+
+        # Add overhead for JSON output if enabled
+        if self.save_json:
+            required = int(required * 1.5)  # JSON is ~50% larger
+
+        free_gb = free / 1_073_741_824
+        req_gb = required / 1_073_741_824
+        actual_gb = (embeddings_size + vectors_size) / 1_073_741_824
+
+        print(f"  Estimated chunks: {chunk_count:,}")
+        print(f"  Vector dimension: {dim}{quant_suffix}")
+        print(f"  Estimated embeddings.bin: {embeddings_size / 1_048_576:.1f} MB")
+        print(f"  Estimated vectors.bin:    {vectors_size / 1_048_576:.1f} MB")
+        print(f"  Disk space required: ~{req_gb:.2f} GB (actual ~{actual_gb:.2f} GB)")
+        print(f"  Disk space available: {free_gb:.2f} GB")
+
+        if free < required:
+            print(f"\n  [ERROR] Insufficient disk space!")
+            print(f"          Need: ~{req_gb:.2f} GB")
+            print(f"          Have:  {free_gb:.2f} GB")
+            print(f"          Shortfall: {(required - free) / 1_073_741_824:.2f} GB")
+            sys.exit(1)
+        elif free < required * 1.1:
+            print(f"  [WARN] Low disk space - only {(free_gb - req_gb):.2f} GB buffer")
+
+    def _process_step3_step4(
+        self,
+        chunks: List[Chunk],
+        output_dir: Path,
+    ) -> int:
+        """
+        Merged Step 3 + Step 4: embed → stream directly to disk.
+        Peak RAM = one batch of embeddings (batch_size * dim * 4 bytes).
+
+        Returns the dimension used (needed by process() summary block).
+        """
+        sep = "-" * 70
+
+        print("STEP 3+4: Generating Embeddings → Writing to disk (streaming)")
+        print(sep)
+        t = time.time()
+
+        dim = self.generator.dimension
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        emb_bin = output_dir / "embeddings.bin"
+        vec_bin = output_dir / "vectors.bin"
+
+        ordered_ids: List[str] = []
+        n_written = 0
+
+        def _entry_gen():
+            nonlocal n_written
+            for cid, vec in self.generate_vectors_streaming(self.generator, chunks):
+                ordered_ids.append(cid)
+                n_written += 1
+                yield cid, vec
+
+        count = len(chunks)  # upper bound; dedup inside generator may reduce
+
+        save_embeddings_bin(
+            emb_bin,
+            self.generator.model_name,
+            dim,
+            _entry_gen(),
+            count=count,
+            quantize=self.quantize,
+        )
+
+        # Patch count field in header if dedup reduced it
+        if n_written != count:
+            model_bytes = self.generator.model_name.encode()
+            count_offset = 4 + 4 + 4 + len(model_bytes)  # magic+ver+model_len+model
+            with open(emb_bin, "r+b") as fh:
+                fh.seek(count_offset)
+                fh.write(_struct.pack("<I", n_written))
+
+        emb_size = emb_bin.stat().st_size / 1_048_576
+        quant_str = " (SQ8 int8)" if self.quantize else " (float32)"
+        print(f"  [OK] embeddings.bin  ({emb_size:.2f} MB){quant_str}")
+
+        save_vectors_bin(vec_bin, self.generator.model_name, ordered_ids)
+        print(f"  [OK] vectors.bin     ({vec_bin.stat().st_size / 1_048_576:.2f} MB)")
+        print(f"       Vectors written: {n_written}")
+        print(f"       Time:            {time.time() - t:.2f}s\n")
+
+        return dim  # returned so process() summary block can use it
+
+    def process(
+        self, kb_path: Path, output_dir: Path, args: argparse.Namespace
+    ) -> None:
         t_total = time.time()
         SEP = "=" * 70
         sep = "-" * 70
@@ -1092,9 +1374,11 @@ class EmbeddingPipeline:
         print(f"  ijson backend : {ijson.backend}")
         print(f"  orjson        : {'yes' if _HAS_ORJSON else 'no (stdlib json)'}")
         print(f"  Chunk slots   : {'yes' if _DC_KW else 'no (Python <3.10)'}")
+        print(f"  Quantization  : {'SQ8 int8' if self.quantize else 'float32'}")
         print(f"{SEP}\n")
 
         self._check_disk_space(output_dir, kb_path)
+
         # Step 1+2: Single-pass KB scan + chunk generation
         print("STEP 1+2: Knowledge Base scan + Chunk generation (single pass)")
         print(sep)
@@ -1111,18 +1395,15 @@ class EmbeddingPipeline:
 
         def _submit(file_path: str, fs: dict) -> Future:
             max_size = self.max_chunk_size
+
             def _work():
                 _drop_docstrings(fs)
                 local_seen: Set[str] = set()
-                return chunk_one_file(
-                    file_path, fs,
-                    # frozenset(), {},
-                    max_size, local_seen,
-                )
+                return chunk_one_file(file_path, fs, max_size, local_seen)
+
             return executor.submit(_work)
 
         def _harvest(fut: Future) -> None:
-            """Drain one future into chunks. called in main thread"""
             for chunk in fut.result():
                 if chunk.id not in seen_ids:
                     seen_ids.add(chunk.id)
@@ -1130,7 +1411,6 @@ class EmbeddingPipeline:
                     chunks.append(chunk)
 
         def _drain_inflight(max_remaining: int = 0) -> None:
-            # Build entry-point lookups as soon as we have them
             while len(inflight) > max_remaining:
                 _harvest(inflight.popleft())
 
@@ -1143,20 +1423,20 @@ class EmbeddingPipeline:
 
                 elif event_type == "structure":
                     file_path, fs = payload
-                    n_files   += 1
-                    n_funcs   += len(fs.get("functions", []))
+                    n_files += 1
+                    n_funcs += len(fs.get("functions", []))
                     n_classes += len(fs.get("classes", []))
-                    n_methods += sum(len(c.get("methods", [])) for c in fs.get("classes", []))
-
+                    n_methods += sum(
+                        len(c.get("methods", [])) for c in fs.get("classes", [])
+                    )
                     inflight.append(_submit(file_path, fs))
-
                     if len(inflight) >= MAX_INFLIGHT:
                         _drain_inflight(max_remaining=MAX_INFLIGHT // 2)
 
             _drain_inflight(max_remaining=0)
 
         step12_time = time.time() - t
-        n_chunks = len(chunks)   # snapshot before any del
+        n_chunks = len(chunks)
 
         print(f"  [OK] KB scanned + chunked in single pass")
         print(f"       Files:        {n_files}")
@@ -1168,96 +1448,12 @@ class EmbeddingPipeline:
         for ct, cnt in sorted(ct_counts.items()):
             print(f"         {ct + ':':<22} {cnt}")
         print(f"       Time:         {step12_time:.2f}s\n")
-        # Free per-file metadata and seen_ids — no longer needed
+
         del seen_ids
         gc.collect()
 
-        # Step 3: Embeddings
-        print("STEP 3: Generating Embeddings")
-        print(sep)
-        t = time.time()
-
-        vector_store = self.generator.generate_vectors(chunks)
-        dim    = self.generator.dimension
-        vec_mb = len(vector_store) * dim * 4 / 1_048_576
-
-        print(f"  [OK] Embeddings generated")
-        print(f"       Total Vectors:  {len(vector_store)}")
-        print(f"       Vector Size:    {vec_mb:.2f} MB (in-memory)")
-        print(f"       Model:          {self.generator.model_name}")
-        print(f"       Dimension:      {dim}")
-        print(f"       Time:           {time.time() - t:.2f}s\n")
-
-        # Step 4: Write output files
-        print("STEP 4: Writing Output Files")
-        print(sep)
-        t = time.time()
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        ordered_ids = [c.id for c in chunks if c.id in vector_store]
-        missing     = [c.id for c in chunks if c.id not in vector_store]
-        if missing:
-            print(f"  [WARN] {len(missing)} chunks missing from vector store:")
-            for mid in missing[:10]:
-                print(f"         {mid}")
-            if len(missing) > 10:
-                print(f"         ... and {len(missing) - 10} more")
-
-        # Build metadata lookup before freeing chunks (used by --save-json)
-        chunk_meta: Dict[str, Any] = {}
-        if self.save_json:
-            chunk_meta = {
-                c.id: {
-                    "file_path":  c.metadata.file_path,
-                    "language":   c.metadata.language,
-                    "line_start": c.metadata.line_start,
-                    "line_end":   c.metadata.line_end,
-                    "name":       c.metadata.name,
-                    "complexity": c.metadata.complexity,
-                }
-                for c in chunks
-                if c.id in vector_store
-            }
-
-        del chunks
-        gc.collect()
-
-        emb_bin = output_dir / "embeddings.bin"
-        save_embeddings_bin(
-            emb_bin,
-            self.generator.model_name,
-            dim,
-            ((eid, vector_store[eid]) for eid in ordered_ids),
-            count=len(ordered_ids),
-        )
-        print(f"  [OK] embeddings.bin  ({emb_bin.stat().st_size / 1_048_576:.2f} MB)")
-
-        if self.save_json:
-            emb_json = output_dir / "embeddings.json"
-            emb_data: Dict[str, Any] = {
-                "model":        self.generator.model_name,
-                "dimension":    dim,
-                "total_chunks": len(ordered_ids),
-                "embeddings": [
-                    {
-                        "id":        eid,
-                        "embedding": vector_store[eid].tolist(),
-                        "metadata":  chunk_meta.get(eid, {}),
-                    }
-                    for eid in ordered_ids
-                ],
-            }
-            emb_json.write_text(_json_dumps(emb_data, indent=True))
-            print(f"  [OK] embeddings.json ({emb_json.stat().st_size / 1_048_576:.2f} MB)")
-
-        del vector_store
-        gc.collect()
-
-        vec_bin = output_dir / "vectors.bin"
-        save_vectors_bin(vec_bin, self.generator.model_name, ordered_ids)
-        print(f"  [OK] vectors.bin     ({vec_bin.stat().st_size / 1_048_576:.2f} MB)")
-
-        print(f"       Time:           {time.time() - t:.2f}s\n")
+        # Step 3+4: Embed + write (streaming, no full vector_store dict)
+        dim = self._process_step3_step4(chunks, output_dir)
 
         # Summary
         total_elapsed = time.time() - t_total
@@ -1265,6 +1461,7 @@ class EmbeddingPipeline:
         print("  PIPELINE SUMMARY")
         print(SEP)
         print(f"  Model:          {self.generator.model_name}")
+        print(f"  Quantization:   {'SQ8 int8' if self.quantize else 'float32'}")
         print(f"  Dimension:      {dim}")
         print(f"  Total Chunks:   {n_chunks}")
         print(f"  Total Time:     {total_elapsed:.2f}s")
@@ -1272,8 +1469,10 @@ class EmbeddingPipeline:
         print("  PIPELINE COMPLETED SUCCESSFULLY")
         print(f"{SEP}\n")
 
+
 # [EXPERIMENTAL FOR NOW]
 # SERVE MODE — long-lived stdin/stdout embedding server
+
 
 def cmd_serve(args: argparse.Namespace) -> None:
     """
@@ -1332,7 +1531,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     print(json.dumps(_ready), flush=True)
     print(f"  ✓ Ready — listening on stdin (dim={gen.dimension})", file=_err)
 
-    stdin  = sys.stdin
+    stdin = sys.stdin
     stdout = sys.stdout
 
     for raw_line in stdin:
@@ -1373,9 +1572,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
                 if not isinstance(queries, list) or not all(
                     isinstance(q, str) for q in queries
                 ):
-                    raise ValueError(
-                        '"queries" must be a JSON array of strings'
-                    )
+                    raise ValueError('"queries" must be a JSON array of strings')
                 if not queries:
                     raise ValueError('"queries" array is empty')
 
@@ -1422,8 +1619,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 
 def print_help() -> None:
-    print(
-        """eulix_embed.py — Knowledge Base Embedding Generator (Python/PyTorch)
+    print("""eulix_embed.py — Knowledge Base Embedding Generator (Python/PyTorch)
 
 USAGE:
     python eulix_embed.py [COMMAND] [OPTIONS]
@@ -1481,23 +1677,27 @@ SUPPORTED MODELS:
     BAAI/bge-small-en-v1.5
     BAAI/bge-base-en-v1.5
     jinaai/jina-embeddings-v2-base-code  (8192 tokens)
-"""
-    )
+""")
+
 
 def ijson_check():
     """Check which ijson backend is active."""
     try:
         import ijson
+
         print(f"ijson backend: {ijson.backend}")
-        if ijson.backend == 'yajl2_c':
+        if ijson.backend == "yajl2_c":
             print("  ✓ Fast C backend (yajl2_c) - optimal performance")
-        elif ijson.backend == 'yajl2_cffi':
+        elif ijson.backend == "yajl2_cffi":
             print("  ✓ C backend via CFFI - good performance")
         else:
-            print("  ⚠ Pure Python backend - slower, consider: pip install 'ijson[yajl2_cffi]'")
+            print(
+                "  ⚠ Pure Python backend - slower, consider: pip install 'ijson[yajl2_cffi]'"
+            )
     except ImportError:
         print("❌ ijson not installed")
         print("   Install with: uv pip install ijson")
+
 
 def cmd_embed(args: argparse.Namespace) -> None:
     pipeline = EmbeddingPipeline(
@@ -1506,6 +1706,7 @@ def cmd_embed(args: argparse.Namespace) -> None:
         device=args.device,
         batch_size=args.batch_size,
         save_json=args.save_json,
+        quantize=args.quantize,
         debug=args.debug,
     )
     kb_path = Path(args.kb_path)
@@ -1530,20 +1731,23 @@ def cmd_query(args: argparse.Namespace) -> None:
         }
         print(_json_dumps(out, indent=True))
     elif args.format == "binary":
-        sys.stdout.buffer.write(struct.pack("<I", len(emb)))
+        sys.stdout.buffer.write(_struct.pack("<I", len(emb)))
         sys.stdout.buffer.write(emb.astype("float32").tobytes())
     else:
         print(f"[ERROR] Unknown format '{args.format}'", file=sys.stderr)
         sys.exit(1)
 
+
 def check_duplicate_ids(path: Path) -> List[str]:
     with open(path, "rb") as f:
-        f.read(4); f.read(4)  # magic + version
-        n = struct.unpack("<I", f.read(4))[0]; f.read(n)  # model name
-        count, dim = struct.unpack("<II", f.read(8))
+        f.read(4)
+        f.read(4)  # magic + version
+        n = _struct.unpack("<I", f.read(4))[0]
+        f.read(n)  # model name
+        count, dim = _struct.unpack("<II", f.read(8))
         ids = []
         for _ in range(count):
-            n = struct.unpack("<I", f.read(4))[0]
+            n = _struct.unpack("<I", f.read(4))[0]
             ids.append(f.read(n).decode())
             f.read(dim * 4)
 
@@ -1555,6 +1759,7 @@ def check_duplicate_ids(path: Path) -> List[str]:
 
     return dupes
 
+
 def cmd_compare(args: argparse.Namespace) -> None:
     np = _require_numpy()
     print("Comparing embeddings.bin ↔ vectors.bin...\n")
@@ -1563,6 +1768,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
     load_embeddings_bin(emb_path)
     load_vectors_bin(vec_path)
+
 
 def check_python_version():
     # Define your allowed Python boundaries
@@ -1575,15 +1781,20 @@ def check_python_version():
         print("=" * 60)
         print("❌ CRITICAL: PYTHON VERSION COMPATIBILITY ERROR")
         print(f"Current version: Python {sys.version.split()[0]}")
-        print(f"Required version: Between Python {MIN_VERSION[0]}.{MIN_VERSION[1]} and {MAX_VERSION[0]}.{MAX_VERSION[1]}")
+        print(
+            f"Required version: Between Python {MIN_VERSION[0]}.{MIN_VERSION[1]} and {MAX_VERSION[0]}.{MAX_VERSION[1]}"
+        )
         print("=" * 60)
         print("\nPlease switch your virtual environment or Python installation.")
-        print("If using 'uv', you can recreate the environment with the correct version:")
+        print(
+            "If using 'uv', you can recreate the environment with the correct version:"
+        )
         print(f"  uv venv --python {MIN_VERSION[0]}.{MIN_VERSION[1]}")
         print("=" * 60)
 
         # Immediately halt execution with a non-zero exit code
         sys.exit(1)
+
 
 def main() -> None:
     if len(sys.argv) == 1 or sys.argv[1] in ("-h", "--help"):
@@ -1612,13 +1823,27 @@ def main() -> None:
     ep.add_argument("-o", "--output", default="./embeddings")
     ep.add_argument("-m", "--model", default="sentence-transformers/all-MiniLM-L6-v2")
     ep.add_argument("-d", "--device", default=None)
-    ep.add_argument("-b","--batch-size", type=int, default=None)
-    ep.add_argument("-rcom","--remove-comments", action="store_true",
-                    help="Removes comments, docstring, license headers from embedding and vidx bins")
+    ep.add_argument("-b", "--batch-size", type=int, default=None)
+    ep.add_argument(
+        "--quantize",
+        action="store_true",
+        help="SQ8 int8 quantization: 4x smaller embeddings.bin, ~1%% quality loss",
+    )
+    ep.add_argument(
+        "-rcom",
+        "--remove-comments",
+        action="store_true",
+        help="Removes comments, docstring, license headers from embedding and vidx bins",
+    )
     ep.add_argument("--max-chunk", type=int, default=2000)
-    ep.add_argument("--save-json", action="store_true",
-                    help="[Use for Debugging] Save a json copy of embedder.bin and vector.bin")
-    ep.add_argument("--debug", action="store_true", help="Print debug info during pipeline")
+    ep.add_argument(
+        "--save-json",
+        action="store_true",
+        help="[Use for Debugging] Save a json copy of embedder.bin and vector.bin",
+    )
+    ep.add_argument(
+        "--debug", action="store_true", help="Print debug info during pipeline"
+    )
 
     qp = sub.add_parser("query")
     qp.add_argument("-q", "--query", default="")
@@ -1627,17 +1852,20 @@ def main() -> None:
 
     sp = sub.add_parser("serve")
     sp.add_argument(
-        "-m", "--model",
+        "-m",
+        "--model",
         default="sentence-transformers/all-MiniLM-L6-v2",
         help="HuggingFace model name",
     )
     sp.add_argument(
-        "-d", "--device",
+        "-d",
+        "--device",
         default=None,
         help="cuda / mps / cpu  (default: auto-detect)",
     )
     sp.add_argument(
-        "-b", "--batch-size",
+        "-b",
+        "--batch-size",
         type=int,
         default=None,
         help="Batch size for 'queries' requests (default: auto)",
@@ -1670,7 +1898,7 @@ def main() -> None:
     elif args.command == "ijson-backend":
         ijson_check()
     elif args.command == "version":
-        if hasattr(args, 'short') and args.short:
+        if hasattr(args, "short") and args.short:
             print(Version)
         else:
             print(f"eulix-embed version {Version}")
