@@ -58,7 +58,7 @@ import (
 
 // Constants
 const (
-	BinaryVersion = uint32(3)
+	BinaryVersion = uint32(4)
 	MagicBytes    = "EULX"
 )
 
@@ -102,12 +102,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	}
 
 	cb.loadCallGraph()
-
-	if err := cb.loadKnowledgeBase(); err != nil {
-		cb.hasKB = false
-	} else {
-		cb.hasKB = true
-	}
+	cb.hasKB = true
 
 	cb.debugLog.Log("ContextBuilder initialized successfully")
 	return cb, nil
@@ -133,7 +128,8 @@ func (cb *ContextBuilder) BuildContext(query string) (*types.ContextWindow, erro
 func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int) (*types.ContextWindow, *DebugTrace, error) {
 	start := time.Now()
 	trace := &DebugTrace{Query: query}
-
+	explicitAnchor := extractExplicitAnchors(query)
+	gate := buildPathGate(explicitAnchor)
 	cb.debugLog.Log("\n=== NEW QUERY ===")
 	cb.debugLog.Log("Query: %s", query)
 
@@ -192,9 +188,22 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	var selected []Chunk
 	if cb.hasEmbeddings {
 		trace.SelectionMethod = "mmr"
-		selected = cb.mmrSelect(expanded, budget.ContextBudget, qEmb, anchorFiles, trace)
+		selected = cb.mmrSelect(expanded, budget.ContextBudget, qEmb, anchorFiles, trace, gate)
 	} else {
 		trace.SelectionMethod = "greedy"
+		// Apply gate before greedy selection — selectChunks has no gate awareness.
+		if gate.active {
+			filtered := make([]ScoredChunk, 0, len(expanded))
+			for _, sc := range expanded {
+				if gate.Pass(sc.File) {
+					sc.Score *= gate.Boost(sc.File)
+					filtered = append(filtered, sc)
+				}
+			}
+			cb.debugLog.Log("Gate filtered greedy candidates: %d → %d",
+				len(expanded), len(filtered))
+			expanded = filtered
+		}
 		selected = cb.selectChunks(expanded, budget.ContextBudget)
 		for i, c := range selected {
 			trace.ChunkTraces = append(trace.ChunkTraces, ChunkTrace{
@@ -232,24 +241,45 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 
 // candidateLimitForIntent avoids pulling 120 candidates for narrow queries
 func (cb *ContextBuilder) candidateLimitForIntent(intent QueryIntent) int {
+	scale := 1.0
+	n := len(cb.chunks)
+	switch {
+	case n > 500_000:
+		scale = 4.0
+	case n > 100_00:
+		scale = 2.5
+	case n > 50_000:
+		scale = 1.5
+	}
+
+	var base int
 	switch {
 	case intent.Type == IntentCallers || intent.Type == IntentCallees:
 		if intent.Specificity > 0.9 {
-			return 5
+			base = 5
+		} else {
+			base = 30
 		}
-		return 30
 	case intent.Type == IntentConcept || intent.Type == IntentFlow:
 		if intent.Specificity > 0.8 {
-			return 15
+			base = 15
+		} else {
+			base = 50
 		}
-		return 50
 	case intent.Specificity > 0.8:
-		return 20
+		base = 20
 	case intent.Specificity > 0.5:
-		return 50
+		base = 50
 	default:
-		return 80
+		base = 80
 	}
+	// Hard cap: MMR over 600 candidates is still fast beyound that
+	// just adds noise without improving recall.
+	limit := int(float64(base) * scale)
+	if limit > 600 {
+		limit = 600
+	}
+	return limit
 }
 
 // mergeWithPriority blends pre-computed high-priority slices (anchors, callsites)

@@ -71,7 +71,7 @@ import (
 //   - context_intent.go: IntentCallees and other intent types
 //   - expandFromKBFunction: Callee expansion for IntentCallees queries
 func (cb *ContextBuilder) kbExactLookup(query string, intent QueryIntent) []ScoredChunk {
-	if !cb.hasKB {
+	if !cb.hasKB || cb.kbData == nil {
 		return nil
 	}
 	potentialSymbols := extractPotentialSymbols(query)

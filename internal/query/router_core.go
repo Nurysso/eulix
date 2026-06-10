@@ -40,15 +40,9 @@ func QueryTrafficController(
 	llmClient *llm.Client,
 	cacheManager *cache.Manager,
 ) (*Router, error) {
-	// Always load these (they're smaller)
-	kbIndex, err := loadKBIndex(eulixDir)
+	cb, err := ContextWindowCreator(eulixDir, cfg, llmClient, cfg.Project.Path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load KB index: %w", err)
-	}
-
-	callGraph, err := loadCallGraph(eulixDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load call graph: %w", err)
+		return nil, fmt.Errorf("failed to initialize context builder: %w", err)
 	}
 
 	classifier, err := QuerySheriff(filepath.Join(eulixDir, "kb_index.json"))
@@ -62,11 +56,7 @@ func QueryTrafficController(
 		classifier:     classifier,
 		llmClient:      llmClient,
 		cache:          cacheManager,
-		contextBuilder: nil,
-		kbIndex:        kbIndex,
-		callGraph:      callGraph,
-		kb:             nil, // Load lazily when needed
-		cgIdx:          newCallGraphIndex(),
+		contextBuilder: cb,
 	}, nil
 }
 

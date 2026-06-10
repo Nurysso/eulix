@@ -17,7 +17,87 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"eulix/internal/types"
 )
+
+// adaptiveDFThreshold scales the document-frequency cutoff with corpus size.
+// Large corpora need a lower threshold because truly universal symbols
+// (err, ctx, ret) spread across many files but still don't hit 30% of
+// 765k chunks — they'd need to appear in 229k distinct chunks.
+//
+//	< 10k  chunks → 0.30 (original, avoids false positives on small repos)
+//	< 50k  chunks → 0.15
+//	< 200k chunks → 0.05
+//	≥ 200k chunks → 0.02  (kernel-scale: filter anything in ≥2% of chunks)
+func adaptiveDFThreshold(n int) float64 {
+	switch {
+	case n < 10_000:
+		return 0.30
+	case n < 50_000:
+		return 0.15
+	case n < 200_000:
+		return 0.05
+	default:
+		return 0.02
+	}
+}
+
+func (cb *ContextBuilder) buildBoilerplateFromKB(kb *types.KnowledgeBaseRef) {
+	// Collect richer symbol sets per chunk position.
+	// Each chunk currently only carries fn.Name as its Symbols slice;
+	// for boilerplate purposes we want all identifiers: params, local vars,
+	// callee names — so we rebuild from the KB directly.
+	type chunkSyms struct {
+		syms []string
+	}
+	all := make([]chunkSyms, 0, len(cb.chunks))
+
+	for _, fs := range kb.Structure {
+		for _, fn := range fs.Functions {
+			syms := make([]string, 0, 4+len(fn.Params)+len(fn.Calls))
+			syms = append(syms, fn.Name)
+			for _, p := range fn.Params {
+				syms = append(syms, p.Name)
+			}
+			for _, c := range fn.Calls {
+				syms = append(syms, c.Callee)
+			}
+			all = append(all, chunkSyms{syms})
+		}
+		for _, cls := range fs.Classes {
+			syms := []string{cls.Name}
+			all = append(all, chunkSyms{syms})
+			for _, m := range cls.Methods {
+				msyms := make([]string, 0, 4+len(m.Params)+len(m.Calls))
+				msyms = append(msyms, m.Name)
+				for _, p := range m.Params {
+					msyms = append(msyms, p.Name)
+				}
+				for _, c := range m.Calls {
+					msyms = append(msyms, c.Callee)
+				}
+				all = append(all, chunkSyms{msyms})
+			}
+		}
+	}
+
+	// Adaptive threshold: on huge corpora lower the bar so common
+	// short identifiers (err, ctx, ret, i, buf) get filtered.
+	threshold := adaptiveDFThreshold(len(all))
+	cb.debugLog.Log("Boilerplate: corpus=%d, threshold=%.3f", len(all), threshold)
+
+	// Build a synthetic []Chunk just for the detector (no alloc of content).
+	synth := make([]Chunk, len(all))
+	for i, cs := range all {
+		synth[i] = Chunk{Symbols: cs.syms}
+	}
+	cb.boilerplate = NewBoilerplateDetector(synth, threshold, bpMinChunks)
+	cb.debugLog.Log("Boilerplate detector: %d symbols filtered top: %v",
+		len(cb.boilerplate.boilerplate),
+		cb.boilerplate.TopBoilerplate(10),
+	)
+}
 
 // NewBoilerplateDetector builds the detector from all chunks in the index.
 // dfThreshold is the fraction of chunks a symbol must appear in to be

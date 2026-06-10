@@ -199,7 +199,7 @@ func readStr(data []byte, off int) (string, int, error) {
 //   - invertedKeywordSearch: Uses postings to retrieve chunks by TF-IDF score
 //   - context_loader.go: buildInvertedIndexFromKB called during setup
 //   - extractQueryKeywords: Keyword extraction with stop-word filtering
-func (cb *ContextBuilder) buildInvertedIndexFromKB(kb *types.KnowledgeBase) *InvertedIndex {
+func (cb *ContextBuilder) buildInvertedIndexFromKB(kb *types.KnowledgeBaseRef) *InvertedIndex {
 	idx := &InvertedIndex{
 		Postings: make(map[string][]Posting, len(cb.chunks)*10),
 		DocCount: len(cb.chunks),
