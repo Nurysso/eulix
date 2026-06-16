@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -489,66 +490,84 @@ func (c *Client) BuildFullPrompt(context *types.ContextWindow, userQuery string,
 	return sb.String()
 }
 
+// buildPrompt builds only the context payload — no instruction boilerplate.
+// Instructions belong in buildSystemPrompt() which is passed as the system role.
 func (c *Client) buildPrompt(context *types.ContextWindow, userQuery string) string {
 	var sb strings.Builder
 
-	// CONTEXT INVENTORY HEADER
-	sb.WriteString("CONTEXT INVENTORY\n")
-
-	// Separate chunks into source code vs metadata-only for clarity
-	var sourceChunks, metadataChunks []types.ContextChunk
+	// Separate source vs metadata chunks
+	var srcChunks, metaChunks []types.ContextChunk
 	for _, chunk := range context.Chunks {
 		if strings.TrimSpace(chunk.Content) != "" && !strings.HasPrefix(chunk.Content, "[METADATA]") {
-			sourceChunks = append(sourceChunks, chunk)
+			srcChunks = append(srcChunks, chunk)
 		} else {
-			metadataChunks = append(metadataChunks, chunk)
+			metaChunks = append(metaChunks, chunk)
 		}
 	}
 
-	// Summary statistics
-	sb.WriteString(fmt.Sprintf("Available evidence:\n"))
-	sb.WriteString(fmt.Sprintf("  • Source code chunks : %d (files with actual implementation)\n", len(sourceChunks)))
-	sb.WriteString(fmt.Sprintf("  • Metadata chunks    : %d (signatures, call edges, structural info)\n", len(metadataChunks)))
-	sb.WriteString(fmt.Sprintf("  • Total tokens       : %d\n", context.TotalTokens))
-	sb.WriteString(fmt.Sprintf("  • Files covered      : %d\n\n", len(context.Sources)))
+	// Compact inventory header — just counts, no per-token explanation
+	sb.WriteString(fmt.Sprintf(
+		"Context: %d source chunks, %d metadata, %d tokens across %d files\n\n",
+		len(srcChunks), len(metaChunks), context.TotalTokens, len(context.Sources),
+	))
 
-	// Usage guidance
-	sb.WriteString("HOW TO USE THIS CONTEXT:\n")
-	sb.WriteString("  • Source code chunks = ground truth. Cite them directly.\n")
-	sb.WriteString("  • Metadata chunks    = structural hints only. Do NOT invent implementation.\n")
-	sb.WriteString("  • If a symbol appears only in metadata, state: 'signature only — lines X-Y of file Z'\n")
-	sb.WriteString("  • Never fabricate function bodies, variable values, or logic you cannot see.\n\n")
-
-	// SOURCE CODE CHUNKS
-	if len(sourceChunks) > 0 {
-		sb.WriteString("─── SOURCE CODE (ground truth) ───\n\n")
-		for i, chunk := range sourceChunks {
-			sb.WriteString(fmt.Sprintf("[CHUNK %d] %s (Lines %d-%d) — relevance %.2f\n",
+	if len(srcChunks) > 0 {
+		sb.WriteString("── SOURCE ──\n\n")
+		for i, chunk := range srcChunks {
+			sb.WriteString(fmt.Sprintf("[%d] %s:%d-%d (score %.2f)\n",
 				i+1, chunk.File, chunk.StartLine, chunk.EndLine, chunk.Importance))
-			sb.WriteString(strings.Repeat("-", 60) + "\n")
 			sb.WriteString(chunk.Content)
 			sb.WriteString("\n\n")
 		}
 	}
 
-	// METADATA CHUNKS
-	if len(metadataChunks) > 0 {
-		sb.WriteString("─── METADATA (structural hints) ───\n\n")
-		for i, chunk := range metadataChunks {
-			sb.WriteString(fmt.Sprintf("[META %d] %s (Lines %d-%d) — relevance %.2f\n",
-				i+1, chunk.File, chunk.StartLine, chunk.EndLine, chunk.Importance))
-			sb.WriteString(strings.Repeat("-", 60) + "\n")
+	if len(metaChunks) > 0 {
+		sb.WriteString("── METADATA ──\n\n")
+		for i, chunk := range metaChunks {
+			sb.WriteString(fmt.Sprintf("[M%d] %s:%d-%d\n",
+				i+1, chunk.File, chunk.StartLine, chunk.EndLine))
 			sb.WriteString(chunk.Content)
 			sb.WriteString("\n\n")
 		}
 	}
 
-	//  EVIDENCE RULES
-	sb.WriteString("EVIDENCE RULES:\n")
-	sb.WriteString("  1. Cite file + line range for every claim.\n")
-	sb.WriteString("  2. Distinguish: \"Source shows…\" vs \"Signature implies…\" vs \"Metadata indicates…\"\n")
-	sb.WriteString("  3. Write \"Not visible in context\" rather than guessing.\n")
-	sb.WriteString("  4. Never invent function bodies or logic you cannot see.\n\n")
+	sb.WriteString("QUERY\n")
+	sb.WriteString(userQuery)
+	sb.WriteString("\n")
 
 	return sb.String()
+}
+
+// fillResidualBudget does a second bin-packing pass over skipped chunks,
+// fitting any that are small enough to fill the remaining token budget.
+// Call this after the primary greedy hydration loop.
+//
+// skipped: chunks that didn't fit in order (index → token cost)
+// remaining: tokens left after the greedy pass
+// addChunk: callback that appends the chunk content and returns new remaining
+func fillResidualBudget(
+	skipped []types.ContextChunk,
+	remaining int,
+	addChunk func(chunk types.ContextChunk) int, // returns new remaining
+) int {
+	if remaining <= 0 || len(skipped) == 0 {
+		return remaining
+	}
+
+	// Sort skipped by token cost ascending — fit smallest first
+	sorted := make([]types.ContextChunk, len(skipped))
+	copy(sorted, skipped)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Tokens < sorted[j].Tokens
+	})
+
+	for _, chunk := range sorted {
+		if remaining <= 0 {
+			break
+		}
+		if chunk.Tokens <= remaining {
+			remaining = addChunk(chunk)
+		}
+	}
+	return remaining
 }

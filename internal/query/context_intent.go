@@ -89,6 +89,7 @@ package query
 
 import (
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -241,51 +242,98 @@ func (qi QueryIntent) Budget() map[string]float64 {
 }
 
 func (cb *ContextBuilder) allocateBudget(query string, intent QueryIntent) BudgetAllocation {
-	sysReserve := 150
-	qTokens := len(query) / 4
-	safetyBuf := 200
-	respReserve := 2000
 	total := cb.config.LLM.MaxTokens
-	ctxBudget := int(float64(total-qTokens-sysReserve-safetyBuf-respReserve) * 0.85)
 
-	w := map[string]float64{
-		"kb_exact": 0.30, "keyword": 0.25, "semantic": 0.25, "graph": 0.20,
+	// Token costs that eat into the model's context window
+	sysPromptTokens := 130           // buildSystemPrompt measure once and hardcode
+	qTokens := (len(query) / 4) + 10 // rough tiktoken estimate + small pad
+	respReserve := 2048              // room for the LLM to write its answer
+
+	// Single safety margin — don't double-penalize with both subtraction and *0.85
+	ctxBudget := total - sysPromptTokens - qTokens - respReserve
+	if ctxBudget < 512 {
+		ctxBudget = 512 // floor: always allow some context
 	}
 
+	// Strategy weights sum to 1.0 for each intent
+	// Needs to update weight after trial and error
+	type weights struct{ kbExact, keyword, semantic, graph float64 }
+	var ww weights
 	switch intent.Type {
 	case IntentCallers, IntentCallees:
-		// callsite scan is the primary signal — reduce semantic noise
-		w["kb_exact"], w["keyword"], w["semantic"], w["graph"] = 0.45, 0.30, 0.10, 0.15
+		ww = weights{0.45, 0.30, 0.10, 0.15}
 	case IntentSymbolExact:
-		w["kb_exact"], w["keyword"], w["semantic"], w["graph"] = 0.55, 0.20, 0.10, 0.15
+		ww = weights{0.55, 0.20, 0.10, 0.15}
 	case IntentSymbolFuzzy:
-		w["kb_exact"], w["keyword"], w["semantic"], w["graph"] = 0.40, 0.25, 0.20, 0.15
+		ww = weights{0.40, 0.25, 0.20, 0.15}
 	case IntentConcept:
-		w["kb_exact"], w["keyword"], w["semantic"], w["graph"] = 0.15, 0.20, 0.50, 0.15
+		ww = weights{0.15, 0.20, 0.50, 0.15}
 	case IntentFlow:
-		w["kb_exact"], w["keyword"], w["semantic"], w["graph"] = 0.20, 0.15, 0.25, 0.40
+		ww = weights{0.20, 0.15, 0.25, 0.40}
 	case IntentDebug:
-		w["kb_exact"], w["keyword"], w["semantic"], w["graph"] = 0.35, 0.35, 0.15, 0.15
+		ww = weights{0.35, 0.35, 0.15, 0.15}
+	default:
+		ww = weights{0.30, 0.25, 0.25, 0.20}
 	}
 
 	return BudgetAllocation{
 		MaxTokens:       total,
-		SystemReserve:   sysReserve,
+		SystemReserve:   sysPromptTokens,
 		QueryCost:       qTokens,
 		ResponseReserve: respReserve,
 		ContextBudget:   ctxBudget,
-		StrategyWeights: w,
+		StrategyWeights: map[string]float64{
+			"kb_exact": ww.kbExact,
+			"keyword":  ww.keyword,
+			"semantic": ww.semantic,
+			"graph":    ww.graph,
+		},
 	}
 }
 
 // applyBudget truncates a pre-sorted slice to fit within the token budget.
 func (cb *ContextBuilder) applyBudget(chunks []ScoredChunk, budget int) []ScoredChunk {
-	used := 0
-	for i, sc := range chunks {
-		used += sc.Chunk.Tokens
-		if used > budget {
-			return chunks[:i]
+	if len(chunks) == 0 || budget <= 0 {
+		return nil
+	}
+
+	included := make([]ScoredChunk, 0, len(chunks))
+	var skipped []ScoredChunk
+	remaining := budget
+
+	// Pass 1: greedy in score order
+	for _, sc := range chunks {
+		cost := sc.Chunk.Tokens
+		if cost <= 0 {
+			cost = 1 // guard against zero-token chunks causing infinite loops
+		}
+		if cost <= remaining {
+			included = append(included, sc)
+			remaining -= cost
+		} else {
+			skipped = append(skipped, sc)
 		}
 	}
-	return chunks
+
+	// Pass 2: bin-pack skipped chunks by ascending token cost
+	if remaining > 0 && len(skipped) > 0 {
+		sort.Slice(skipped, func(i, j int) bool {
+			return skipped[i].Chunk.Tokens < skipped[j].Chunk.Tokens
+		})
+		for _, sc := range skipped {
+			if remaining <= 0 {
+				break
+			}
+			cost := sc.Chunk.Tokens
+			if cost <= remaining {
+				included = append(included, sc)
+				remaining -= cost
+			}
+		}
+	}
+
+	cb.debugLog.Log("applyBudget: %d/%d chunks fit, %d tokens used of %d (%d remaining)",
+		len(included), len(chunks), budget-remaining, budget, remaining)
+
+	return included
 }

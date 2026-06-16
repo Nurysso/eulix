@@ -13,6 +13,7 @@ package query
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/bytedance/sonic"
@@ -85,4 +86,30 @@ func sizeOverflows(size int64) bool {
 // the current platform (only reachable on 32-bit builds).
 func errFileTooLarge(path string, size int64) error {
 	return fmt.Errorf("file %s is %d bytes, which overflows int on this platform", path, size)
+}
+
+// openForSequentialRead returns an io.Reader over path, using mmap with
+// MADV_SEQUENTIAL for large files where supported, and a buffered file
+// reader otherwise. The returned cleanup func must always be called
+// (even on error paths after a successful return) to release the
+// mapping/file.
+func openForSequentialRead(path string) (r io.Reader, cleanup func(), err error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	size := fi.Size()
+
+	if size >= mmapThreshold && !sizeOverflows(size) {
+		if r, cleanup, err := mmapForSequentialRead(path, size); err == nil {
+			return r, cleanup, nil
+		}
+		// mmap unsupported or failed — fall through to buffered reader.
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return bufio.NewReaderSize(f, jsonBufSize), func() { f.Close() }, nil
 }
