@@ -126,16 +126,23 @@ type ExplicitAnchor struct {
 //   - vectorSearchIVF / vectorSearch: Semantic vector search
 //   - context_intent.go: QueryIntent and budget allocation
 func (cb *ContextBuilder) multiStrategySearch(
-	query string, topK int, intent QueryIntent, trace *DebugTrace, qEmb []float32,
+	query string,
+	topK int,
+	intent QueryIntent,
+	weights map[string]float64,
+	trace *DebugTrace,
+	qEmb []float32,
 ) []ScoredChunk {
 	all := make(map[string]ScoredChunk, topK*2)
-
 	anchors := extractExplicitAnchors(query)
 	gate := buildPathGate(anchors)
+
 	if len(anchors) > 0 {
-		cb.debugLog.Log("Explicit anchors: %d, gate active: %v (required: %v)", len(anchors), gate.active, gate.required)
+		cb.debugLog.Log("Explicit anchors: %d, gate active: %v (required: %v)",
+			len(anchors), gate.active, gate.required)
 		for _, a := range anchors {
-			cb.debugLog.Log("  anchor: file=%q func=%q line=%q score=%.0f", a.File, a.FuncName, a.Line, a.Score)
+			cb.debugLog.Log("  anchor: file=%q func=%q line=%q score=%.0f",
+				a.File, a.FuncName, a.Line, a.Score)
 		}
 		anchorsHits := cb.explicitAnchorSearch(anchors)
 		anchorsHits = gate.applyGate(anchorsHits)
@@ -153,6 +160,7 @@ func (cb *ContextBuilder) multiStrategySearch(
 			topK = highConfidence + 20
 		}
 	}
+
 	run := func(name string, fn func() []ScoredChunk, multiBoost float64) {
 		t0 := time.Now()
 		results := fn()
@@ -182,11 +190,11 @@ func (cb *ContextBuilder) multiStrategySearch(
 	if cb.hasKB {
 		run("kb_exact", func() []ScoredChunk { return cb.kbExactLookup(query, intent) }, 2.5)
 	}
-
 	run("exact", func() []ScoredChunk { return cb.exactSymbolSearch(query) }, 2.0)
 	run("partial", func() []ScoredChunk { return cb.partialIdentifierMatch(query) }, 1.5)
 
-	kwTopK := int(float64(topK) * (0.4 + 0.3*intent.Budget()["keyword"]))
+	// Use weights from allocateBudget
+	kwTopK := int(float64(topK) * (0.3 + 0.4*weights["keyword"]))
 	syms := extractPotentialSymbols(query)
 	run("keyword", func() []ScoredChunk {
 		var res []ScoredChunk
@@ -209,7 +217,6 @@ func (cb *ContextBuilder) multiStrategySearch(
 					break
 				}
 			}
-			// Penalise _sym* matches
 			for _, sym := range syms {
 				if strings.HasPrefix(strings.ToLower(res[i].Name), "_"+strings.ToLower(sym)) {
 					res[i].Score -= 10.0
@@ -222,11 +229,9 @@ func (cb *ContextBuilder) multiStrategySearch(
 	skipSemantic := intent.Type == IntentCallers ||
 		intent.Type == IntentCallees ||
 		intent.Specificity > 0.85
-
 	if cb.hasEmbeddings && !skipSemantic && qEmb != nil {
-		semTopK := int(float64(topK) * (0.3 + 0.3*intent.Budget()["semantic"]))
+		semTopK := int(float64(topK) * (0.2 + 0.5*weights["semantic"]))
 		run("semantic", func() []ScoredChunk {
-			// qEmb already computed — no EmbedQueryBinary call here
 			var raw []ScoredChunk
 			if cb.ivfIndex != nil {
 				raw = cb.vectorSearchIVF(qEmb, semTopK, 0.5)
@@ -245,6 +250,20 @@ func (cb *ContextBuilder) multiStrategySearch(
 		result = append(result, sc)
 	}
 	boostBySubsystemPath(result, query)
+	// In multiStrategySearch, after boostBySubsystemPath:
+	for i := range result {
+		f := result[i].File
+		if strings.Contains(f, "/tests/") ||
+			strings.Contains(f, "/test_") ||
+			strings.Contains(f, "fake_") ||
+			strings.Contains(f, "_test.go") {
+			// Don't zero out — tests are valid for debug/callee queries
+			// Just de-prioritize for concept/overview queries
+			if intent.Type == IntentConcept || intent.Type == IntentFlow {
+				result[i].Score *= 0.4
+			}
+		}
+	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].MatchType == "exact" && result[j].MatchType != "exact" {
 			return true
@@ -673,36 +692,50 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int) []Sc
 //   - isIdentRune: Character predicate for identifier matching
 //   - context_graph.go: expandGraph uses this index for caller/callee expansion
 //   - context_loader.go: Called during KB loading
-func buildCallSiteIndex(chunks []Chunk) callSiteIndex {
-	idx := make(callSiteIndex, 512)
-
-	for i, chunk := range chunks {
-		content := chunk.Content
-		if content == "" {
-			continue
-		}
-
-		for j := 0; j < len(content); {
-			paren := strings.IndexByte(content[j:], '(')
-			if paren < 0 {
-				break
-			}
-			paren += j
-
-			start := paren - 1
-			for start >= 0 && isIdentRune(content[start]) {
-				start--
-			}
-			start++
-
-			if start < paren {
-				sym := strings.ToLower(content[start:paren])
-				idx[sym] = append(idx[sym], i)
-			}
-			j = paren + 1
+func buildCallSiteIndex(cg *types.CallGraphRef, chunks []Chunk) callSiteIndex {
+	// primary lookup: symbol stored in chunk.Symbols
+	symToChunks := make(map[string][]int, len(chunks))
+	for i, c := range chunks {
+		for _, sym := range c.Symbols {
+			symToChunks[sym] = append(symToChunks[sym], i)
 		}
 	}
-	return idx
+
+	// fallback lookup: derive the call-graph-style ID from chunk fields
+	nameToChunks := make(map[string][]int, len(chunks))
+	for i, c := range chunks {
+		key := normalizeToCallGraphID(c)
+		nameToChunks[key] = append(nameToChunks[key], i) // was nameToChunks[i]
+	}
+
+	callSites := make(callSiteIndex)
+	var missed int
+	for _, edge := range cg.Edges {
+		if edge.EdgeType != "call" {
+			continue
+		}
+		callerChunks, ok := symToChunks[edge.From]
+		if !ok {
+			callerChunks = nameToChunks[edge.From]
+		}
+		if len(callerChunks) == 0 {
+			missed++
+			continue
+		}
+		callSites[edge.To] = append(callSites[edge.To], callerChunks...)
+	}
+	return callSites
+}
+
+// normalizeToCallGraphID derives the call-graph node ID format from a chunk.
+// Mirrors what eulix-parser writes: "method_ClassName_funcName" or "func_funcName"
+func normalizeToCallGraphID(c Chunk) string {
+	name := strings.ToLower(strings.ReplaceAll(c.Name, " ", "_"))
+	if c.ClassName != "" {
+		class := strings.ToLower(strings.ReplaceAll(c.ClassName, " ", "_"))
+		return "method_" + class + "_" + name
+	}
+	return "func_" + name
 }
 
 func buildCallSiteIndexFromGraph(graph *types.CallGraphRef, chunks []Chunk) callSiteIndex {
@@ -756,6 +789,20 @@ func buildCallSiteIndexFromGraph(graph *types.CallGraphRef, chunks []Chunk) call
 	return idx
 }
 
+func buildRelationshipMap(cg *types.CallGraphRef) map[string][]Relationship {
+	m := make(map[string][]Relationship, len(cg.Nodes))
+	for _, e := range cg.Edges {
+		if e.EdgeType == "calls" {
+			m[e.From] = append(m[e.From], Relationship{
+				Type: "calls", Target: e.To, Distance: 1,
+			})
+			m[e.To] = append(m[e.To], Relationship{
+				Type: "called_by", Target: e.From, Distance: 1,
+			})
+		}
+	}
+	return m
+}
 func findChunkForLine(chunks []Chunk, chunkIdxs []int, line int) int {
 	if line == 0 {
 		return chunkIdxs[0] // no line info, fall back to first chunk in file

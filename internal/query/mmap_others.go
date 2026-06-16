@@ -12,10 +12,23 @@ Prevents mmap to happen on unsupported os
 
 package query
 
-import "errors"
+import (
+	"bufio"
+	"errors"
+	"io"
+	"os"
+)
 
 var errNoMmap = errors.New("mmap not supported on this platform")
 
 func decodeViaMmap(_ string, _ int64, _ any) error {
 	return errNoMmap
+}
+
+func openForSequentialRead(path string) (io.Reader, func(), error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return bufio.NewReaderSize(f, jsonBufSize), func() { f.Close() }, nil
 }
