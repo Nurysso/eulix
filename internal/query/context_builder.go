@@ -75,17 +75,16 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	}
 	cb.debugLog.Log("Initializing ContextBuilder with source root: %s", sourceRoot)
 
-	// eulixBinaryPath := filepath.Join(eulixDir, "..", "eulix_embed")
 	queryEmbedder, err := embeddings.VectorWeaver(cfg.Embeddings.Model)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize embedder: %w", err)
 	}
 	cb.queryEmbedder = queryEmbedder
-	// Load chunks from kb.json + kb_index.json (replaces embeddings.json)
+
 	if err := cb.loadChunksFromKB(); err != nil {
 		return nil, fmt.Errorf("failed to load chunks from KB: %w", err)
 	}
-	// Load raw float32 embeddings from embeddings.bin
+
 	if err := cb.loadEmbeddings(); err != nil {
 		cb.debugLog.Log("Embeddings not loaded: %v", err)
 		cb.hasEmbeddings = false
@@ -93,7 +92,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 		cb.hasEmbeddings = true
 		cb.debugLog.Log("Loaded %d embeddings", len(cb.embeddings))
 	}
-	// Load id→embedding-index map from vectors.bin
+
 	if err := cb.loadVectorMap(); err != nil {
 		cb.debugLog.Log("Vector map not loaded: %v", err)
 		cb.vectorMap = make(map[string]int)
@@ -101,9 +100,10 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 		cb.debugLog.Log("Loaded %d vector mappings", len(cb.vectorMap))
 	}
 
-	cb.loadCallGraph()
-	cb.hasKB = true
+	// Single unified call graph load — runs after chunks are ready
+	cb.loadAndIndexCallGraph()
 
+	cb.hasKB = true
 	cb.debugLog.Log("ContextBuilder initialized successfully")
 	return cb, nil
 }
@@ -130,6 +130,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	trace := &DebugTrace{Query: query}
 	explicitAnchor := extractExplicitAnchors(query)
 	gate := buildPathGate(explicitAnchor)
+
 	cb.debugLog.Log("\n=== NEW QUERY ===")
 	cb.debugLog.Log("Query: %s", query)
 
@@ -137,6 +138,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	trace.Intent = intent
 	cb.debugLog.Log("Intent: %d (specificity: %.2f, confidence: %.2f)",
 		intent.Type, intent.Specificity, intent.Confidence)
+
 	var qEmb []float32
 	skipSemantic := intent.Type == IntentCallers ||
 		intent.Type == IntentCallees ||
@@ -148,11 +150,12 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 			trace.Warnings = append(trace.Warnings, "query embedding failed: "+err.Error())
 		}
 	}
+
 	budget := cb.allocateBudget(query, intent)
 	trace.Budget = budget
 	cb.debugLog.Log("Budget: %d tokens for context (total: %d)",
 		budget.ContextBudget, budget.MaxTokens)
-	// Always anchor on the queried symbol(s) first
+
 	anchors := cb.exactSymbolSearch(query)
 	if len(anchors) > 2 {
 		anchors = anchors[:2]
@@ -162,7 +165,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 		anchorFiles[a.File] = true
 	}
 	cb.debugLog.Log("Found %d exact anchors", len(anchors))
-	// For caller/callee intents do direct call-site scan
+
 	var callSiteResults []ScoredChunk
 	if intent.Type == IntentCallers || intent.Type == IntentCallees {
 		callSiteResults = cb.findCallSites(query, intent)
@@ -170,10 +173,11 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	}
 
 	candidateLimit := cb.candidateLimitForIntent(intent)
-	candidates := cb.multiStrategySearch(query, candidateLimit, intent, trace, qEmb)
+	// Passes budget weights so multiStrategySearch uses the same allocation
+	candidates := cb.multiStrategySearch(query, candidateLimit, intent, budget.StrategyWeights, trace, qEmb)
 	trace.TotalCandidates = len(candidates)
 	cb.debugLog.Log("Multi-strategy search: %d candidates", len(candidates))
-	// Merge anchors + callsite hits
+
 	candidates = mergeWithPriority(anchors, callSiteResults, candidates)
 	cb.debugLog.Log("After merge: %d candidates", len(candidates))
 
@@ -191,7 +195,6 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 		selected = cb.mmrSelect(expanded, budget.ContextBudget, qEmb, anchorFiles, trace, gate)
 	} else {
 		trace.SelectionMethod = "greedy"
-		// Apply gate before greedy selection — selectChunks has no gate awareness.
 		if gate.active {
 			filtered := make([]ScoredChunk, 0, len(expanded))
 			for _, sc := range expanded {
@@ -219,9 +222,10 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 		cb.hydrateContent(selected)
 		cb.debugLog.Log("Hydrated KB content for %d chunks", len(selected))
 	}
-	// Add actual source code (30% of budget)
-	sourceBudget := budget.ContextBudget * 65 / 100
-	selected = cb.hydrateSourceCode(selected, sourceBudget, maxLinesDefault)
+
+	// Source hydration gets the full remaining budget — applyBudget's
+	// bin-packing already handles fitting; no second discount needed.
+	selected = cb.hydrateSourceCode(selected, budget.ContextBudget, maxLinesDefault)
 
 	ctx := cb.assembleContext(selected)
 	trace.TotalTokens = ctx.TotalTokens
@@ -235,7 +239,6 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	cb.mu.Lock()
 	cb.lastTrace = trace
 	cb.mu.Unlock()
-
 	return ctx, trace, nil
 }
 
