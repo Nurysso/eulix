@@ -14,7 +14,9 @@ MADV_SEQUENTIAL for improved performance
 package query
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -58,4 +60,24 @@ func decodeViaMmap(path string, size int64, v any) error {
 	// Using sonic.ConfigDefault (CopyString: false) here would leave decoded
 	// string headers pointing into the now-unmapped region — use-after-free.
 	return sonicCopy.Unmarshal(data, v)
+}
+
+// mmapForSequentialRead mmaps path read-only and advises the kernel to
+// prefetch sequentially (MADV_SEQUENTIAL), matching JSON parse order.
+func mmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	mapped, err := unix.Mmap(int(f.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+
+	_ = unix.Madvise(mapped, unix.MADV_SEQUENTIAL)
+	f.Close() // mapping holds the pages; fd not needed after mmap
+
+	return bytes.NewReader(mapped), func() { _ = unix.Munmap(mapped) }, nil
 }

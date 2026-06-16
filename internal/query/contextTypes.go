@@ -158,6 +158,7 @@ type Chunk struct {
 	Content    string
 	Tokens     int
 	Symbols    []string
+	ClassName  string
 	Name       string
 	Importance float64
 }
@@ -321,4 +322,36 @@ type VectorStoreHeader struct {
 	Version   uint32
 	Count     uint64
 	Dimension uint32
+}
+
+// Lightweight closure-capture types
+// These hold only the fields buildChunkFromKBFunction/Class actually read,
+// avoiding keeping the full types.KBFunction/KBClass alive per closure.
+
+type fnParts struct {
+	name      string
+	signature string
+	docstring string
+	lineStart int
+	lineEnd   int
+	calls     []callPart // only Callee + Line used
+}
+
+type callPart struct {
+	callee string
+	line   int
+}
+
+type classParts struct {
+	name      string
+	docstring string
+	lineStart int
+	lineEnd   int
+	methods   []methodPart // only Name + LineStart + LineEnd used
+}
+
+type methodPart struct {
+	name      string
+	lineStart int
+	lineEnd   int
 }

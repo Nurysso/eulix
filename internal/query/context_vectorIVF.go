@@ -43,12 +43,16 @@ See:
 package query
 
 import (
-	"math"
+	"log"
 	"math/rand"
+	"runtime"
 	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
-const ivfNProbe = 8
+const ivfNProbe = 32
 
 // vectorSearchIVF performs approximate nearest neighbor search using IVF clustering.
 // It finds topK chunks with similarity >= threshold by:
@@ -57,28 +61,37 @@ const ivfNProbe = 8
 // 3. Re-ranking candidates by exact cosine similarity
 // Falls back to brute-force search if IVF index is unavailable.
 func (cb *ContextBuilder) vectorSearchIVF(qEmb []float32, topK int, threshold float64) []ScoredChunk {
-	if cb.ivfIndex == nil {
+	// IVF may still be building in background — fall back to linear scan
+	cb.mu.Lock()
+	idx := cb.ivfIndex
+	cb.mu.Unlock()
+	if idx == nil {
 		return cb.vectorSearch(qEmb, topK, threshold)
 	}
-	idx := cb.ivfIndex
 
 	type centDist struct {
-		d float64
+		d float32
 		i int
 	}
+
+	// Rank centroids by similarity to query (cast to float32 to stay consistent
+	// with how centroids were built)
 	cd := make([]centDist, idx.NClusters)
 	for i, c := range idx.Centroids {
-		cd[i] = centDist{-cosineSimilarity(qEmb, c), i}
+		cd[i] = centDist{float32(cosineSimilarity(qEmb, c)), i}
 	}
-	sort.Slice(cd, func(i, j int) bool { return cd[i].d < cd[j].d })
+	// Sort descending by similarity (highest first)
+	sort.Slice(cd, func(i, j int) bool { return cd[i].d > cd[j].d })
 
 	nProbe := ivfNProbe
 	if nProbe > idx.NClusters {
 		nProbe = idx.NClusters
 	}
 
+	threshF := float32(threshold)
 	scored := make([]ScoredChunk, 0, topK*2)
-	seen := make(map[int32]bool, topK*2)
+	seen := make(map[int32]bool, topK*4)
+
 	for p := 0; p < nProbe; p++ {
 		for _, embIdx := range idx.Lists[cd[p].i] {
 			if seen[embIdx] {
@@ -88,11 +101,16 @@ func (cb *ContextBuilder) vectorSearchIVF(qEmb []float32, topK int, threshold fl
 			if int(embIdx) >= len(cb.chunks) || int(embIdx) >= len(cb.embeddings) {
 				continue
 			}
-			if sim := cosineSimilarity(qEmb, cb.embeddings[embIdx]); sim >= threshold {
-				scored = append(scored, ScoredChunk{Chunk: cb.chunks[embIdx], Score: sim})
+			sim := float32(cosineSimilarity(qEmb, cb.embeddings[embIdx]))
+			if sim >= threshF {
+				scored = append(scored, ScoredChunk{
+					Chunk: cb.chunks[embIdx],
+					Score: float64(sim),
+				})
 			}
 		}
 	}
+
 	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
 	if len(scored) > topK {
 		scored = scored[:topK]
@@ -124,8 +142,9 @@ func buildIVFIndex(embs [][]float32, k, maxIter int) *IVFIndex {
 		k = n
 	}
 	dim := len(embs[0])
-	rng := rand.New(rand.NewSource(42))
+	nWorkers := runtime.NumCPU()
 
+	rng := rand.New(rand.NewSource(42))
 	perm := rng.Perm(n)
 	centroids := make([][]float32, k)
 	for i := range centroids {
@@ -141,24 +160,56 @@ func buildIVFIndex(embs [][]float32, k, maxIter int) *IVFIndex {
 	}
 	counts := make([]int, k)
 
+	chunkSize := (n + nWorkers - 1) / nWorkers
+
 	for iter := 0; iter < maxIter; iter++ {
-		changed := 0
-		for ei, emb := range embs {
-			best, bestSim := int32(0), -math.MaxFloat64
-			for ci, c := range centroids {
-				if s := cosineSimilarity(emb, c); s > bestSim {
-					bestSim, best = s, int32(ci)
+		iterStart := time.Now()
+
+		// Parallel assignment: each worker owns a slice of vectors
+		var totalChanged int64
+		var wg sync.WaitGroup
+		for w := 0; w < nWorkers; w++ {
+			lo := w * chunkSize
+			hi := lo + chunkSize
+			if hi > n {
+				hi = n
+			}
+			wg.Add(1)
+			go func(lo, hi int) {
+				defer wg.Done()
+				var localChanged int64
+				for ei := lo; ei < hi; ei++ {
+					emb := embs[ei]
+					best := int32(0)
+					// reuse cosineSimilarity but track as float32 to avoid
+					// repeated float64 conversions in the hot path
+					bestSim := float32(-1e9)
+					for ci, c := range centroids {
+						// cosineSimilarity returns float64; cast once per call
+						s := float32(cosineSimilarity(emb, c))
+						if s > bestSim {
+							bestSim = s
+							best = int32(ci)
+						}
+					}
+					if assignments[ei] != best {
+						localChanged++
+						assignments[ei] = best
+					}
 				}
-			}
-			if assignments[ei] != best {
-				changed++
-			}
-			assignments[ei] = best
+				atomic.AddInt64(&totalChanged, localChanged)
+			}(lo, hi)
 		}
-		if changed == 0 {
+		wg.Wait()
+
+		log.Printf("[IVF] iter %d/%d: changed=%d elapsed=%v",
+			iter+1, maxIter, totalChanged, time.Since(iterStart))
+
+		if totalChanged == 0 {
 			break
 		}
 
+		// Serial centroid update — cheap relative to assignment
 		for i := range sums {
 			counts[i] = 0
 			for j := range sums[i] {
@@ -176,18 +227,24 @@ func buildIVFIndex(embs [][]float32, k, maxIter int) *IVFIndex {
 			if counts[ci] == 0 {
 				continue
 			}
+			inv := 1.0 / float64(counts[ci])
 			for j := range centroids[ci] {
-				centroids[ci][j] = float32(sums[ci][j] / float64(counts[ci]))
+				centroids[ci][j] = float32(sums[ci][j] * inv)
 			}
 		}
 	}
 
 	lists := make([][]int32, k)
 	for i := range lists {
-		lists[i] = make([]int32, 0)
+		lists[i] = make([]int32, 0, n/k+16)
 	}
 	for ei, ci := range assignments {
 		lists[ci] = append(lists[ci], int32(ei))
 	}
-	return &IVFIndex{Centroids: centroids, Lists: lists, NClusters: k, Dim: dim}
+	return &IVFIndex{
+		Centroids: centroids,
+		Lists:     lists,
+		NClusters: k,
+		Dim:       dim,
+	}
 }

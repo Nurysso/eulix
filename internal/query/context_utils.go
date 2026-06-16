@@ -51,11 +51,13 @@ package query
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"eulix/internal/types"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode"
@@ -73,6 +75,12 @@ func (cb *ContextBuilder) Close() error { return nil }
 //   - buildCallSiteIndex: Uses this to recognize identifier boundaries
 func isIdentRune(b byte) bool {
 	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+func getHeapAlloc() uint64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
 }
 
 // GetLastTrace returns the most recent DebugTrace from the last query execution.
@@ -106,12 +114,33 @@ func (cb *ContextBuilder) writeContextToFile(ctx *types.ContextWindow) error {
 	return err
 }
 
+func jsonSkipToKey(dec *json.Decoder, target string) error {
+	// Consume the opening '{' of the top-level object
+	if _, err := dec.Token(); err != nil {
+		return err
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return fmt.Errorf("expected string key, got %T", tok)
+		}
+		if key == target {
+			return nil // dec is now positioned just before the value
+		}
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return fmt.Errorf("skipping key %q: %w", key, err)
+		}
+	}
+	return fmt.Errorf("key %q not found", target)
+}
+
 // NewDebugLogger creates a thread-safe debug logger writing to eulixDir/context_debug.log.
 // If file creation fails, returns a silent (no-op) logger rather than panicking.
-//
-// See:
-//   - DebugLogger.Log: Timestamp-prefixed logging
-//   - DebugLogger.Close: Should be called in context_builder cleanup
 func NewDebugLogger(eulixDir string) *DebugLogger {
 	logPath := filepath.Join(eulixDir, "context_debug.log")
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
