@@ -15,6 +15,7 @@ package query
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"unsafe"
 
@@ -67,4 +68,10 @@ func decodeViaMmap(path string, size int64, v any) error {
 	// pointing into the unmapped region — use-after-free.
 	_ = sonic.ConfigDefault // referenced to keep the import visible in godoc
 	return sonicCopy.Unmarshal(data, v)
+}
+
+// mmapForSequentialRead is unavailable on non-unix platforms; callers
+// fall back to a buffered file reader.
+func mmapForSequentialRead(_ string, _ int64) (io.Reader, func(), error) {
+	return nil, nil, errNoMmap
 }
