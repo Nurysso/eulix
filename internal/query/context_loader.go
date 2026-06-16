@@ -56,6 +56,7 @@ package query
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -67,7 +68,7 @@ import (
 )
 
 const (
-	ivfBuildThreshold = 10_000
+	ivfBuildThreshold = 50_000
 	invIdxThreshold   = 5_000
 	lazyContentLimit  = 50_000
 	ivfNClusters      = 256
@@ -295,18 +296,58 @@ func (cb *ContextBuilder) loadChunksFromKB() error {
 	cb.hasKB = cb.kbData != nil
 	kb = types.KnowledgeBaseRef{}
 	runtime.GC()
+	cb.debugLog.Log("Freed kb.json memory, current heap: %d MB",
+		getHeapAlloc()/1024/1024)
+	return nil
+}
 
-	// Load call graph and build call site index
-	done = cb.logFileLoad("kb_call_graph.json")
-	var callGraph types.CallGraphRef
-	err = decodeJSONFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"), &callGraph)
-	done(err)
+func (cb *ContextBuilder) streamKBChunks() error {
+	path := filepath.Join(cb.eulixDir, "kb.json")
+
+	r, cleanup, err := openForSequentialRead(path)
 	if err != nil {
-		return fmt.Errorf("kb_call_graph.json: %w", err)
+		return err
+	}
+	defer cleanup()
+
+	// encoding/json required here: sonic's decoder doesn't implement
+	// Token()/More() streaming use stdlib for the token walk.
+	dec := json.NewDecoder(r)
+
+	if err := jsonSkipToKey(dec, "structure"); err != nil {
+		return fmt.Errorf("finding 'structure' key: %w", err)
+	}
+	if _, err := dec.Token(); err != nil {
+		return fmt.Errorf("reading structure opening brace: %w", err)
 	}
 
-	cb.callSites = buildCallSiteIndexFromGraph(&callGraph, cb.chunks)
-	cb.debugLog.Log("Built call-site index with %d entries", len(cb.callSites))
+	cb.chunks = make([]Chunk, 0, 320_000)
+	cb.hydrateIdx = make(map[string]map[[2]int]func() string, 40_000)
+
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return fmt.Errorf("reading file path token: %w", err)
+		}
+		filePath, ok := tok.(string)
+		if !ok {
+			return fmt.Errorf("expected string key, got %T", tok)
+		}
+
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return fmt.Errorf("reading FileData for %s: %w", filePath, err)
+		}
+
+		var fs types.FileData
+		if err := sonicCopy.Unmarshal(raw, &fs); err != nil {
+			return fmt.Errorf("unmarshaling FileData for %s: %w", filePath, err)
+		}
+
+		cb.addChunksFromFile(filePath, &fs)
+	}
+
+	cb.lazyContent = len(cb.chunks) > lazyContentLimit
 	return nil
 }
 
@@ -430,7 +471,14 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 
 	// Build IVF index if needed
 	if numEmb > ivfBuildThreshold {
-		cb.ivfIndex = buildIVFIndex(cb.embeddings, ivfNClusters, ivfKMeansIter)
+		go func() {
+			idx := buildIVFIndex(cb.embeddings, ivfNClusters, ivfKMeansIter)
+			cb.mu.Lock()
+			cb.ivfIndex = idx
+			cb.mu.Unlock()
+			cb.debugLog.Log("IVF index built: %d clusters", ivfNClusters)
+		}()
+		cb.debugLog.Log("IVF build started in background (%d embeddings)", numEmb)
 	}
 	return nil
 }
@@ -485,37 +533,79 @@ func (cb *ContextBuilder) loadVectorMap() error {
 	if err != nil {
 		return fmt.Errorf("vectors.bin not found: %w", err)
 	}
-	if len(data) < 12 {
-		return fmt.Errorf("invalid vectors.bin: too short (%d bytes)", len(data))
+
+	const minHeader = 4 + 4 + 4 + 1 + 4 // magic+version+model_len_prefix+1char+count
+	if len(data) < minHeader {
+		return fmt.Errorf("vectors.bin too short: %d bytes", len(data))
 	}
+
 	off := 0
+
+	// Magic
 	if string(data[off:off+4]) != MagicBytes {
 		return fmt.Errorf("wrong magic in vectors.bin: %q", data[off:off+4])
 	}
 	off += 4
+
+	// Version
 	version := binary.LittleEndian.Uint32(data[off : off+4])
 	off += 4
+	cb.debugLog.Log("vectors.bin: version=%d (expected=%d)", version, BinaryVersion)
 	if version != BinaryVersion {
 		return fmt.Errorf("vectors.bin version mismatch: expected %d, got %d", BinaryVersion, version)
 	}
-	_, off, err = readStr(data, off)
-	if err != nil {
-		return fmt.Errorf("reading model name: %w", err)
-	}
+
+	// Model name — validate the length prefix before reading
 	if off+4 > len(data) {
-		return fmt.Errorf("invalid vectors.bin: truncated header")
+		return fmt.Errorf("vectors.bin: truncated before model name length")
+	}
+	modelNameLen := int(binary.LittleEndian.Uint32(data[off : off+4]))
+	cb.debugLog.Log("vectors.bin: model name length=%d", modelNameLen)
+	if modelNameLen > 512 {
+		return fmt.Errorf("vectors.bin: model name length=%d is implausible, file may be corrupt (off=%d)", modelNameLen, off)
+	}
+	off += 4
+	if off+modelNameLen > len(data) {
+		return fmt.Errorf("vectors.bin: truncated reading model name (need %d bytes at off=%d, have %d)", modelNameLen, off, len(data))
+	}
+	modelName := string(data[off : off+modelNameLen])
+	off += modelNameLen
+	cb.debugLog.Log("vectors.bin: model=%q", modelName)
+
+	// Count
+	if off+4 > len(data) {
+		return fmt.Errorf("vectors.bin: truncated before count field")
 	}
 	count := int(binary.LittleEndian.Uint32(data[off : off+4]))
 	off += 4
+	cb.debugLog.Log("vectors.bin: count=%d, bytes remaining=%d", count, len(data)-off)
+
+	// Sanity: each entry is at minimum 4 (len prefix) + 1 (id char) = 5 bytes
+	if count > (len(data)-off)/5 {
+		return fmt.Errorf("vectors.bin: count=%d impossible given %d bytes remaining, file is corrupt", count, len(data)-off)
+	}
+	if count > 10_000_000 {
+		return fmt.Errorf("vectors.bin: count=%d exceeds sanity limit", count)
+	}
+
 	cb.vectorMap = make(map[string]int, count)
 	for i := 0; i < count; i++ {
-		var id string
-		id, off, err = readStr(data, off)
-		if err != nil {
-			return fmt.Errorf("reading id at index %d: %w", i, err)
+		if off+4 > len(data) {
+			return fmt.Errorf("vectors.bin: truncated reading id length at index %d (off=%d)", i, off)
 		}
+		idLen := int(binary.LittleEndian.Uint32(data[off : off+4]))
+		off += 4
+		if idLen == 0 || idLen > 1024 {
+			return fmt.Errorf("vectors.bin: implausible id length=%d at index %d (off=%d)", idLen, i, off)
+		}
+		if off+idLen > len(data) {
+			return fmt.Errorf("vectors.bin: truncated reading id at index %d (need %d bytes, have %d)", i, idLen, len(data)-off)
+		}
+		id := string(data[off : off+idLen])
+		off += idLen
 		cb.vectorMap[id] = i
 	}
+
 	return nil
 }
 
@@ -528,29 +618,43 @@ func (cb *ContextBuilder) loadVectorMap() error {
 // the routing path; it returns the raw *CallGraph type rather than the
 // map[string][]Relationship representation built here. In Go a method and a
 // package-level function may share a name without conflict; both are intentional.
-//
-// See:
-//   - context_graph.go: expandGraph uses call graph to trace related code
-//   - context_search.go: integration with multi-strategy search pipeline
-func (cb *ContextBuilder) loadCallGraph() {
+func (cb *ContextBuilder) loadAndIndexCallGraph() {
 	done := cb.logFileLoad("kb_call_graph.json")
-	var gd CallGraphData
-	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"), &gd)
+	var cg types.CallGraphRef
+	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"), &cg)
 	done(err)
 	if err != nil {
 		cb.hasCallGraph = false
+		cb.debugLog.Log("Call graph not loaded: %v", err)
 		return
 	}
-	cb.callGraph = make(map[string][]Relationship, len(gd.Functions))
-	for fn, fd := range gd.Functions {
-		rels := make([]Relationship, 0, len(fd.Calls)+len(fd.CalledBy))
-		for _, c := range fd.Calls {
-			rels = append(rels, Relationship{Type: "calls", Target: c, Distance: 1})
-		}
-		for _, c := range fd.CalledBy {
-			rels = append(rels, Relationship{Type: "called_by", Target: c, Distance: 1})
-		}
-		cb.callGraph[fn] = rels
+
+	// log a sample to verify format alignment
+	if len(cg.Edges) > 0 {
+		cb.debugLog.Log("Call graph: %d nodes, %d edges", len(cg.Nodes), len(cg.Edges))
+		cb.debugLog.Log("Edge sample: from=%q to=%q type=%q",
+			cg.Edges[0].From, cg.Edges[0].To, cg.Edges[0].EdgeType)
 	}
+	if len(cb.chunks) > 0 {
+		cb.debugLog.Log("Chunk sample: id=%q name=%q class=%q symbols=%v",
+			cb.chunks[0].ID, cb.chunks[0].Name, cb.chunks[0].ClassName, cb.chunks[0].Symbols)
+	}
+
+	// Build cb.callGraph (used by call graph expansion during retrieval)
+	cb.callGraph = make(map[string][]Relationship, len(cg.Nodes))
+	for _, e := range cg.Edges {
+		if e.EdgeType != "call" {
+			continue
+		}
+		cb.callGraph[e.From] = append(cb.callGraph[e.From],
+			Relationship{Type: "calls", Target: e.To, Distance: 1})
+		cb.callGraph[e.To] = append(cb.callGraph[e.To],
+			Relationship{Type: "called_by", Target: e.From, Distance: 1})
+	}
+
+	// Build cb.callSites (used by call-site expansion during retrieval)
+	cb.callSites = buildCallSiteIndex(&cg, cb.chunks)
 	cb.hasCallGraph = len(cb.callGraph) > 0
+	cb.debugLog.Log("Call graph indexed: %d relationships, %d call sites",
+		len(cb.callGraph), len(cb.callSites))
 }

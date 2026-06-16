@@ -19,7 +19,7 @@ import (
 // BuildPromptString composes header + task-specific body + footer.
 func BuildPromptString(query string, class *Classification, sourceAvailable bool, taskBody string) string {
 	return cotHeader(query, class, sourceAvailable) +
-		"=== TASK ===\n" +
+		" TASK \n" +
 		taskBody +
 		cotFooter()
 }
@@ -70,7 +70,7 @@ func cotHeader(query string, class *Classification, sourceAvailable bool) string
 
 // cotFooter appends a honesty reminder at the end of every prompt.
 func cotFooter() string {
-	return "\n=== HONESTY CONTRACT ===\n" +
+	return "\n HONESTY CONTRACT \n" +
 		"• Cite file + line range for every factual claim.\n" +
 		"• Write 'Not visible in context' rather than guessing.\n" +
 		"• Distinguish 'I see in source' from 'I infer from signature'.\n"

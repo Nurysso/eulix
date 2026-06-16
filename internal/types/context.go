@@ -13,6 +13,7 @@ type ContextChunk struct {
 	EndLine    int
 	Content    string
 	Importance float64
+	Tokens     int
 }
 
 // ContextWindow represents the full context for a query

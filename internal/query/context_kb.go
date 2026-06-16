@@ -191,6 +191,131 @@ func (cb *ContextBuilder) findChunkForLocation(loc string) *Chunk {
 	return nil
 }
 
+// Extractors
+func extractFnParts(fn types.KBFunction) fnParts {
+	calls := make([]callPart, len(fn.Calls))
+	for i, c := range fn.Calls {
+		calls[i] = callPart{callee: c.Callee, line: c.Line}
+	}
+	return fnParts{
+		name:      fn.Name,
+		signature: fn.Signature,
+		docstring: fn.Docstring,
+		lineStart: fn.LineStart,
+		lineEnd:   fn.LineEnd,
+		calls:     calls,
+	}
+}
+
+func extractClassParts(cls types.KBClass) classParts {
+	methods := make([]methodPart, len(cls.Methods))
+	for i, m := range cls.Methods {
+		methods[i] = methodPart{name: m.Name, lineStart: m.LineStart, lineEnd: m.LineEnd}
+	}
+	return classParts{
+		name:      cls.Name,
+		docstring: cls.Docstring,
+		lineStart: cls.LineStart,
+		lineEnd:   cls.LineEnd,
+		methods:   methods,
+	}
+}
+
+// Content builders (mirror buildChunkFromKBFunction/Class exactly)
+
+func (cb *ContextBuilder) buildChunkFromParts(p fnParts, filePath string) Chunk {
+	content := fmt.Sprintf("Function: %s\nSignature: %s\nLines: %d-%d\n",
+		p.name, p.signature, p.lineStart, p.lineEnd)
+	if p.docstring != "" {
+		content += "Documentation: " + p.docstring + "\n"
+	}
+	if len(p.calls) > 0 {
+		content += "Calls:\n"
+		for _, c := range p.calls {
+			content += fmt.Sprintf("  - %s (line %d)\n", c.callee, c.line)
+		}
+	}
+	return Chunk{
+		ID:        fmt.Sprintf("%s:%d-%d", filePath, p.lineStart, p.lineEnd),
+		ChunkType: "function", File: filePath,
+		StartLine: p.lineStart, EndLine: p.lineEnd,
+		Content: content, Tokens: len(content) / 4,
+		Symbols: []string{p.name}, Name: p.name, Importance: 0.9,
+	}
+}
+
+func (cb *ContextBuilder) buildClassFromParts(p classParts, filePath string) Chunk {
+	content := fmt.Sprintf("Class: %s\nLines: %d-%d\n", p.name, p.lineStart, p.lineEnd)
+	if p.docstring != "" {
+		content += "Documentation: " + p.docstring + "\n"
+	}
+	if len(p.methods) > 0 {
+		content += "Methods:\n"
+		for _, m := range p.methods {
+			content += fmt.Sprintf("  - %s (lines %d-%d)\n", m.name, m.lineStart, m.lineEnd)
+		}
+	}
+	syms := make([]string, 0, len(p.methods)+1)
+	syms = append(syms, p.name)
+	for _, m := range p.methods {
+		syms = append(syms, m.name)
+	}
+	return Chunk{
+		ID:        fmt.Sprintf("%s:%d-%d", filePath, p.lineStart, p.lineEnd),
+		ChunkType: "class", File: filePath,
+		StartLine: p.lineStart, EndLine: p.lineEnd,
+		Content: content, Tokens: len(content) / 4,
+		Symbols: syms, Name: p.name, Importance: 0.95,
+	}
+}
+
+// addChunksFromFile
+
+func (cb *ContextBuilder) addChunksFromFile(filePath string, fs *types.FileData) {
+	fileIdx := make(map[[2]int]func() string)
+
+	for _, fn := range fs.Functions {
+		c := cb.buildChunkFromKBFunction(fn, filePath)
+		if cb.lazyContent {
+			p := extractFnParts(fn) // cheap copy of only what we need
+			fp := filePath
+			fileIdx[[2]int{c.StartLine, c.EndLine}] = func() string {
+				return cb.buildChunkFromParts(p, fp).Content
+			}
+			c.Content = ""
+		}
+		cb.chunks = append(cb.chunks, c)
+	}
+
+	for _, cls := range fs.Classes {
+		cc := cb.buildChunkFromKBClass(cls, filePath)
+		if cb.lazyContent {
+			p := extractClassParts(cls)
+			fp := filePath
+			fileIdx[[2]int{cc.StartLine, cc.EndLine}] = func() string {
+				return cb.buildClassFromParts(p, fp).Content
+			}
+			cc.Content = ""
+		}
+		cb.chunks = append(cb.chunks, cc)
+
+		for _, m := range cls.Methods {
+			mc := cb.buildChunkFromKBFunction(m, filePath)
+			if cb.lazyContent {
+				p := extractFnParts(m)
+				fp := filePath
+				fileIdx[[2]int{mc.StartLine, mc.EndLine}] = func() string {
+					return cb.buildChunkFromParts(p, fp).Content
+				}
+				mc.Content = ""
+			}
+			cb.chunks = append(cb.chunks, mc)
+		}
+	}
+
+	cb.hydrateIdx[filePath] = fileIdx
+}
+
 // buildChunkFromKBFunction constructs a Chunk from a KBFunction (function or method).
 // Materializes signature, docstring, and call relationships into a human-readable
 // chunk with metadata for retrieval scoring.
