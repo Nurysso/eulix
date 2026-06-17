@@ -14,3 +14,6 @@ eulix.toml
 callgraph-viz/
 context_debug_*.txt
 debug_embedding_pipeline_*
+deb*
+diff*
+profile_*
