@@ -70,6 +70,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 		config:     cfg,
 		llmClient:  llmClient,
 		vectorMap:  make(map[string]int),
+		hydrateIdx: make(map[string]map[[2]int]func() string),
 		sourceRoot: sourceRoot,
 		debugLog:   NewDebugLogger(eulixDir),
 	}
@@ -81,7 +82,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	}
 	cb.queryEmbedder = queryEmbedder
 
-	if err := cb.loadChunksFromKB(); err != nil {
+	if err := cb.loadChunks(); err != nil {
 		return nil, fmt.Errorf("failed to load chunks from KB: %w", err)
 	}
 
