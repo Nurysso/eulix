@@ -80,7 +80,8 @@ except ImportError:
     _HAS_ORJSON = False
     _json_dumps_no_indent = partial(json.dumps, indent=None)
     _json_dumps_indent = partial(json.dumps, indent=2)
-
+import warnings
+warnings.filterwarnings("ignore", message="optimum is not installed")
 
 # Define the wrapper function once
 def _json_dumps(obj: Any, *, indent: bool = False) -> str:
@@ -114,6 +115,7 @@ def _require_ml():
     import torch.nn.functional as F
     from transformers import AutoModel, AutoTokenizer
     from tqdm import tqdm
+    torch.cuda.set_per_process_memory_fraction(0.85)
 
     return np, torch, F, AutoModel, AutoTokenizer, tqdm
 
@@ -132,7 +134,7 @@ BUCKETS_JINA: List[int] = [32, 64, 128, 192, 256, 384, 512, 768, 1024, 2048, 409
 BINARY_MAGIC = b"EULX"
 BINARY_VERSION = 4
 # VECTOR_MAGIC = b"EULX"
-Version = "0.3.7"  # different from Binary and vector magic
+Version = "0.3.8"  # different from Binary and vector magic
 
 # Dataclass slots: Python ≥3.10 natively; earlier versions fall back gracefully.
 _DC_KW: Dict[str, Any] = {"slots": True} if sys.version_info >= (3, 10) else {}
@@ -167,7 +169,6 @@ def _sq8_encode(vec: "np.ndarray") -> tuple["np.ndarray", float]:
 def _sq8_decode(q: "np.ndarray", scale: float) -> "np.ndarray":
     """Dequantize int8 → float32."""
     return q.astype(np.float32) * scale
-
 
 # ChunkType
 class ChunkType(str, Enum):
@@ -709,7 +710,12 @@ class EmbeddingGenerator:
                 try:
                     from sentence_transformers import SentenceTransformer
 
-                    self._st_model = SentenceTransformer(model_name, device=self.device)
+                    self._st_model = SentenceTransformer(
+                        model_name,
+                        device=self.device,
+                        trust_remote_code=True,
+                        model_kwargs={"attn_implementation": "eager"},
+                    )
                     self._st_model.eval()
                     self.tokenizer = self._st_model.tokenizer
                     self.model = None
@@ -973,7 +979,7 @@ def save_embeddings_bin(
     quant_flag = b"\x01" if quantize else b"\x00"
 
     with open(path, "wb") as raw:
-        fh = io.BufferedWriter(raw, buffer_size=4*1024*1024)
+        fh = io.BufferedWriter(raw, buffer_size=4 * 1024 * 1024)
         fh.write(BINARY_MAGIC)
         fh.write(_struct.pack("<I", BINARY_VERSION))
         _write_str(fh, model_name)
