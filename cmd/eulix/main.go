@@ -1,5 +1,5 @@
-// Eulix - A simple cross-platform package manager
-// Copyright (C) 2025 Dawood Khan
+// Eulix - Turn your codebase into a searchable book.
+// Copyright (C) 2026 Dawood Khan
 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
