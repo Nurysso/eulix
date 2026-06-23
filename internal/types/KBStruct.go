@@ -14,10 +14,7 @@ type KnowledgeBaseRef struct {
 }
 
 type IndexRef struct {
-	Indices            KBIndices          `json:"indices"`
-	EntryPoint         EntryPoint         `json:"entry_points"`
-	ExternalDependency ExternalDependency `json:"external_dependencies"`
-	Patterns           PatternInfo        `json:"patterns"`
+	Indices KBIndices `json:"indices"`
 }
 type CallGraphRef struct {
 	Nodes []CallGraphNode `json:"nodes"`
@@ -25,25 +22,35 @@ type CallGraphRef struct {
 }
 
 type EntryPointsRef struct {
-	EntryPoint EntryPoint `json:"entry_points"`
+	EntryPoint []EntryPoint `json:"entry_points"`
 }
 type ExternalDependencyRef struct {
 	ExternalDependency ExternalDependency `json:"external_dependencies"`
 }
 type MetricsRef struct {
-	Metadata KBMetadata  `json:"metadata"`
-	Patterns PatternInfo `json:"patterns"`
+	Metadata            KBMetadata       `json:"metadata"`
+	TopComplexFunctions []FunctionMetric `json:"top_complex_functions"`
 }
 
+type FunctionMetric struct {
+	Name            string  `json:"name"`
+	File            string  `json:"file"`
+	Complexity      int     `json:"complexity"`
+	ImportanceScore float32 `json:"importance_score"`
+	LineStart       int     `json:"line_start"`
+	LineEnd         int     `json:"line_end"`
+}
 type KBMetadata struct {
 	ProjectName    string   `json:"project_name"`
 	Version        string   `json:"version"`
+	GitHash        string   `json:"git_hash"`
+	ParsedAt       string   `json:"parsed_at"`
+	Languages      []string `json:"languages"`
+	TotalFiles     int      `json:"total_files"`
+	TotalLOC       int      `json:"total_loc"`
 	TotalFunctions int      `json:"total_functions"`
 	TotalClasses   int      `json:"total_classes"`
-	TotalLOC       int      `json:"total_loc"`
-	TotalFiles     int      `json:"total_files"`
-	Languages      []string `json:"languages"`
-	ParsedAt       string   `json:"parsed_at"`
+	TotalMethods   int      `json:"total_methods"`
 }
 
 type FileData struct {
@@ -89,29 +96,19 @@ type SecurityNote struct {
 }
 
 type KBFunction struct {
-	ID         string      `json:"id"`
-	Name       string      `json:"name"`
-	Signature  string      `json:"signature"`
-	Docstring  string      `json:"docstring"`
-	LineStart  int         `json:"line_start"`
-	LineEnd    int         `json:"line_end"`
-	Params     []Parameter `json:"params"`
-	ReturnType string      `json:"return_type"`
-
-	// Call information
-	Calls    []FunctionCall `json:"calls"`
-	CalledBy []CallerInfo   `json:"called_by"`
-
-	// Variable tracking
-	Variables []Variable `json:"variables"`
-
-	// Control flow
-	ControlFlow ControlFlow `json:"control_flow"`
-
-	// Exception handling
-	Exceptions ExceptionInfo `json:"exceptions"`
-
-	// Metadata
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	Signature       string               `json:"signature"`
+	Docstring       string               `json:"docstring"`
+	LineStart       int                  `json:"line_start"`
+	LineEnd         int                  `json:"line_end"`
+	Params          []Parameter          `json:"params"`
+	ReturnType      string               `json:"return_type"`
+	Calls           []FunctionCall       `json:"calls"`
+	CalledBy        []CallerInfo         `json:"called_by"`
+	Variables       []Variable           `json:"variables"`
+	ControlFlow     ControlFlow          `json:"control_flow"`
+	Exceptions      ExceptionInfo        `json:"exceptions"`
 	Complexity      int                  `json:"complexity"`
 	IsAsync         bool                 `json:"is_async"`
 	Decorators      []string             `json:"decorators"`
