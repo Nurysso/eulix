@@ -22,29 +22,26 @@ type Classifier struct {
 	usagePattern          *regexp.Regexp
 	architecturePattern   *regexp.Regexp
 	implementationPattern *regexp.Regexp
-
-	// New patterns
-	debugPattern       *regexp.Regexp
-	comparisonPattern  *regexp.Regexp
-	dependencyPattern  *regexp.Regexp
-	refactoringPattern *regexp.Regexp
-	performancePattern *regexp.Regexp
-	dataFlowPattern    *regexp.Regexp
-	securityPattern    *regexp.Regexp
-	// documentationPattern *regexp.Regexp
-	examplePattern *regexp.Regexp
-	testingPattern *regexp.Regexp
-	codeGenPattern *regexp.Regexp
-
-	symbolPattern *regexp.Regexp
-	validSymbols  map[string]bool
-	validTypes    map[string]bool
-
-	callGraphPattern  *regexp.Regexp
-	entryPointPattern *regexp.Regexp
-	fileStructPattern *regexp.Regexp
-	todosPattern      *regexp.Regexp
-	metricsPattern    *regexp.Regexp
+	debugPattern          *regexp.Regexp
+	comparisonPattern     *regexp.Regexp
+	dependencyPattern     *regexp.Regexp
+	refactoringPattern    *regexp.Regexp
+	performancePattern    *regexp.Regexp
+	dataFlowPattern       *regexp.Regexp
+	securityPattern       *regexp.Regexp
+	understandingPattern  *regexp.Regexp
+	examplePattern        *regexp.Regexp
+	testingPattern        *regexp.Regexp
+	codeGenPattern        *regexp.Regexp
+	symbolPattern         *regexp.Regexp
+	validSymbols          map[string]bool
+	validTypes            map[string]bool
+	callGraphPattern      *regexp.Regexp
+	entryPointPattern     *regexp.Regexp
+	fileStructPattern     *regexp.Regexp
+	todosPattern          *regexp.Regexp
+	metricsPattern        *regexp.Regexp
+	usagePrefixPattern    *regexp.Regexp
 }
 
 type Classification struct {
@@ -83,7 +80,7 @@ func (c *Classifier) Classify(query string) *Classification {
 }
 
 func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
-	// Priority order matters - check more specific patterns first
+	// Priority order matters check more specific patterns first
 	if c.codeGenPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeCodeGeneration,
@@ -93,7 +90,7 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     1,
 		}
 	}
-	// Debug queries (high priority - often urgent)
+	// Debug queries
 	if c.debugPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeDebug,
@@ -223,6 +220,16 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     4,
 		}
 	}
+	// Bare "usage <symbol>" prefix — must be first to avoid falling through to Understanding
+	if c.usagePrefixPattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeUsage,
+			Confidence:   0.97,
+			Reasoning:    "Level 1: usage prefix pattern",
+			NeedsContext: false,
+			Priority:     4,
+		}
+	}
 
 	if c.architecturePattern.MatchString(queryLower) {
 		return &Classification{
@@ -345,6 +352,18 @@ func (c *Classifier) level2SymbolAnalysis(queryLower string, symbols []string, e
 		if containsAny(queryLower, []string{"example", "how to use", "sample"}) {
 			return &Classification{
 				Type:         QueryTypeExample,
+				Confidence:   0.90,
+				Symbols:      symbols,
+				Keywords:     keywords,
+				Entities:     entities,
+				Reasoning:    "Level 2: single symbol with example keywords",
+				NeedsContext: true,
+				Priority:     2,
+			}
+		}
+		if containsAny((queryLower), []string{"calls", "uses", "used by", "usage"}) {
+			return &Classification{
+				Type:         QueryTypeUsage,
 				Confidence:   0.90,
 				Symbols:      symbols,
 				Keywords:     keywords,

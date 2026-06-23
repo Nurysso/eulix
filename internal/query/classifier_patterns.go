@@ -85,6 +85,8 @@ func QuerySheriff(kbIndexPath string) (*Classifier, error) {
 		fileStructPattern:     regexp.MustCompile(`(?i)\b(what('?s|\s+is)\s+in\s+file|contents?\s+of\s+file|functions?\s+in\s+file|classes?\s+in\s+file|show\s+file)\b`),
 		todosPattern:          regexp.MustCompile(`(?i)\b(todo\b|fixme\b|hack\b|security\s+note|technical\s+debt)\b`),
 		metricsPattern:        regexp.MustCompile(`(?i)\b(complexity|metrics?|loc|lines\s+of\s+code|importance|hotspot)\b`),
+		usagePrefixPattern:    regexp.MustCompile(`(?i)^(usage|use|uses\s+of|show\s+usage|find\s+usage|usage\s+of)\s+\S+`),
+		understandingPattern:  regexp.MustCompile(`(?i)^(how\s+does\s+\w+\s+(work|authenticate|set|process)|explain\s+\w+|what\s+does\s+\w+\s+do|how\s+is\s+\w+\s+used)\b`),
 		symbolPattern:         regexp.MustCompile(`[A-Z][a-zA-Z0-9]*(?:[A-Z][a-zA-Z0-9]*)*|[a-z][a-zA-Z0-9]{2,}`),
 		validSymbols:          make(map[string]bool),
 		validTypes:            make(map[string]bool),
