@@ -129,8 +129,8 @@ func (cb *ContextBuilder) logFileLoad(name string) func(error) {
 // they benefit from the same mmap-backed streaming-decode behaviour
 // as the ContextBuilder loaders below.
 
-func loadKBIndex(eulixDir string) (*KBIndex, error) {
-	var idx KBIndex
+func loadKBIndex(eulixDir string) (*types.KBIndices, error) {
+	var idx types.KBIndices
 	if err := decodeJSONFile(filepath.Join(eulixDir, "kb_index.json"), &idx); err != nil {
 		return nil, fmt.Errorf("kb_index.json: %w", err)
 	}
@@ -182,45 +182,33 @@ func loadCallGraph(eulixDir string) (*CallGraph, error) {
 // always carry their Content inline, which is the right tradeoff
 // for search use cases.
 func (cb *ContextBuilder) loadChunks() error {
-	// Phase 1: kb_index.json (small)
+	// Step 1: kb_index.json (small)
 	done := cb.logFileLoad("kb_index.json")
-	var kbIdx KBIndex
-	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_index.json"), &kbIdx)
+	var ref types.IndexRef
+	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_index.json"), &ref)
 	done(err)
 	if err != nil {
 		return fmt.Errorf("kb_index.json: %w", err)
 	}
-	cb.kbIdx = &kbIdx
+	cb.kbIdx = &ref.Indices
+	cb.debugLog.Log("kbIdx FunctionsByName len=%d", len(cb.kbIdx.FunctionsByName))
 
-	// Phase 2: stream kb.json (the big one)
+	// Step 2: stream kb.json (the big one)
 	if err := cb.streamKBChunks(); err != nil {
 		return fmt.Errorf("kb.json: %w", err)
 	}
 
-	// Phase 3: derived indices (boilerplate, symbol index, inverted index)
+	// Step 3: derived indices (boilerplate, symbol index, inverted index)
 	cb.buildDerivedIndices()
 
-	// Phase 4: state
-	//
+	// Step 4: state (TODO)
 	// cb.kbData is left nil: the streaming path never materialises
 	// the full struct, and any caller that depends on
 	// cb.kbData.Structure should be migrated to cb.chunks / cb.kbIdx.
-	//
-	// cb.hasKB is set from the load result, not from cb.kbData
-	// (which would be false in this path) fixes a latent bug in
-	// the old loadChunksFromKB where hasKB was always false unless
-	// loadKnowledgeBase was called first.
 	cb.kbData = nil
 	cb.hasKB = true
 	cb.lazyContent = false // streaming path can't do lazy content
 
-	// Phase 5: free intermediate memory.
-	//
-	// Drop our reference to kbIdx's backing struct (the routing
-	// path uses its own copy via loadKBIndex). runtime.GC() reclaims
-	// the streaming decoder's buffer and any FileData structs that
-	// the inner-loop sonic decodes allocated.
-	kbIdx = KBIndex{}
 	runtime.GC()
 
 	cb.debugLog.Log("Chunks loaded: %d, heap: %d MB",
@@ -438,6 +426,8 @@ func (cb *ContextBuilder) loadAndIndexCallGraph() {
 		cb.debugLog.Log("Call graph not loaded: %v", err)
 		return
 	}
+
+	cb.cgRef = &cg
 
 	if len(cg.Edges) > 0 {
 		cb.debugLog.Log("Call graph: %d nodes, %d edges", len(cg.Nodes), len(cg.Edges))
