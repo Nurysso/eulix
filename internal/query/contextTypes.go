@@ -32,20 +32,25 @@ type Router struct {
 	llmClient       *llm.Client
 	cache           *cache.Manager
 	contextBuilder  *ContextBuilder
-	kbIndex         *KBIndex
+	kbIndex         *types.KBIndices
 	callGraph       *CallGraph
 	kb              *types.KnowledgeBaseRef
 	index           *types.IndexRef
-	metricsIdx      *metricsIndex // pre-built; nil until kb is loaded
+	Patterns        *types.PatternInfo
 	cgIdx           *callGraphIndex
+	cgRef           *types.CallGraphRef
 	currentChecksum string
 }
 
-type metricsIndex struct {
-	topComplex  []fnEntry          // top-N by complexity, pre-sorted
-	summary     projectSummary     // project-wide counters
-	byName      map[string]fnEntry // name → first match
-	entryPoints []types.EntryPoint
+type metricsEntry struct {
+	fn   *types.KBFunction
+	file string
+}
+
+type MetricsIndex struct {
+	Metadata   *types.KBMetadata
+	byName     map[string]metricsEntry
+	topComplex []metricsEntry
 }
 
 type callGraphIndex struct {
@@ -53,6 +58,15 @@ type callGraphIndex struct {
 	cache map[string]string // entity → pre-rendered two-level tree string
 }
 
+type CGFunction struct {
+	Location string
+	Calls    []string
+	CalledBy []string
+}
+
+type CallGraph struct {
+	Functions map[string]CGFunction
+}
 type projectSummary struct {
 	name      string
 	files     int
@@ -79,17 +93,6 @@ type fnEntry struct {
 	file string
 	fn   *types.KBFunction
 }
-type KBIndex struct {
-	FunctionsByName  map[string][]string `json:"functions_by_name"`
-	FunctionsCalling map[string][]string `json:"functions_calling"`
-	FunctionsByTag   map[string][]string `json:"functions_by_tag"`
-	TypesByName      map[string][]string `json:"types_by_name"`
-}
-
-type CallGraph struct {
-	Functions map[string]FunctionNode `json:"functions"`
-	Types     map[string]TypeNode     `json:"types"`
-}
 
 type FunctionNode struct {
 	Name     string   `json:"name"`
@@ -115,36 +118,31 @@ type ContextBuilder struct {
 	config        *config.Config
 	llmClient     *llm.Client
 	queryEmbedder QueryEmbedder
-
 	// Embeddings (may be nil for very large corpora; use ivfIndex instead)
 	hasEmbeddings bool
 	embeddings    [][]float32
 	embData       *EmbeddingsData
-
 	// Chunks (Content field is empty when lazyContent is true)
 	chunks      []Chunk
 	callSites   callSiteIndex
 	symbolIndex map[string][]int
 	vectorMap   map[string]int
 	lazyContent bool // true: Content loaded on demand during assembleContext
-
 	// GB-scale indices — built automatically based on corpus size
 	ivfIndex    *IVFIndex      // non-nil when len(embeddings) > ivfBuildThreshold
 	invertedIdx *InvertedIndex // non-nil when len(chunks) > invIdxThreshold
-
 	// Knowledge base and call graph
 	hasKB        bool
 	kbData       *types.KnowledgeBaseRef
 	hasCallGraph bool
 	callGraph    map[string][]Relationship
-	kbIdx        *KBIndex
+	cgRef        *types.CallGraphRef
+	kbIdx        *types.KBIndices
 	sourceRoot   string
 	debugLog     *DebugLogger
-
 	// Thread-safe trace storage
-	mu        sync.Mutex
-	lastTrace *DebugTrace
-
+	mu          sync.Mutex
+	lastTrace   *DebugTrace
 	boilerplate *BoilerplateDetector
 	hydrateIdx  map[string]map[[2]int]func() string // file -> (start,end) -> content builder
 }
