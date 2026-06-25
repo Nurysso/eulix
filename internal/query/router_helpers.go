@@ -12,10 +12,22 @@ package query
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"eulix/internal/types"
+)
+
+type language int
+
+const (
+	langGo language = iota
+	langRust
+	langPython
+	langTS
+	langC // covers C and C++
 )
 
 func (r *Router) SetCurrentChecksum(checksum string) {
@@ -265,4 +277,201 @@ func fuzzyScore(pattern, target string) int {
 		diff = -diff
 	}
 	return score - diff
+}
+
+// dedupe preserves order while removing duplicates, since kb_index.json
+// can contain repeated entries (e.g. "Pass" appears twice at the same location).
+func dedupe(ss []string) []string {
+	seen := make(map[string]struct{}, len(ss))
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// parseLocation splits "path/to/file.go:42" into (path, lineNum, err).
+func parseLocation(loc string) (string, int, error) {
+	i := strings.LastIndex(loc, ":")
+	if i < 0 {
+		return "", 0, fmt.Errorf("no line number in %q", loc)
+	}
+	line, err := strconv.Atoi(loc[i+1:])
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid line number in %q", loc)
+	}
+	return loc[:i], line, nil
+}
+
+// extractSignature opens the file at the given 1-based line number,
+// detects the language, and reads the full function signature.
+func extractSignature(filePath string, startLine int) (string, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		// try relative to project root via env or cwd
+		return "", fmt.Errorf("open %s: %w", filePath, err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	if startLine < 1 || startLine > len(lines) {
+		return "", fmt.Errorf("line %d out of range (file has %d lines)", startLine, len(lines))
+	}
+
+	lang := detectLang(filePath)
+	return parseSig(lines, startLine-1, lang) // convert to 0-based
+}
+
+func detectLang(path string) language {
+	switch filepath.Ext(path) {
+	case ".go":
+		return langGo
+	case ".rs":
+		return langRust
+	case ".py":
+		return langPython
+	case ".ts", ".tsx", ".js", ".jsx":
+		return langTS
+	case ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp":
+		return langC
+	default:
+		return langGo
+	}
+}
+
+// parseSig reads lines starting at idx and collects the full signature
+// up to (but not including) the opening brace / colon / arrow body.
+func parseSig(lines []string, idx int, lang language) (string, error) {
+	var collected []string
+	depth := 0 // paren depth for multi-line signatures
+
+	for i := idx; i < len(lines) && i < idx+40; i++ {
+		line := lines[i]
+		collected = append(collected, line)
+
+		switch lang {
+		case langPython:
+			// def foo(a: int, b: str = "x") -> None:
+			// collect until we hit the closing ) then the colon
+			for _, ch := range line {
+				switch ch {
+				case '(':
+					depth++
+				case ')':
+					depth--
+				}
+			}
+			if depth <= 0 && strings.Contains(line, ":") {
+				return formatSig(collected, lang), nil
+			}
+
+		case langRust:
+			// fn foo(a: i32, b: &str) -> Result<(), Error> {
+			for _, ch := range line {
+				switch ch {
+				case '(':
+					depth++
+				case ')':
+					depth--
+				}
+			}
+			if depth <= 0 && (strings.Contains(line, "{") || strings.Contains(line, ";")) {
+				return formatSig(collected, lang), nil
+			}
+
+		case langTS:
+			// function foo(a: string, b: number): void {
+			// or arrow: const foo = (a: string): void => {
+			for _, ch := range line {
+				switch ch {
+				case '(':
+					depth++
+				case ')':
+					depth--
+				}
+			}
+			if depth <= 0 && (strings.Contains(line, "{") || strings.Contains(line, "=>")) {
+				return formatSig(collected, lang), nil
+			}
+
+		case langC:
+			// int foo(int a, const char* b) {
+			for _, ch := range line {
+				switch ch {
+				case '(':
+					depth++
+				case ')':
+					depth--
+				}
+			}
+			if depth <= 0 && strings.Contains(line, "{") {
+				return formatSig(collected, lang), nil
+			}
+
+		default: // Go
+			// func (r *Router) Foo(a int, b string) (string, error) {
+			for _, ch := range line {
+				switch ch {
+				case '(':
+					depth++
+				case ')':
+					depth--
+				}
+			}
+			if depth <= 0 && strings.Contains(line, "{") {
+				return formatSig(collected, lang), nil
+			}
+		}
+	}
+
+	// Hit the line limit — return what we have
+	return formatSig(collected, lang), nil
+}
+
+// formatSig trims the body and formats the signature block for display.
+func formatSig(lines []string, lang language) string {
+	// Drop everything after the opening brace / colon on the last line
+	if len(lines) == 0 {
+		return ""
+	}
+
+	last := lines[len(lines)-1]
+	var cutAt string
+	switch lang {
+	case langPython:
+		cutAt = ":"
+	default:
+		cutAt = "{"
+	}
+
+	if i := strings.Index(last, cutAt); i >= 0 {
+		lines[len(lines)-1] = strings.TrimRight(last[:i], " \t")
+	}
+
+	// Trim trailing blank lines
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString("  ")
+		b.WriteString(strings.TrimRight(l, " \t"))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// stripCommandPrefix removes a leading command word/phrase from query
+// so entity extraction sees only the symbol name.
+func stripCommandPrefix(query string, prefixes ...string) string {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p+" ") {
+			return strings.TrimSpace(query[len(p):])
+		}
+	}
+	return query
 }
