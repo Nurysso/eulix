@@ -10,7 +10,10 @@ This file is responsible for handleing/Generating Prompts with CoT.
 package query
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"eulix/internal/types"
@@ -270,15 +273,65 @@ func (r *Router) handleTesting(query string, class *Classification) (string, err
 
 // NON LLM BASED HANDLERS
 
-// handleCallGraph — renders the two-level call tree with a per-symbol cache.
+// handleCallGraph renders the two-level call tree with a per-symbol cache.
 // First call for a symbol: O(callers + callees + their neighbours).
 // Subsequent calls: O(1) map lookup + string copy.
+func buildRouterCallGraph(ref *types.CallGraphRef) *CallGraph {
+	if ref == nil {
+		return &CallGraph{Functions: map[string]CGFunction{}}
+	}
+
+	fns := make(map[string]CGFunction, len(ref.Nodes))
+	for _, n := range ref.Nodes {
+		fns[bareID(n.ID)] = CGFunction{Location: n.File}
+	}
+
+	for _, e := range ref.Edges {
+		if e.EdgeType != "call" {
+			continue
+		}
+		from := bareID(e.From)
+		to := bareID(e.To)
+
+		caller := fns[from]
+		caller.Calls = append(caller.Calls, to)
+		fns[from] = caller
+
+		callee := fns[to]
+		callee.CalledBy = append(callee.CalledBy, from)
+		fns[to] = callee
+	}
+
+	return &CallGraph{Functions: fns}
+}
+
+// bareID strips the node-type prefix that eulix-parser emits.
+// "func_firstSymbolOrExtracted"   → "firstSymbolOrExtracted"
+// "method_Router_handleLocation"  → "Router.handleLocation"
+// "type_KBIndices"                → "KBIndices"
+func bareID(id string) string {
+	for _, prefix := range []string{"func_", "method_", "type_"} {
+		if strings.HasPrefix(id, prefix) {
+			s := strings.TrimPrefix(id, prefix)
+			if prefix == "method_" {
+				if i := strings.Index(s, "_"); i != -1 {
+					return s[:i] + "." + s[i+1:]
+				}
+			}
+			return s
+		}
+	}
+	return id
+}
+
 func (r *Router) handleCallGraph(query string, class *Classification) (string, error) {
 	entity := firstSymbolOrExtracted(class, query)
 	if entity == "" {
 		return "Could not identify a symbol for call graph analysis.", nil
 	}
-
+	if r.callGraph == nil {
+		return "", fmt.Errorf("call graph not loaded")
+	}
 	fn, ok := r.callGraph.Functions[entity]
 	if !ok {
 		if matches := r.fuzzySearch(entity); len(matches) > 0 {
@@ -286,8 +339,6 @@ func (r *Router) handleCallGraph(query string, class *Classification) (string, e
 		}
 		return fmt.Sprintf("'%s' not found in call graph.", entity), nil
 	}
-
-	// Fast path: return cached render
 	r.cgIdx.mu.RLock()
 	if s, hit := r.cgIdx.cache[entity]; hit {
 		r.cgIdx.mu.RUnlock()
@@ -295,16 +346,9 @@ func (r *Router) handleCallGraph(query string, class *Classification) (string, e
 	}
 	r.cgIdx.mu.RUnlock()
 
-	// Slow path: build once
-	// Pre-size the builder. Two-level tree for a high-fan-out node can be a few
-	// KB; 2 KB is a reasonable starting allocation that avoids reallocs for
-	// typical functions.
-	b := strings.Builder{}
+	var b strings.Builder
 	b.Grow(2048)
-
-	b.WriteString(fmt.Sprintf("Call graph for '%s'  (%s)\n", entity, fn.Location))
-
-	// Callers tree (inbound)
+	fmt.Fprintf(&b, "Call graph for '%s'  (%s)\n", entity, fn.Location)
 	b.WriteString("\n┌─ Called by (inbound):\n")
 	if len(fn.CalledBy) == 0 {
 		b.WriteString("│  (none — likely an entry point or exported API)\n")
@@ -312,14 +356,12 @@ func (r *Router) handleCallGraph(query string, class *Classification) (string, e
 		for _, caller := range fn.CalledBy {
 			fmt.Fprintf(&b, "│  ← %s\n", caller)
 			if callerFn, ok := r.callGraph.Functions[caller]; ok {
-				for _, grandCaller := range callerFn.CalledBy {
-					fmt.Fprintf(&b, "│     ← %s\n", grandCaller)
+				for _, gc := range callerFn.CalledBy {
+					fmt.Fprintf(&b, "│     ← %s\n", gc)
 				}
 			}
 		}
 	}
-
-	// Callees tree (outbound)
 	b.WriteString("\n└─ Calls (outbound):\n")
 	if len(fn.Calls) == 0 {
 		b.WriteString("   (none — leaf function)\n")
@@ -327,102 +369,123 @@ func (r *Router) handleCallGraph(query string, class *Classification) (string, e
 		for _, callee := range fn.Calls {
 			fmt.Fprintf(&b, "   → %s\n", callee)
 			if calleeFn, ok := r.callGraph.Functions[callee]; ok {
-				for _, grandCallee := range calleeFn.Calls {
-					fmt.Fprintf(&b, "      → %s\n", grandCallee)
+				for _, gc := range calleeFn.Calls {
+					fmt.Fprintf(&b, "      → %s\n", gc)
 				}
 			}
 		}
 	}
-
-	// Fan-in / fan-out summary
-	fmt.Fprintf(&b, "\nFan-in (callers) : %d\n", len(fn.CalledBy))
-	fmt.Fprintf(&b, "Fan-out (callees): %d\n", len(fn.Calls))
+	fmt.Fprintf(&b, "\nFan-in : %d\nFan-out: %d\n", len(fn.CalledBy), len(fn.Calls))
 	if len(fn.CalledBy) == 0 {
 		b.WriteString("Note: No callers detected — treat as entry point.\n")
 	}
 	if len(fn.Calls) > 7 {
-		fmt.Fprintf(&b, "⚠ High fan-out (%d) — consider splitting responsibilities.\n", len(fn.Calls))
+		fmt.Fprintf(&b, "⚠ High fan-out (%d) — consider splitting.\n", len(fn.Calls))
 	}
-
 	result := b.String()
-
-	// Store in cache — upgrade to write lock
 	r.cgIdx.mu.Lock()
 	r.cgIdx.cache[entity] = result
 	r.cgIdx.mu.Unlock()
-
 	return result, nil
 }
 
-// handleMetrics — O(1) for project-wide summary and per-symbol lookup.
-// No longer iterates kb.Structure on the hot path.
+// handleMetrics for project-wide summary and per-symbol lookup.
 func (r *Router) handleMetrics(query string, class *Classification) (string, error) {
-	if r.kb == nil {
-		return "Full KB (kb.json) not loaded — metrics query requires it.", nil
+	metricsPath := filepath.Join(r.config.Project.Path, ".eulix", "kb_metrics.json")
+
+	data, err := os.ReadFile(metricsPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read metrics file at %s: %w", metricsPath, err)
 	}
 
-	// Check if this is a project-wide metrics query (no specific symbol)
+	var ref types.MetricsRef
+	if err := json.Unmarshal(data, &ref); err != nil {
+		return "", fmt.Errorf("failed to parse metrics JSON: %w", err)
+	}
+
+	byName := make(map[string]metricsEntry)
+	var topComplex []metricsEntry
+
+	for _, fn := range ref.TopComplexFunctions {
+		// Allocate a local copy to safely take its address
+		kbFn := types.KBFunction{
+			Name:            fn.Name,
+			LineStart:       fn.LineStart,
+			LineEnd:         fn.LineEnd,
+			Complexity:      fn.Complexity,
+			ImportanceScore: fn.ImportanceScore,
+		}
+
+		entry := metricsEntry{
+			fn:   &kbFn,
+			file: fn.File,
+		}
+
+		byName[fn.Name] = entry
+		topComplex = append(topComplex, entry)
+	}
+
+	// Parse the query intent
 	lowerQuery := strings.ToLower(query)
 	isProjectMetrics := strings.Contains(lowerQuery, "project") ||
 		strings.Contains(lowerQuery, "overall") ||
 		strings.Contains(lowerQuery, "summary") ||
 		strings.Contains(lowerQuery, "total") ||
 		strings.Contains(lowerQuery, "all functions") ||
-		// If no clear symbol detected, default to project metrics
 		len(class.Symbols) == 0
 
 	entity := firstSymbolOrExtracted(class, query)
 
-	// Only try to lookup a specific symbol if we have one AND it's not a project metrics query
 	if entity != "" && !isProjectMetrics {
-		// O(1) lookup via pre-built index
-		if e, ok := r.metricsIdx.byName[entity]; ok {
+		if e, ok := byName[entity]; ok {
 			return formatFunctionMetrics(*e.fn, e.file), nil
 		}
 		return fmt.Sprintf("'%s' not found in metrics index.", entity), nil
 	}
-
-	// Project-wide summary — all pre-computed, just format
-	s := r.metricsIdx.summary
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Project metrics: %s\n\n", s.name))
-	b.WriteString(fmt.Sprintf("  Files       : %d\n", s.files))
-	b.WriteString(fmt.Sprintf("  Total LOC   : %d\n", s.loc))
-	b.WriteString(fmt.Sprintf("  Functions   : %d\n", s.functions))
-	b.WriteString(fmt.Sprintf("  Languages   : %s\n", s.languages))
-	b.WriteString(fmt.Sprintf("  Parsed at   : %s\n\n", s.parsedAt))
+	meta := ref.Metadata
+
+	b.WriteString(fmt.Sprintf("Project metrics: %s\n\n", meta.ProjectName))
+	b.WriteString(fmt.Sprintf("  Files       : %d\n", meta.TotalFiles))
+	b.WriteString(fmt.Sprintf("  Total LOC   : %d\n", meta.TotalLOC))
+	b.WriteString(fmt.Sprintf("  Functions   : %d\n", meta.TotalFunctions))
+	b.WriteString(fmt.Sprintf("  Languages   : %s\n", strings.Join(meta.Languages, ", ")))
+	b.WriteString(fmt.Sprintf("  Parsed at   : %s\n\n", meta.ParsedAt))
 
 	b.WriteString("Top 10 most complex functions:\n")
-	for i, e := range r.metricsIdx.topComplex {
+
+	// Safely boundary-check slice sizing
+	limit := len(topComplex)
+	if limit > 10 {
+		limit = 10
+	}
+
+	for i := 0; i < limit; i++ {
+		e := topComplex[i]
 		b.WriteString(fmt.Sprintf("  %2d. %s  (%s, complexity %d, importance %.2f)\n",
 			i+1, e.fn.Name, e.file, e.fn.Complexity, e.fn.ImportanceScore))
 	}
+
 	return b.String(), nil
 }
 
 func (r *Router) handleEntryPoints(_ string, _ *Classification) (string, error) {
-	if r.kb == nil {
-		// fall back to call graph: functions with no callers
-		var b strings.Builder
-		b.WriteString("Entry points (functions with no callers in call graph):\n\n")
-		count := 0
-		for name, fn := range r.callGraph.Functions {
-			if len(fn.CalledBy) == 0 {
-				b.WriteString(fmt.Sprintf("  • %s  @ %s\n", name, fn.Location))
-				count++
-			}
-		}
-		if count == 0 {
-			b.WriteString("  (none found — all functions have at least one caller)\n")
-		}
-		return b.String(), nil
+	entryPath := filepath.Join(r.config.Project.Path, ".eulix", "kb_entry_points.json")
+	data, err := os.ReadFile(entryPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read entry points at %s: %w", entryPath, err)
 	}
 
+	var ref types.EntryPointsRef
+	if err := json.Unmarshal(data, &ref); err != nil {
+		return "", fmt.Errorf("failed to parse kb_entry_points.json: %w", err)
+	}
+	// log.Printf("[DEBUG] entry points loaded: %d entries, raw: %s", len(ref.EntryPoint), string(data[:min(200, len(data))]))
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Entry points for %s:\n\n", r.kb.Metadata.ProjectName))
+	b.WriteString("Entry points \n")
 
 	byType := make(map[string][]types.EntryPoint)
-	for _, ep := range r.metricsIdx.entryPoints {
+	for _, ep := range ref.EntryPoint {
 		byType[ep.EntryType] = append(byType[ep.EntryType], ep)
 	}
 
@@ -438,11 +501,9 @@ func (r *Router) handleEntryPoints(_ string, _ *Classification) (string, error) 
 		}
 		b.WriteString("\n")
 	}
-
-	if r.index.Patterns.ArchitectureStyle != nil {
-		b.WriteString(fmt.Sprintf("Architecture style : %s\n", *r.index.Patterns.ArchitectureStyle))
+	if r.Patterns != nil && r.Patterns.ArchitectureStyle != nil {
+		b.WriteString(fmt.Sprintf("Architecture style : %s\n", *r.Patterns.ArchitectureStyle))
 	}
-
 	return b.String(), nil
 }
 
@@ -535,77 +596,84 @@ func (r *Router) handleTodosQuery(_ string, _ *Classification) (string, error) {
 }
 
 func (r *Router) handleLocation(query string, class *Classification) (string, error) {
+	if r.kbIndex == nil {
+		return "", fmt.Errorf("kb index unavailable — router was not fully initialized")
+	}
+	r.contextBuilder.debugLog.Log("[DEBUG] kbIndex ptr=%p len(FunctionsByName)=%d\n", r.kbIndex, len(r.kbIndex.FunctionsByName))
 	entity := firstSymbolOrExtracted(class, query)
+	r.contextBuilder.debugLog.Log("[DEBUG] handleLocation: entity=%q\n", entity)
 	if entity == "" {
 		return "Could not identify a function or class name in the query.", nil
 	}
 
-	var results []string
+	var b strings.Builder
+	found := false
 
 	if locations, ok := r.kbIndex.FunctionsByName[entity]; ok {
-		results = append(results, fmt.Sprintf("Function '%s' found at:", entity))
-		results = append(results, locations...)
-	}
-	if locations, ok := r.kbIndex.TypesByName[entity]; ok {
-		results = append(results, fmt.Sprintf("Type '%s' found at:", entity))
-		results = append(results, locations...)
+		b.WriteString(fmt.Sprintf("Function '%s' defined at:\n", entity))
+		for _, loc := range dedupe(locations) {
+			b.WriteString(fmt.Sprintf("  %s\n", loc))
+		}
+		found = true
 	}
 
-	if len(results) == 0 {
+	if locations, ok := r.kbIndex.TypesByName[entity]; ok {
+		b.WriteString(fmt.Sprintf("Type '%s' defined at:\n", entity))
+		for _, loc := range dedupe(locations) {
+			b.WriteString(fmt.Sprintf("  %s\n", loc))
+		}
+		found = true
+	}
+
+	if callers, ok := r.kbIndex.FunctionsCalling[entity]; ok {
+		b.WriteString(fmt.Sprintf("'%s' is called by:\n", entity))
+		for _, caller := range dedupe(callers) {
+			b.WriteString(fmt.Sprintf("  %s\n", caller))
+		}
+		found = true
+	}
+
+	if !found {
 		if matches := r.fuzzySearch(entity); len(matches) > 0 {
-			results = append(results, fmt.Sprintf("No exact match for '%s'. Closest symbols:", entity))
-			results = append(results, matches...)
+			b.WriteString(fmt.Sprintf("No exact match for '%s'. Closest symbols:\n", entity))
+			for _, m := range matches {
+				b.WriteString(fmt.Sprintf("  %s\n", m))
+			}
 		} else {
 			return fmt.Sprintf("'%s' was not found in the knowledge base.", entity), nil
 		}
 	}
 
-	return strings.Join(results, "\n"), nil
+	return b.String(), nil
 }
 
 func (r *Router) handleUsage(query string, class *Classification) (string, error) {
+	query = stripCommandPrefix(query, "usage of", "usage", "use", "uses of", "show usage", "find usage")
 	entity := firstSymbolOrExtracted(class, query)
 	if entity == "" {
 		return "Could not identify a function or class name in the query.", nil
 	}
 
-	var results []string
-
-	if fn, ok := r.callGraph.Functions[entity]; ok {
-		results = append(results, fmt.Sprintf("Usage analysis for '%s':", entity))
-		results = append(results, fmt.Sprintf("  Location : %s", fn.Location))
-
-		if len(fn.Calls) > 0 {
-			results = append(results, "\nCalls (outbound):")
-			for _, c := range fn.Calls {
-				results = append(results, fmt.Sprintf("  → %s", c))
-			}
-		}
-		if len(fn.CalledBy) > 0 {
-			results = append(results, "\nCalled by (inbound):")
-			for _, c := range fn.CalledBy {
-				results = append(results, fmt.Sprintf("  ← %s", c))
-			}
-		} else {
-			results = append(results, "\nNot called by any indexed function (entry point or unused).")
-		}
-	} else if t, ok := r.callGraph.Types[entity]; ok {
-		results = append(results, fmt.Sprintf("Type analysis for '%s':", entity))
-		results = append(results, fmt.Sprintf("  Location : %s", t.Location))
-		if len(t.Methods) > 0 {
-			results = append(results, "\nMethods:")
-			for _, m := range t.Methods {
-				results = append(results, fmt.Sprintf("  • %s", m))
-			}
-		}
-	} else if callers, ok := r.kbIndex.FunctionsCalling[entity]; ok {
-		results = append(results, fmt.Sprintf("Functions calling '%s':", entity))
-		for _, c := range callers {
-			results = append(results, fmt.Sprintf("  ← %s", c))
-		}
-	} else {
-		return fmt.Sprintf("No usage information found for '%s'.", entity), nil
+	locations, ok := r.kbIndex.FunctionsByName[entity]
+	if !ok || len(locations) == 0 {
+		return fmt.Sprintf("'%s' not found in knowledge base.", entity), nil
 	}
 
-	return strings.Join(results, "\n"), nil
+	var b strings.Builder
+	fmt.Fprintf(&b, "Usage of '%s'\n\n", entity)
+
+	for _, loc := range dedupe(locations) {
+		file, line, err := parseLocation(loc) // "path/to/file.go:42"
+		if err != nil {
+			continue
+		}
+		sig, err := extractSignature(file, line)
+		if err != nil {
+			fmt.Fprintf(&b, "  %s — could not read signature: %v\n", loc, err)
+			continue
+		}
+		fmt.Fprintf(&b, "  %s\n%s\n", loc, sig)
+	}
+
+	return b.String(), nil
 }
