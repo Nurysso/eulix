@@ -80,7 +80,8 @@ func (c *Classifier) Classify(query string) *Classification {
 }
 
 func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
-	// Priority order matters check more specific patterns first
+	longQuery := len(strings.Fields(queryLower)) > 12
+
 	if c.codeGenPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeCodeGeneration,
@@ -90,7 +91,6 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     1,
 		}
 	}
-	// Debug queries
 	if c.debugPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeDebug,
@@ -100,41 +100,6 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     1,
 		}
 	}
-
-	// Comparison queries
-	if c.comparisonPattern.MatchString(queryLower) {
-		return &Classification{
-			Type:         QueryTypeComparison,
-			Confidence:   0.95,
-			Reasoning:    "Level 1: comparison pattern match",
-			NeedsContext: true,
-			Priority:     2,
-		}
-	}
-
-	// Example queries
-	if c.examplePattern.MatchString(queryLower) {
-		return &Classification{
-			Type:         QueryTypeExample,
-			Confidence:   0.95,
-			Reasoning:    "Level 1: example/usage pattern match",
-			NeedsContext: true,
-			Priority:     2,
-		}
-	}
-
-	// Data flow queries
-	if c.dataFlowPattern.MatchString(queryLower) {
-		return &Classification{
-			Type:         QueryTypeDataFlow,
-			Confidence:   0.95,
-			Reasoning:    "Level 1: data flow pattern match",
-			NeedsContext: true,
-			Priority:     3,
-		}
-	}
-
-	// Security queries
 	if c.securityPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeSecurity,
@@ -145,7 +110,38 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 		}
 	}
 
-	// Performance queries
+	// For long queries, only high-signal unambiguous patterns fire at Level 1
+	if longQuery {
+		return nil
+	}
+
+	if c.comparisonPattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeComparison,
+			Confidence:   0.95,
+			Reasoning:    "Level 1: comparison pattern match",
+			NeedsContext: true,
+			Priority:     2,
+		}
+	}
+	if c.examplePattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeExample,
+			Confidence:   0.95,
+			Reasoning:    "Level 1: example/usage pattern match",
+			NeedsContext: true,
+			Priority:     2,
+		}
+	}
+	if c.dataFlowPattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeDataFlow,
+			Confidence:   0.95,
+			Reasoning:    "Level 1: data flow pattern match",
+			NeedsContext: true,
+			Priority:     3,
+		}
+	}
 	if c.performancePattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypePerformance,
@@ -155,8 +151,6 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     2,
 		}
 	}
-
-	// Refactoring queries
 	if c.refactoringPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeRefactoring,
@@ -166,8 +160,6 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     3,
 		}
 	}
-
-	// Dependency queries
 	if c.dependencyPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeDependency,
@@ -177,8 +169,6 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     2,
 		}
 	}
-
-	// Testing queries
 	if c.testingPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeTesting,
@@ -188,19 +178,6 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     3,
 		}
 	}
-
-	// Documentation queries
-	// if c.documentationPattern.MatchString(queryLower) {
-	// 	return &Classification{
-	// 		Type:         QueryTypeDocumentation,
-	// 		Confidence:   0.95,
-	// 		Reasoning:    "Level 1: documentation pattern match",
-	// 		NeedsContext: true,
-	// 		Priority:     3,
-	// 	}
-	// }
-
-	// Original patterns
 	if c.locationPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeLocation,
@@ -210,7 +187,6 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     5,
 		}
 	}
-
 	if c.usagePattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeUsage,
@@ -230,7 +206,6 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     4,
 		}
 	}
-
 	if c.architecturePattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeArchitecture,
@@ -240,7 +215,6 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     3,
 		}
 	}
-
 	if c.implementationPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeImplementation,
@@ -250,7 +224,6 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     2,
 		}
 	}
-
 	if c.callGraphPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeCallGraph,
@@ -282,7 +255,7 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 		return &Classification{
 			Type:         QueryTypeTodos,
 			Confidence:   0.95,
-			Reasoning:    "Level 1: todos/security pattern",
+			Reasoning:    "Level 1: todos pattern",
 			NeedsContext: false,
 			Priority:     5,
 		}
