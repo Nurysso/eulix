@@ -12,7 +12,10 @@ types such as location, usage, debugging, architecture, etc.
 
 package query
 
-import "regexp"
+import (
+	"fmt"
+	"regexp"
+)
 
 const (
 	QueryTypeLocation QueryType = iota + 1
@@ -31,7 +34,8 @@ const (
 	QueryTypeExample
 	QueryTypeTesting
 	QueryTypeCodeGeneration
-	QueryTypeCallGraph QueryType = iota + 17
+	// QueryTypeCallGraph QueryType = iota + 17
+	QueryTypeCallGraph
 	QueryTypeEntryPoints
 	QueryTypeFileStructure
 	QueryTypeTodos
@@ -39,7 +43,7 @@ const (
 )
 
 func (qt QueryType) String() string {
-	return [...]string{
+	names := [...]string{
 		"Unknown",
 		"Location",
 		"Usage",
@@ -56,12 +60,17 @@ func (qt QueryType) String() string {
 		"Documentation",
 		"Example",
 		"Testing",
+		"CodeGeneration",
 		"CallGraph",
 		"EntryPoints",
 		"FileStructure",
 		"Todos",
 		"Metrics",
-	}[qt]
+	}
+	if int(qt) >= len(names) {
+		return fmt.Sprintf("QueryType(%d)", int(qt))
+	}
+	return names[qt]
 }
 
 func QuerySheriff(kbIndexPath string) (*Classifier, error) {
@@ -81,7 +90,7 @@ func QuerySheriff(kbIndexPath string) (*Classifier, error) {
 		testingPattern:        regexp.MustCompile(`(?i)\b(test\b|unit\s+test|integration\s+test|mock\b|coverage\b|test\s+case)\b`),
 		codeGenPattern:        regexp.MustCompile(`(?i)\b(show\s+me\s+code|write\s+code|code\s+example|sample\s+code|how\s+to\s+implement|generate\s+code)\b`),
 		callGraphPattern:      regexp.MustCompile(`(?i)\b(call\s+graph|call\s+tree|who\s+calls|calls?\s+chain|callers?\s+of|callees?\s+of|call\s+hierarchy)\b`),
-		entryPointPattern:     regexp.MustCompile(`(?i)\b(entry\s+points?|endpoints?|api\s+routes?|cli\s+commands?|main\s+functions?)\b`),
+		entryPointPattern:     regexp.MustCompile(`(?i)\b(entry\s+points?|api\s+routes?|cli\s+commands?|main\s+functions?)\b|(?i)\b(list|show|find|what\s+are)\b.{0,40}\bendpoints?\b`),
 		fileStructPattern:     regexp.MustCompile(`(?i)\b(what('?s|\s+is)\s+in\s+file|contents?\s+of\s+file|functions?\s+in\s+file|classes?\s+in\s+file|show\s+file)\b`),
 		todosPattern:          regexp.MustCompile(`(?i)\b(todo\b|fixme\b|hack\b|security\s+note|technical\s+debt)\b`),
 		metricsPattern:        regexp.MustCompile(`(?i)\b(complexity|metrics?|loc|lines\s+of\s+code|importance|hotspot)\b`),
