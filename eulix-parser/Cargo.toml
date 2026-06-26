@@ -1,6 +1,6 @@
 [package]
 name = "eulix-parser"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 authors = ["dawood Nurysso@proton.me"]
 description = "Fast, secure code parser for multiple languages using tree-sitter"
@@ -72,6 +72,8 @@ mimalloc = { version = "*", features = ["secure"]  }
 secrecy = { version = "0.8", optional = true }  # For sensitive data handling
 sonic-rs = "0.5.8"
 indicatif = "0.18.4"
+libc = "0.2.186"
+memmap2 = "0.9.11"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -118,7 +120,7 @@ unwrap_used = "warn"
 # Linting configuration for security
 [lints.rust]
 missing-docs = "warn"
-unsafe-code = "forbid"  # No unsafe code allowed
+unsafe-code = "warn"
 unused-crate-dependencies = "warn"
 
 # Profile configurations
