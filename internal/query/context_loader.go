@@ -60,9 +60,11 @@ decode logic as the streaming loader.
 package query
 
 import (
+	"bufio"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -182,7 +184,6 @@ func loadCallGraph(eulixDir string) (*CallGraph, error) {
 // always carry their Content inline, which is the right tradeoff
 // for search use cases.
 func (cb *ContextBuilder) loadChunks() error {
-	// Step 1: kb_index.json (small)
 	done := cb.logFileLoad("kb_index.json")
 	var ref types.IndexRef
 	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_index.json"), &ref)
@@ -193,24 +194,24 @@ func (cb *ContextBuilder) loadChunks() error {
 	cb.kbIdx = &ref.Indices
 	cb.debugLog.Log("kbIdx FunctionsByName len=%d", len(cb.kbIdx.FunctionsByName))
 
-	// Step 2: stream kb.json (the big one)
+	// lazyContent must be set BEFORE streamKBChunks so addChunksFromFile
+	// sees the correct value and skips closure allocation on this path.
+	cb.lazyContent = false
+
 	if err := cb.streamKBChunks(); err != nil {
 		return fmt.Errorf("kb.json: %w", err)
 	}
 
-	// Step 3: derived indices (boilerplate, symbol index, inverted index)
 	cb.buildDerivedIndices()
 
-	// Step 4: state (TODO)
-	// cb.kbData is left nil: the streaming path never materialises
-	// the full struct, and any caller that depends on
-	// cb.kbData.Structure should be migrated to cb.chunks / cb.kbIdx.
 	cb.kbData = nil
+
+	// streaming path never populates hydrateIdx, release the map
+	// so the GC can collect it rather than leaving an empty shell alive.
+	cb.hydrateIdx = nil
+
 	cb.hasKB = true
-	cb.lazyContent = false // streaming path can't do lazy content
-
 	runtime.GC()
-
 	cb.debugLog.Log("Chunks loaded: %d, heap: %d MB",
 		len(cb.chunks), getHeapAlloc()/1024/1024)
 	return nil
@@ -276,10 +277,10 @@ func (cb *ContextBuilder) streamKBChunks() error {
 			return fmt.Errorf("expected string key, got %T", tok)
 		}
 
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			return fmt.Errorf("reading FileData for %s: %w", filePath, err)
-		}
+		// var raw json.RawMessage
+		// if err := dec.Decode(&raw); err != nil {
+		// 	return fmt.Errorf("reading FileData for %s: %w", filePath, err)
+		// }
 
 		// Decode the FileData with sonic for JIT-speed field
 		// access. The raw byte slice is a sub-slice of the
@@ -287,11 +288,12 @@ func (cb *ContextBuilder) streamKBChunks() error {
 		// decoded strings out before we move to the next
 		// iteration, so the source can be safely reused.
 		var fs types.FileData
-		if err := sonicCopy.Unmarshal(raw, &fs); err != nil {
-			return fmt.Errorf("unmarshaling FileData for %s: %w", filePath, err)
+		if err := dec.Decode(&fs); err != nil {
+			return fmt.Errorf("reading FileData for %s: %w", filePath, err)
 		}
 
 		cb.addChunksFromFile(filePath, &fs)
+		fs = types.FileData{}
 	}
 
 	return nil
@@ -305,7 +307,7 @@ func (cb *ContextBuilder) streamKBChunks() error {
 // during its pass; the inverted index reuses the same predicate
 // during tokenisation.
 func (cb *ContextBuilder) buildDerivedIndices() {
-	// 1. Boilerplate detector (over the full corpus)
+	// Boilerplate detector (over the full corpus)
 	cb.buildBoilerplate()
 	cb.debugLog.Log("Boilerplate detector: %d symbols filtered (threshold=%.2f, corpus=%d) top: %v",
 		len(cb.boilerplate.boilerplate),
@@ -314,7 +316,11 @@ func (cb *ContextBuilder) buildDerivedIndices() {
 		cb.boilerplate.TopBoilerplate(5),
 	)
 
-	// 2. Symbol index (boilerplate-filtered)
+	// Build the subsystem tree first so detectNoisePatterns has nodes to
+	// inspect. Both are read-only after this point.
+	cb.buildSubsystemTree()
+	cb.detectNoisePatterns()
+
 	cb.symbolIndex = make(map[string][]int, len(cb.chunks)*2)
 	for i, c := range cb.chunks {
 		for _, sym := range c.Symbols {
@@ -324,8 +330,7 @@ func (cb *ContextBuilder) buildDerivedIndices() {
 			cb.symbolIndex[sym] = append(cb.symbolIndex[sym], i)
 		}
 	}
-
-	// 3. Inverted index (large corpora only)
+	// Inverted index (large corpora only)
 	if len(cb.chunks) > invIdxThreshold {
 		cb.invertedIdx = cb.buildInvertedIndex()
 	}
@@ -351,12 +356,9 @@ func (cb *ContextBuilder) buildDerivedIndices() {
 // len(chunks)*8 (heuristic; tune if your token/cardinality
 // ratio differs).
 func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
-	// First pass: count raw term frequencies per chunk
-	type rawTF struct {
-		counts map[string]int
-		total  int
-	}
-	perChunk := make([]rawTF, len(cb.chunks))
+	postings := make(map[string][]Posting, len(cb.chunks)*8)
+	totalTokens, nonEmpty := 0, 0
+
 	for i, c := range cb.chunks {
 		if c.Content == "" {
 			continue
@@ -369,33 +371,24 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 			}
 			counts[norm]++
 		}
-		perChunk[i] = rawTF{counts: counts, total: len(counts)}
-	}
-
-	// Second pass: build postings with normalised TF
-	postings := make(map[string][]Posting, len(cb.chunks)*8)
-	totalTokens := 0
-	nonEmpty := 0
-	for i, rf := range perChunk {
-		if rf.counts == nil {
+		if len(counts) == 0 {
 			continue
 		}
 		nonEmpty++
-		totalTokens += rf.total
-		for tok, cnt := range rf.counts {
-			tf := float32(cnt) / float32(max(rf.total, 1))
+		totalTokens += len(counts)
+		for tok, cnt := range counts {
+			tf := float32(cnt) / float32(len(counts))
 			postings[tok] = append(postings[tok], Posting{ChunkIdx: i, TF: tf})
 		}
+		// counts goes out of scope here and is immediately GC-eligible
 	}
 
 	avgTokens := 0.0
 	if nonEmpty > 0 {
 		avgTokens = float64(totalTokens) / float64(nonEmpty)
 	}
-
-	cb.debugLog.Log("Inverted index: %d unique tokens across %d chunks (avg %.1f tokens/chunk)",
+	cb.debugLog.Log("Inverted index: %d unique tokens, %d chunks, avg %.1f tokens/chunk",
 		len(postings), len(cb.chunks), avgTokens)
-
 	return &InvertedIndex{
 		Postings:       postings,
 		DocCount:       len(cb.chunks),
@@ -468,97 +461,103 @@ func (cb *ContextBuilder) loadAndIndexCallGraph() {
 // openForSequentialRead and indexing into a bytes.Reader.
 func (cb *ContextBuilder) loadEmbeddings() error {
 	done := cb.logFileLoad("embeddings.bin")
-	data, err := os.ReadFile(filepath.Join(cb.eulixDir, "embeddings.bin"))
+	path := filepath.Join(cb.eulixDir, "embeddings.bin")
+	f, err := os.Open(path)
 	done(err)
 	if err != nil {
 		return fmt.Errorf("embeddings.bin not found: %w", err)
 	}
-	if len(data) < 8 {
-		return fmt.Errorf("invalid embeddings file: too short (%d bytes)", len(data))
+	defer f.Close()
+	br := bufio.NewReaderSize(f, 4<<20) // 4MB read buffer
+
+	// read magic
+	magic := make([]byte, 4)
+	if _, err := io.ReadFull(br, magic); err != nil {
+		return fmt.Errorf("reading magic: %w", err)
+	}
+	if string(magic) != MagicBytes {
+		return fmt.Errorf("wrong magic bytes: %q", magic)
 	}
 
-	off := 0
-	if string(data[off:off+4]) != MagicBytes {
-		return fmt.Errorf("wrong magic bytes in embeddings.bin: %q", data[off:off+4])
+	var hdr [4]byte
+	// version
+	if _, err := io.ReadFull(br, hdr[:4]); err != nil {
+		return err
 	}
-	off += 4
-
-	version := binary.LittleEndian.Uint32(data[off : off+4])
-	off += 4
+	version := binary.LittleEndian.Uint32(hdr[:4])
 	if version != 3 && version != 4 {
-		return fmt.Errorf("unsupported embeddings.bin version: %d", version)
+		return fmt.Errorf("unsupported version: %d", version)
 	}
-
-	modelName, n, err := readStr(data, off)
-	if err != nil {
-		return fmt.Errorf("reading model name: %w", err)
+	// model name (length-prefixed)
+	if _, err := io.ReadFull(br, hdr[:4]); err != nil {
+		return err
 	}
-	off = n
-	_ = modelName // could validate against config
-
-	if off+8 > len(data) {
-		return fmt.Errorf("invalid embeddings file: truncated header")
+	modelLen := int(binary.LittleEndian.Uint32(hdr[:4]))
+	modelBuf := make([]byte, modelLen)
+	if _, err := io.ReadFull(br, modelBuf); err != nil {
+		return err
 	}
-	numEmb := int(binary.LittleEndian.Uint32(data[off : off+4]))
-	dim := int(binary.LittleEndian.Uint32(data[off+4 : off+8]))
-	off += 8
-
+	// numEmb, dim
+	var meta [8]byte
+	if _, err := io.ReadFull(br, meta[:]); err != nil {
+		return err
+	}
+	numEmb := int(binary.LittleEndian.Uint32(meta[:4]))
+	dim := int(binary.LittleEndian.Uint32(meta[4:8]))
 	quantized := false
 	if version == 4 {
-		if off >= len(data) {
-			return fmt.Errorf("missing quantization flag")
+		var flag [1]byte
+		if _, err := io.ReadFull(br, flag[:]); err != nil {
+			return err
 		}
-		quantized = data[off] == 1
-		off++
+		quantized = flag[0] == 1
 	}
-
 	if dim == 0 {
-		return fmt.Errorf("embeddings.bin has dim=0: file is corrupt or was written by an incompatible version, please regenerate")
-	}
-
-	if err := validateEmbeddingsHeader(numEmb, dim, quantized, len(data)); err != nil {
-		return err
+		return fmt.Errorf("embeddings.bin dim=0: regenerate with eulix-embed")
 	}
 
 	cb.embeddings = make([][]float32, numEmb)
+	idLenBuf := make([]byte, 4)
+	scaleBuf := make([]byte, 4)
+	int8Buf := make([]byte, dim)  // reused per vector
+	f32Buf := make([]byte, dim*4) // reused per vector
 
-	var embID string
 	for i := 0; i < numEmb; i++ {
-		embID, off, err = readStr(data, off)
-		_ = embID
-		if err != nil {
-			return fmt.Errorf("reading id at index %d: %w", i, err)
+		// id length + id bytes (skip id, we use positional index)
+		if _, err := io.ReadFull(br, idLenBuf); err != nil {
+			return fmt.Errorf("reading id length at %d: %w", i, err)
+		}
+		idLen := int(binary.LittleEndian.Uint32(idLenBuf))
+		if idLen > 1024 {
+			return fmt.Errorf("implausible id length %d at %d", idLen, i)
+		}
+		if _, err := io.ReadFull(br, make([]byte, idLen)); err != nil { // discard id
+			return fmt.Errorf("reading id at %d: %w", i, err)
 		}
 
 		emb := make([]float32, dim)
 		if quantized {
-			if off+4 > len(data) {
-				return fmt.Errorf("unexpected EOF reading scale at index %d", i)
+			if _, err := io.ReadFull(br, scaleBuf); err != nil {
+				return fmt.Errorf("reading scale at %d: %w", i, err)
 			}
-			scale := math.Float32frombits(binary.LittleEndian.Uint32(data[off : off+4]))
-			off += 4
-
-			if off+dim > len(data) {
-				return fmt.Errorf("unexpected EOF reading quantized vector at index %d (need %d bytes, have %d)", i, dim, len(data)-off)
+			scale := math.Float32frombits(binary.LittleEndian.Uint32(scaleBuf))
+			if _, err := io.ReadFull(br, int8Buf); err != nil {
+				return fmt.Errorf("reading quantized vector at %d: %w", i, err)
 			}
-
 			for j := 0; j < dim; j++ {
-				emb[j] = float32(int8(data[off+j])) * scale
+				emb[j] = float32(int8(int8Buf[j])) * scale
 			}
-			off += dim
-			cb.embeddings[i] = emb
 		} else {
-			if off+dim*4 > len(data) {
-				return fmt.Errorf("unexpected EOF reading vector at index %d", i)
+			if _, err := io.ReadFull(br, f32Buf); err != nil {
+				return fmt.Errorf("reading vector at %d: %w", i, err)
 			}
 			for j := 0; j < dim; j++ {
-				emb[j] = math.Float32frombits(binary.LittleEndian.Uint32(data[off : off+4]))
-				off += 4
+				emb[j] = math.Float32frombits(binary.LittleEndian.Uint32(f32Buf[j*4:]))
 			}
 		}
+		cb.embeddings[i] = emb
 	}
 
-	// IVF index builds in background; doesn't block the main load.
 	if numEmb > ivfBuildThreshold {
 		go func() {
 			idx := buildIVFIndex(cb.embeddings, ivfNClusters, ivfKMeansIter)
