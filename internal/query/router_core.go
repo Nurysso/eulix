@@ -44,12 +44,10 @@ func QueryTrafficController(
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize context builder: %w", err)
 	}
-
 	classifier, err := QuerySheriff(filepath.Join(eulixDir, "kb_index.json"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create classifier: %w", err)
 	}
-
 	return &Router{
 		eulixDir:       eulixDir,
 		config:         cfg,

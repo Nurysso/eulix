@@ -307,7 +307,7 @@ func (cb *ContextBuilder) streamKBChunks() error {
 // during its pass; the inverted index reuses the same predicate
 // during tokenisation.
 func (cb *ContextBuilder) buildDerivedIndices() {
-	// 1. Boilerplate detector (over the full corpus)
+	// Boilerplate detector (over the full corpus)
 	cb.buildBoilerplate()
 	cb.debugLog.Log("Boilerplate detector: %d symbols filtered (threshold=%.2f, corpus=%d) top: %v",
 		len(cb.boilerplate.boilerplate),
@@ -316,7 +316,11 @@ func (cb *ContextBuilder) buildDerivedIndices() {
 		cb.boilerplate.TopBoilerplate(5),
 	)
 
-	// 2. Symbol index (boilerplate-filtered)
+	// Build the subsystem tree first so detectNoisePatterns has nodes to
+	// inspect. Both are read-only after this point.
+	cb.buildSubsystemTree()
+	cb.detectNoisePatterns()
+
 	cb.symbolIndex = make(map[string][]int, len(cb.chunks)*2)
 	for i, c := range cb.chunks {
 		for _, sym := range c.Symbols {
@@ -326,8 +330,7 @@ func (cb *ContextBuilder) buildDerivedIndices() {
 			cb.symbolIndex[sym] = append(cb.symbolIndex[sym], i)
 		}
 	}
-
-	// 3. Inverted index (large corpora only)
+	// Inverted index (large corpora only)
 	if len(cb.chunks) > invIdxThreshold {
 		cb.invertedIdx = cb.buildInvertedIndex()
 	}
