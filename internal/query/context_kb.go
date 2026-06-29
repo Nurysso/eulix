@@ -272,14 +272,15 @@ func (cb *ContextBuilder) buildClassFromParts(p classParts, filePath string) Chu
 // addChunksFromFile
 
 func (cb *ContextBuilder) addChunksFromFile(filePath string, fs *types.FileData) {
-	fileIdx := make(map[[2]int]func() string)
-
 	for _, fn := range fs.Functions {
 		c := cb.buildChunkFromKBFunction(fn, filePath)
 		if cb.lazyContent {
-			p := extractFnParts(fn) // cheap copy of only what we need
+			p := extractFnParts(fn)
 			fp := filePath
-			fileIdx[[2]int{c.StartLine, c.EndLine}] = func() string {
+			if cb.hydrateIdx[filePath] == nil {
+				cb.hydrateIdx[filePath] = make(map[[2]int]func() string)
+			}
+			cb.hydrateIdx[filePath][[2]int{c.StartLine, c.EndLine}] = func() string {
 				return cb.buildChunkFromParts(p, fp).Content
 			}
 			c.Content = ""
@@ -292,7 +293,10 @@ func (cb *ContextBuilder) addChunksFromFile(filePath string, fs *types.FileData)
 		if cb.lazyContent {
 			p := extractClassParts(cls)
 			fp := filePath
-			fileIdx[[2]int{cc.StartLine, cc.EndLine}] = func() string {
+			if cb.hydrateIdx[filePath] == nil {
+				cb.hydrateIdx[filePath] = make(map[[2]int]func() string)
+			}
+			cb.hydrateIdx[filePath][[2]int{cc.StartLine, cc.EndLine}] = func() string {
 				return cb.buildClassFromParts(p, fp).Content
 			}
 			cc.Content = ""
@@ -304,7 +308,10 @@ func (cb *ContextBuilder) addChunksFromFile(filePath string, fs *types.FileData)
 			if cb.lazyContent {
 				p := extractFnParts(m)
 				fp := filePath
-				fileIdx[[2]int{mc.StartLine, mc.EndLine}] = func() string {
+				if cb.hydrateIdx[filePath] == nil {
+					cb.hydrateIdx[filePath] = make(map[[2]int]func() string)
+				}
+				cb.hydrateIdx[filePath][[2]int{mc.StartLine, mc.EndLine}] = func() string {
 					return cb.buildChunkFromParts(p, fp).Content
 				}
 				mc.Content = ""
@@ -312,8 +319,8 @@ func (cb *ContextBuilder) addChunksFromFile(filePath string, fs *types.FileData)
 			cb.chunks = append(cb.chunks, mc)
 		}
 	}
-
-	cb.hydrateIdx[filePath] = fileIdx
+	// when lazyContent=false the hydrateIdx entry for this file is
+	// intentionally left absent loadChunks will nil the whole map.
 }
 
 // buildChunkFromKBFunction constructs a Chunk from a KBFunction (function or method).
