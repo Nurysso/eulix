@@ -66,13 +66,15 @@ const (
 
 func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Client, sourceRoot string) (*ContextBuilder, error) {
 	cb := &ContextBuilder{
-		eulixDir:   eulixDir,
-		config:     cfg,
-		llmClient:  llmClient,
-		vectorMap:  make(map[string]int),
-		hydrateIdx: make(map[string]map[[2]int]func() string),
-		sourceRoot: sourceRoot,
-		debugLog:   NewDebugLogger(eulixDir),
+		eulixDir:      eulixDir,
+		config:        cfg,
+		llmClient:     llmClient,
+		vectorMap:     make(map[string]int),
+		hydrateIdx:    make(map[string]map[[2]int]func() string),
+		sourceRoot:    sourceRoot,
+		debugLog:      NewDebugLogger(eulixDir),
+		subsystemTree: make([]*SubsystemNode, 0, 128),
+		noisePaths:    make([]string, 0, 32),
 	}
 	cb.debugLog.Log("Initializing ContextBuilder with source root: %s", sourceRoot)
 
@@ -82,6 +84,9 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	}
 	cb.queryEmbedder = queryEmbedder
 
+	// loadChunks calls buildDerivedIndices which calls
+	// buildSubsystemTree and detectNoisePatterns internally,
+	// so subsystemTree and noisePaths are populated here.
 	if err := cb.loadChunks(); err != nil {
 		return nil, fmt.Errorf("failed to load chunks from KB: %w", err)
 	}
@@ -101,11 +106,11 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 		cb.debugLog.Log("Loaded %d vector mappings", len(cb.vectorMap))
 	}
 
-	// Single unified call graph load — runs after chunks are ready
+	// Single unified call graph load, runs after chunks are ready
 	cb.loadAndIndexCallGraph()
-
 	cb.hasKB = true
-	cb.debugLog.Log("ContextBuilder initialized successfully")
+	cb.debugLog.Log("ContextBuilder initialized: %d chunks, %d subsystem nodes, %d noise paths",
+		len(cb.chunks), len(cb.subsystemTree), len(cb.noisePaths))
 	return cb, nil
 }
 

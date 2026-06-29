@@ -145,6 +145,15 @@ type ContextBuilder struct {
 	lastTrace   *DebugTrace
 	boilerplate *BoilerplateDetector
 	hydrateIdx  map[string]map[[2]int]func() string // file -> (start,end) -> content builder
+	// subsystemTree is the set of significant directory nodes built from
+	// chunk file paths during index construction. Read-only after
+	// buildDerivedIndices completes.
+	subsystemTree []*SubsystemNode
+	// noisePaths are path prefixes identified as high-density generic
+	// infrastructure (test fixtures, vendor dirs, shared utils). Chunks
+	// under these paths receive a score penalty when a specific subsystem
+	// is confidently detected for the query.
+	noisePaths []string
 }
 
 type Chunk struct {
