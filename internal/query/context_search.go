@@ -249,7 +249,24 @@ func (cb *ContextBuilder) multiStrategySearch(
 	for _, sc := range all {
 		result = append(result, sc)
 	}
-	boostBySubsystemPath(result, query)
+	// Subsystem-aware boosting replaces old boostBySubSystemPath call.
+	// we drive query tokens the same way B<25 does so the subsystem
+	// detector sees the same vocabulary the keyword search used.
+	queryTokens := extractQueryKeywords(strings.ToLower(query))
+	detected := detectQuerySubsystems(cb.subsystemTree, queryTokens)
+	if len(detected) > 0 {
+		cb.debugLog.Log("Detected subsystem (%d): top=%q score=%.2f",
+			len(detected), detected[0].node.Path, detected[0].score)
+		if trace != nil {
+			for _, ds := range detected {
+				trace.Warnings = append(trace.Warnings,
+					fmt.Sprintf("subsystem: %s (score=%.2f chunks=%d)",
+						ds.node.Path, ds.score, ds.node.TotalChunks))
+			}
+		}
+	}
+	boostByDetectedSubsystems(result, detected, cb.noisePaths)
+	// boostBySubsystemPath(result, query)
 	// In multiStrategySearch, after boostBySubsystemPath:
 	for i := range result {
 		f := result[i].File
@@ -621,7 +638,6 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int) []Sc
 	if cb.invertedIdx == nil {
 		return cb.keywordSearch(query, topK)
 	}
-
 	keywords := extractQueryKeywords(strings.ToLower(query))
 	symbols := extractPotentialSymbols(query)
 	terms := uniqueStrings(append(keywords, symbols...))
@@ -651,7 +667,27 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int) []Sc
 		}
 	}
 
-	// Exact name bonus on top of BM25 (unchanged from before)
+	// Proximity bonus: reward chunks where query terms appear near each
+	// other in content. Only applied to the top candidates by BM25 score
+	// to keep this O(topK) rather than O(all matched chunks).
+	//
+	// We need at least 2 matched terms in a chunk for proximity to be
+	// meaningful; single-term chunks skip the scan entirely.
+	const proximityWindow = 300 // characters
+	if len(terms) >= 2 {
+		for idx, matchedTerms := range matched {
+			if len(matchedTerms) < 2 {
+				continue
+			}
+			content := cb.chunks[idx].Content
+			if content == "" {
+				content = cb.hydrateOne(cb.chunks[idx])
+			}
+			scores[idx] += proximityBonus(content, matchedTerms, proximityWindow)
+		}
+	}
+
+	// Exact name match bonus (unchanged from original).
 	for _, sym := range symbols {
 		symLow := strings.ToLower(sym)
 		for idx := range scores {
