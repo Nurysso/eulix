@@ -1,5 +1,85 @@
 # Changelog
 
+## Eulix v0.7.2 (2026-06-28)
+
+### Retrieval Quality
+
+- **Dynamic subsystem detection** — Queries now automatically identify relevant
+  subdirectories based on token overlap with the repository tree. Chunks in
+  matching subsystems receive proportional score boosts; chunks in unrelated
+  subsystems are penalized. Eliminates hardcoded project-specific paths.
+- **Noise path detection** — Directories dominated by test fixtures, vendor
+  code, shared utilities, and config/plugin directories are automatically
+  identified and penalized during retrieval. Prevents test code and
+  infrastructure noise from crowding out relevant results on large monorepos.
+- **BM25 term proximity bonus** — Chunks where multiple query terms appear
+  close together (within 300 characters) now receive an additional score
+  bonus. Improves precision for multi-word technical queries like
+  "PCI passthrough filter claiming".
+
+### Memory
+
+- **Streaming embeddings loader** — `embeddings.bin` is now read via buffered
+  IO (4MB buffer) instead of `os.ReadFile`, eliminating a large intermediate
+  allocation. Reduces peak heap by ~800MB on codebases with 270K+ embeddings.
+- **Single-pass inverted index construction** — Removed intermediate
+  `[]rawTF` allocation (306K elements on OpenStack-scale repos). Term
+  frequency maps are now built and immediately converted to postings,
+  becoming GC-eligible per chunk.
+- **Explicit FileData cleanup** — `types.FileData` structs are zeroed after
+  each file during streaming load, releasing references immediately rather
+  than waiting for loop-scope GC.
+- **Hydrate index map initialization fix** — Fixed nil map panic that would
+  occur on lazy content hydration for file paths not seen during load.
+
+### Performance
+
+- **Query latency reduced 29%** (680ms → 485ms on 306K chunk corpus) due to
+  better candidate filtering from subsystem detection, reducing downstream
+  work in graph expansion and MMR selection.
+- **dTLB misses reduced 58%** (30M → 12.7M) from improved memory locality
+  when accessing subsystem-grouped chunks.
+- **Minor page faults reduced 31%** (0.74M → 0.51M).
+
+### Internal
+
+- `ContextBuilder` gains `subsystemTree` and `noisePaths` fields (read-only
+  after `buildDerivedIndices`).
+- `buildDerivedIndices()` now calls `buildSubsystemTree()` and
+  `detectNoisePatterns()` before constructing the symbol and inverted indices.
+- `multiStrategySearch()` replaces `boostBySubsystemPath()` with
+  `detectQuerySubsystems()` + `boostByDetectedSubsystems()`.
+- `loadEmbeddings()` rewritten to use `bufio.Reader` streaming instead of
+  `os.ReadFile` + manual offset tracking.
+- `buildInvertedIndex()` collapsed from two-pass to single-pass construction.
+
+---
+
+## Eulix v0.7.1 (2026-06-26)
+
+### Memory
+
+- **Streaming kb.json loader** — Replaced full `sonic.Unmarshal` of the
+  entire knowledge base with a streaming JSON decoder. Reduces peak memory
+  for kb.json from ~2.75 GB to ~554 MB on large codebases.
+- **Max RSS reduced 44%** (4.68 GB → 2.63 GB) on OpenStack-scale monorepo
+  (~20M LOC, 306K chunks).
+- **Lazy content support** — Chunks beyond `lazyContentLimit` (50K) store
+  only metadata; full content is built on-demand during hydration.
+
+### Performance
+
+- Cold start increased ~51% (17s → 26s) due to streaming overhead. This is
+  a one-time cost; subsequent queries are faster due to reduced memory
+  pressure and better cache locality.
+
+### Breaking
+
+- `kb.json` is no longer fully materialized in memory. Callers depending on
+  `cb.kbData.Structure` must migrate to `cb.chunks` / `cb.kbIdx`.
+- `hydrateIdx` is nil after load when `lazyContent` is false (streaming
+  path never populates it).
+
 ## Eulix_parser [v0.7.2] - 2026-06-25
 
 > Performance Notes (main.rs)
