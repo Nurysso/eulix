@@ -144,14 +144,14 @@ flowchart TD
 
 ## Language Support Status
 
-| Language | Extension | Parse | Call Graph | Complexity | Status |
-|----------|-----------|-------|-----------|-----------|--------|
-| Python | `.py` | ✅ | ✅ | ✅ | Implemented |
-| Go | `.go` | ✅ | ✅ | ✅ | Implemented |
-| C | `.c` `.h` | ✅ | ✅ | ✅ | Implemented |
-| JavaScript | `.js` | ❌ | ❌ | ❌ | Returns error |
-| TypeScript | `.ts` | ❌ | ❌ | ❌ | Returns error |
-| Rust | `.rs` | ❌ | ❌ | ❌ | Returns error |
+| Language   | Extension | Parse | Call Graph | Complexity | Status                    |
+| ---------- | --------- | ----- | ---------- | ---------- | ------------------------- |
+| Python     | `.py`     | ✅    | ✅         | ✅         | Implemented               |
+| Go         | `.go`     | ✅    | ✅         | ✅         | Implemented               |
+| C          | `.c` `.h` | ✅    | ✅         | ✅         | Implemented               |
+| Rust       | `.rs`     | ✅    | ✅         | ✅         | Implemented               |
+| TypeScript | `.ts`     | ✅    | ✅         | ✅         | Implemented(need changes) |
+| JavaScript | `.js`     | ❌    | ❌         | ❌         | Returns error             |
 
 > **Note:** Even though JS/TS/Rust are listed in `collect_source_files`, any
 > file of those types causes `parse_file()` to return `Err(...)`, which is
@@ -162,22 +162,20 @@ flowchart TD
 
 ## Performance Characteristics
 
-| Metric | Value | Conditions |
-|--------|-------|-----------|
-| Throughput | ~9M LOC / 40s | Single thread, mixed Python/Go/C |
-| Parallelism | Linear with `-t` | Rayon work-stealing thread pool |
-| Memory | O(total functions + classes) | Full KB held in RAM |
-| Large codebase warning | > 10 000 files | Printed only in `--verbose` mode |
+| Metric                 | Value                        | Conditions                       |
+| ---------------------- | ---------------------------- | -------------------------------- |
+| Throughput             | ~9M LOC / 40s                | Single thread, mixed Python/Go/C |
+| Parallelism            | Linear with `-t`             | Rayon work-stealing thread pool  |
+| Memory                 | O(total functions + classes) | Full KB held in RAM              |
+| Large codebase warning | > 10 000 files               | Printed only in `--verbose` mode |
 
 ---
 
 ## Limitations
 
-| Limitation | Impact | Notes |
-|-----------|--------|-------|
-| JS/TS/Rust parsers not implemented | Those files silently fail | Highest priority: Rust (dogfooding) |
-| `euignore` param commented out in `collect_source_files` | Possible gap in ignore-file handling | Verify that `FileWalker` loads it independently |
-| No incremental parsing — whole codebase re-parsed on each `analyze` | Slow on large repos with small changes | Use `checksum.json` to skip unchanged files |
-| Call graph cross-file resolution depends on name matching | Overloaded function names cause false edges | Qualify names with file path |
-| Complexity is per-function cyclomatic; no module-level metrics | Cannot detect "hot" modules | Add file-level aggregation |
-| `--no-analyze` skips call graph entirely | Dependency/usage queries return no results | Warn user in `eulix chat` if call graph is absent |
+| Limitation                                                     | Impact                                      | Notes                                             |
+| -------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------- |
+| JS/TS parsers not implemented/isn't stable                     | Those files fail                            | Highest priority: TS (dogfooding)                 |
+| Call graph cross-file resolution depends on name matching      | Overloaded function names cause false edges | Qualify names with file path                      |
+| Complexity is per-function cyclomatic; no module-level metrics | Cannot detect "hot" modules                 | Add file-level aggregation                        |
+| `--no-analyze` skips call graph entirely                       | Dependency/usage queries return no results  | Warn user in `eulix chat` if call graph is absent |
