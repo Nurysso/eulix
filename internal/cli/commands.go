@@ -31,7 +31,7 @@ import (
 
 const (
 	AppName    = "Eulix"
-	AppVersion = "v0.7.1"
+	AppVersion = "v0.7.2"
 )
 
 var (
