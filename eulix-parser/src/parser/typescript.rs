@@ -4,10 +4,91 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 use crate::struc::kb_struct::*;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tree_sitter::{Node, Parser};
+
+struct SecurityPattern {
+    regex: &'static Lazy<Regex>,
+    note_type: &'static str,
+    description: &'static str,
+}
+
+//  Regex Patterns compiled once at first use
+static TODO_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid TODO regex"));
+
+static EVAL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"eval\s*\(").expect("Invalid eval regex"));
+
+static INNERHTML_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"innerHTML\s*=|outerHTML\s*=").expect("Invalid innerHTML regex"));
+
+static DOCUMENT_WRITE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"document\.write\s*\(").expect("Invalid document.write regex"));
+
+static DANGEROUSLY_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"dangerouslySetInnerHTML").expect("Invalid dangerouslySetInnerHTML regex")
+});
+
+static BROWSER_STORAGE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"localStorage\.|sessionStorage\.").expect("Invalid browser_storage regex")
+});
+
+static WEAK_RANDOM_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"Math\.random\(\)").expect("Invalid weak_random regex"));
+
+static DYNAMIC_REQUIRE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"require\s*\(\s*req\.").expect("Invalid dynamic_require regex"));
+
+static NEW_FUNCTION_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"new\s+Function\s*\(").expect("Invalid new Function regex"));
+
+static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
+    vec![
+        SecurityPattern {
+            regex: &EVAL_RE,
+            note_type: "code_injection",
+            description: "eval() executes arbitrary code — XSS risk",
+        },
+        SecurityPattern {
+            regex: &INNERHTML_RE,
+            note_type: "xss",
+            description: "innerHTML assignment — potential XSS",
+        },
+        SecurityPattern {
+            regex: &DOCUMENT_WRITE_RE,
+            note_type: "xss",
+            description: "document.write() — potential XSS",
+        },
+        SecurityPattern {
+            regex: &DANGEROUSLY_RE,
+            note_type: "xss",
+            description: "React dangerouslySetInnerHTML — ensure sanitization",
+        },
+        SecurityPattern {
+            regex: &BROWSER_STORAGE_RE,
+            note_type: "sensitive_storage",
+            description: "Browser storage — avoid storing secrets",
+        },
+        SecurityPattern {
+            regex: &WEAK_RANDOM_RE,
+            note_type: "weak_random",
+            description: "Math.random() is not cryptographically secure",
+        },
+        SecurityPattern {
+            regex: &DYNAMIC_REQUIRE_RE,
+            note_type: "dynamic_require",
+            description: "Dynamic require() from user input is dangerous",
+        },
+        SecurityPattern {
+            regex: &NEW_FUNCTION_RE,
+            note_type: "code_injection",
+            description: "new Function() is similar to eval()",
+        },
+    ]
+});
 
 pub struct TypeScriptParser {
     source_code: String,
@@ -46,16 +127,12 @@ impl TypeScriptParser {
         self.source_code.lines().count()
     }
 
-    // Imports
-
     fn extract_imports(&self, root: &Node) -> Vec<Import> {
         let mut imports = Vec::new();
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {
-            // Unwrap export statements to find re-exports with `from`
             let target = if child.kind() == "export_statement" {
-                // export { X } from '...' or export * from '...'
                 child
                     .children(&mut child.walk())
                     .find(|c| c.kind() == "import_statement")
@@ -73,7 +150,6 @@ impl TypeScriptParser {
     }
 
     fn parse_import_statement(&self, node: &Node, imports: &mut Vec<Import>) {
-        // Get the module path (string)
         let module = node
             .children(&mut node.walk())
             .find(|c| c.kind() == "string")
@@ -88,7 +164,6 @@ impl TypeScriptParser {
             return;
         }
 
-        // Collect imported names
         let mut items: Vec<String> = Vec::new();
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -128,8 +203,6 @@ impl TypeScriptParser {
         }
     }
 
-    // Functions — function_declaration, arrow functions, method definitions
-
     fn extract_functions(&self, root: &Node) -> Vec<Function> {
         let mut functions = Vec::new();
         self.collect_top_level_functions(root, &mut functions);
@@ -147,7 +220,6 @@ impl TypeScriptParser {
                     }
                 }
                 "export_statement" | "ambient_declaration" => {
-                    // exported functions
                     let mut ec = child.walk();
                     for inner in child.children(&mut ec) {
                         if matches!(
@@ -161,7 +233,6 @@ impl TypeScriptParser {
                     }
                 }
                 "lexical_declaration" | "variable_declaration" => {
-                    // const fn = () => {}  /  const fn = function() {}
                     let mut vc = child.walk();
                     for decl in child.children(&mut vc) {
                         if decl.kind() == "variable_declarator" {
@@ -351,8 +422,6 @@ impl TypeScriptParser {
         decorators
     }
 
-    // Classes — class_declaration and interfaces
-
     fn extract_classes(&self, root: &Node) -> Vec<Class> {
         let mut classes = Vec::new();
         let mut cursor = root.walk();
@@ -403,7 +472,6 @@ impl TypeScriptParser {
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
 
-        // Extends / implements
         let bases: Vec<String> = node
             .children(&mut node.walk())
             .filter(|c| c.kind() == "class_heritage")
@@ -452,7 +520,6 @@ impl TypeScriptParser {
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
 
-        // extends
         let bases: Vec<String> = node
             .children(&mut node.walk())
             .filter(|c| c.kind() == "extends_type_clause")
@@ -554,8 +621,6 @@ impl TypeScriptParser {
         self.parse_function_inner(node, &name, class_name)
     }
 
-    // Global variables
-
     fn extract_global_vars(&self, root: &Node) -> Vec<GlobalVar> {
         let mut vars = Vec::new();
         let mut cursor = root.walk();
@@ -575,14 +640,13 @@ impl TypeScriptParser {
                                 continue;
                             }
 
-                            // Skip if value is a function
                             let value = decl.child_by_field_name("value");
                             if let Some(v) = &value {
                                 if matches!(
                                     v.kind(),
                                     "arrow_function" | "function" | "generator_function"
                                 ) {
-                                    continue; // Handled as function
+                                    continue;
                                 }
                             }
 
@@ -606,8 +670,6 @@ impl TypeScriptParser {
 
         vars
     }
-
-    // Function call extraction
 
     fn extract_function_calls_detailed(&self, node: &Node) -> Vec<FunctionCall> {
         let mut calls = Vec::new();
@@ -637,7 +699,6 @@ impl TypeScriptParser {
         if node.kind() == "call_expression" {
             if let Some(func_node) = node.child_by_field_name("function") {
                 let call_text = self.get_node_text(&func_node);
-                // Strip `await `, object prefix, chained `.`
                 let name = call_text
                     .trim_start_matches("await ")
                     .split('.')
@@ -683,8 +744,6 @@ impl TypeScriptParser {
 
         args
     }
-
-    // Variables
 
     fn extract_variables(&self, node: &Node, params: &[Parameter]) -> Vec<Variable> {
         let mut variables: HashMap<String, Variable> = HashMap::new();
@@ -761,8 +820,6 @@ impl TypeScriptParser {
             self.track_variable_usage(&child, variables);
         }
     }
-
-    // Control flow
 
     fn build_control_flow(&self, node: &Node) -> ControlFlow {
         let mut cf = ControlFlow {
@@ -969,8 +1026,6 @@ impl TypeScriptParser {
         1 + count(node)
     }
 
-    // Docstrings — JSDoc style
-
     fn extract_docstring(&self, node: &Node) -> String {
         let prev = node.prev_sibling();
 
@@ -978,7 +1033,6 @@ impl TypeScriptParser {
             match sib.kind() {
                 "comment" => {
                     let text = self.get_node_text(&sib);
-                    // JSDoc block comment /** ... */
                     if text.starts_with("/**") {
                         return text
                             .trim_start_matches("/**")
@@ -989,7 +1043,6 @@ impl TypeScriptParser {
                             .collect::<Vec<_>>()
                             .join(" ");
                     }
-                    // Single-line or block
                     return text
                         .trim_start_matches("//")
                         .trim_start_matches("/*")
@@ -999,22 +1052,17 @@ impl TypeScriptParser {
                 }
                 _ => break,
             }
-            // prev = sib.prev_sibling(); // was unreachable dont remember why I added it
         }
 
         String::new()
     }
 
-    // TODOs
-
     fn extract_todos(&self) -> Vec<Todo> {
-        let re = Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").unwrap();
-
         self.source_code
             .lines()
             .enumerate()
             .filter_map(|(idx, line)| {
-                re.captures(line).map(|caps| {
+                TODO_RE.captures(line).map(|caps| {
                     let text = caps.get(1).unwrap().as_str().trim().to_string();
                     let priority = if text.to_lowercase().contains("critical")
                         || text.to_lowercase().contains("urgent")
@@ -1025,6 +1073,7 @@ impl TypeScriptParser {
                     } else {
                         "medium"
                     };
+
                     Todo {
                         line: idx + 1,
                         text,
@@ -1035,72 +1084,24 @@ impl TypeScriptParser {
             .collect()
     }
 
-    // Security patterns
-
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
 
-        let patterns = vec![
-            (
-                r"eval\s*\(",
-                "code_injection",
-                "eval() executes arbitrary code — XSS risk",
-            ),
-            (
-                r"innerHTML\s*=|outerHTML\s*=",
-                "xss",
-                "innerHTML assignment — potential XSS",
-            ),
-            (
-                r"document\.write\s*\(",
-                "xss",
-                "document.write() — potential XSS",
-            ),
-            (
-                r"dangerouslySetInnerHTML",
-                "xss",
-                "React dangerouslySetInnerHTML — ensure sanitization",
-            ),
-            (
-                r"localStorage\.|sessionStorage\.",
-                "sensitive_storage",
-                "Browser storage — avoid storing secrets",
-            ),
-            (
-                r"Math\.random\(\)",
-                "weak_random",
-                "Math.random() is not cryptographically secure",
-            ),
-            (
-                r"require\s*\(\s*req\.",
-                "dynamic_require",
-                "Dynamic require() from user input is dangerous",
-            ),
-            (
-                r"new\s+Function\s*\(",
-                "code_injection",
-                "new Function() is similar to eval()",
-            ),
-        ];
-
-        for (pat, note_type, description) in patterns {
-            if let Ok(re) = Regex::new(pat) {
-                for (idx, line) in self.source_code.lines().enumerate() {
-                    if re.is_match(line) {
-                        notes.push(SecurityNote {
-                            note_type: note_type.to_string(),
-                            line: idx + 1,
-                            description: description.to_string(),
-                        });
-                    }
+        for (idx, line) in self.source_code.lines().enumerate() {
+            for pattern in SECURITY_PATTERNS.iter() {
+                if pattern.regex.is_match(line) {
+                    notes.push(SecurityNote {
+                        note_type: pattern.note_type.to_string(),
+                        line: idx + 1,
+                        description: pattern.description.to_string(),
+                    });
+                    break;
                 }
             }
         }
 
         notes
     }
-
-    // Auto-tagging & importance scoring
 
     fn auto_tag_function(&self, name: &str, doc: &str, calls: &[FunctionCall]) -> Vec<String> {
         let mut tags = Vec::new();
@@ -1148,8 +1149,6 @@ impl TypeScriptParser {
 
         score.clamp(0.0, 1.0)
     }
-
-    // Utility
 
     fn get_node_text(&self, node: &Node) -> String {
         let bytes = self.source_code.as_bytes();
