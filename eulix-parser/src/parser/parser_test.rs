@@ -450,7 +450,7 @@ enum Color {
         };
         kb.structure.insert("foo.py".into(), file1);
         // Build call graph (direct mode)
-        kb.call_graph = Analyzer::build_call_graph(&kb.structure);
+        kb.call_graph = Analyzer::build_call_graph_v2(&kb.structure);
         // Should have one edge from func_parse_file to itself (the call matches its own ID)
         assert_eq!(kb.call_graph.edges.len(), 1);
         assert_eq!(kb.call_graph.edges[0].from, "func_parse_file");
