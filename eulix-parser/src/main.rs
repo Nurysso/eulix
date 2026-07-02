@@ -69,7 +69,6 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-
 mod parser;
 mod struc;
 mod utils;
@@ -100,14 +99,13 @@ use utils::file_walker::FileWalker;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-
 #[cfg(target_os = "linux")]
 mod os_io {
+    use std::fs::File;
     use std::os::unix::io::AsRawFd;
     use std::path::Path;
-    use std::fs::File;
 
-    const MIN_PREFETCH_SIZE: u64 = 1024 * 1024;      // 1MB
+    const MIN_PREFETCH_SIZE: u64 = 1024 * 1024; // 1MB
     const MIN_CACHE_EVICT_SIZE: u64 = 10 * 1024 * 1024; // 10MB
 
     pub fn prefetch(path: &Path) {
@@ -116,18 +114,20 @@ mod os_io {
                 if let Ok(f) = std::fs::File::open(path) {
                     let fd = f.as_raw_fd();
                     let size = metadata.len().min(16 * 1024 * 1024);
-                    unsafe { libc::readahead(fd, 0, size as usize); }
+                    unsafe {
+                        libc::readahead(fd, 0, size as usize);
+                    }
                 }
             }
         }
     }
 
     pub fn hint_read_sequential(f: &File) {
-    let fd = f.as_raw_fd();
-    unsafe {
-        libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
+        let fd = f.as_raw_fd();
+        unsafe {
+            libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
+        }
     }
-}
 
     // Evict large files from cache after parsing to free memory
     pub fn done_with_file(f: &File) {
@@ -162,9 +162,9 @@ mod os_io {
 
 #[cfg(target_os = "macos")]
 mod os_io {
+    use std::fs::File;
     use std::os::unix::io::AsRawFd;
     use std::path::Path;
-    use std::fs::File;
 
     pub fn prefetch(_path: &Path) {}
 
@@ -187,8 +187,8 @@ mod os_io {
 
 #[cfg(target_os = "windows")]
 mod os_io {
-    use std::path::Path;
     use std::fs::File;
+    use std::path::Path;
 
     pub fn prefetch(_path: &Path) {}
 
@@ -205,8 +205,8 @@ mod os_io {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod os_io {
-    use std::path::Path;
     use std::fs::File;
+    use std::path::Path;
 
     pub fn prefetch(_path: &Path) {}
     pub fn hint_read_sequential(_f: &File) {}
@@ -272,9 +272,13 @@ fn write_json_file(path: &Path, json: &str) -> std::io::Result<()> {
 
 fn default_thread_count() -> usize {
     #[cfg(feature = "num_cpus")]
-    { num_cpus::get_physical().max(1) }
+    {
+        num_cpus::get_physical().max(1)
+    }
     #[cfg(not(feature = "num_cpus"))]
-    { 4 }
+    {
+        4
+    }
 }
 #[derive(Debug, Clone)]
 struct ParseStats {
@@ -293,6 +297,16 @@ impl ParseStats {
     }
 }
 
+fn validate_prism_input(val: &str) -> Result<u8, String> {
+    let n: u8 = val
+        .parse()
+        .map_err(|_| "Value must be a number".to_string())?;
+    if n == 1 || n == 2 {
+        Ok(n)
+    } else {
+        Err("can only accept 1 or 2".to_string())
+    }
+}
 #[derive(Parser, Debug)]
 #[command(
     name = "eulix_parser",
@@ -329,6 +343,10 @@ struct Args {
     /// Path to custom .euignore file (defaults to <root>/.euignore)
     #[arg(long)]
     euignore: Option<String>,
+
+    // switches prism algorithm version check docs to see what each version does
+    #[arg(short, long, value_parser = validate_prism_input)]
+    prism: u8,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -358,6 +376,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Output:          {}", args.output);
         println!("Languages:       {}", args.languages);
         println!("Skip Analysis:   {}", args.no_analyze);
+        println!("PRISM Version:   {}", args.prism);
         if let Some(ref ignore) = args.euignore {
             println!("[x] Ignore File:     {}", ignore);
         }
@@ -383,7 +402,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.verbose {
         println!("\n{}", "─".repeat(64));
         println!("Parsing Complete!");
-        println!("     Time:         {:.2}s", parse_start.elapsed().as_secs_f64());
+        println!(
+            "     Time:         {:.2}s",
+            parse_start.elapsed().as_secs_f64()
+        );
         println!("     Parsed:       {} files", stats.parsed.len());
         println!("     Skipped:      {} files", stats.skipped.len());
         println!("     Failed:       {} files", stats.failed.len());
@@ -403,12 +425,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    Consider using --no-analyze for faster results");
         }
 
-        kb = Analyzer::analyze_and_build(kb, args.verbose);
+        kb = Analyzer::analyze_and_build(kb, args.verbose, args.prism);
 
         if args.verbose {
             println!("\n{}", "─".repeat(64));
             println!(" Analysis Complete!");
-            println!("  Time:         {:.2}s",analyze_start.elapsed().as_secs_f64());
+            println!(
+                "  Time:         {:.2}s",
+                analyze_start.elapsed().as_secs_f64()
+            );
             println!("  Graph Nodes:  {}", kb.call_graph.nodes.len());
             println!("  Graph Edges:  {}", kb.call_graph.edges.len());
             println!("{}", "═".repeat(64));
@@ -437,7 +462,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let output_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(output_dir)?;
 
-        let base_name = output_path.file_stem().and_then(|s| s.to_str()).unwrap_or("kb");
+        let base_name = output_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("kb");
         let index_path = output_dir.join(format!("{}_index.json", base_name));
         let summary_path = output_dir.join(format!("{}_summary.json", base_name));
         let callgraph_path = output_dir.join(format!("{}_call_graph.json", base_name));
@@ -472,26 +500,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             (kb_json, index_json),
             ((summary_json, callgraph_json), (metrics_json, (ep_json, (deps_json, patterns_json)))),
         ) = rayon::join(
-            || rayon::join(
-                || sonic_rs::to_string(&kb_ref).expect("serialize kb"),
-                || sonic_rs::to_string(&index_ref).expect("serialize indices"),
-            ),
-            || rayon::join(
-                || rayon::join(
-                    || sonic_rs::to_string_pretty(&summary).expect("serialize summary"),
-                    || sonic_rs::to_string(&cg_ref).expect("serialize call_graph"),
-                ),
-                || rayon::join(
-                    || sonic_rs::to_string_pretty(&metrics).expect("serialize metrics"),
-                    || rayon::join(
-                        || sonic_rs::to_string(&ep_ref).expect("serialize entry_points"),
-                        || rayon::join(
-                            || sonic_rs::to_string(&deps_ref).expect("serialize external_deps"),
-                            || sonic_rs::to_string(&pat_ref).expect("serialize patterns"),
-                        ),
-                    ),
-                ),
-            ),
+            || {
+                rayon::join(
+                    || sonic_rs::to_string(&kb_ref).expect("serialize kb"),
+                    || sonic_rs::to_string(&index_ref).expect("serialize indices"),
+                )
+            },
+            || {
+                rayon::join(
+                    || {
+                        rayon::join(
+                            || sonic_rs::to_string_pretty(&summary).expect("serialize summary"),
+                            || sonic_rs::to_string(&cg_ref).expect("serialize call_graph"),
+                        )
+                    },
+                    || {
+                        rayon::join(
+                            || sonic_rs::to_string_pretty(&metrics).expect("serialize metrics"),
+                            || {
+                                rayon::join(
+                                    || {
+                                        sonic_rs::to_string(&ep_ref)
+                                            .expect("serialize entry_points")
+                                    },
+                                    || {
+                                        rayon::join(
+                                            || {
+                                                sonic_rs::to_string(&deps_ref)
+                                                    .expect("serialize external_deps")
+                                            },
+                                            || {
+                                                sonic_rs::to_string(&pat_ref)
+                                                    .expect("serialize patterns")
+                                            },
+                                        )
+                                    },
+                                )
+                            },
+                        )
+                    },
+                )
+            },
         );
 
         // Write all four files in parallel
@@ -506,9 +555,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             (&patterns_path, "patterns", patterns_json.as_str()),
         ];
 
-        let write_errors: Vec<String> = files.iter().filter_map(|(path, name, json)| {
-            if args.verbose { println!("   Writing {}...", name); }
-                    write_json_file(path, json).err().map(|e| format!("{} ({}): {}", path.display(), name, e))
+        let write_errors: Vec<String> = files
+            .iter()
+            .filter_map(|(path, name, json)| {
+                if args.verbose {
+                    println!("   Writing {}...", name);
+                }
+                write_json_file(path, json)
+                    .err()
+                    .map(|e| format!("{} ({}): {}", path.display(), name, e))
             })
             .collect();
 
@@ -646,7 +701,9 @@ fn parse_directory(
         let pb = ProgressBar::new(files.len() as u64);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                .template(
+                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+                )
                 .unwrap()
                 .progress_chars("#>-"),
         );
@@ -714,7 +771,11 @@ fn parse_directory(
                                 acc.1 += file_data.loc;
                                 acc.2 += file_data.functions.len();
                                 acc.3 += file_data.classes.len();
-                                acc.4 += file_data.classes.iter().map(|c| c.methods.len()).sum::<usize>();
+                                acc.4 += file_data
+                                    .classes
+                                    .iter()
+                                    .map(|c| c.methods.len())
+                                    .sum::<usize>();
                                 acc.5.insert(file_data.language.clone());
                                 acc.0.insert(rel, file_data);
                             }
@@ -723,7 +784,11 @@ fn parse_directory(
                                     pb.println(format!("   ✗ Failed: {} - {}", relative_path, e));
                                     pb.inc(1);
                                 }
-                                stats.lock().unwrap().failed.push((relative_path, e.to_string()));
+                                stats
+                                    .lock()
+                                    .unwrap()
+                                    .failed
+                                    .push((relative_path, e.to_string()));
                             }
                         }
                     }
@@ -731,16 +796,7 @@ fn parse_directory(
                 },
             )
             .reduce(
-                || {
-                    (
-                        HashMap::new(),
-                        0,
-                        0,
-                        0,
-                        0,
-                        std::collections::HashSet::new(),
-                    )
-                },
+                || (HashMap::new(), 0, 0, 0, 0, std::collections::HashSet::new()),
                 |mut a, b| {
                     for (k, v) in b.0 {
                         a.0.insert(k, v);
@@ -816,21 +872,19 @@ fn collect_source_files(
         languages
             .split(',')
             .map(|s| s.trim())
-            .filter_map(|lang_str| {
-                match lang_str.to_lowercase().as_str() {
-                    "c" => Some(Language::C),
-                    "cpp" | "c++" | "cxx" => Some(Language::Cpp),
-                    "python" | "py" => Some(Language::Python),
-                    "javascript" | "js" => Some(Language::JavaScript),
-                    "typescript" | "ts" => Some(Language::TypeScript),
-                    "go" | "golang" => Some(Language::Go),
-                    "rust" | "rs" => Some(Language::Rust),
-                    _ => {
-                        if verbose {
-                            eprintln!("     Unknown language filter '{}'", lang_str);
-                        }
-                        None
+            .filter_map(|lang_str| match lang_str.to_lowercase().as_str() {
+                "c" => Some(Language::C),
+                "cpp" | "c++" | "cxx" => Some(Language::Cpp),
+                "python" | "py" => Some(Language::Python),
+                "javascript" | "js" => Some(Language::JavaScript),
+                "typescript" | "ts" => Some(Language::TypeScript),
+                "go" | "golang" => Some(Language::Go),
+                "rust" | "rs" => Some(Language::Rust),
+                _ => {
+                    if verbose {
+                        eprintln!("     Unknown language filter '{}'", lang_str);
                     }
+                    None
                 }
             })
             .collect()
@@ -921,7 +975,7 @@ fn parse_file(
     let file = open_source_file(file_path)?;
 
     // For very large files, use mmap
-    let contents = if let Ok(metadata) = file.metadata() {
+    let _contents = if let Ok(metadata) = file.metadata() {
         if metadata.len() > 10 * 1024 * 1024 {
             use memmap2::Mmap;
             let mmap = unsafe { Mmap::map(&file)? };

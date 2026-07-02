@@ -6,17 +6,28 @@
 use crate::struc::kb_struct::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 
 /// Analyzes the knowledge base to extract high-level insights
 pub struct Analyzer;
 
+#[derive(Clone)]
+struct CompactNode {
+    id: String,
+    node_type: u8, // 0 = function, 1 = method, 2 = class
+    file_idx: usize,
+    is_entry: bool,
+}
+
 impl Analyzer {
     /// Generate complete knowledge base with indices and call graph
-    pub fn analyze_and_build(mut kb: KnowledgeBase, verbose: bool) -> KnowledgeBase {
+    pub fn analyze_and_build(mut kb: KnowledgeBase, verbose: bool, prism: u8) -> KnowledgeBase {
         let file_count = kb.structure.len();
-        let is_large = file_count > 100000; // For very large codebases, skip expensive operations
-        let use_precise = true; // todo! add a way to change algorithm maybe is_large or args
+        // TODO, add a way to change/turn off is_large file value so that it can run on servers.
+        // For very large codebases, skip expensive operations,
+        let is_large = file_count > 100000;
+        let use_precise = prism;
         if verbose && is_large {
             println!(
                 "   [!]  Enabling memory-efficient mode for {} files",
@@ -35,18 +46,20 @@ impl Analyzer {
             if verbose {
                 println!("   → Building call graphs...");
             }
-            if use_precise {
+            // use_precise value can only be 1[default] or 2
+            // calp manages value checking while parsing args
+            if use_precise == 2 {
                 if verbose {
                     println!("      Using precise analysis (PRISM)...");
                 }
                 // Build the research-grade call graph
-                kb.call_graph = Self::build_call_graph(&kb.structure); // todo! write a new build_call_graph_precise.
+                kb.call_graph = Self::build_call_graph_v2(&kb.structure);
             } else {
                 if verbose {
                     println!("      Using direct analysis...");
                 }
                 // Build the simpler direct call graph
-                kb.call_graph = Self::build_call_graph(&kb.structure);
+                kb.call_graph = Self::build_call_graph_v2(&kb.structure);
             }
             if verbose {
                 println!("   → Building reverse call graphs...");
@@ -54,12 +67,13 @@ impl Analyzer {
             if verbose {
                 println!("   → Building reverse call graphs...");
             }
-            if use_precise {
-                // For precise graphs, populate called_by from the graph itself
-                Self::populate_called_by(&mut kb); // todo write a new populate_called_by_from_graph
-            } else {
-                Self::populate_called_by(&mut kb);
-            }
+            // if use_precise == 2 || use_precise == 1 {
+            // For precise graphs, populate called_by from the graph itself
+            // Self::populate_called_by(&mut kb); // todo write a new populate_called_by_from_graph
+            // } else {
+            // Self::populate_called_by(&mut kb);
+            // }
+            Self::populate_called_by(&mut kb);
         } else if verbose {
             println!("   [!]  Skipping call graph (too large, would use excessive memory)");
         }
@@ -137,17 +151,10 @@ impl Analyzer {
     fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
         const CHUNK_SIZE: usize = 2000;
 
-        // PHASE 1: Build compact node index in parallel (Same as before)
+        // PHASE 1:
+        //  Build compact node index in parallel
         let structure_vec: Vec<_> = structure.iter().collect();
         let chunks: Vec<_> = structure_vec.chunks(CHUNK_SIZE).collect();
-
-        #[derive(Clone)]
-        struct CompactNode {
-            id: String,
-            node_type: u8,
-            file_idx: usize,
-            is_entry: bool,
-        }
 
         let all_nodes: Vec<(String, CompactNode)> = chunks
             .par_iter()
@@ -223,7 +230,8 @@ impl Analyzer {
             .map(|(i, f)| (f.clone(), i))
             .collect();
 
-        // PHASE 2: Build edges using CSR-style compact storage
+        // PHASE 2:
+        // Build edges using CSR-style compact storage
         type CompactEdge = (usize, usize, u8, bool, usize);
 
         let all_edges: Vec<CompactEdge> = chunks
@@ -292,7 +300,8 @@ impl Analyzer {
             })
             .collect();
 
-        // --- PHASE 3: Pre-calculate Call Counts ---
+        // PHASE 3
+        // Pre-calculate Call Counts
         // Create a frequency map of how many times each node index appears as a 'to' (callee)
         let mut counts = vec![0; unique_nodes.len()];
         for (_, to_idx, _, _, _) in &all_edges {
@@ -301,7 +310,8 @@ impl Analyzer {
             }
         }
 
-        // --- PHASE 4: Conversion to Final Nodes ---
+        // PHASE 4
+        // Conversion to Final Nodes
         let final_nodes: Vec<CallGraphNode> = unique_nodes
             .into_iter()
             .enumerate()
@@ -326,8 +336,8 @@ impl Analyzer {
             })
             .collect();
 
-        // --- PHASE 5: Conversion to Final Edges ---
-        // --- PHASE 5: Conversion to Final Edges ---
+        // PHASE 5:
+        // Conversion to Final Edges
         let node_count = final_nodes.len();
         let final_edges: Vec<CallGraphEdge> = all_edges
             .into_iter()
@@ -346,6 +356,535 @@ impl Analyzer {
             .collect();
 
         // Final result - These will now be in scope
+        CallGraph {
+            nodes: final_nodes,
+            edges: final_edges,
+        }
+    }
+
+    pub fn build_call_graph_v2(structure: &HashMap<String, FileData>) -> CallGraph {
+        const CHUNK_SIZE: usize = 2000;
+
+        let structure_vec: Vec<_> = structure.iter().collect();
+        let chunks: Vec<_> = structure_vec.chunks(CHUNK_SIZE).collect();
+
+        // PHASE 1
+        //  Node extraction (Keep this same as v1)
+
+        let all_nodes: Vec<(String, CompactNode)> = chunks
+            .par_iter()
+            .flat_map(|chunk| {
+                let mut local_nodes = Vec::with_capacity(chunk.len() * 10);
+                for (_filepath, filedata) in chunk.iter() {
+                    for func in &filedata.functions {
+                        local_nodes.push((
+                            func.id.clone(),
+                            CompactNode {
+                                id: func.id.clone(),
+                                node_type: if func.id.starts_with("method_") { 1 } else { 0 },
+                                file_idx: 0,
+                                is_entry: func.tags.contains(&"entry-point".to_string()),
+                            },
+                        ));
+                    }
+                    for class in &filedata.classes {
+                        local_nodes.push((
+                            class.id.clone(),
+                            CompactNode {
+                                id: class.id.clone(),
+                                node_type: 2,
+                                file_idx: 0,
+                                is_entry: false,
+                            },
+                        ));
+                        for method in &class.methods {
+                            local_nodes.push((
+                                method.id.clone(),
+                                CompactNode {
+                                    id: method.id.clone(),
+                                    node_type: 1,
+                                    file_idx: 0,
+                                    is_entry: false,
+                                },
+                            ));
+                        }
+                    }
+                }
+                local_nodes
+            })
+            .collect();
+
+        // Dedup by id (first occurrence wins for stable output).
+        let mut node_map: HashMap<String, usize> = HashMap::with_capacity(all_nodes.len());
+        let mut unique_nodes: Vec<CompactNode> = Vec::with_capacity(all_nodes.len());
+        for (id, node) in all_nodes {
+            if node_map.insert(id.clone(), unique_nodes.len()).is_none() {
+                unique_nodes.push(node);
+            }
+        }
+
+        // PHASE 2
+        // Build the five indexes (parallel where independent)
+
+        // Build file_list + file_map first (needed for node.file_idx).
+        let file_list: Vec<String> = structure.keys().cloned().collect();
+        let file_map: HashMap<String, usize> = file_list
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.clone(), i))
+            .collect();
+
+        // Fill in file_idx now that we have file_map. Cheap O(N) pass.
+        for (filepath, filedata) in structure {
+            if let Some(&fidx) = file_map.get(filepath) {
+                // 1. Functions
+                for func in &filedata.functions {
+                    if let Some(&i) = node_map.get(&func.id) {
+                        if let Some(node) = unique_nodes.get_mut(i) {
+                            node.file_idx = fidx;
+                        }
+                    }
+                }
+
+                // 2. Classes
+                for class in &filedata.classes {
+                    if let Some(&i) = node_map.get(&class.id) {
+                        if let Some(node) = unique_nodes.get_mut(i) {
+                            node.file_idx = fidx;
+                        }
+                    }
+
+                    // 3. Methods
+                    for method in &class.methods {
+                        if let Some(&i) = node_map.get(&method.id) {
+                            if let Some(node) = unique_nodes.get_mut(i) {
+                                node.file_idx = fidx;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Index 1:
+        // file_scope[file][short_name] = Vec<node_idx>
+        let mut file_scope: HashMap<String, HashMap<String, Vec<usize>>> =
+            HashMap::with_capacity(file_list.len());
+        for (i, node) in unique_nodes.iter().enumerate() {
+            let file = file_list[node.file_idx].clone();
+            let short = Self::short_name_of(&node.id, node.node_type);
+            file_scope
+                .entry(file)
+                .or_default()
+                .entry(short)
+                .or_default()
+                .push(i);
+        }
+
+        // Indexes 2-4:
+        // imports_per_file, class_methods, inheritance.
+        #[derive(Default)]
+        struct IndexChunk {
+            imports: Vec<(String, Vec<(String, String)>)>,
+            class_methods: Vec<(String, String, usize)>,
+            inheritance: Vec<(String, String)>,
+            // Track which classes have which bases with proper node IDs
+            inheritance_with_ids: Vec<(usize, usize)>, // (child_idx, parent_idx)
+        }
+
+        let index_chunks: Vec<IndexChunk> = chunks
+            .par_iter()
+            .map(|chunk| {
+                let mut ic = IndexChunk::default();
+                for (filepath, filedata) in chunk.iter() {
+                    // Imports
+                    let imps: Vec<(String, String)> = filedata
+                        .imports
+                        .iter()
+                        .flat_map(|i| {
+                            i.items
+                                .iter()
+                                .map(move |item| (item.clone(), i.module.clone()))
+                        })
+                        .collect();
+                    if !imps.is_empty() {
+                        ic.imports.push((filepath.to_string(), imps));
+                    }
+
+                    // Classes → method tables + inheritance edges
+                    for class in &filedata.classes {
+                        if node_map.contains_key(&class.id) {
+                            // Class methods
+                            for method in &class.methods {
+                                if let Some(&mid) = node_map.get(&method.id) {
+                                    let short = Self::short_name_of(&method.id, 1);
+                                    ic.class_methods.push((class.id.clone(), short, mid));
+                                }
+                            }
+
+                            // Inheritance try multiple resolution strategies
+                            for base in &class.bases {
+                                // Strategy 1: Direct match
+                                if let Some(&base_idx) = node_map.get(base) {
+                                    ic.inheritance.push((class.id.clone(), base.clone()));
+                                    if let Some(&child_idx) = node_map.get(&class.id) {
+                                        ic.inheritance_with_ids.push((child_idx, base_idx));
+                                    }
+                                    continue;
+                                }
+
+                                // Strategy 2: Try with "class_" prefix
+                                let prefixed = format!("class_{}", base);
+                                if let Some(&base_idx) = node_map.get(&prefixed) {
+                                    ic.inheritance.push((class.id.clone(), prefixed.clone()));
+                                    if let Some(&child_idx) = node_map.get(&class.id) {
+                                        ic.inheritance_with_ids.push((child_idx, base_idx));
+                                    }
+                                    continue;
+                                }
+
+                                // Strategy 3: Try stripping "class_" from child
+                                let child_id = &class.id;
+                                if let Some(stripped) = child_id.strip_prefix("class_") {
+                                    if stripped == base {
+                                        if let Some(&base_idx) =
+                                            node_map.get(&format!("class_{}", base))
+                                        {
+                                            ic.inheritance.push((class.id.clone(), base.clone()));
+                                            if let Some(&child_idx) = node_map.get(&class.id) {
+                                                ic.inheritance_with_ids.push((child_idx, base_idx));
+                                            }
+                                            continue;
+                                        }
+                                    }
+                                }
+
+                                // Strategy 4: Try with "func_" prefix (for functions as base)
+                                let func_prefixed = format!("func_{}", base);
+                                if let Some(&base_idx) = node_map.get(&func_prefixed) {
+                                    ic.inheritance
+                                        .push((class.id.clone(), func_prefixed.clone()));
+                                    if let Some(&child_idx) = node_map.get(&class.id) {
+                                        ic.inheritance_with_ids.push((child_idx, base_idx));
+                                    }
+                                    continue;
+                                }
+
+                                // Strategy 5: Try with "method_" prefix
+                                let method_prefixed = format!("method_{}", base);
+                                if let Some(&base_idx) = node_map.get(&method_prefixed) {
+                                    ic.inheritance
+                                        .push((class.id.clone(), method_prefixed.clone()));
+                                    if let Some(&child_idx) = node_map.get(&class.id) {
+                                        ic.inheritance_with_ids.push((child_idx, base_idx));
+                                    }
+                                    continue;
+                                }
+
+                                // Strategy 6: Look for the base in the node map with any prefix
+                                // This handles cases where base names might be stored differently
+                                for (node_id, &node_idx) in node_map.iter() {
+                                    // Check if the node_id ends with the base name
+                                    if node_id.ends_with(base)
+                                        || node_id.ends_with(&format!("_{}", base))
+                                    {
+                                        ic.inheritance.push((class.id.clone(), node_id.clone()));
+                                        if let Some(&child_idx) = node_map.get(&class.id) {
+                                            ic.inheritance_with_ids.push((child_idx, node_idx));
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                ic
+            })
+            .collect();
+
+        // Merge: imports_per_file
+        let mut imports_per_file: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for (file, imps) in index_chunks.iter().flat_map(|c| c.imports.iter()) {
+            imports_per_file.insert(file.clone(), imps.clone());
+        }
+
+        // Merge: class_methods[class_id][short] = method_idx
+        let mut class_methods: HashMap<String, HashMap<String, usize>> = HashMap::new();
+        for (cid, short, mid) in index_chunks.iter().flat_map(|c| c.class_methods.iter()) {
+            class_methods
+                .entry(cid.clone())
+                .or_default()
+                .insert(short.clone(), *mid);
+        }
+
+        // Merge: inheritance[child] = Vec<parent_id>
+        let mut inheritance: HashMap<String, Vec<String>> = HashMap::new();
+        for (child, parent) in index_chunks.iter().flat_map(|c| c.inheritance.iter()) {
+            inheritance
+                .entry(child.clone())
+                .or_default()
+                .push(parent.clone());
+        }
+        let descendants = Self::reverse_inheritance(&inheritance);
+
+        // Build inheritance_ids and descendants_ids from the resolved indices
+        let mut inheritance_ids: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (child_idx, parent_idx) in index_chunks
+            .iter()
+            .flat_map(|c| c.inheritance_with_ids.iter())
+        {
+            inheritance_ids
+                .entry(*child_idx)
+                .or_default()
+                .push(*parent_idx);
+        }
+
+        let mut descendants_ids: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (parent_id, children) in &descendants {
+            let parent_idx = match node_map.get(parent_id) {
+                Some(&i) => i,
+                None => continue,
+            };
+            let child_indices: Vec<usize> = children
+                .iter()
+                .filter_map(|c| node_map.get(c).copied())
+                .collect();
+            if !child_indices.is_empty() {
+                descendants_ids.insert(parent_idx, child_indices);
+            }
+        }
+
+        // Index 5:
+        // symbol_index (Tier-5 fallback, same as v1)
+        let mut symbol_index: HashMap<String, usize> = HashMap::with_capacity(node_map.len());
+        for (id, &idx) in node_map.iter() {
+            let short = id
+                .split("::")
+                .last()
+                .and_then(|s| s.strip_prefix("method_"))
+                .unwrap_or(id);
+            symbol_index.entry(short.to_string()).or_insert(idx);
+        }
+
+        // Index 6 (derived):
+        // module_to_files for Tier 4.
+        let module_to_files = Self::build_module_to_files(&file_list);
+
+        // Index 7:
+        // idx_to_id (reverse of node_map)
+        let idx_to_id = Self::build_idx_to_id(&node_map);
+
+        // PHASE 3
+        //  Resolve edges via the five-tier cascade (parallel)
+        type CompactEdge = (usize, usize, u8, bool, usize);
+
+        let class_methods_ref = &class_methods;
+        let inheritance_ids_ref = &inheritance_ids;
+        let descendants_ids_ref = &descendants_ids;
+        let file_scope_ref = &file_scope;
+        let imports_per_file_ref = &imports_per_file;
+        let module_to_files_ref = &module_to_files;
+        let symbol_index_ref = &symbol_index;
+        let node_map_ref = &node_map;
+        let idx_to_id_ref = &idx_to_id;
+
+        let all_edges: Vec<CompactEdge> = chunks
+            .par_iter()
+            .flat_map(|chunk| {
+                let mut local_edges = Vec::new();
+
+                for (filepath, filedata) in chunk.iter() {
+                    // top-level functions
+                    for func in &filedata.functions {
+                        let from_idx = match node_map_ref.get(&func.id) {
+                            Some(&i) => i,
+                            None => continue,
+                        };
+                        for call in &func.calls {
+                            if let Some(to_idx) = Self::resolve_v2(
+                                &call.callee,
+                                filepath,
+                                None,
+                                node_map_ref,
+                                symbol_index_ref,
+                                class_methods_ref,
+                                inheritance_ids_ref,
+                                descendants_ids_ref,
+                                file_scope_ref,
+                                imports_per_file_ref,
+                                module_to_files_ref,
+                                idx_to_id_ref,
+                            ) {
+                                local_edges.push((
+                                    from_idx,
+                                    to_idx,
+                                    0,
+                                    call.is_conditional,
+                                    call.line,
+                                ));
+                            }
+                        }
+                    }
+
+                    // classes: inheritance edges + method bodies
+                    for class in &filedata.classes {
+                        let class_idx = match node_map_ref.get(&class.id) {
+                            Some(&i) => i,
+                            None => continue,
+                        };
+
+                        // Inheritance edges use the pre-resolved indices from IndexChunk
+                        // But also try direct resolution for any that might have been missed
+                        for base in &class.bases {
+                            // Try all resolution strategies again for direct edge creation
+                            let mut found = false;
+
+                            // Strategy 1: Direct match
+                            if let Some(&base_idx) = node_map_ref.get(base) {
+                                local_edges.push((class_idx, base_idx, 1, false, class.line_start));
+                                found = true;
+                            }
+
+                            // Strategy 2: Try with "class_" prefix
+                            if !found {
+                                let prefixed = format!("class_{}", base);
+                                if let Some(&base_idx) = node_map_ref.get(&prefixed) {
+                                    local_edges.push((
+                                        class_idx,
+                                        base_idx,
+                                        1,
+                                        false,
+                                        class.line_start,
+                                    ));
+                                    found = true;
+                                }
+                            }
+
+                            // Strategy 3: Try various prefixes
+                            if !found {
+                                for prefix in ["", "class_", "func_", "method_"] {
+                                    let candidate = format!("{}{}", prefix, base);
+                                    if let Some(&base_idx) = node_map_ref.get(&candidate) {
+                                        local_edges.push((
+                                            class_idx,
+                                            base_idx,
+                                            1,
+                                            false,
+                                            class.line_start,
+                                        ));
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Strategy 4: Try fuzzy matching (ends with)
+                            if !found {
+                                for (node_id, &node_idx) in node_map_ref.iter() {
+                                    if node_id.ends_with(base)
+                                        || node_id.ends_with(&format!("_{}", base))
+                                    {
+                                        local_edges.push((
+                                            class_idx,
+                                            node_idx,
+                                            1,
+                                            false,
+                                            class.line_start,
+                                        ));
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Method bodies caller is inside `class`.
+                        for method in &class.methods {
+                            let from_idx = match node_map_ref.get(&method.id) {
+                                Some(&i) => i,
+                                None => continue,
+                            };
+                            let self_class_id =
+                                Self::first_self_param(&method.params).map(|_| class.id.clone());
+                            for call in &method.calls {
+                                if let Some(to_idx) = Self::resolve_v2(
+                                    &call.callee,
+                                    filepath,
+                                    self_class_id.as_deref(),
+                                    node_map_ref,
+                                    symbol_index_ref,
+                                    class_methods_ref,
+                                    inheritance_ids_ref,
+                                    descendants_ids_ref,
+                                    file_scope_ref,
+                                    imports_per_file_ref,
+                                    module_to_files_ref,
+                                    idx_to_id_ref,
+                                ) {
+                                    local_edges.push((
+                                        from_idx,
+                                        to_idx,
+                                        0,
+                                        call.is_conditional,
+                                        call.line,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                local_edges
+            })
+            .collect();
+
+        // PHASE 4
+        // In-degree count
+        let mut counts = vec![0u32; unique_nodes.len()];
+        for (_, to_idx, _, _, _) in &all_edges {
+            if let Some(c) = counts.get_mut(*to_idx) {
+                *c += 1;
+            }
+        }
+
+        // PHASE 5
+        // Convert to public types
+        let final_nodes: Vec<CallGraphNode> = unique_nodes
+            .into_iter()
+            .enumerate()
+            .map(|(i, node)| CallGraphNode {
+                id: node.id,
+                node_type: match node.node_type {
+                    0 => "function".to_string(),
+                    1 => "method".to_string(),
+                    _ => "class".to_string(),
+                },
+                file: file_list
+                    .get(node.file_idx)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string()),
+                is_entry_point: node.is_entry,
+                call_count_estimate: counts[i] as usize,
+            })
+            .collect();
+
+        let node_count = final_nodes.len();
+        let final_edges: Vec<CallGraphEdge> = all_edges
+            .into_iter()
+            .filter(|(from_idx, to_idx, _, _, _)| *from_idx < node_count && *to_idx < node_count)
+            .map(|(from_idx, to_idx, kind, cond, line)| CallGraphEdge {
+                from: final_nodes[from_idx].id.clone(),
+                to: final_nodes[to_idx].id.clone(),
+                edge_type: if kind == 1 {
+                    "inheritance".to_string()
+                } else {
+                    "call".to_string()
+                },
+                conditional: cond,
+                call_site_line: line,
+            })
+            .collect();
+
         CallGraph {
             nodes: final_nodes,
             edges: final_edges,
@@ -383,9 +922,8 @@ impl Analyzer {
         symbol_index.get(base_name).copied()
     }
 
-    /// Populate called_by fields in functions (reverse call graph) - OPTIMIZED WITH CHUNKING
-    /// Populate called_by fields using resolved callee IDs, not raw names.
-    /// resolve_call_locations must be called first.
+    /// Populate called_by fields in functions (reverse call graph)
+    /// uses resolved callee IDs, not raw names.
     fn populate_called_by(kb: &mut KnowledgeBase) {
         const CHUNK_SIZE: usize = 1000;
 
@@ -981,6 +1519,228 @@ impl Analyzer {
         }
 
         features.into_iter().take(10).collect()
+    }
+
+    fn resolve_v2(
+        callee: &str,
+        caller_file: &str,
+        caller_class_id: Option<&str>,
+        node_map: &HashMap<String, usize>,
+        symbol_index: &HashMap<String, usize>,
+        class_methods: &HashMap<String, HashMap<String, usize>>,
+        inheritance_ids: &HashMap<usize, Vec<usize>>,
+        descendants_ids: &HashMap<usize, Vec<usize>>,
+        file_scope: &HashMap<String, HashMap<String, Vec<usize>>>,
+        imports_per_file: &HashMap<String, Vec<(String, String)>>,
+        module_to_files: &HashMap<String, Vec<String>>,
+        idx_to_id: &HashMap<usize, String>,
+    ) -> Option<usize> {
+        // Tier 1: already fully-qualified (v1 pre-pass or exact ID) trust it, skip everything else.
+        if let Some(&idx) = node_map.get(callee) {
+            return Some(idx);
+        }
+
+        // Tier 2: self.foo() should resolve within the caller's own type hierarchy,
+        // not globally, otherwise unrelated classes with the same method name collide.
+        if let Some(cls_id) = caller_class_id {
+            if let Some(class_idx) = node_map.get(cls_id).copied() {
+                // Own class is the most likely target, check before touching the hierarchy.
+                if let Some(methods) = class_methods.get(cls_id) {
+                    if let Some(&idx) = methods.get(callee) {
+                        return Some(idx);
+                    }
+                }
+                // Inherited method not overridden locally, walk up to find where it's defined.
+                if inheritance_ids.contains_key(&class_idx) {
+                    if let Some(idx) = Self::lookup_method_in_chain(
+                        callee,
+                        class_idx,
+                        inheritance_ids,
+                        class_methods,
+                        node_map,
+                        idx_to_id,
+                        true,
+                    ) {
+                        return Some(idx);
+                    }
+                }
+                // Polymorphic dispatch, the runtime call could land in a subclass override.
+                if let Some(idx) = Self::lookup_method_in_chain(
+                    callee,
+                    class_idx,
+                    descendants_ids,
+                    class_methods,
+                    node_map,
+                    idx_to_id,
+                    true,
+                ) {
+                    return Some(idx);
+                }
+            }
+        }
+
+        // Tier 3: no class context (or Tier 2 missed), same file is still the strongest signal,
+        // since shadowing across files is rare but shadowing within a file is common.
+        if let Some(file_map) = file_scope.get(caller_file) {
+            if let Some(candidates) = file_map.get(callee) {
+                match candidates.len() {
+                    0 => {}
+                    1 => return Some(candidates[0]),
+                    _ => {
+                        // Ambiguous, ideally we'd prefer a method vs function candidate by scope,
+                        // but node_type isn't available on this fast path, so fall back deterministically.
+                        if let Some(cls_id) = caller_class_id {
+                            let _ = cls_id;
+                        }
+                        return Some(candidates[0]);
+                    }
+                }
+            }
+        }
+
+        // Tier 4: name isn't local, check if it was imported, since that's the next most
+        // reliable link to a definition before we give up and guess globally.
+        if let Some(imports) = imports_per_file.get(caller_file) {
+            for (imported_name, source_module) in imports {
+                if imported_name == callee {
+                    if let Some(target_files) = module_to_files.get(source_module) {
+                        for tf in target_files {
+                            if let Some(file_map) = file_scope.get(tf) {
+                                if let Some(candidates) = file_map.get(callee) {
+                                    return candidates.first().copied();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Tier 5: last resort, any match beats none, kept for v1 compatibility on
+        // cross-module calls that slip past every structural check above.
+        symbol_index.get(callee).copied()
+    }
+
+    /// Extract the short name used for symbol-table lookup.
+    fn short_name_of(id: &str, node_type: u8) -> String {
+        let stripped = id.split("::").last().unwrap_or(id);
+        if node_type == 1 {
+            // method: strip "method_" prefix
+            stripped
+                .strip_prefix("method_")
+                .unwrap_or(stripped)
+                .to_string()
+        } else {
+            stripped.to_string()
+        }
+    }
+
+    /// Detect the `self` / `this` / `cls` parameter that binds the receiver.
+    fn first_self_param(params: &[Parameter]) -> Option<usize> {
+        params.iter().position(|p| {
+            matches!(
+                p.name.as_str(),
+                "self" | "this" | "cls" | "_self" | "self_" | "myself"
+            )
+        })
+    }
+
+    /// BFS-walk the class hierarchy (ancestors or descendants) looking for
+    /// a class that defines the given method short name.
+    fn lookup_method_in_chain(
+        method_short: &str,
+        start_class_idx: usize,
+        chain: &HashMap<usize, Vec<usize>>,
+        class_methods: &HashMap<String, HashMap<String, usize>>,
+        node_map: &HashMap<String, usize>,
+        idx_to_id: &HashMap<usize, String>,
+        _walk_kind: bool, // true=walk both, currently unused (kept for future tuning)
+    ) -> Option<usize> {
+        // Recover class id from node idx. node_map is id→idx; we need
+        // idx→id. Build it once.
+        let _ = _walk_kind;
+        // let idx_to_id = Self::build_idx_to_id(node_map);
+        // let idx_to_id_ref = &idx_to_id;
+        let start_id = idx_to_id.get(&start_class_idx)?;
+
+        let mut queue: VecDeque<String> = VecDeque::new();
+        let mut visited: HashSet<String> = HashSet::new();
+        queue.push_back(start_id.clone());
+        visited.insert(start_id.clone());
+
+        while let Some(cid) = queue.pop_front() {
+            // Direct hit on this class?
+            if let Some(methods) = class_methods.get(&cid) {
+                if let Some(&idx) = methods.get(method_short) {
+                    return Some(idx);
+                }
+            }
+            // Walk the chain (ancestors or descendants).
+            if let Some(cidx) = node_map.get(&cid).copied() {
+                if let Some(neighbors) = chain.get(&cidx) {
+                    for &nidx in neighbors {
+                        if let Some(nid) = idx_to_id.get(&nidx) {
+                            if visited.insert(nid.clone()) {
+                                queue.push_back(nid.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Build a reverse node_map (idx → id). Called once per resolver invocation
+    /// from lookup_method_in_chain; for hot loops, cache this once in Phase 2.
+    fn build_idx_to_id(node_map: &HashMap<String, usize>) -> HashMap<usize, String> {
+        node_map.iter().map(|(k, v)| (*v, k.clone())).collect()
+    }
+
+    /// Build a reverse index: parent_id → [child_id, ...].
+    fn reverse_inheritance(forward: &HashMap<String, Vec<String>>) -> HashMap<String, Vec<String>> {
+        let mut reverse: HashMap<String, Vec<String>> = HashMap::new();
+        for (child, parents) in forward {
+            for parent in parents {
+                reverse
+                    .entry(parent.clone())
+                    .or_default()
+                    .push(child.clone());
+            }
+        }
+        reverse
+    }
+    /// Heuristic: map a module name to the files that "declare" it.
+    /// Examples (Python-style):
+    ///   "os"             → files matching "os.py" or paths starting with "os/"
+    ///   "pkg.subpkg"     → files matching "pkg/subpkg/" or "pkg/subpkg.py"
+    ///   "react"          → "react.tsx", "react/index.ts"
+    ///
+    /// Conservative: if uncertain, returns an empty Vec, and Tier 4 simply
+    /// misses (Tier 5 picks up the slack).
+    fn build_module_to_files(file_list: &[String]) -> HashMap<String, Vec<String>> {
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        for path in file_list {
+            // Strip extension and any leading "./"
+            let cleaned = path.trim_start_matches("./").to_string();
+            let stem = match cleaned.rsplit_once('.') {
+                Some((s, _ext)) => s,
+                None => cleaned.as_str(),
+            };
+            // Last path component is a candidate module name.
+            let module = stem.rsplit_once('/').map(|(_, tail)| tail).unwrap_or(stem);
+            if !module.is_empty() {
+                map.entry(module.to_string())
+                    .or_default()
+                    .push(path.clone());
+            }
+            // Also map the full dotted path for languages that use them.
+            let dotted = stem.replace('/', ".");
+            if dotted != module {
+                map.entry(dotted).or_default().push(path.clone());
+            }
+        }
+        map
     }
 }
 
