@@ -4,10 +4,87 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 use crate::struc::kb_struct::*;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tree_sitter::{Node, Parser};
+
+struct SecurityPattern {
+    regex: &'static Lazy<Regex>,
+    note_type: &'static str,
+    description: &'static str,
+}
+
+//  Regex Patterns compiled once at first use
+static FROM_IMPORT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"from\s+(\S+)\s+import\s+(.+)").expect("Invalid from-import regex"));
+
+static ATTRIBUTE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(\w+)\s*:\s*([^=]+)(?:=\s*(.+))?").expect("Invalid attribute regex"));
+
+static TODO_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"#\s*TODO:?\s*(.+)").expect("Invalid TODO regex"));
+
+static PASSWORD_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"password").expect("Invalid password regex"));
+
+static SENSITIVE_DATA_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"secret|api_key|token").expect("Invalid sensitive_data regex"));
+
+static EVAL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"eval\(").expect("Invalid eval regex"));
+
+static EXEC_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"exec\(").expect("Invalid exec regex"));
+
+static DYNAMIC_IMPORT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"__import__").expect("Invalid dynamic_import regex"));
+
+static PICKLE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"pickle\.load").expect("Invalid pickle regex"));
+
+static COMMAND_EXEC_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"subprocess|os\.system|os\.popen").expect("Invalid command_exec regex")
+});
+
+static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
+    vec![
+        SecurityPattern {
+            regex: &PASSWORD_RE,
+            note_type: "password_handling",
+            description: "Handles passwords",
+        },
+        SecurityPattern {
+            regex: &SENSITIVE_DATA_RE,
+            note_type: "sensitive_data",
+            description: "Handles sensitive data",
+        },
+        SecurityPattern {
+            regex: &EVAL_RE,
+            note_type: "code_execution",
+            description: "Uses eval() - potential security risk",
+        },
+        SecurityPattern {
+            regex: &EXEC_RE,
+            note_type: "code_execution",
+            description: "Uses exec() - potential security risk",
+        },
+        SecurityPattern {
+            regex: &DYNAMIC_IMPORT_RE,
+            note_type: "dynamic_import",
+            description: "Dynamic imports detected",
+        },
+        SecurityPattern {
+            regex: &PICKLE_RE,
+            note_type: "deserialization",
+            description: "Uses pickle - potential security risk",
+        },
+        SecurityPattern {
+            regex: &COMMAND_EXEC_RE,
+            note_type: "command_execution",
+            description: "System command execution",
+        },
+    ]
+});
 
 pub struct PythonParser {
     source_code: String,
@@ -15,7 +92,6 @@ pub struct PythonParser {
 
 impl PythonParser {
     pub fn new(source_code: String) -> Self {
-        // let lines: Vec<String> = source_code.lines().map(|s| s.to_string()).collect();
         Self { source_code }
     }
 
@@ -84,7 +160,6 @@ impl PythonParser {
     }
 
     fn classify_import(&self, module: &str) -> String {
-        // Python stdlib modules (common ones)
         let stdlib = [
             "os",
             "sys",
@@ -117,9 +192,8 @@ impl PythonParser {
 
     fn parse_import_from(&self, node: &Node) -> Option<Import> {
         let text = self.get_node_text(node);
-        let re = Regex::new(r"from\s+(\S+)\s+import\s+(.+)").ok()?;
 
-        if let Some(caps) = re.captures(&text) {
+        if let Some(caps) = FROM_IMPORT_RE.captures(&text) {
             let module = caps.get(1)?.as_str().to_string();
             let items_str = caps.get(2)?.as_str();
             let items: Vec<String> = items_str
@@ -172,14 +246,6 @@ impl PythonParser {
         let mut name = String::new();
         let is_async = node.kind() == "async_function_definition";
 
-        // Check for async
-        // if let Some(prev) = node.prev_sibling() {
-        //     if prev.kind() == "async" {
-        //         is_async = true;
-        //     }
-        // }
-
-        // Extract decorators
         let mut decorators = Vec::new();
         if let Some(parent) = node.parent() {
             if parent.kind() == "decorated_definition" {
@@ -191,14 +257,6 @@ impl PythonParser {
                 }
             }
         }
-        // let mut decorators = Vec::new();
-        // let mut current = node.prev_sibling();
-        // while let Some(sibling) = current {
-        //     if sibling.kind() == "decorator" {
-        //         decorators.insert(0, self.get_node_text(&sibling));
-        //     }
-        //     current = sibling.prev_sibling();
-        // }
 
         for child in node.children(&mut cursor) {
             if child.kind() == "identifier" && name.is_empty() {
@@ -218,16 +276,12 @@ impl PythonParser {
         let docstring = self.extract_docstring(node);
         let signature = self.build_signature(&name, &params, &return_type, is_async);
 
-        // Extract function calls with context
         let calls = self.extract_function_calls_detailed(node);
 
-        // Extract variables and data flow
         let variables = self.extract_variables(node, &params);
 
-        // Build control flow
         let control_flow = self.build_control_flow(node);
 
-        // Extract exception info
         let exceptions = self.extract_exception_info(node);
 
         let complexity = self.calculate_complexity(node);
@@ -238,10 +292,8 @@ impl PythonParser {
             format!("method_{}_{}", class_context, name)
         };
 
-        // Auto-tag functions
         let tags = self.auto_tag_function(&name, &docstring, &calls);
 
-        // Calculate importance (placeholder, will be refined later)
         let importance_score = self.estimate_importance(&name, &decorators);
 
         let python_info = self.classify_decorators(&decorators);
@@ -380,7 +432,6 @@ impl PythonParser {
         }
     }
 
-    // Extract function calls with detailed context
     fn extract_function_calls_detailed(&self, node: &Node) -> Vec<FunctionCall> {
         let mut calls = Vec::new();
         let mut seen = HashSet::new();
@@ -398,7 +449,6 @@ impl PythonParser {
     ) {
         let mut cursor = node.walk();
 
-        // Determine context for children
         let child_context = match node.kind() {
             "if_statement" => "if",
             "elif_clause" => "elif",
@@ -424,7 +474,6 @@ impl PythonParser {
                         if !seen.contains(&key) {
                             seen.insert(key);
 
-                            // Extract arguments
                             let args = self.extract_call_arguments(node);
 
                             calls.push(FunctionCall {
@@ -464,11 +513,9 @@ impl PythonParser {
         args
     }
 
-    // Extract variables and track transformations
     fn extract_variables(&self, node: &Node, params: &[Parameter]) -> Vec<Variable> {
         let mut variables: HashMap<String, Variable> = HashMap::new();
 
-        // Add parameters as variables
         for param in params {
             variables.insert(
                 param.name.clone(),
@@ -488,7 +535,6 @@ impl PythonParser {
             );
         }
 
-        // Track assignments and usage
         self.track_variable_usage(node, &mut variables);
 
         variables.into_values().collect()
@@ -497,19 +543,16 @@ impl PythonParser {
     fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
         let mut cursor = node.walk();
 
-        // Check for assignments
         if node.kind() == "assignment" {
             if let Some(left) = node.child_by_field_name("left") {
                 if let Some(right) = node.child_by_field_name("right") {
                     let var_name = self.get_node_text(&left);
                     let line = node.start_position().row + 1;
 
-                    // Check if it's a function call transformation
                     if right.kind() == "call" {
                         if let Some(func_node) = right.child_by_field_name("function") {
                             let func_name = self.get_node_text(&func_node);
 
-                            // Track transformation
                             if let Some(var) = variables.get_mut(&var_name) {
                                 var.transformations.push(VarTransformation {
                                     line,
@@ -517,7 +560,6 @@ impl PythonParser {
                                     becomes: var_name.clone(),
                                 });
                             } else {
-                                // New local variable
                                 variables.insert(
                                     var_name.clone(),
                                     Variable {
@@ -533,7 +575,6 @@ impl PythonParser {
                             }
                         }
                     } else {
-                        // Simple assignment
                         if !variables.contains_key(&var_name) {
                             variables.insert(
                                 var_name.clone(),
@@ -553,7 +594,6 @@ impl PythonParser {
             }
         }
 
-        // Check for return statements
         if node.kind() == "return_statement" {
             if let Some(value) = node.child(1) {
                 let returned_var = self.get_node_text(&value);
@@ -568,7 +608,6 @@ impl PythonParser {
         }
     }
 
-    // Build control flow structure
     fn build_control_flow(&self, node: &Node) -> ControlFlow {
         let mut control_flow = ControlFlow {
             complexity: self.calculate_complexity(node),
@@ -765,7 +804,6 @@ impl PythonParser {
         vec![]
     }
 
-    // Extract exception information
     fn extract_exception_info(&self, node: &Node) -> ExceptionInfo {
         let mut info = ExceptionInfo::default();
 
@@ -813,8 +851,6 @@ impl PythonParser {
                     }
                 }
                 "decorated_definition" => {
-                    // When a class has decorators, tree-sitter wraps it in
-                    // decorated_definition. Find the inner class_definition.
                     let mut inner_cursor = child.walk();
                     for inner in child.children(&mut inner_cursor) {
                         if inner.kind() == "class_definition" {
@@ -859,6 +895,7 @@ impl PythonParser {
                     }
                 }
                 "argument_list" => {
+                    // This is where base classes are defined
                     bases = self.extract_base_classes(&child);
                 }
                 "block" => {
@@ -877,7 +914,7 @@ impl PythonParser {
         let line_start = node.start_position().row + 1;
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
-        let python_info = self.classify_decorators(&decorators);
+
         Some(Class {
             id: format!("class_{}", name),
             name,
@@ -889,7 +926,7 @@ impl PythonParser {
             attributes,
             decorators,
             lang_info: LanguageSpecificInfo {
-                python: Some(python_info),
+                python: Some(PythonInfo::default()),
                 ..Default::default()
             },
         })
@@ -913,46 +950,28 @@ impl PythonParser {
         };
 
         for raw in decorators {
-            // Normalise: strip leading '@' and grab just the base name / dotted path
             let d = raw.trim().trim_start_matches('@');
-            // Split off any call args: "@app.route('/x')" -> base = "app.route"
             let base = d.split('(').next().unwrap_or(d).trim();
-            // Last segment for simple matching: "functools.cached_property" -> "cached_property"
             let leaf = base.split('.').last().unwrap_or(base);
 
             match leaf {
-                //  dataclass
                 "dataclass" => info.is_dataclass = true,
-
-                //  method kind
                 "staticmethod" => info.is_staticmethod = true,
                 "classmethod" => info.is_classmethod = true,
-
-                // property family
                 "property" => info.is_property = true,
-                // "@foo.setter" / "@foo.deleter"
                 "setter" => info.is_property_setter = true,
                 "deleter" => info.is_property_deleter = true,
-
-                // abc / typing
                 "abstractmethod" | "abstractstaticmethod" | "abstractclassmethod" => {
                     info.is_abstractmethod = true
                 }
-
                 "cached_property" => info.is_cached_property = true,
                 "overload" => info.is_overload = true,
                 "override" => info.is_override = true,
                 "final" => info.is_final = true,
-
-                // web frameworks
-                // Flask/FastAPI: @app.route('/path'), @router.get('/path'), …
                 "route" | "get" | "post" | "put" | "patch" | "delete" => {
-                    // Try to pull the path string out of the raw decorator text
                     let path = self.extract_decorator_arg(raw);
                     info.flask_route = path;
                 }
-
-                // unknown
                 _ => info.unknown_decorators.push(raw.clone()),
             }
         }
@@ -960,12 +979,9 @@ impl PythonParser {
         info
     }
 
-    /// Pulls the first string literal argument from a decorator, e.g.
-    /// `@app.route("/users/<id>", methods=["GET"])` -> `Some("/users/<id>")`
     fn extract_decorator_arg(&self, raw: &str) -> Option<String> {
         let start = raw.find('(')?;
         let inner = &raw[start + 1..];
-        // Find the first quoted string
         for quote in ['"', '\''] {
             if let Some(q_start) = inner.find(quote) {
                 let after = &inner[q_start + 1..];
@@ -978,12 +994,40 @@ impl PythonParser {
     }
 
     fn extract_base_classes(&self, node: &Node) -> Vec<String> {
-        let text = self.get_node_text(node);
-        text.trim_matches(|c| c == '(' || c == ')')
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
+        let mut bases = Vec::new();
+        let mut cursor = node.walk();
+
+        // The argument_list node contains all base classes and arguments
+        // We need to find all identifiers and attributes that are base classes
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "identifier" | "attribute" | "call" => {
+                    let text = self.get_node_text(&child);
+                    // Skip built-in object (implicit in Python 3)
+                    if text != "object" && !text.contains('=') && !text.contains('(') {
+                        // Clean up the base class name
+                        let base_name = text.trim();
+                        if !base_name.is_empty() {
+                            bases.push(base_name.to_string());
+                        }
+                    }
+                }
+                "subscript" => {
+                    // Handle things like List[Base]
+                    let text = self.get_node_text(&child);
+                    // Extract just the base part before the [
+                    if let Some(base_part) = text.split('[').next() {
+                        let base_name = base_part.trim();
+                        if !base_name.is_empty() && base_name != "object" {
+                            bases.push(base_name.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        bases
     }
 
     fn parse_class_body(&self, node: &Node, class_name: &str) -> (Vec<Function>, Vec<Attribute>) {
@@ -1014,8 +1058,7 @@ impl PythonParser {
         let text = self.get_node_text(node);
 
         if text.contains(':') && !text.contains("def ") {
-            let re = Regex::new(r"(\w+)\s*:\s*([^=]+)(?:=\s*(.+))?").ok()?;
-            if let Some(caps) = re.captures(&text) {
+            if let Some(caps) = ATTRIBUTE_RE.captures(&text) {
                 return Some(Attribute {
                     name: caps.get(1)?.as_str().trim().to_string(),
                     type_annotation: caps.get(2)?.as_str().trim().to_string(),
@@ -1141,13 +1184,11 @@ impl PythonParser {
     }
 
     fn extract_todos(&self) -> Vec<Todo> {
-        let re = Regex::new(r"#\s*TODO:?\s*(.+)").unwrap();
-
         self.source_code
             .lines()
             .enumerate()
             .filter_map(|(idx, line)| {
-                re.captures(line).map(|caps| {
+                TODO_RE.captures(line).map(|caps| {
                     let text = caps.get(1).unwrap().as_str().trim().to_string();
                     let priority = if text.to_lowercase().contains("critical")
                         || text.to_lowercase().contains("urgent")
@@ -1171,48 +1212,17 @@ impl PythonParser {
 
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
-        // let code_lower = self.source_code.to_lowercase();
+        let source_lower = self.source_code.to_lowercase();
 
-        let patterns = vec![
-            (r"password", "password_handling", "Handles passwords"),
-            (
-                r"secret|api_key|token",
-                "sensitive_data",
-                "Handles sensitive data",
-            ),
-            (
-                r"eval\(",
-                "code_execution",
-                "Uses eval() - potential security risk",
-            ),
-            (
-                r"exec\(",
-                "code_execution",
-                "Uses exec() - potential security risk",
-            ),
-            (r"__import__", "dynamic_import", "Dynamic imports detected"),
-            (
-                r"pickle\.load",
-                "deserialization",
-                "Uses pickle - potential security risk",
-            ),
-            (
-                r"subprocess|os\.system|os\.popen",
-                "command_execution",
-                "System command execution",
-            ),
-        ];
-
-        for (pattern, note_type, description) in patterns {
-            if let Ok(re) = Regex::new(pattern) {
-                for (idx, line) in self.source_code.lines().enumerate() {
-                    if re.is_match(&line.to_lowercase()) {
-                        notes.push(SecurityNote {
-                            note_type: note_type.to_string(),
-                            line: idx + 1,
-                            description: description.to_string(),
-                        });
-                    }
+        for (idx, line) in source_lower.lines().enumerate() {
+            for pattern in SECURITY_PATTERNS.iter() {
+                if pattern.regex.is_match(line) {
+                    notes.push(SecurityNote {
+                        note_type: pattern.note_type.to_string(),
+                        line: idx + 1,
+                        description: pattern.description.to_string(),
+                    });
+                    break;
                 }
             }
         }
@@ -1220,7 +1230,6 @@ impl PythonParser {
         notes
     }
 
-    // Auto-tag functions based on name and behavior
     fn auto_tag_function(
         &self,
         name: &str,
@@ -1231,12 +1240,10 @@ impl PythonParser {
         let name_lower = name.to_lowercase();
         let doc_lower = docstring.to_lowercase();
 
-        // Entry point
         if name == "main" || name == "run" || name == "start" || name == "__main__" {
             tags.push("entry-point".to_string());
         }
 
-        // Initialization
         if name_lower.contains("init")
             || name_lower.contains("setup")
             || name_lower.contains("initialize")
@@ -1245,7 +1252,6 @@ impl PythonParser {
             tags.push("initialization".to_string());
         }
 
-        // Cleanup
         if name_lower.contains("cleanup")
             || name_lower.contains("close")
             || name_lower.contains("shutdown")
@@ -1254,7 +1260,6 @@ impl PythonParser {
             tags.push("cleanup".to_string());
         }
 
-        // Authentication & Security
         if name_lower.contains("auth")
             || name_lower.contains("login")
             || name_lower.contains("logout")
@@ -1269,7 +1274,6 @@ impl PythonParser {
             tags.push("security".to_string());
         }
 
-        // API & HTTP
         if name_lower.contains("api")
             || name_lower.contains("endpoint")
             || name_lower.contains("route")
@@ -1288,7 +1292,6 @@ impl PythonParser {
             tags.push("http-handler".to_string());
         }
 
-        // Database
         if name_lower.contains("db")
             || name_lower.contains("database")
             || name_lower.contains("query")
@@ -1303,7 +1306,6 @@ impl PythonParser {
             tags.push("database".to_string());
         }
 
-        // Validation
         if name_lower.contains("validate")
             || name_lower.contains("check")
             || name_lower.contains("verify")
@@ -1312,26 +1314,22 @@ impl PythonParser {
             tags.push("validation".to_string());
         }
 
-        // Error handling
         if name_lower.contains("error")
             || name_lower.contains("exception")
-            || name_lower.contains("handle")
-                && (doc_lower.contains("error") || doc_lower.contains("exception"))
+            || (name_lower.contains("handle")
+                && (doc_lower.contains("error") || doc_lower.contains("exception")))
         {
             tags.push("error-handling".to_string());
         }
 
-        // Utilities
         if name_lower.contains("util") || name_lower.contains("helper") {
             tags.push("utility".to_string());
         }
 
-        // Testing
         if name_lower.starts_with("test_") || name_lower.starts_with("test") {
             tags.push("testing".to_string());
         }
 
-        // File I/O
         if name_lower.contains("read")
             || name_lower.contains("write")
             || name_lower.contains("file")
@@ -1341,7 +1339,6 @@ impl PythonParser {
             tags.push("file-io".to_string());
         }
 
-        // Network
         if name_lower.contains("socket")
             || name_lower.contains("connect")
             || name_lower.contains("request")
@@ -1350,7 +1347,6 @@ impl PythonParser {
             tags.push("network".to_string());
         }
 
-        // Configuration
         if name_lower.contains("config")
             || name_lower.contains("setting")
             || name_lower.contains("option")
@@ -1358,22 +1354,18 @@ impl PythonParser {
             tags.push("configuration".to_string());
         }
 
-        // Logging
         if name_lower.contains("log") || name_lower.contains("debug") {
             tags.push("logging".to_string());
         }
 
-        // Parsing
         if name_lower.contains("parse") || name_lower.contains("decode") {
             tags.push("parsing".to_string());
         }
 
-        // Serialization
         if name_lower.contains("serialize") || name_lower.contains("encode") {
             tags.push("serialization".to_string());
         }
 
-        // Async/Await
         if calls
             .iter()
             .any(|c| c.callee.contains("await") || c.callee.contains("async"))
@@ -1383,7 +1375,6 @@ impl PythonParser {
             tags.push("coroutine".to_string());
         }
 
-        // Dunder methods
         if name.starts_with("__") && name.ends_with("__") {
             tags.push("dunder-method".to_string());
 
@@ -1408,7 +1399,6 @@ impl PythonParser {
             }
         }
 
-        // Private/Protected methods (naming convention)
         if name.starts_with("_") && !name.starts_with("__") {
             tags.push("protected".to_string());
         }
@@ -1416,12 +1406,10 @@ impl PythonParser {
             tags.push("private".to_string());
         }
 
-        // Property decorator
         if name_lower.contains("property") || doc_lower.contains("@property") {
             tags.push("property".to_string());
         }
 
-        // Threading
         if calls
             .iter()
             .any(|c| c.callee.contains("Thread") || c.callee.contains("threading"))
@@ -1430,7 +1418,6 @@ impl PythonParser {
             tags.push("concurrent".to_string());
         }
 
-        // Multiprocessing
         if calls
             .iter()
             .any(|c| c.callee.contains("Process") || c.callee.contains("multiprocessing"))
@@ -1439,12 +1426,10 @@ impl PythonParser {
             tags.push("concurrent".to_string());
         }
 
-        // Generators
         if calls.iter().any(|c| c.callee == "yield") {
             tags.push("generator".to_string());
         }
 
-        // Decorators (common patterns)
         if name_lower.contains("classmethod") || doc_lower.contains("@classmethod") {
             tags.push("class-method".to_string());
         }
@@ -1452,22 +1437,18 @@ impl PythonParser {
             tags.push("static-method".to_string());
         }
 
-        // Remove duplicates and sort
         tags.sort();
         tags.dedup();
         tags
     }
 
-    // Estimate function importance
     fn estimate_importance(&self, name: &str, decorators: &[String]) -> f32 {
-        let mut score: f32 = 0.5; // Base score
+        let mut score: f32 = 0.5;
 
-        // Entry points are important
         if name == "main" || name == "run" || name == "start" {
             score += 0.3;
         }
 
-        // Public API functions (decorated)
         if decorators
             .iter()
             .any(|d| d.contains("route") || d.contains("api") || d.contains("endpoint"))
@@ -1475,12 +1456,10 @@ impl PythonParser {
             score += 0.2;
         }
 
-        // Auth functions are important
         if name.to_lowercase().contains("auth") || name.to_lowercase().contains("login") {
             score += 0.2;
         }
 
-        // Private functions less important
         if name.starts_with('_') && !name.starts_with("__") {
             score -= 0.2;
         }
@@ -1498,11 +1477,8 @@ impl PythonParser {
 pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
-
     let parser = PythonParser::new(source_code);
     let file_data = parser.parse()?;
-
     let relative_path = path.to_string_lossy().to_string();
-
     Ok((relative_path, file_data))
 }
