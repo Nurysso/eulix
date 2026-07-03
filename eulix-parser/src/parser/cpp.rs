@@ -9,6 +9,7 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tree_sitter::{Node, Parser};
+
 struct SecurityPattern {
     regex: &'static Lazy<Regex>,
     note_type: &'static str,
@@ -58,6 +59,15 @@ static MACRO_DEFINE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?m)^#define\s+([A-Za-z_]\w*)(?:\([^)]*\))?\s+(.+)$")
         .expect("Invalid macro define regex")
 });
+
+static TYPEDEF_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?m)^\s*typedef\s+(.+?)\s+(\w+)\s*;").unwrap());
+
+static USING_ALIAS_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?m)^\s*using\s+(\w+)\s*=\s*(.+?)\s*;").unwrap());
+
+static BIND_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"std::bind\s*\(\s*&?(\w+(?:::?\w+)*)").unwrap());
 
 static MALLOC_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"malloc|calloc|realloc|alloca|new\s|new\[").unwrap());
@@ -306,9 +316,7 @@ static TAG_RULES: Lazy<Vec<TagRule>> = Lazy::new(|| {
 pub struct CppParser {
     source_code: String,
     macro_defs: HashMap<String, String>,
-    /// function_ptr_var -> resolved callee name (best-effort)
     fn_ptr_map: HashMap<String, String>,
-    /// type aliases from typedef/using (for resolving complex types)
     type_aliases: HashMap<String, String>,
 }
 
@@ -324,10 +332,8 @@ impl CppParser {
         }
     }
 
-    // Pre-scan: collect #define NAME(...) body
     fn pre_scan_macros(src: &str) -> HashMap<String, String> {
         let mut map = HashMap::new();
-        // Matches both object-like and function-like macros, handles line continuations
         for caps in MACRO_DEFINE_RE.captures_iter(src) {
             let name = caps[1].to_string();
             let body = caps[2].trim_end_matches('\\').trim().to_string();
@@ -340,17 +346,11 @@ impl CppParser {
         let mut map = HashMap::new();
 
         // typedef existing_type new_name;
-        static TYPEDEF_RE: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"(?m)^\s*typedef\s+(.+?)\s+(\w+)\s*;").unwrap());
-
-        // using new_name = existing_type;
-        static USING_ALIAS_RE: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"(?m)^\s*using\s+(\w+)\s*=\s*(.+?)\s*;").unwrap());
-
         for caps in TYPEDEF_RE.captures_iter(src) {
             map.insert(caps[2].to_string(), caps[1].trim().to_string());
         }
 
+        // using new_name = existing_type;
         for caps in USING_ALIAS_RE.captures_iter(src) {
             map.insert(caps[1].to_string(), caps[2].trim().to_string());
         }
@@ -407,7 +407,6 @@ impl CppParser {
                     .trim()
                     .to_string();
 
-                // Only record if rhs looks like a plain identifier
                 if rhs_text.chars().all(|c| c.is_alphanumeric() || c == '_') && !rhs_text.is_empty()
                 {
                     map.insert(lhs_text, rhs_text);
@@ -415,7 +414,6 @@ impl CppParser {
             }
         }
 
-        // Initialization: fn_ptr_t fp = actual_func; or auto fp = &Class::method;
         if node.kind() == "init_declarator" {
             if let (Some(decl), Some(val)) = (
                 node.child_by_field_name("declarator"),
@@ -429,7 +427,6 @@ impl CppParser {
                     .to_string();
 
                 if !name.is_empty() && !val_text.is_empty() {
-                    // Check if it looks like a function name (possibly qualified)
                     if val_text
                         .chars()
                         .all(|c| c.is_alphanumeric() || c == '_' || c == ':')
@@ -440,7 +437,6 @@ impl CppParser {
             }
         }
 
-        // Constructor initializer lists: Class() : callback(func) {}
         if node.kind() == "field_initializer" {
             let field = node.child_by_field_name("field");
             let value = node.child_by_field_name("value");
@@ -463,11 +459,10 @@ impl CppParser {
             self.scan_fn_ptr_assignments(&child, map);
         }
     }
+
     fn scan_std_function_assignments(&self, node: &Node, map: &mut HashMap<String, String>) {
         let mut cursor = node.walk();
 
-        // std::function<void(int)> f = &Class::method;
-        // auto f = std::bind(&func, args...)
         if node.kind() == "init_declarator" || node.kind() == "assignment_expression" {
             let (decl_name, value_node) = if node.kind() == "init_declarator" {
                 (
@@ -487,9 +482,7 @@ impl CppParser {
             if let (Some(name), Some(val)) = (decl_name, value_node) {
                 let val_text = self.get_node_text(&val);
 
-                // std::function assignment
                 if val_text.contains("std::bind") || val_text.contains("std::function") {
-                    // Extract the actual function from std::bind(&func, ...)
                     if let Some(func_name) = self.extract_bound_function(&val_text) {
                         map.insert(name, func_name);
                     }
@@ -503,16 +496,12 @@ impl CppParser {
     }
 
     fn extract_bound_function(&self, bind_expr: &str) -> Option<String> {
-        static BIND_RE: Lazy<Regex> =
-            Lazy::new(|| Regex::new(r"std::bind\s*\(\s*&?(\w+(?:::?\w+)*)").unwrap());
-
         BIND_RE.captures(bind_expr).map(|caps| caps[1].to_string())
     }
 
     fn resolve_callee(&self, raw: &str, fn_ptr_map: &HashMap<String, String>) -> String {
         let trimmed = raw.trim();
 
-        // Handle C++ member function calls: obj->method(), obj.method(), Class::method()
         let base = if let Some(last_part) = trimmed
             .rsplit("->")
             .next()
@@ -524,39 +513,32 @@ impl CppParser {
             trimmed
         };
 
-        // Remove template arguments: func<int, float> -> func
         let base = if let Some(template_pos) = base.find('<') {
             base[..template_pos].trim()
         } else {
             base
         };
 
-        // Strip leading * (dereference) and & (address-of)
         let base = base.trim_start_matches('*').trim_start_matches('&');
 
         if base.is_empty() {
             return String::new();
         }
 
-        // 1. Function-pointer map lookup
         if let Some(real) = fn_ptr_map.get(base) {
             return real.clone();
         }
 
-        // 2. Macro expansion
         if base.chars().all(|c| c.is_uppercase() || c == '_') {
             if let Some(expansion) = self.macro_defs.get(base) {
                 let exp = expansion.trim();
-                // Only use if expands to a single identifier
                 if exp.chars().all(|c| c.is_alphanumeric() || c == '_') {
                     return exp.to_string();
                 }
             }
         }
 
-        // 3. Type alias resolution (for std::function callbacks etc.)
         if let Some(resolved_type) = self.type_aliases.get(base) {
-            // If the alias points to a function pointer type, extract the name
             if resolved_type.contains('(') && resolved_type.contains('*') {
                 return resolved_type.clone();
             }
@@ -569,7 +551,6 @@ impl CppParser {
         self.source_code.lines().count()
     }
 
-    // Imports — #include directives
     fn extract_imports(&self, root: &Node) -> Vec<Import> {
         let mut imports = Vec::new();
         let mut cursor = root.walk();
@@ -638,7 +619,6 @@ impl CppParser {
             "sstream",
             "iomanip",
             "filesystem",
-            // C headers
             "stdio.h",
             "stdlib.h",
             "string.h",
@@ -662,7 +642,6 @@ impl CppParser {
         }
     }
 
-    // Functions — top-level and namespace-level
     fn extract_functions(&self, root: &Node) -> Vec<Function> {
         let mut functions = Vec::new();
         self.collect_functions(root, &mut functions, "", &self.fn_ptr_map);
@@ -686,7 +665,6 @@ impl CppParser {
                     }
                 }
                 "namespace_definition" => {
-                    // Recurse into namespaces
                     if let Some(body) = child.child_by_field_name("body") {
                         self.collect_functions(&body, functions, ctx, fn_ptr_map);
                     }
@@ -706,8 +684,6 @@ impl CppParser {
         let declarator = node.child_by_field_name("declarator")?;
         let name = self.extract_function_name(&declarator)?;
 
-        // Skip constructors/destructors captured by parse_class
-        // In top-level context we still capture them
         let params = self.extract_parameters(&declarator);
         let return_type = node
             .child_by_field_name("type")
@@ -744,7 +720,6 @@ impl CppParser {
         let tags = self.auto_tag_function(&name, &docstring, &calls, &return_type, &body_text);
         let importance_score = self.estimate_importance(&name, !struct_context.is_empty());
 
-        //  Building template
         let template_params = if let Some(parent) = node.parent() {
             if parent.kind() == "template_declaration" {
                 self.extract_template_params(&parent)
@@ -776,7 +751,6 @@ impl CppParser {
             decorators: vec![],
             tags,
             importance_score,
-            // lang_info: LanguageSpecificInfo::default(),
             lang_info: LanguageSpecificInfo {
                 cpp: Some(cpp_info),
                 ..Default::default()
@@ -796,6 +770,7 @@ impl CppParser {
         }
         params
     }
+
     fn extract_function_name(&self, declarator: &Node) -> Option<String> {
         match declarator.kind() {
             "function_declarator" => declarator
@@ -906,8 +881,6 @@ impl CppParser {
         }
     }
 
-    // Classes — class_specifier / struct_specifier
-
     fn extract_classes(&self, root: &Node) -> Vec<Class> {
         let mut classes = Vec::new();
         self.collect_classes(root, &mut classes);
@@ -943,12 +916,10 @@ impl CppParser {
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
 
-        // Base classes
         let bases = node
             .child_by_field_name("base_class_clause")
             .map(|bc| {
                 let text = self.get_node_text(&bc);
-                // Simple extraction — strip leading `: `
                 text.trim_start_matches(':')
                     .split(',')
                     .map(|s| {
@@ -970,7 +941,6 @@ impl CppParser {
             .unwrap_or((vec![], vec![]));
 
         let is_struct = node.kind() == "struct_specifier";
-        // let class_text = self.get_node_text(node);
         Some(Class {
             id: format!("{}_{}", if is_struct { "struct" } else { "class" }, name),
             name,
@@ -981,7 +951,6 @@ impl CppParser {
             methods,
             attributes,
             decorators: vec![],
-            // lang_info: self.extract_lang_info(&class_text),
             lang_info: LanguageSpecificInfo::default(),
         })
     }
@@ -994,7 +963,6 @@ impl CppParser {
         for child in body.children(&mut cursor) {
             match child.kind() {
                 "access_specifier" => {
-                    // eg "public:", "protected:", "private:"
                     let text = self.get_node_text(&child);
                     if text.contains("public") {
                         current_access = "public".to_string();
@@ -1034,9 +1002,7 @@ impl CppParser {
                         methods.push(method);
                     }
                 }
-                "declaration" => {
-                    // Forward declarations / pure virtual — skip body-less
-                }
+                "declaration" => {}
                 _ => {}
             }
         }
@@ -1044,15 +1010,12 @@ impl CppParser {
         (attributes, methods)
     }
 
-    // Global variables
-
     fn extract_global_vars(&self, root: &Node) -> Vec<GlobalVar> {
         let mut vars = Vec::new();
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {
             if child.kind() == "declaration" {
-                // Skip function declarations
                 let declarator = child.child_by_field_name("declarator");
                 let is_func = declarator
                     .map(|d| d.kind() == "function_declarator")
@@ -1094,8 +1057,6 @@ impl CppParser {
         })
     }
 
-    // Function call extraction
-
     fn extract_function_calls_detailed(
         &self,
         node: &Node,
@@ -1129,7 +1090,6 @@ impl CppParser {
             if let Some(func_node) = node.child_by_field_name("function") {
                 let call_text = self.get_node_text(&func_node);
                 let resolved = self.resolve_callee(&call_text, fn_ptr_map);
-                // Handle `obj.method()`, `ns::func()`, `obj->method()`
                 let name = call_text
                     .split(|c: char| c == '.' || c == '>')
                     .last()
@@ -1190,8 +1150,6 @@ impl CppParser {
 
         args
     }
-
-    // Variables
 
     fn extract_variables(&self, node: &Node, params: &[Parameter]) -> Vec<Variable> {
         let mut variables: HashMap<String, Variable> = HashMap::new();
@@ -1259,8 +1217,6 @@ impl CppParser {
             self.track_variable_usage(&child, variables);
         }
     }
-
-    // Control flow
 
     fn build_control_flow(&self, node: &Node) -> ControlFlow {
         let mut cf = ControlFlow {
@@ -1469,8 +1425,6 @@ impl CppParser {
         1 + count(node)
     }
 
-    // Docstrings
-
     fn extract_docstring(&self, node: &Node) -> String {
         if let Some(prev) = node.prev_sibling() {
             if prev.kind() == "comment" {
@@ -1488,24 +1442,24 @@ impl CppParser {
         String::new()
     }
 
-    // TODOs
-
     fn extract_todos(&self) -> Vec<Todo> {
         self.source_code
             .lines()
             .enumerate()
             .filter_map(|(idx, line)| {
                 TODO_RE.captures(line).map(|caps| {
-                    let text = caps.get(1).unwrap().as_str().trim().to_string();
-                    let priority = if text.to_lowercase().contains("critical")
-                        || text.to_lowercase().contains("urgent")
-                    {
-                        "high"
-                    } else if text.to_lowercase().contains("minor") {
-                        "low"
-                    } else {
-                        "medium"
-                    };
+                    let text = caps[1].trim().to_string();
+                    let text_lower = text.to_lowercase();
+
+                    let priority =
+                        if text_lower.contains("critical") || text_lower.contains("urgent") {
+                            "high"
+                        } else if text_lower.contains("minor") {
+                            "low"
+                        } else {
+                            "medium"
+                        };
+
                     Todo {
                         line: idx + 1,
                         text,
@@ -1515,8 +1469,6 @@ impl CppParser {
             })
             .collect()
     }
-
-    // Security patterns
 
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
@@ -1529,6 +1481,7 @@ impl CppParser {
                         line: idx + 1,
                         description: pattern.description.to_string(),
                     });
+                    break;
                 }
             }
         }
@@ -1536,21 +1489,18 @@ impl CppParser {
         notes
     }
 
-    // Auto-tagging & importance scoring
-
     fn auto_tag_function(
         &self,
         name: &str,
-        doc: &str,
+        docstring: &str,
         calls: &[FunctionCall],
         return_type: &str,
-        body_text: &str, // <-- new parameter
+        body_text: &str,
     ) -> Vec<String> {
         let mut tags = HashSet::new();
         let lower = name.to_lowercase();
-        let doc_lower = doc.to_lowercase();
+        let doc_lower = docstring.to_lowercase();
 
-        // Apply TAG_RULES first
         for rule in TAG_RULES.iter() {
             let search_in = if rule.check_docstring {
                 format!("{} {}", lower, doc_lower)
@@ -1562,7 +1512,6 @@ impl CppParser {
             }
         }
 
-        // Existing heuristics
         if lower.contains("init") || lower.starts_with("create") || lower.starts_with("make") {
             tags.insert("constructor".to_string());
         }
@@ -1582,8 +1531,6 @@ impl CppParser {
             tags.insert("error-handling".to_string());
         }
 
-        // --- New pattern‑based tags ---
-        // Memory
         if MALLOC_RE.is_match(body_text) {
             tags.insert("heap-allocation".to_string());
         }
@@ -1594,7 +1541,6 @@ impl CppParser {
             tags.insert("smart-pointer".to_string());
         }
 
-        // Concurrency
         if THREAD_RE.is_match(body_text) {
             tags.insert("threading".to_string());
         }
@@ -1602,17 +1548,14 @@ impl CppParser {
             tags.insert("synchronization".to_string());
         }
 
-        // System
         if SYSCALL_RE.is_match(body_text) {
             tags.insert("syscall".to_string());
         }
 
-        // Strings
         if STRING_OPS_RE.is_match(body_text) {
             tags.insert("string-ops".to_string());
         }
 
-        // C++ features
         if TEMPLATE_RE.is_match(body_text) {
             tags.insert("template".to_string());
         }
@@ -1629,9 +1572,6 @@ impl CppParser {
             tags.insert("operator-overload".to_string());
         }
 
-        // Structural (class-level only – you may skip these for functions)
-        // For functions inside a namespace/class, you can detect from context.
-        // If you want to keep them, they're fine.
         if NAMESPACE_RE.is_match(body_text) {
             tags.insert("namespaced".to_string());
         }
@@ -1669,13 +1609,12 @@ impl CppParser {
         func_node: &Node,
         name: &str,
         struct_context: &str,
-        access: Option<String>,       // from class body scanning
-        template_params: Vec<String>, // filled later
+        access: Option<String>,
+        template_params: Vec<String>,
     ) -> CppInfo {
         let mut info = CppInfo::default();
         let text = self.get_node_text(func_node);
 
-        // --- Analyse children by kind -------------------------------------------------
         let mut cursor = func_node.walk();
         for child in func_node.children(&mut cursor) {
             match child.kind() {
@@ -1684,7 +1623,6 @@ impl CppParser {
                     if kw == "static" {
                         info.is_static = true;
                     }
-                    // you can also catch "extern", "mutable", etc. if needed
                 }
                 "virtual_specifier" => {
                     info.is_virtual = true;
@@ -1696,20 +1634,16 @@ impl CppParser {
                     info.is_final = true;
                 }
                 "pure_virtual_specifier" => {
-                    // tree-sitter-cpp has this?
                     info.is_pure_virtual = true;
                 }
                 _ => {}
             }
         }
 
-        // --- Things best checked with a simple substring (already parsed) ------------
-        // pure virtual "= 0"
         if text.contains("= 0") {
             info.is_pure_virtual = true;
         }
 
-        // const method (const after parameter list)
         if let Some(decl) = func_node.child_by_field_name("declarator") {
             let decl_text = self.get_node_text(&decl);
             if decl_text.contains(") const")
@@ -1720,27 +1654,22 @@ impl CppParser {
             }
         }
 
-        // noexcept
         if text.contains("noexcept") {
             info.is_noexcept = true;
         }
 
-        // explicit (only meaningful for constructors, but we record it anyway)
         if text.contains("explicit") {
             info.is_explicit = true;
         }
 
-        // constexpr / consteval / constinit
         if text.contains("constexpr") || text.contains("consteval") || text.contains("constinit") {
             info.is_constexpr = true;
         }
 
-        // inline – if the text starts with "inline"
         if text.trim_start().starts_with("inline") {
             info.is_inline = true;
         }
 
-        // constructor / destructor (by name matching)
         if !struct_context.is_empty() {
             if name == struct_context {
                 info.is_constructor = true;
@@ -1749,15 +1678,11 @@ impl CppParser {
             }
         }
 
-        // access specifier
         info.access_specifier = access;
-
-        // template parameters (passed from parent detection)
         info.template_params = template_params;
 
         info
     }
-    // Utility
 
     fn get_node_text(&self, node: &Node) -> String {
         let bytes = self.source_code.as_bytes();
@@ -1767,7 +1692,6 @@ impl CppParser {
     }
 }
 
-/// Entry point called from main.rs
 pub fn parse_file(path: &Path) -> Result<(String, FileData), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(path)?;
     let mut parser = CppParser::new(source);

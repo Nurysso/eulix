@@ -4,10 +4,76 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 use crate::struc::kb_struct::*;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tree_sitter::{Node, Parser};
+
+struct SecurityPattern {
+    regex: &'static Lazy<Regex>,
+    note_type: &'static str,
+    description: &'static str,
+}
+
+//  Regex Patterns compiled once at first use
+static TODO_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid TODO regex"));
+
+static UNSAFE_BLOCK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"unsafe\s*\{").expect("Invalid unsafe block regex"));
+
+static TRANSMUTE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"std::mem::transmute").expect("Invalid transmute regex"));
+
+static UNWRAP_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"unwrap\(\)").expect("Invalid unwrap regex"));
+
+static EXPECT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"expect\(").expect("Invalid expect regex"));
+
+static COMMAND_EXEC_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"Command::new|std::process::Command").expect("Invalid command_exec regex")
+});
+
+static RAW_POINTER_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"from_raw_parts|from_raw_parts_mut").expect("Invalid raw_pointer regex")
+});
+
+static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
+    vec![
+        SecurityPattern {
+            regex: &UNSAFE_BLOCK_RE,
+            note_type: "unsafe_block",
+            description: "Unsafe block manual memory safety required",
+        },
+        SecurityPattern {
+            regex: &TRANSMUTE_RE,
+            note_type: "transmute",
+            description: "Use of mem::transmute is unsafe",
+        },
+        SecurityPattern {
+            regex: &UNWRAP_RE,
+            note_type: "panic_risk",
+            description: "Unchecked unwrap() panics on None/Err",
+        },
+        SecurityPattern {
+            regex: &EXPECT_RE,
+            note_type: "panic_risk",
+            description: "Unchecked expect() panics on None/Err",
+        },
+        SecurityPattern {
+            regex: &COMMAND_EXEC_RE,
+            note_type: "command_execution",
+            description: "Shell command execution",
+        },
+        SecurityPattern {
+            regex: &RAW_POINTER_RE,
+            note_type: "raw_pointer",
+            description: "Raw pointer slice construction",
+        },
+    ]
+});
 
 pub struct RustParser {
     source_code: String,
@@ -46,7 +112,6 @@ impl RustParser {
         self.source_code.lines().count()
     }
 
-    // Imports — `use` declarations
     fn extract_imports(&self, root: &Node) -> Vec<Import> {
         let mut imports = Vec::new();
         self.collect_use_declarations(root, &mut imports);
@@ -58,7 +123,6 @@ impl RustParser {
         for child in node.children(&mut cursor) {
             if child.kind() == "use_declaration" {
                 let text = self.get_node_text(&child);
-                // Strip leading `use ` and trailing `;`
                 let module = text
                     .trim_start_matches("use ")
                     .trim_end_matches(';')
@@ -104,7 +168,6 @@ impl RustParser {
         let mut cfg_attrs = Vec::new();
         let mut unknown_attrs = Vec::new();
 
-        // Visibility + function modifiers from node children
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             match child.kind() {
@@ -128,7 +191,6 @@ impl RustParser {
                         is_extern = true;
                     }
                 }
-                // Lifetime params: fn foo<'a, 'b, T>(...)
                 "type_parameters" => {
                     let mut lc = child.walk();
                     for lp in child.children(&mut lc) {
@@ -141,13 +203,11 @@ impl RustParser {
             }
         }
 
-        // Walk preceding siblings for #[...] attribute items
         let mut prev = node.prev_sibling();
         while let Some(sib) = prev {
             match sib.kind() {
                 "attribute_item" => {
                     let raw = self.get_node_text(&sib);
-                    // Strip #[ and ]
                     let inner = raw
                         .trim_start_matches('#')
                         .trim_start_matches('[')
@@ -176,7 +236,6 @@ impl RustParser {
 
                     prev = sib.prev_sibling();
                 }
-                // Skip doc comments — they're handled by extract_docstring
                 "line_comment" | "block_comment" => {
                     prev = sib.prev_sibling();
                 }
@@ -200,7 +259,6 @@ impl RustParser {
         }
     }
 
-    // Top-level functions
     fn extract_functions(&self, root: &Node) -> Vec<Function> {
         let mut functions = Vec::new();
         let mut cursor = root.walk();
@@ -212,7 +270,6 @@ impl RustParser {
                         functions.push(func);
                     }
                 }
-                // Functions inside `impl` blocks are collected via extract_structs_and_enums
                 _ => {}
             }
         }
@@ -228,7 +285,7 @@ impl RustParser {
             let mut c = node.walk();
             node.children(&mut c).any(|ch| ch.kind() == "async")
                 || node
-                    .child_by_field_name("function_modifiers") // also catches mod list
+                    .child_by_field_name("function_modifiers")
                     .map(|m| self.get_node_text(&m).contains("async"))
                     .unwrap_or(false)
         };
@@ -364,8 +421,6 @@ impl RustParser {
         }
     }
 
-    // Structs, Enums, Impl blocks
-
     fn extract_structs_and_enums(&self, root: &Node) -> Vec<Class> {
         let mut items: Vec<Class> = Vec::new();
         let mut methods_map: HashMap<String, Vec<Function>> = HashMap::new();
@@ -384,7 +439,6 @@ impl RustParser {
                     }
                 }
                 "impl_item" => {
-                    // Find the type being implemented
                     let type_name = child
                         .child_by_field_name("type")
                         .map(|t| self.get_node_text(&t))
@@ -410,7 +464,6 @@ impl RustParser {
             }
         }
 
-        // Attach methods to matching struct/enum
         for class in &mut items {
             if let Some(methods) = methods_map.remove(&class.name) {
                 class.methods = methods;
@@ -461,7 +514,6 @@ impl RustParser {
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
 
-        // Extract enum variants as attributes
         let attributes = node
             .child_by_field_name("body")
             .map(|body| {
@@ -527,8 +579,6 @@ impl RustParser {
         fields
     }
 
-    // Global vars — const / static items
-
     fn extract_global_vars(&self, root: &Node) -> Vec<GlobalVar> {
         let mut vars = Vec::new();
         let mut cursor = root.walk();
@@ -568,8 +618,6 @@ impl RustParser {
             line: node.start_position().row + 1,
         })
     }
-
-    // Function call extraction
 
     fn extract_function_calls_detailed(&self, node: &Node) -> Vec<FunctionCall> {
         let mut calls = Vec::new();
@@ -644,8 +692,6 @@ impl RustParser {
 
         args
     }
-
-    // Variable tracking
 
     fn extract_variables(&self, node: &Node, params: &[Parameter]) -> Vec<Variable> {
         let mut variables: HashMap<String, Variable> = HashMap::new();
@@ -725,8 +771,6 @@ impl RustParser {
             self.track_variable_usage(&child, variables);
         }
     }
-
-    // Control flow
 
     fn build_control_flow(&self, node: &Node) -> ControlFlow {
         let mut cf = ControlFlow {
@@ -873,8 +917,6 @@ impl RustParser {
         1 + count(node)
     }
 
-    // Docstrings (/// comments preceding item)
-
     fn extract_docstring(&self, node: &Node) -> String {
         let mut doc_lines = Vec::new();
         let mut prev = node.prev_sibling();
@@ -902,16 +944,12 @@ impl RustParser {
         doc_lines.join(" ")
     }
 
-    // TODOs
-
     fn extract_todos(&self) -> Vec<Todo> {
-        let re = Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").unwrap();
-
         self.source_code
             .lines()
             .enumerate()
             .filter_map(|(idx, line)| {
-                re.captures(line).map(|caps| {
+                TODO_RE.captures(line).map(|caps| {
                     let text = caps.get(1).unwrap().as_str().trim().to_string();
                     let priority = if text.to_lowercase().contains("critical")
                         || text.to_lowercase().contains("urgent")
@@ -932,62 +970,24 @@ impl RustParser {
             .collect()
     }
 
-    // Security patterns
-
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
 
-        let patterns = vec![
-            (
-                r"unsafe\s*\{",
-                "unsafe_block",
-                "Unsafe block — manual memory safety required",
-            ),
-            (
-                r"std::mem::transmute",
-                "transmute",
-                "Use of mem::transmute is unsafe",
-            ),
-            (
-                r"unwrap\(\)",
-                "panic_risk",
-                "Unchecked unwrap() — panics on None/Err",
-            ),
-            (
-                r"expect\(",
-                "panic_risk",
-                "Unchecked expect() — panics on None/Err",
-            ),
-            (
-                r#"Command::new|std::process::Command"#,
-                "command_execution",
-                "Shell command execution",
-            ),
-            (
-                r"from_raw_parts|from_raw_parts_mut",
-                "raw_pointer",
-                "Raw pointer slice construction",
-            ),
-        ];
-
-        for (pat, note_type, description) in patterns {
-            if let Ok(re) = Regex::new(pat) {
-                for (idx, line) in self.source_code.lines().enumerate() {
-                    if re.is_match(line) {
-                        notes.push(SecurityNote {
-                            note_type: note_type.to_string(),
-                            line: idx + 1,
-                            description: description.to_string(),
-                        });
-                    }
+        for (idx, line) in self.source_code.lines().enumerate() {
+            for pattern in SECURITY_PATTERNS.iter() {
+                if pattern.regex.is_match(line) {
+                    notes.push(SecurityNote {
+                        note_type: pattern.note_type.to_string(),
+                        line: idx + 1,
+                        description: pattern.description.to_string(),
+                    });
+                    break;
                 }
             }
         }
 
         notes
     }
-
-    // Auto-tagging & importance scoring
 
     fn auto_tag_function(&self, name: &str, doc: &str, calls: &[FunctionCall]) -> Vec<String> {
         let mut tags = Vec::new();
@@ -1040,8 +1040,6 @@ impl RustParser {
 
         score.clamp(0.0, 1.0)
     }
-
-    // Utility
 
     fn get_node_text(&self, node: &Node) -> String {
         let bytes = self.source_code.as_bytes();
