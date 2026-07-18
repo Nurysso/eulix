@@ -34,7 +34,9 @@ type ProjectConfig struct {
 }
 
 type ParserConfig struct {
-	Threads int `toml:"threads"`
+	Threads int  `toml:"threads"`
+	PrismV  int  `toml:"prismVersion"`
+	Verbose bool `toml:"verbose"`
 }
 
 type EmbeddingsConfig struct {
@@ -92,7 +94,7 @@ func Load() (*Config, error) {
 			return nil, err
 		}
 		if cfg.Project.DebugConfig {
-			fmt.Printf("[CONFIG] Project path: %s → %s\n", cfg.Project.Path, absPath)
+			// fmt.Printf("[CONFIG] Project path: %s → %s\n", cfg.Project.Path, absPath)
 		}
 		cfg.Project.Path = absPath
 	}
@@ -129,6 +131,8 @@ func DefaultConfig() *Config {
 		},
 		Parser: ParserConfig{
 			Threads: 4,
+			PrismV:  2,
+			Verbose: true,
 		},
 		Embeddings: EmbeddingsConfig{
 			Model:     "BAAI/bge-base-en-v1.5",

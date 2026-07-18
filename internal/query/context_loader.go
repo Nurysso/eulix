@@ -153,6 +153,22 @@ func loadCallGraph(eulixDir string) (*CallGraph, error) {
 	return &g, nil
 }
 
+// loadExternalDeps reads and parses kb_external_deps.json
+func (cb *ContextBuilder) loadExternalDeps() error {
+	done := cb.logFileLoad("kb_external_deps.json")
+
+	var FileData types.ExternalDependencyRef
+	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_external_deps.json"), &FileData)
+
+	done(err)
+	if err != nil {
+		return fmt.Errorf("kb_external_deps: %w", err)
+	}
+	cb.externalDeps = FileData.ExternalDependency
+	cb.depIdx = buildDepIndex(cb.externalDeps)
+	return nil
+}
+
 // loadChunks is the primary loader: streams kb_index.json and
 // kb.json, builds the chunk slice, and populates all derived
 // indices (boilerplate detector, symbol index, inverted index).
@@ -215,6 +231,10 @@ func (cb *ContextBuilder) loadChunks() error {
 	cb.debugLog.Log("Chunks loaded: %d, heap: %d MB",
 		len(cb.chunks), getHeapAlloc()/1024/1024)
 	return nil
+}
+
+func (cb *ContextBuilder) GetDepIndex() *depIndex {
+	return cb.depIdx
 }
 
 // streamKBChunks opens kb.json with mmap + sequential-read hints
@@ -423,8 +443,8 @@ func (cb *ContextBuilder) loadAndIndexCallGraph() {
 	cb.cgRef = &cg
 
 	if len(cg.Edges) > 0 {
-		cb.debugLog.Log("Call graph: %d nodes, %d edges", len(cg.Nodes), len(cg.Edges))
-		cb.debugLog.Log("Edge sample: from=%q to=%q type=%q",
+		cb.debugLog.Log("Call graphs: %d nodes, %d edges", len(cg.Nodes), len(cg.Edges))
+		cb.debugLog.Log("Edge samples: from=%q to=%q type=%q",
 			cg.Edges[0].From, cg.Edges[0].To, cg.Edges[0].EdgeType)
 	}
 	if len(cb.chunks) > 0 {
