@@ -25,7 +25,7 @@ type EntryPointsRef struct {
 	EntryPoint []EntryPoint `json:"entry_points"`
 }
 type ExternalDependencyRef struct {
-	ExternalDependency ExternalDependency `json:"external_dependencies"`
+	ExternalDependency []ExternalDependency `json:"external_dependencies"`
 }
 type MetricsRef struct {
 	Metadata            KBMetadata       `json:"metadata"`
