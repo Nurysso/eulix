@@ -6,18 +6,19 @@ DebugConfig = true
 
 [parser]
 threads = 4
+prismVersion = 2
 
 [embeddings]
 model = "microsoft/codebert-base"
 dimension = 768
 
 [llm]
-local       = true
-provider    = "ollama"
-model       = "qwen2.5-coder:7b"
-max_tokens  = 8192
+local = true
+provider = "ollama"
+model = "qwen2.5-coder:7b"
+max_tokens = 8192
 temperature = 0.4
-baseURL     = "http://localhost:11434"
+baseURL = "http://localhost:11434"
 
 [cache]
 [cache.redis]

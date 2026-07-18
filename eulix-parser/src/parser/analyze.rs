@@ -368,6 +368,14 @@ impl Analyzer {
         let structure_vec: Vec<_> = structure.iter().collect();
         let chunks: Vec<_> = structure_vec.chunks(CHUNK_SIZE).collect();
 
+        // Build file_list + file_map FIRST, before node extraction
+        let file_list: Vec<String> = structure.keys().cloned().collect();
+        let file_map: HashMap<String, usize> = file_list
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.clone(), i))
+            .collect();
+
         // PHASE 1
         //  Node extraction (Keep this same as v1)
 
@@ -375,14 +383,15 @@ impl Analyzer {
             .par_iter()
             .flat_map(|chunk| {
                 let mut local_nodes = Vec::with_capacity(chunk.len() * 10);
-                for (_filepath, filedata) in chunk.iter() {
+                for (filepath, filedata) in chunk.iter() {
+                    let file_idx = file_map.get(*filepath).copied().unwrap_or(0);
                     for func in &filedata.functions {
                         local_nodes.push((
                             func.id.clone(),
                             CompactNode {
                                 id: func.id.clone(),
                                 node_type: if func.id.starts_with("method_") { 1 } else { 0 },
-                                file_idx: 0,
+                                file_idx,
                                 is_entry: func.tags.contains(&"entry-point".to_string()),
                             },
                         ));
@@ -393,7 +402,7 @@ impl Analyzer {
                             CompactNode {
                                 id: class.id.clone(),
                                 node_type: 2,
-                                file_idx: 0,
+                                file_idx,
                                 is_entry: false,
                             },
                         ));
@@ -403,7 +412,7 @@ impl Analyzer {
                                 CompactNode {
                                     id: method.id.clone(),
                                     node_type: 1,
-                                    file_idx: 0,
+                                    file_idx,
                                     is_entry: false,
                                 },
                             ));
@@ -414,7 +423,7 @@ impl Analyzer {
             })
             .collect();
 
-        // Dedup by id (first occurrence wins for stable output).
+        // Dedup: first occurrence wins drops the second all_nodes re-extraction entirely
         let mut node_map: HashMap<String, usize> = HashMap::with_capacity(all_nodes.len());
         let mut unique_nodes: Vec<CompactNode> = Vec::with_capacity(all_nodes.len());
         for (id, node) in all_nodes {
