@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"eulix/internal/types"
@@ -148,42 +149,6 @@ func (r *Router) handleComparison(query string, class *Classification) (string, 
 	taskBody := getTaskBody(r, query, class)
 	fullPrompt := BuildPromptString(query, class, src, taskBody)
 	return r.llmClient.LlmResponse(fullPrompt)
-}
-
-func (r *Router) handleDependency(query string, class *Classification) (string, error) {
-	entity := firstSymbolOrExtracted(class, query)
-	if entity == "" {
-		return "Could not identify an entity for dependency analysis.", nil
-	}
-
-	var results []string
-	results = append(results, fmt.Sprintf("Dependency analysis for '%s':", entity))
-
-	if fn, ok := r.callGraph.Functions[entity]; ok {
-		if len(fn.Calls) > 0 {
-			results = append(results, "\nDirect dependencies (calls):")
-			for _, d := range fn.Calls {
-				results = append(results, fmt.Sprintf("  → %s", d))
-			}
-		}
-		if len(fn.CalledBy) > 0 {
-			results = append(results, "\nDependents (called by):")
-			for _, c := range fn.CalledBy {
-				results = append(results, fmt.Sprintf("  ← %s", c))
-			}
-		}
-		transitive := r.findTransitiveDependencies(entity, 2)
-		if len(transitive) > 0 {
-			results = append(results, "\nTransitive dependencies (depth ≤ 2):")
-			for _, d := range transitive {
-				results = append(results, fmt.Sprintf("  ⇒ %s", d))
-			}
-		}
-	} else {
-		results = append(results, "\nNo call-graph entry found for this symbol.")
-	}
-
-	return strings.Join(results, "\n"), nil
 }
 
 func (r *Router) handleRefactoring(query string, class *Classification) (string, error) {
@@ -324,67 +289,131 @@ func bareID(id string) string {
 	return id
 }
 
+func (r *Router) handleDependency(query string, _ *Classification) (string, error) {
+	entity := extractDepQueryTerm(query)
+	if entity == "" {
+		return "Could not identify an entity for dependency analysis.", nil
+	}
+
+	if len(r.contextBuilder.GetExternalDeps()) == 0 {
+		if err := r.contextBuilder.loadExternalDeps(); err != nil {
+			return "", fmt.Errorf("could not load external deps: %w", err)
+		}
+	}
+	deps := r.contextBuilder.GetExternalDeps()
+	idx := r.contextBuilder.GetDepIndex()
+
+	entityLow := strings.ToLower(entity)
+	queryLow := strings.ToLower(query)
+
+	switch classifyDepIntent(queryLow, entityLow) {
+	case depIntentAll:
+		return formatAllExternalDeps(deps), nil
+
+	case depIntentFile:
+		return formatFileImports(entityLow, idx), nil
+
+	case depIntentCount:
+		return formatDepCount(deps), nil
+
+	default: // depIntentWhoUses and depIntentLookup share the same matching logic
+		matched := idx.matchDeps(entityLow)
+		if len(matched) == 0 {
+			return fmt.Sprintf("No dependency named '%s' found.\nTip: use 'list dependencies' to see all.", entity), nil
+		}
+		sort.Slice(matched, func(i, j int) bool { return matched[i].Name < matched[j].Name })
+		return formatMatchedDeps(entity, matched), nil
+	}
+}
+
 func (r *Router) handleCallGraph(query string, class *Classification) (string, error) {
 	entity := firstSymbolOrExtracted(class, query)
 	if entity == "" {
 		return "Could not identify a symbol for call graph analysis.", nil
 	}
-	if r.callGraph == nil {
-		return "", fmt.Errorf("call graph not loaded")
+	if r.cgBuild == nil {
+		return "", fmt.Errorf("call graph not found while running")
 	}
-	fn, ok := r.callGraph.Functions[entity]
+
+	resolvedKey, node, ok, ambiguous := r.resolveCallGraphEntity(entity)
 	if !ok {
 		if matches := r.fuzzySearch(entity); len(matches) > 0 {
-			return fmt.Sprintf("'%s' not found. Did you mean: %s", entity, strings.Join(matches, ", ")), nil
+			return fmt.Sprintf("'%s' not found. Did you mean: %s",
+				entity, strings.Join(matches, ", ")), nil
 		}
 		return fmt.Sprintf("'%s' not found in call graph.", entity), nil
 	}
+
 	r.cgIdx.mu.RLock()
-	if s, hit := r.cgIdx.cache[entity]; hit {
+	if s, hit := r.cgIdx.cache[resolvedKey]; hit {
 		r.cgIdx.mu.RUnlock()
 		return s, nil
 	}
 	r.cgIdx.mu.RUnlock()
 
+	callers := r.cgBuild.CalledBy[resolvedKey]
+	callees := r.cgBuild.Calls[resolvedKey]
+
 	var b strings.Builder
 	b.Grow(2048)
-	fmt.Fprintf(&b, "Call graph for '%s'  (%s)\n", entity, fn.Location)
+
+	// Ambiguity note goes first in the output
+	if len(ambiguous) > 1 {
+		fmt.Fprintf(&b, "Note: '%s' matched %d symbols. Showing highest-traffic one. Others:\n",
+			entity, len(ambiguous))
+		for _, k := range ambiguous {
+			if k == resolvedKey {
+				continue
+			}
+			n := r.cgBuild.Nodes[k]
+			fmt.Fprintf(&b, "  • %s  (fan-in: %d, file: %s)\n",
+				callGraphShortName(k), n.CallCountEstimate, n.File)
+		}
+		b.WriteString("\n")
+	}
+
+	fmt.Fprintf(&b, "Call graph for '%s'\n", resolvedKey)
+	fmt.Fprintf(&b, "File     : %s\n", node.File)
+	fmt.Fprintf(&b, "Type     : %s\n", node.NodeType)
+	if node.IsEntryPoint {
+		b.WriteString("Role     : entry point\n")
+	}
+
 	b.WriteString("\n┌─ Called by (inbound):\n")
-	if len(fn.CalledBy) == 0 {
+	if len(callers) == 0 {
 		b.WriteString("│  (none — likely an entry point or exported API)\n")
 	} else {
-		for _, caller := range fn.CalledBy {
-			fmt.Fprintf(&b, "│  ← %s\n", caller)
-			if callerFn, ok := r.callGraph.Functions[caller]; ok {
-				for _, gc := range callerFn.CalledBy {
-					fmt.Fprintf(&b, "│     ← %s\n", gc)
-				}
+		for _, callerID := range callers {
+			fmt.Fprintf(&b, "│  ← %s\n", callerID)
+			for _, gc := range r.cgBuild.CalledBy[callerID] {
+				fmt.Fprintf(&b, "│     ← %s\n", gc)
 			}
 		}
 	}
+
 	b.WriteString("\n└─ Calls (outbound):\n")
-	if len(fn.Calls) == 0 {
+	if len(callees) == 0 {
 		b.WriteString("   (none — leaf function)\n")
 	} else {
-		for _, callee := range fn.Calls {
+		for _, callee := range callees {
 			fmt.Fprintf(&b, "   → %s\n", callee)
-			if calleeFn, ok := r.callGraph.Functions[callee]; ok {
-				for _, gc := range calleeFn.Calls {
-					fmt.Fprintf(&b, "      → %s\n", gc)
-				}
+			for _, gc := range r.cgBuild.Calls[callee] {
+				fmt.Fprintf(&b, "      → %s\n", gc)
 			}
 		}
 	}
-	fmt.Fprintf(&b, "\nFan-in : %d\nFan-out: %d\n", len(fn.CalledBy), len(fn.Calls))
-	if len(fn.CalledBy) == 0 {
+
+	fmt.Fprintf(&b, "\nFan-in : %d\nFan-out: %d\n", len(callers), len(callees))
+	if len(callers) == 0 {
 		b.WriteString("Note: No callers detected — treat as entry point.\n")
 	}
-	if len(fn.Calls) > 7 {
-		fmt.Fprintf(&b, "⚠ High fan-out (%d) — consider splitting.\n", len(fn.Calls))
+	if len(callees) > 7 {
+		fmt.Fprintf(&b, "⚠ High fan-out (%d) — consider splitting.\n", len(callees))
 	}
+
 	result := b.String()
 	r.cgIdx.mu.Lock()
-	r.cgIdx.cache[entity] = result
+	r.cgIdx.cache[resolvedKey] = result
 	r.cgIdx.mu.Unlock()
 	return result, nil
 }
