@@ -39,6 +39,7 @@ type Router struct {
 	Patterns        *types.PatternInfo
 	cgIdx           *callGraphIndex
 	cgRef           *types.CallGraphRef
+	cgBuild         *CallGraphIdx
 	currentChecksum string
 }
 
@@ -58,6 +59,14 @@ type callGraphIndex struct {
 	cache map[string]string // entity → pre-rendered two-level tree string
 }
 
+type CallGraphIdx struct {
+	// node ID → node
+	Nodes map[string]*types.CallGraphNode
+	// node ID → IDs of nodes that call it (inbound)
+	CalledBy map[string][]string
+	// node ID → IDs of nodes it calls (outbound)
+	Calls map[string][]string
+}
 type CGFunction struct {
 	Location string
 	Calls    []string
@@ -138,6 +147,8 @@ type ContextBuilder struct {
 	callGraph    map[string][]Relationship
 	cgRef        *types.CallGraphRef
 	kbIdx        *types.KBIndices
+	externalDeps []types.ExternalDependency
+	depIdx       *depIndex
 	sourceRoot   string
 	debugLog     *DebugLogger
 	// Thread-safe trace storage

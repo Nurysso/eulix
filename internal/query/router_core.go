@@ -58,6 +58,7 @@ func QueryTrafficController(
 		kbIndex:        cb.kbIdx,
 		callGraph:      buildRouterCallGraph(cb.cgRef),
 		cgIdx:          &callGraphIndex{cache: make(map[string]string)},
+		cgBuild:        BuildCallGraphIndex(cb.cgRef),
 	}, nil
 }
 
