@@ -81,7 +81,7 @@ func QuerySheriff(kbIndexPath string) (*Classifier, error) {
 		implementationPattern: regexp.MustCompile(`(?i)\b(implement\b|add\s+feature|create\s+new|build\s+a\b)`),
 		debugPattern:          regexp.MustCompile(`(?i)\b(why\s+(is|does|doesn't\b)|debug|error|bug|issue|problem|not\s+working|fails?|crash|exception)\b`),
 		comparisonPattern:     regexp.MustCompile(`(?i)\b(difference\s+between|compare\b|vs\.?\b|versus\b|similar\s+to|differs?\s+from|what's\s+the\s+difference)\b`),
-		dependencyPattern:     regexp.MustCompile(`(?i)\b(depends?\s+on|dependencies|required\s+by|imports?|external\b|third[\s-]party)\b`),
+		dependencyPattern:     regexp.MustCompile(`(?i)\b(depends?\s+on|depends?\b|dependency\b|dependencies\b|required\s+by|imports?\b|external\b|third[\s-]party|which\s+files\s+(use|import)|who\s+(uses?|imports?))\b`),
 		refactoringPattern:    regexp.MustCompile(`(?i)\b(refactor\b|improve\b|optimize\b|clean\s+up|restructure\b|simplify\b|better\s+way)\b`),
 		performancePattern:    regexp.MustCompile(`(?i)\b(performance|slow\b|fast\b|optimize\b|bottleneck|efficient\b|speed\b|latency|memory\s+usage)\b`),
 		dataFlowPattern:       regexp.MustCompile(`(?i)\b(data\s+flow|how\s+data|trace\s+data|data\s+path|value\s+propagat|passes?\s+through)\b`),

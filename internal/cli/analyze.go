@@ -59,6 +59,7 @@ func analyzeProject(projectPath string) error {
 		"--root", projectPath,
 		"-o", kbPath,
 		"--threads", fmt.Sprintf("%d", cfg.Parser.Threads),
+		"--prism", fmt.Sprintf("%d", cfg.Parser.PrismV),
 	)
 	parserCmd.Stdout = os.Stdout
 	parserCmd.Stderr = os.Stderr
