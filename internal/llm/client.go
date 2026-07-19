@@ -56,6 +56,7 @@ var openAICompatible = map[string]bool{
 	"lmstudio":     true,
 	"vllm":         true,
 	"openrouter":   true,
+	"fireworks":    true,
 }
 
 type Client struct {
@@ -441,6 +442,7 @@ var knownProviders = map[string]providerDefaults{
 	"lmstudio":        {"http://localhost:1234", "/v1/chat/completions"},
 	"vllm":            {"http://localhost:8000", "/v1/chat/completions"},
 	"openrouter":      {"https://openrouter.ai/api", "/v1/chat/completions"},
+	"fireworks":       {"https://api.fireworks.ai/inference", "/v1/chat/completions"},
 	ProviderAnthropic: {"https://api.anthropic.com", "/v1/messages"},
 	ProviderOllama:    {"http://localhost:11434", "/api/chat"},
 }
