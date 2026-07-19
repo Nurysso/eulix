@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -78,33 +80,53 @@ type ChecksumConfig struct {
 	ForceReanalyzeThreshold float64 `toml:"force_reanalyze_threshold"`
 }
 
+var providerEnvVar = map[string]string{
+	"Anthropic":  "ANTHROPIC_API_KEY",
+	"Gemini":     "GEMINI_API_KEY",
+	"openai":     "OPENAI_API_KEY",
+	"groq":       "GROQ_API_KEY",
+	"together":   "TOGETHER_API_KEY",
+	"mistral":    "MISTRAL_API_KEY",
+	"deepseek":   "DEEPSEEK_API_KEY",
+	"openrouter": "OPENROUTER_API_KEY",
+	"fireworks":  "FIREWORKS_API_KEY",
+}
+
+// resolveAPIKeyFromEnv checks the provider-specific var first, then falls
+// back to a generic LLM_API_KEY so custom/self-hosted setups still work.
+func resolveAPIKeyFromEnv(provider string) string {
+	p := strings.ToLower(strings.TrimSpace(provider))
+	if envVar, ok := providerEnvVar[p]; ok {
+		if v := os.Getenv(envVar); v != "" {
+			return v
+		}
+	}
+	return os.Getenv("LLM_API_KEY")
+}
+
 func Load() (*Config, error) {
+	// Load .env into process env if present. Missing file is fine not an error.
+	_ = godotenv.Load()
+
 	var cfg Config
 
-	// Try to read from eulix.toml
 	if _, err := toml.DecodeFile("eulix.toml", &cfg); err != nil {
-		// Return default config
 		cfg = *DefaultConfig()
 	}
 
-	// Resolve project path to absolute path (cross-platform)
 	if cfg.Project.Path != "" {
 		absPath, err := filepath.Abs(cfg.Project.Path)
 		if err != nil {
 			return nil, err
 		}
-		if cfg.Project.DebugConfig {
-			// fmt.Printf("[CONFIG] Project path: %s → %s\n", cfg.Project.Path, absPath)
-		}
 		cfg.Project.Path = absPath
 	}
 
-	// Override API key from environment if not set
+	// toml api_key wins if set; otherwise pull from env, keyed by provider.
 	if cfg.LLM.APIKey == "" {
-		cfg.LLM.APIKey = os.Getenv("ANTHROPIC_API_KEY")
+		cfg.LLM.APIKey = resolveAPIKeyFromEnv(cfg.LLM.Provider)
 	}
 
-	// Normalize cache DSN path (make it absolute if relative)
 	if cfg.Cache.SQL.Enabled && !filepath.IsAbs(cfg.Cache.SQL.DSN) {
 		absPath, err := filepath.Abs(cfg.Cache.SQL.DSN)
 		if err == nil {
@@ -169,10 +191,8 @@ func DefaultConfig() *Config {
 
 func TestSourcePaths() {
 	eulixDir := "/path/to/.eulix"
-	sourceRoot := filepath.Dir(eulixDir) // parent of .eulix
-
-	// Test file from your KB
-	testFile := "testproject/django/shortcuts.py" // example from Django
+	sourceRoot := filepath.Dir(eulixDir)
+	testFile := "testproject/django/shortcuts.py"
 	fullPath := filepath.Join(sourceRoot, testFile)
 
 	fmt.Printf("Eulix dir: %s\n", eulixDir)

@@ -28,6 +28,20 @@ func BuildPromptString(query string, class *Classification, sourceAvailable bool
 		cotFooter()
 }
 
+// buildFullPromptWithContext assembles the context inventory + CoT prompt,
+// the same way PromptOrAnswer does. Every LLM-calling handler should use
+// this instead of calling BuildPromptString alone, or the retrieved code
+// context never reaches the model.
+func (r *Router) buildFullPromptWithContext(ctx *types.ContextWindow, query string, class *Classification) string {
+	src := hasSourceCode(ctx)
+	taskBody := getTaskBody(r, query, class)
+
+	contextPrompt := r.llmClient.BuildFullPrompt(ctx, query)
+	cotPrompt := BuildPromptString(query, class, src, taskBody)
+
+	return contextPrompt + "\n\n" + cotPrompt
+}
+
 // cotHeader builds the universal reasoning preamble injected into every prompt.
 // It instructs the model to separate "what I can see" from "what I infer",
 // and to distinguish source code chunks from metadata-only chunks.
@@ -96,9 +110,7 @@ func (r *Router) handleUnderstanding(query string, class *Classification) (strin
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
-	src := hasSourceCode(ctx)
-	taskBody := getTaskBody(r, query, class)
-	fullPrompt := BuildPromptString(query, class, src, taskBody)
+	fullPrompt := r.buildFullPromptWithContext(ctx, query, class)
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
@@ -107,9 +119,7 @@ func (r *Router) handleImplementation(query string, class *Classification) (stri
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
-	src := hasSourceCode(ctx)
-	taskBody := getTaskBody(r, query, class)
-	fullPrompt := BuildPromptString(query, class, src, taskBody)
+	fullPrompt := r.buildFullPromptWithContext(ctx, query, class)
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
@@ -119,9 +129,7 @@ func (r *Router) handleArchitecture(query string, class *Classification) (string
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
-	src := hasSourceCode(ctx)
-	taskBody := getTaskBody(r, query, class)
-	fullPrompt := BuildPromptString(query, class, src, taskBody)
+	fullPrompt := r.buildFullPromptWithContext(ctx, query, class)
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
@@ -130,9 +138,7 @@ func (r *Router) handleDebug(query string, class *Classification) (string, error
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
-	src := hasSourceCode(ctx)
-	taskBody := getTaskBody(r, query, class)
-	fullPrompt := BuildPromptString(query, class, src, taskBody)
+	fullPrompt := r.buildFullPromptWithContext(ctx, query, class)
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
@@ -145,9 +151,7 @@ func (r *Router) handleComparison(query string, class *Classification) (string, 
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
-	src := hasSourceCode(ctx)
-	taskBody := getTaskBody(r, query, class)
-	fullPrompt := BuildPromptString(query, class, src, taskBody)
+	fullPrompt := r.buildFullPromptWithContext(ctx, query, class)
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
@@ -156,9 +160,7 @@ func (r *Router) handleRefactoring(query string, class *Classification) (string,
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
-	src := hasSourceCode(ctx)
-	taskBody := getTaskBody(r, query, class)
-	fullPrompt := BuildPromptString(query, class, src, taskBody)
+	fullPrompt := r.buildFullPromptWithContext(ctx, query, class)
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
@@ -167,9 +169,7 @@ func (r *Router) handlePerformance(query string, class *Classification) (string,
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
-	src := hasSourceCode(ctx)
-	taskBody := getTaskBody(r, query, class)
-	fullPrompt := BuildPromptString(query, class, src, taskBody)
+	fullPrompt := r.buildFullPromptWithContext(ctx, query, class)
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
@@ -186,9 +186,7 @@ func (r *Router) handleDataFlow(query string, class *Classification) (string, er
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
-	src := hasSourceCode(ctx)
-	taskBody := getTaskBody(r, query, class)
-	fullPrompt := BuildPromptString(query, class, src, taskBody)
+	fullPrompt := r.buildFullPromptWithContext(ctx, query, class)
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
@@ -197,9 +195,7 @@ func (r *Router) handleSecurity(query string, class *Classification) (string, er
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
-	src := hasSourceCode(ctx)
-	taskBody := getTaskBody(r, query, class)
-	fullPrompt := BuildPromptString(query, class, src, taskBody)
+	fullPrompt := r.buildFullPromptWithContext(ctx, query, class)
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
@@ -208,9 +204,7 @@ func (r *Router) handleDocumentation(query string, class *Classification) (strin
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
-	src := hasSourceCode(ctx)
-	taskBody := getTaskBody(r, query, class)
-	fullPrompt := BuildPromptString(query, class, src, taskBody)
+	fullPrompt := r.buildFullPromptWithContext(ctx, query, class)
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
@@ -219,9 +213,7 @@ func (r *Router) handleExample(query string, class *Classification) (string, err
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
-	src := hasSourceCode(ctx)
-	taskBody := getTaskBody(r, query, class)
-	fullPrompt := BuildPromptString(query, class, src, taskBody)
+	fullPrompt := r.buildFullPromptWithContext(ctx, query, class)
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
@@ -230,9 +222,7 @@ func (r *Router) handleTesting(query string, class *Classification) (string, err
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
 	}
-	src := hasSourceCode(ctx)
-	taskBody := getTaskBody(r, query, class)
-	fullPrompt := BuildPromptString(query, class, src, taskBody)
+	fullPrompt := r.buildFullPromptWithContext(ctx, query, class)
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
