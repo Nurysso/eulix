@@ -17,3 +17,4 @@ debug_embedding_pipeline_*
 deb*
 diff*
 profile_*
+.env
