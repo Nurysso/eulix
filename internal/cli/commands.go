@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"eulix/internal/cache"
 	"eulix/internal/checksum"
@@ -31,7 +32,7 @@ import (
 
 const (
 	AppName    = "Eulix"
-	AppVersion = "v0.7.2"
+	AppVersion = "v0.7.3"
 )
 
 var (
@@ -212,7 +213,11 @@ var queryCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return
 		}
-
+		if cfg.Project.DebugConfig {
+			if err := writeQueryDebugLog(eulixDir, userQuery, result); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to write query debug log: %v\n", err)
+			}
+		}
 		fmt.Println(result)
 	},
 }
@@ -484,6 +489,31 @@ func init() {
 	setupCacheCommands()
 	// disableDefaultHelp()
 	registerCommands()
+}
+
+// writeQueryDebugLog appends the final query output to a query-debug log
+// file under eulixDir, mirroring llm.go's llmdebug.log format.
+func writeQueryDebugLog(eulixDir, query, result string) error {
+	if err := os.MkdirAll(eulixDir, 0755); err != nil {
+		return fmt.Errorf("failed to create debug directory: %w", err)
+	}
+
+	logFile := filepath.Join(eulixDir, "query-debug.log")
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open debug log file: %w", err)
+	}
+	defer f.Close()
+
+	entry := fmt.Sprintf("\n%s\n=== QUERY DEBUG ENTRY ===\nTimestamp: %s\n\n=== QUERY ===\n%s\n=== END QUERY ===\n\n=== OUTPUT ===\n%s\n=== END OUTPUT ===\n%s\n",
+		strings.Repeat("=", 80),
+		time.Now().Format("2006-01-02 15:04:05"),
+		query,
+		result,
+		strings.Repeat("=", 80))
+
+	_, err = f.WriteString(entry)
+	return err
 }
 
 func setupFlags() {
