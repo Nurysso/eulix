@@ -297,10 +297,10 @@ func (cb *ContextBuilder) streamKBChunks() error {
 			return fmt.Errorf("expected string key, got %T", tok)
 		}
 
-		// var raw json.RawMessage
-		// if err := dec.Decode(&raw); err != nil {
-		// 	return fmt.Errorf("reading FileData for %s: %w", filePath, err)
-		// }
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return fmt.Errorf("reading FileData for %s: %w", filePath, err)
+		}
 
 		// Decode the FileData with sonic for JIT-speed field
 		// access. The raw byte slice is a sub-slice of the
@@ -308,10 +308,9 @@ func (cb *ContextBuilder) streamKBChunks() error {
 		// decoded strings out before we move to the next
 		// iteration, so the source can be safely reused.
 		var fs types.FileData
-		if err := dec.Decode(&fs); err != nil {
-			return fmt.Errorf("reading FileData for %s: %w", filePath, err)
+		if err := sonicCopy.Unmarshal(raw, &fs); err != nil {
+			return fmt.Errorf("decoding FileData for %s: %w ", filePath, err)
 		}
-
 		cb.addChunksFromFile(filePath, &fs)
 		fs = types.FileData{}
 	}
