@@ -47,8 +47,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
+
+	"eulix/internal/types"
 
 	"github.com/bytedance/sonic"
+	"github.com/bytedance/sonic/option"
 )
 
 const (
@@ -74,6 +78,35 @@ var sonicCopy = sonic.Config{CopyString: true}.Froze()
 
 // errFileTooLarge is returned when size would overflow int on 32 bits platform
 var errFileTooLarge = errors.New("file size overflows int on this platform")
+
+func (cb *ContextBuilder) init() {
+	cb.debugLog.Log("Initializing context: starting JIT pretouching for target types...")
+
+	targets := []struct {
+		name string
+		typ  reflect.Type
+	}{
+		{"FileData", reflect.TypeOf(types.FileData{})},
+		{"IndexRef", reflect.TypeOf(types.IndexRef{})},
+		{"ExternalDependencyRef", reflect.TypeOf(types.ExternalDependencyRef{})},
+		{"CallGraphRef", reflect.TypeOf(types.CallGraphRef{})},
+	}
+
+	successCount := 0
+	for _, t := range targets {
+		if err := sonic.Pretouch(
+			t.typ,
+			option.WithCompileRecursiveDepth(8),
+		); err != nil {
+			cb.debugLog.Log("Failed to pretouch sonic type %s: %v", t.name, err)
+		} else {
+			cb.debugLog.Log("Successfully pretouched type: %s", t.name)
+			successCount++
+		}
+	}
+
+	cb.debugLog.Log("Context initialization complete (%d/%d types pretouched)", successCount, len(targets))
+}
 
 // decodeJSONFile decodes path into v using the fastest available strategy:
 //

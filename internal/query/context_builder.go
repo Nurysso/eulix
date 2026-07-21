@@ -76,6 +76,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 		subsystemTree: make([]*SubsystemNode, 0, 128),
 		noisePaths:    make([]string, 0, 32),
 	}
+	cb.init()
 	cb.debugLog.Log("Initializing ContextBuilder with source root: %s", sourceRoot)
 
 	queryEmbedder, err := embeddings.VectorWeaver(cfg.Embeddings.Model)

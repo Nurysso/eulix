@@ -254,6 +254,10 @@ func (cb *ContextBuilder) multiStrategySearch(
 	// detector sees the same vocabulary the keyword search used.
 	queryTokens := extractQueryKeywords(strings.ToLower(query))
 	detected := detectQuerySubsystems(cb.subsystemTree, queryTokens)
+	detected = filterNoiseSubsystems(detected, cb.noisePaths)
+	if len(detected) > subsysFinalK {
+		detected = detected[:subsysFinalK]
+	}
 	if len(detected) > 0 {
 		cb.debugLog.Log("Detected subsystem (%d): top=%q score=%.2f",
 			len(detected), detected[0].node.Path, detected[0].score)
@@ -266,16 +270,13 @@ func (cb *ContextBuilder) multiStrategySearch(
 		}
 	}
 	boostByDetectedSubsystems(result, detected, cb.noisePaths)
-	// boostBySubsystemPath(result, query)
-	// In multiStrategySearch, after boostBySubsystemPath:
+	result = filterTestDocChunks(result)
 	for i := range result {
 		f := result[i].File
 		if strings.Contains(f, "/tests/") ||
 			strings.Contains(f, "/test_") ||
 			strings.Contains(f, "fake_") ||
 			strings.Contains(f, "_test.go") {
-			// Don't zero out — tests are valid for debug/callee queries
-			// Just de-prioritize for concept/overview queries
 			if intent.Type == IntentConcept || intent.Type == IntentFlow {
 				result[i].Score *= 0.4
 			}
