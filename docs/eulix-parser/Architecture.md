@@ -1,6 +1,6 @@
 # Eulix Parser - Architecture Documentation
 
-**deep-dive into the design, and internals of the high-performance code parser.**
+**Deep-dive into the design, and internals of the high-performance code parser.**
 
 ---
 
@@ -18,20 +18,21 @@
 10. [Performance Optimization](#performance-optimization)
 11. [Extension Points](#extension-points)
 12. [Testing Strategy](#testing-strategy)
+13. [Language Support Status](#language-support-status)
 
 ---
 
 ## Overview
 
-Eulix Parser is a static code analysis tool that transforms source code into structured, queryable knowledge bases. It uses tree-sitter for accurate AST parsing and Rayon for parallel processing to achieve 5000+ LOC/s throughput.
+Eulix Parser is a static code analysis tool that transforms source code into structured, queryable knowledge bases. It uses custom AST parsing and Rayon for parallel processing to achieve high throughput for codebase analysis.
 
 ### Goals
 
-- **Performance**: Parse large codebases (100K+ LOC) in seconds
-- **Accuracy**: Use tree-sitter AST for language-aware parsing
-- **Completeness**: Extract all relevant code metadata
+- **Performance**: Parse large codebases (Millions of LOC) efficiently
+- **Accuracy**: Language-aware parsing with custom AST walkers
+- **Completeness**: Extract all relevant code metadata (functions, classes, calls, imports)
 - **Scalability**: Handle projects from 1K to 1M+ LOC
-- **Extensibility**: Easy addition of new languages
+- **Extensibility**: Easy addition of new languages through modular parser design
 
 ### Non-Goals
 
@@ -124,528 +125,17 @@ Eulix Parser is a static code analysis tool that transforms source code into str
                    └─────────┘
 ```
 
-### example kb.json
-``` json
-{
-  "metadata": {
-    "project_name": "string",
-    "version": "string",
-    "parsed_at": "string (ISO 8601 timestamp)",
-    "languages": ["string"],
-    "total_files": "number",
-    "total_loc": "number",
-    "total_functions": "number",
-    "total_classes": "number",
-    "total_methods": "number"
-  },
-  "structure": {
-    "path/to/file.py": {
-      "language": "string",
-      "loc": "number",
-      "imports": [
-        {
-          "module": "string",
-          "items": ["string"],
-          "type": "string (external | internal)"
-        }
-      ],
-      "functions": [
-        {
-          "id": "string (file:function_name)",
-          "name": "string",
-          "signature": "string",
-          "params": [
-            {
-              "name": "string",
-              "type_annotation": "string",
-              "default_value": "string | null"
-            }
-          ],
-          "return_type": "string",
-          "docstring": "string",
-          "line_start": "number",
-          "line_end": "number",
-          "calls": [
-            {
-              "callee": "string",
-              "defined_in": "string (file path) | null",
-              "line": "number",
-              "args": ["string"],
-              "is_conditional": "boolean",
-              "context": "string (if | else | loop | try | unconditional)"
-            }
-          ],
-          "called_by": [
-            {
-              "function": "string",
-              "file": "string",
-              "line": "number"
-            }
-          ],
-          "variables": [
-            {
-              "name": "string",
-              "var_type": "string | null",
-              "scope": "string (param | local | global)",
-              "defined_at": "number | null",
-              "transformations": [
-                {
-                  "line": "number",
-                  "via": "string (function name)",
-                  "becomes": "string (new variable name)"
-                }
-              ],
-              "used_in": ["string (function names)"],
-              "returned": "boolean"
-            }
-          ],
-          "control_flow": {
-            "complexity": "number",
-            "branches": [
-              {
-                "branch_type": "string (if | elif | else | match)",
-                "condition": "string",
-                "line": "number",
-                "true_path": {
-                  "calls": ["string"],
-                  "returns": "string | null",
-                  "raises": "string | null"
-                },
-                "false_path": {
-                  "calls": ["string"],
-                  "returns": "string | null",
-                  "raises": "string | null"
-                } | null
-              }
-            ],
-            "loops": [
-              {
-                "loop_type": "string (for | while)",
-                "condition": "string",
-                "line": "number",
-                "calls": ["string"]
-              }
-            ],
-            "try_blocks": [
-              {
-                "line": "number",
-                "try_calls": ["string"],
-                "except_clauses": [
-                  {
-                    "exception_type": "string",
-                    "line": "number",
-                    "calls": ["string"]
-                  }
-                ],
-                "finally_calls": ["string"]
-              }
-            ]
-          },
-          "exceptions": {
-            "raises": ["string (exception types)"],
-            "propagates": ["string (exception types)"],
-            "handles": ["string (exception types)"]
-          },
-          "complexity": "number",
-          "is_async": "boolean",
-          "decorators": ["string"],
-          "tags": ["string"],
-          "importance_score": "number (0-1)"
-        }
-      ],
-      "classes": [
-        {
-          "id": "string (file:class_name)",
-          "name": "string",
-          "bases": ["string (base class names)"],
-          "docstring": "string",
-          "line_start": "number",
-          "line_end": "number",
-          "methods": ["Function objects (same as functions array)"],
-          "attributes": [
-            {
-              "name": "string",
-              "type_annotation": "string",
-              "value": "string | null"
-            }
-          ],
-          "decorators": ["string"]
-        }
-      ],
-      "global_vars": [
-        {
-          "name": "string",
-          "type_annotation": "string",
-          "value": "string | null",
-          "line": "number"
-        }
-      ],
-      "todos": [
-        {
-          "line": "number",
-          "text": "string",
-          "priority": "string (high | medium | low)"
-        }
-      ],
-      "security_notes": [
-        {
-          "note_type": "string",
-          "line": "number",
-          "description": "string"
-        }
-      ]
-    }
-  },
-  "call_graph": {
-    "nodes": [
-      {
-        "id": "string (file:identifier)",
-        "node_type": "string (function | method | class)",
-        "file": "string",
-        "is_entry_point": "boolean",
-        "call_count_estimate": "number"
-      }
-    ],
-    "edges": [
-      {
-        "from": "string (node id)",
-        "to": "string (node id)",
-        "edge_type": "string (calls | inherits | uses)",
-        "conditional": "boolean",
-        "call_site_line": "number"
-      }
-    ]
-  },
-  "dependency_graph": {
-    "nodes": [
-      {
-        "id": "string",
-        "node_type": "string (file | module | package)",
-        "name": "string"
-      }
-    ],
-    "edges": [
-      {
-        "from": "string (node id)",
-        "to": "string (node id)",
-        "edge_type": "string (imports | depends_on)"
-      }
-    ]
-  },
-  "indices": {
-    "functions_by_name": {
-      "function_name": ["string (file:line)"]
-    },
-    "functions_calling": {
-      "callee_name": ["string (caller identifiers)"]
-    },
-    "functions_by_tag": {
-      "tag_name": ["string (function identifiers)"]
-    },
-    "types_by_name": {
-      "type_name": ["string (file:line)"]
-    },
-    "files_by_category": {
-      "category_name": ["string (file paths)"]
-    }
-  },
-  "entry_points": [
-    {
-      "entry_type": "string (api_endpoint | cli_command | main)",
-      "path": "string | null",
-      "function": "string",
-      "handler": "string",
-      "file": "string",
-      "line": "number",
-      "methods": ["string (HTTP methods)"] | null
-    }
-  ],
-  "external_dependencies": [
-    {
-      "name": "string",
-      "version": "string | null",
-      "source": "string",
-      "used_by": ["string (file paths)"],
-      "import_count": "number"
-    }
-  ],
-  "patterns": {
-    "naming_convention": "string",
-    "structure_type": "string",
-    "architecture_style": "string (layered | microservices | mvc) | null"
-  }
-}
-```
-
-
-### example index.json
-```json
-{
-  "functions_by_name": {
-    "main": [
-      "src/main.py:10"
-    ],
-    "initialize": [
-      "src/init.py:25"
-    ],
-    "calculate_total": [
-      "src/utils.py:45",
-      "src/helpers.py:23"
-    ],
-    "process_data": [
-      "src/processor.py:100"
-    ]
-  },
-  "functions_calling": {
-    "initialize": [
-      "func_main"
-    ],
-    "calculate_total": [
-      "func_main",
-      "method_process_order"
-    ],
-    "log_message": [
-      "func_main",
-      "func_initialize",
-      "method_process"
-    ]
-  },
-  "functions_by_tag": {
-    "entry-point": [
-      "func_main",
-      "func_run"
-    ],
-    "async": [
-      "func_fetch_data",
-      "method_load_async"
-    ],
-    "deprecated": [
-      "func_old_method"
-    ]
-  },
-  "types_by_name": {
-    "User": [
-      "src/models/user.py:10"
-    ],
-    "Database": [
-      "src/db/connection.py:25"
-    ],
-    "HttpClient": [
-      "src/http/client.py:5"
-    ]
-  },
-  "files_by_category": {
-    "API": [
-      "src/api/routes.py",
-      "src/api/endpoints.py"
-    ],
-    "Authentication": [
-      "src/auth/login.py",
-      "src/auth/tokens.py"
-    ],
-    "Data Models": [
-      "src/models/user.py",
-      "src/models/post.py"
-    ],
-    "Tests": [
-      "tests/test_api.py",
-      "tests/test_utils.py"
-    ],
-    "Utilities": [
-      "src/utils/helpers.py"
-    ],
-    "Other": [
-      "src/main.py",
-      "src/config.py"
-    ]
-  }
-}
-```
-
-### example summary.json
-```json
-{
-  "project_name": "my-web-app",
-  "total_files": 42,
-  "total_loc": 8500,
-  "languages": [
-    "Python",
-    "JavaScript"
-  ],
-  "categories": {
-    "API": [
-      "src/api/routes.py",
-      "src/api/handlers.py"
-    ],
-    "Authentication": [
-      "src/auth/login.py",
-      "src/auth/tokens.py"
-    ],
-    "Data Models": [
-      "src/models/user.py",
-      "src/models/post.py"
-    ],
-    "Tests": [
-      "tests/test_api.py",
-      "tests/test_auth.py"
-    ],
-    "Utilities": [
-      "src/utils/helpers.py"
-    ],
-    "Other": [
-      "src/main.py",
-      "src/config.py"
-    ]
-  },
-  "key_features": [
-    "RESTful API for user management",
-    "JWT-based authentication system",
-    "PostgreSQL database integration",
-    "Async task queue processing"
-  ],
-  "entry_points": [
-    "src/main.py:10",
-    "src/api/app.py:25"
-  ],
-  "dependencies": {
-    "stdlib": [
-      "os",
-      "sys",
-      "json",
-      "datetime",
-      "asyncio"
-    ],
-    "third_party": [
-      "flask",
-      "sqlalchemy",
-      "jwt",
-      "requests"
-    ]
-  },
-  "patterns": {
-    "naming_convention": "snake_case",
-    "structure_type": "Standard (src/ + tests/)",
-    "architecture_style": "layered"
-  }
-}
-```
-
-### example call_graph.json
-```json
-{
-  "nodes": [
-    {
-      "id": "func_main",
-      "node_type": "function",
-      "file": "src/main.py",
-      "is_entry_point": true,
-      "call_count_estimate": 0
-    },
-    {
-      "id": "func_initialize",
-      "node_type": "function",
-      "file": "src/init.py",
-      "is_entry_point": false,
-      "call_count_estimate": 2
-    },
-    {
-      "id": "class_User",
-      "node_type": "class",
-      "file": "src/models/user.py",
-      "is_entry_point": false,
-      "call_count_estimate": 5
-    },
-    {
-      "id": "method_save",
-      "node_type": "method",
-      "file": "src/models/user.py",
-      "is_entry_point": false,
-      "call_count_estimate": 3
-    }
-  ],
-  "edges": [
-    {
-      "from": "func_main",
-      "to": "func_initialize",
-      "edge_type": "calls",
-      "conditional": false,
-      "call_site_line": 15
-    },
-    {
-      "from": "func_initialize",
-      "to": "class_User",
-      "edge_type": "calls",
-      "conditional": true,
-      "call_site_line": 28
-    },
-    {
-      "from": "class_AdminUser",
-      "to": "class_User",
-      "edge_type": "inherits",
-      "conditional": false,
-      "call_site_line": 10
-    }
-  ]
-}
-```
-
 ### Component Overview
 
-| Component | Input | Output | Purpose |
-|-----------|-------|--------|---------|
-| **File Walker** | Directory path | File list | Discover source files |
-| **Language Detector** | File paths | (file, language) | Detect language per file |
-| **Parser** | Source code | Parsed data | Extract AST information |
-| **KB Builder** | Parsed data | KnowledgeBase | Build unified structure |
-| **Analyzer** | KnowledgeBase | Index/Summary | Extract insights |
+| Component             | Input          | Output           | Purpose                  |
+| --------------------- | -------------- | ---------------- | ------------------------ |
+| **File Walker**       | Directory path | File list        | Discover source files    |
+| **Language Detector** | File paths     | (file, language) | Detect language per file |
+| **Parser**            | Source code    | Parsed data      | Extract AST information  |
+| **KB Builder**        | Parsed data    | KnowledgeBase    | Build unified structure  |
+| **Analyzer**          | KnowledgeBase  | Index/Summary    | Extract insights         |
 
 ---
-
-## Module Architecture
-
-```
-eulix-parser/
-├── src/
-│   ├── main.rs              → CLI entry point
-│   │                          - Argument parsing (clap)
-│   │                          - Orchestrates pipeline
-│   │                          - Progress reporting
-│   │
-│   ├── parser/              → Parsing logic
-│   │   ├── mod.rs            - Module exports
-│   │   ├── language.rs       - Language detection & dispatch
-│   │   ├── python.rs         - Python AST parser
-│   │   └── analyze.rs        - Post-parse analysis
-│   │
-│   ├── kb/                  → Knowledge base types
-│   │   ├── mod.rs            - Module exports
-│   │   ├── types.rs          - Core data structures
-│   │   └── builder.rs        - KB construction
-│   │
-│   └── utils/               → Utilities
-│       ├── mod.rs            - Module exports
-│       ├── file_walker.rs    - File system traversal
-│       └── ignore.rs         - .euignore handling
-│
-└──Cargo.toml               → Dependencies
-```
-
-### Module Dependency Graph
-
-```
-main.rs
-  ├─→ utils::file_walker     → Vec<PathBuf>
-  ├─→ utils::ignore          → IgnoreRules
-  ├─→ parser::language       → Language detection
-  │     └─→ parser::python   → FileData
-  ├─→ kb::builder            → KnowledgeBase
-  │     └─→ kb::types        → Data structures
-  └─→ parser::analyze        → Index + Summary
-```
-
----
-### schema
-(schema)[schema.txt]
 
 ---
 
@@ -674,6 +164,7 @@ Vec<PathBuf> (discovered files)
 ```
 
 **Ignored by Default:**
+
 ```rust
             ".git/",
             ".eulix/",
@@ -741,10 +232,11 @@ FileData {
     global_vars, todos, security_notes
 }
 ```
+
 **Tree-Sitter AST Walking:**
 
- - calculate_complexity
- - Function Call Extraction
+- calculate_complexity
+- Function Call Extraction
 - Security Pattern Detection
 
 ### Phase 4: KB Building
@@ -778,6 +270,7 @@ KnowledgeBase {
     external_dependencies
 }
 ```
+
 ### Phase 5: Analysis
 
 **Module:** `parser/analyze.rs`
@@ -827,6 +320,7 @@ SummaryData {
     todos
 }
 ```
+
 ---
 
 ## Parallel Processing
@@ -873,13 +367,16 @@ Collect Results (thread-safe)
 ### Load Balancing
 
 **Work Stealing Algorithm:**
+
 - Each worker has a deque of tasks
 - Idle workers "steal" from busy workers
 - Automatic load balancing
 
 **Optimal Thread Count:**
+
 - Yet to be implemented
 - Currently let users define threads when eulix-parser bin is called if not defined then uses 4 threads
+
 ```rust
 fn optimal_thread_count(file_count: usize) -> usize {
     let cpu_count = num_cpus::get();
@@ -896,7 +393,34 @@ fn optimal_thread_count(file_count: usize) -> usize {
 
 ---
 
-## Memory Management My asumption
+## Language Support Status
+
+| Language   | Extension                  | Parse | Call Graph | Complexity | Status        |
+| ---------- | -------------------------- | ----- | ---------- | ---------- | ------------- |
+| Python     | `.py`                      | ✅    | ✅         | ✅         | Implemented   |
+| Go         | `.go`                      | ✅    | ✅         | ✅         | Implemented   |
+| C          | `.c` `.h`                  | ✅    | ✅         | ✅         | Implemented   |
+| C++        | `.cpp` `.hpp` `.cc` `.cxx` | ✅    | ✅         | ✅         | Implemented   |
+| Rust       | `.rs`                      | ✅    | ✅         | ✅         | Implemented   |
+| TypeScript | `.ts` `.tsx`               | ✅    | ✅         | ✅         | Implemented   |
+| JavaScript | `.js` `.jsx`               | ❌    | ❌         | ❌         | Returns error |
+
+> **Note:** JavaScript is detected but not yet implemented. Files of this type cause `parse_file()` to return `Err(...)`, which is silently counted as a parse failure. The file is skipped without user warning unless `--verbose` is passed.
+
+### Language Detection Strategy
+
+The parser uses a multi-strategy language detection system in `parser/language.rs`:
+
+1. **Extension-based detection** (fastest) - Checks file extensions against known patterns
+2. **Filename patterns** - Handles special files like `Makefile`, `go.mod`, `Cargo.toml`
+3. **Shebang detection** - Reads first line for `#!` interpreter directives
+4. **Content analysis** - Falls back to heuristic analysis of first 50 lines for ambiguous files
+
+This layered approach ensures accurate language detection even for files without clear extensions or with unusual naming conventions.
+
+---
+
+## Memory Management
 
 ### Memory Layout
 
