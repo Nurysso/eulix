@@ -59,7 +59,7 @@ impl Analyzer {
                     println!("      Using direct analysis...");
                 }
                 // Build the simpler direct call graph
-                kb.call_graph = Self::build_call_graph_v2(&kb.structure);
+                kb.call_graph = Self::build_call_graph(&kb.structure);
             }
             if verbose {
                 println!("   → Building reverse call graphs...");
