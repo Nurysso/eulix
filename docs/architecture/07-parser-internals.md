@@ -149,14 +149,12 @@ flowchart TD
 | Python     | `.py`     | ✅    | ✅         | ✅         | Implemented               |
 | Go         | `.go`     | ✅    | ✅         | ✅         | Implemented               |
 | C          | `.c` `.h` | ✅    | ✅         | ✅         | Implemented               |
+| C++        | `.cpp` `.hpp` `.cc` `.cxx` | ✅    | ✅         | ✅         | Implemented               |
 | Rust       | `.rs`     | ✅    | ✅         | ✅         | Implemented               |
-| TypeScript | `.ts`     | ✅    | ✅         | ✅         | Implemented(need changes) |
-| JavaScript | `.js`     | ❌    | ❌         | ❌         | Returns error             |
+| TypeScript | `.ts` `.tsx` | ✅    | ✅         | ✅         | Implemented               |
+| JavaScript | `.js` `.jsx` | ❌    | ❌         | ❌         | Returns error             |
 
-> **Note:** Even though JS/TS/Rust are listed in `collect_source_files`, any
-> file of those types causes `parse_file()` to return `Err(...)`, which is
-> silently counted as a parse failure. The file is skipped without user warning
-> unless `--verbose` is passed.
+> **Note:** JavaScript is detected but not yet implemented. Files of this type cause `parse_file()` to return `Err(...)`, which is silently counted as a parse failure. The file is skipped without user warning unless `--verbose` is passed.
 
 ---
 
@@ -175,7 +173,18 @@ flowchart TD
 
 | Limitation                                                     | Impact                                      | Notes                                             |
 | -------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------- |
-| JS/TS parsers not implemented/isn't stable                     | Those files fail                            | Highest priority: TS (dogfooding)                 |
+| JavaScript parser not implemented                              | JS files fail to parse                      | Planned for future implementation                  |
 | Call graph cross-file resolution depends on name matching      | Overloaded function names cause false edges | Qualify names with file path                      |
 | Complexity is per-function cyclomatic; no module-level metrics | Cannot detect "hot" modules                 | Add file-level aggregation                        |
 | `--no-analyze` skips call graph entirely                       | Dependency/usage queries return no results  | Warn user in `eulix chat` if call graph is absent |
+
+## Language Detection
+
+The parser uses a multi-strategy language detection system in `parser/language.rs`:
+
+1. **Extension-based detection** (fastest) - Checks file extensions against known patterns
+2. **Filename patterns** - Handles special files like `Makefile`, `go.mod`, `Cargo.toml`
+3. **Shebang detection** - Reads first line for `#!` interpreter directives
+4. **Content analysis** - Falls back to heuristic analysis of first 50 lines for ambiguous files
+
+This layered approach ensures accurate language detection even for files without clear extensions or with unusual naming conventions.
