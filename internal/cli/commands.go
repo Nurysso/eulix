@@ -498,7 +498,7 @@ func writeQueryDebugLog(eulixDir, query, result string) error {
 		return fmt.Errorf("failed to create debug directory: %w", err)
 	}
 
-	logFile := filepath.Join(eulixDir, "query-debug.log")
+	logFile := filepath.Join(eulixDir, "debug", "query-debug.log")
 	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open debug log file: %w", err)
