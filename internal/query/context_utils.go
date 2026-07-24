@@ -99,11 +99,11 @@ func (cb *ContextBuilder) GetLastTrace() *DebugTrace {
 // Uses timestamp in filename for uniqueness.
 // Intended for offline analysis; not used in production path.
 func (cb *ContextBuilder) writeContextToFile(ctx *types.ContextWindow) error {
-	logDir := filepath.Join(cb.config.Project.Path, ".eulix", "debug")
+	logDir := filepath.Join(cb.config.Project.Path, ".eulix", "debug", "retrieval")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return err
 	}
-	fileName := fmt.Sprintf("debug_embedding_pipeline_%s.txt", time.Now().Format("20060102_150405"))
+	fileName := fmt.Sprintf("retrival_debug_%s.txt", time.Now().Format("20060102_150405"))
 	logPath := filepath.Join(logDir, fileName)
 	f, err := os.Create(logPath)
 	if err != nil {
@@ -142,7 +142,7 @@ func jsonSkipToKey(dec *json.Decoder, target string) error {
 // NewDebugLogger creates a thread-safe debug logger writing to eulixDir/context_debug.log.
 // If file creation fails, returns a silent (no-op) logger rather than panicking.
 func NewDebugLogger(eulixDir string) *DebugLogger {
-	logPath := filepath.Join(eulixDir, "context_debug.log")
+	logPath := filepath.Join(eulixDir, "debug", "context_debug.log")
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return &DebugLogger{} // silent fallback
