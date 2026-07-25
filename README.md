@@ -237,6 +237,7 @@ Supported embedding models: `sentence-transformers/all-MiniLM-L6-v2` · `BAAI/bg
 
 | Doc                                                              | Description                                   |
 | ---------------------------------------------------------------- | --------------------------------------------- |
+| [basic introduction and config](docs/About-Eulix.md) | overview of how to configure and general summary of project |
 | [Architecture Overview](docs/architecture/01-system-overview.md) | System design and data flow                   |
 | [Parser Internals](docs/architecture/07-parser-internals.md)     | How `eulix_parser` works                      |
 | [Query Pipeline](docs/architecture/03-query-pipeline.md)         | End-to-end query flow and retrieval           |
