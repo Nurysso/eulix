@@ -16,7 +16,7 @@ dimension = 768
 local = false
 provider = "fireworks"
 model = "accounts/fireworks/models/deepseek-v4-pro"
-max_tokens = 20000
+max_tokens = 10000
 temperature = 0.1
 # baseURL = "http://localhost:11434"
 
