@@ -15,9 +15,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"eulix/internal/cache"
-	"eulix/internal/config"
-	"eulix/internal/query"
+	"corvux/internal/cache"
+	"corvux/internal/config"
+	"corvux/internal/query"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"

@@ -72,7 +72,7 @@ import (
 	"strings"
 	"time"
 
-	"eulix/internal/types"
+	"corvux/internal/types"
 )
 
 const (

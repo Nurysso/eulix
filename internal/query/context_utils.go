@@ -52,7 +52,6 @@ package query
 import (
 	"encoding/binary"
 	"encoding/json"
-	"eulix/internal/types"
 	"fmt"
 	"math"
 	"os"
@@ -61,6 +60,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"corvux/internal/types"
 )
 
 // Close is a no-op placeholder for resource cleanup.

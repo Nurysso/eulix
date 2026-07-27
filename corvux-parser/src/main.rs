@@ -46,9 +46,9 @@
 //! ## Usage
 //!
 //! ```bash
-//! eulix_parser --root ./my_project --output out/kb.json --threads 12
-//! eulix_parser --root . --languages rust,python --no-analyze
-//! eulix_parser --root . --euignore ./.euignore --verbose
+//! corvux_parser --root ./my_project --output out/kb.json --threads 12
+//! corvux_parser --root . --languages rust,python --no-analyze
+//! corvux_parser --root . --euignore ./.euignore --verbose
 //! ```
 //!
 //! ## Performance
@@ -309,7 +309,7 @@ fn validate_prism_input(val: &str) -> Result<u8, String> {
 }
 #[derive(Parser, Debug)]
 #[command(
-    name = "eulix_parser",
+    name = "corvux_parser",
     version = env!("CARGO_PKG_VERSION"),
     // disable_version_flag = true,
     about = "Fast multi-language code parser"

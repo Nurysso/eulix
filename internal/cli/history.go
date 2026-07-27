@@ -30,10 +30,10 @@ import (
 	"fmt"
 	"time"
 
-	"eulix/internal/cache"
-	"eulix/internal/checksum"
-	"eulix/internal/config"
-	"eulix/internal/tui"
+	"corvux/internal/cache"
+	"corvux/internal/checksum"
+	"corvux/internal/config"
+	"corvux/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
