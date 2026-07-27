@@ -1,11 +1,11 @@
 [package]
-name = "eulix-parser"
+name = "corvux-parser"
 version = "0.7.3"
 edition = "2021"
 authors = ["dawood Nurysso@proton.me"]
 description = "Fast, secure code parser for multiple languages using tree-sitter"
 license = "GPLV3"
-repository = "https://github.com/Nurysso/eulix"
+repository = "https://github.com/Nurysso/Corvux"
 readme = "README.md"
 keywords = ["code-analysis", "parser", "static-analysis", "tree-sitter"]
 categories = ["development-tools", "parsing"]
@@ -18,7 +18,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 ignore = []  # List ignored advisories if needed
 
 [[bin]]
-name = "eulix_parser"
+name = "corvux_parser"
 path = "src/main.rs"
 
 # Benchmark configuration
