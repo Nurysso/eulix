@@ -19,7 +19,7 @@ import (
 	"sort"
 	"strings"
 
-	"eulix/internal/types"
+	"corvux/internal/types"
 )
 
 // adaptiveDFThreshold scales the document-frequency cutoff with

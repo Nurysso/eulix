@@ -54,7 +54,7 @@ import (
 	"sort"
 	"strings"
 
-	"eulix/internal/types"
+	"corvux/internal/types"
 )
 
 // findCallSites does a literal string scan for ".symbol(" patterns across all

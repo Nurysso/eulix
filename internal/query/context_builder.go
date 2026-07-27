@@ -50,10 +50,10 @@ import (
 	"fmt"
 	"time"
 
-	"eulix/internal/config"
-	"eulix/internal/embeddings"
-	"eulix/internal/llm"
-	"eulix/internal/types"
+	"corvux/internal/config"
+	"corvux/internal/embeddings"
+	"corvux/internal/llm"
+	"corvux/internal/types"
 )
 
 // Constants

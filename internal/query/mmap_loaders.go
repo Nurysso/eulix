@@ -49,7 +49,7 @@ import (
 	"os"
 	"reflect"
 
-	"eulix/internal/types"
+	"corvux/internal/types"
 
 	"github.com/bytedance/sonic"
 	"github.com/bytedance/sonic/option"

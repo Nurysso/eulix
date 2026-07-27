@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"eulix/internal/cache"
+	"corvux/internal/cache"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"

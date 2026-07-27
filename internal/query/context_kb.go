@@ -47,7 +47,7 @@ import (
 	"fmt"
 	"strings"
 
-	"eulix/internal/types"
+	"corvux/internal/types"
 )
 
 // kbExactLookup performs symbol-based retrieval from the knowledge base.

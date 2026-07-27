@@ -29,31 +29,32 @@ cargo build --release
 ```
 
 Binary location:
-- Debug: `target/debug/eulix-parser`
-- Release: `target/release/eulix-parser`
+
+- Debug: `target/debug/corvux-parser`
+- Release: `target/release/corvux-parser`
 
 ## Usage
 
 ```bash
 # Basic usage
-eulix-parser \
+corvux-parser \
   --root /path/to/project \
   --output knowledge_base.json
 
 # With verbose output
-eulix-parser \
+corvux-parser \
   --root /path/to/project \
   --output kb.json \
   --verbose
 
 # Custom thread count
-eulix-parser \
+corvux-parser \
   --root /path/to/project \
   --output kb.json \
   --threads 2
 
 # With .euignore file
-eulix-parser \
+corvux-parser \
   --root /path/to/project \
   --output kb.json \
   --euignore .euignore
@@ -104,6 +105,7 @@ chmod +x ../build_and_test.sh
 ```
 
 This will:
+
 1. Build the parser in release mode
 2. Create a sample Python project
 3. Parse the project
@@ -112,14 +114,15 @@ This will:
 ## Performance
 
 | Project Size | Parse Time | Throughput |
-|-------------|------------|------------|
-| 1k LOC      | ~0.2s      | 5000 LOC/s |
-| 10k LOC     | ~1.5s      | 6600 LOC/s |
-| 100k LOC    | ~15s       | 6600 LOC/s |
+| ------------ | ---------- | ---------- |
+| 1k LOC       | ~0.2s      | 5000 LOC/s |
+| 10k LOC      | ~1.5s      | 6600 LOC/s |
+| 100k LOC     | ~15s       | 6600 LOC/s |
 
 ## What Gets Parsed
 
 ### Functions
+
 - Name, signature, parameters, return type
 - Docstrings
 - Line numbers (start/end)
@@ -129,6 +132,7 @@ This will:
 - Async/sync status
 
 ### Classes
+
 - Name, base classes
 - Docstrings
 - Line numbers
@@ -136,11 +140,13 @@ This will:
 - Attributes with type annotations
 
 ### Imports
+
 - Module names
 - Imported items
 - Both `import X` and `from X import Y` formats
 
 ### Security Patterns
+
 - Password handling
 - eval/exec usage
 - Dynamic imports
@@ -148,6 +154,7 @@ This will:
 - Pickle usage
 
 ### Dependencies
+
 - From requirements.txt
 - From pyproject.toml
 - From setup.py
@@ -155,8 +162,9 @@ This will:
 ## Ignored Directories
 
 By default, these are skipped:
+
 - `.git/`
-- `.eulix/`
+- `.corvux/`
 - `__pycache__/`
 - `.venv/`, `venv/`, `env/`
 - `node_modules/`
@@ -168,6 +176,7 @@ Add `.euignore` (gitignore format) for custom exclusions.
 ## Development
 
 ### Project Structure
+
 ```
 parser/
 ├── src/
@@ -183,16 +192,19 @@ parser/
 ```
 
 ### Run Tests
+
 ```bash
 cargo test
 ```
 
 ### Format Code
+
 ```bash
 cargo fmt
 ```
 
 ### Lint
+
 ```bash
 cargo clippy
 ```
@@ -200,20 +212,24 @@ cargo clippy
 ## Troubleshooting
 
 ### "Failed to load Python grammar"
+
 - Make sure tree-sitter-python is in Cargo.toml
 - Try `cargo clean && cargo build`
 
 ### "No Python files found"
+
 - Check if .gitignore is excluding files
 - Use `--verbose` to see what's being scanned
 - Create a `.euignore` with custom rules
 
 ### Slow parsing
+
 - Reduce threads: `--threads 2`
 - Exclude large directories in `.euignore`
 - Use release build (10x faster than debug)
 
 ### Out of memory
+
 - Parse fewer files at once
 - Reduce thread count
 - Typical usage: ~5MB per 1k LOC

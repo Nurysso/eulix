@@ -2,12 +2,12 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package cli provides the command-line interface implementation for EULIX.
+// Package cli provides the command-line interface implementation for CORVUX.
 /*
 This file is responsible for running of analyze command which auto runs
-eulix_parser and eulix_embed python script by a local venv located at
-$HOME/.Eulix/.venv (can be customized by eulix.toml) based on
-config provided in eulix.toml
+corvux_parser and corvux_embed python script by a local venv located at
+$HOME/.Corvux/.venv (can be customized by corvux.toml) based on
+config provided in corvux.toml
 */
 package cli
 
@@ -18,9 +18,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"eulix/internal/checksum"
-	"eulix/internal/config"
-	"eulix/internal/embeddings"
+	"corvux/internal/checksum"
+	"corvux/internal/config"
+	"corvux/internal/embeddings"
 )
 
 func analyzeProject(projectPath string) error {
@@ -37,14 +37,14 @@ func analyzeProject(projectPath string) error {
 	}
 
 	// Resolve venv interpreter and environment using the shared helper.
-	venvPath := filepath.Join(homeDir, ".Eulix", ".venv")
+	venvPath := filepath.Join(homeDir, ".Corvux", ".venv")
 	pythonPath, venvEnv, err := embeddings.GetVenvPython(venvPath)
 	if err != nil {
 		return fmt.Errorf("virtual environment setup failed: %w", err)
 	}
 	fmt.Printf("Using Python venv: %s (interpreter: %s)\n", venvPath, pythonPath)
 
-	eulixDir := filepath.Join(projectPath, ".eulix")
+	corvuxDir := filepath.Join(projectPath, ".corvux")
 
 	detector := checksum.HashHound(projectPath)
 	currentChecksum, err := detector.Calculate()
@@ -54,8 +54,8 @@ func analyzeProject(projectPath string) error {
 
 	// Run parser
 	fmt.Println("Parsing codebase...")
-	kbPath := filepath.Join(eulixDir, "kb.json")
-	parserCmd := exec.Command("eulix_parser",
+	kbPath := filepath.Join(corvuxDir, "kb.json")
+	parserCmd := exec.Command("corvux_parser",
 		"--root", projectPath,
 		"-o", kbPath,
 		"--threads", fmt.Sprintf("%d", cfg.Parser.Threads),
@@ -69,14 +69,14 @@ func analyzeProject(projectPath string) error {
 	fmt.Println("✓ Parser completed")
 	fmt.Println()
 
-	// Generate embeddings via ~/.Eulix/eulix_embed.py
+	// Generate embeddings via ~/.Corvux/corvux_embed.py
 	fmt.Println("Generating embeddings...")
-	embedScriptPath := filepath.Join(homeDir, ".Eulix", "eulix_embed.py")
+	embedScriptPath := filepath.Join(homeDir, ".Corvux", "corvux_embed.py")
 	if _, err := os.Stat(embedScriptPath); os.IsNotExist(err) {
 		return fmt.Errorf("embed script not found: %s", embedScriptPath)
 	}
 
-	embeddingsPath := filepath.Join(eulixDir)
+	embeddingsPath := filepath.Join(corvuxDir)
 	embedCmd := exec.Command(pythonPath, embedScriptPath,
 		"embed",
 		"-k", kbPath,
@@ -104,6 +104,6 @@ func analyzeProject(projectPath string) error {
 	duration := time.Since(startTime)
 	fmt.Printf("Took %s\n", duration.Round(time.Second))
 	fmt.Println()
-	fmt.Println("Run 'eulix chat' to start querying your codebase!")
+	fmt.Println("Run 'corvux chat' to start querying your codebase!")
 	return nil
 }

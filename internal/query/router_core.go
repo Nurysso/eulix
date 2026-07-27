@@ -29,9 +29,9 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"eulix/internal/cache"
-	"eulix/internal/config"
-	"eulix/internal/llm"
+	"corvux/internal/cache"
+	"corvux/internal/config"
+	"corvux/internal/llm"
 )
 
 func QueryTrafficController(
