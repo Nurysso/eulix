@@ -45,7 +45,7 @@ Every answer is grounded in actual code structure, not a nearest-neighbor guess.
 | Parser (Rust, 12 threads)  | **Millions of LOC/min**, parallel parsing with Rayon                         |
 | Embedder (Python, PyTorch) | **~35 min** for 1.5GB of parsed JSON, 768-dim model, CUDA/ROCm accelerated   |
 | Embedding index (mmap)     | **O(1)** lookup via IVF — `vectors.bin` + `embeddings.bin` loaded at runtime |
-| Retrieval (Go, warm)       | **<50ms** end-to-end, no model reload                                        |
+| Retrieval (Go, warm)       | **<500ms** end-to-end, no model for very huge corpus 26mLoc reload           |
 | Retrieval (Go, cold)       | **~7.4s** first query — PyTorch init, model load, cache warmup               |
 
 Tested on an AMD Ryzen 5 5600X: 7.4s cold query profile, 95.48% L1 hit rate, IPC 1.26, 16.5B instructions.
@@ -235,21 +235,21 @@ Supported embedding models: `sentence-transformers/all-MiniLM-L6-v2` · `BAAI/bg
 
 ## Documentation
 
-| Doc                                                              | Description                                   |
-| ---------------------------------------------------------------- | --------------------------------------------- |
-| [basic introduction and config](docs/About-Eulix.md) | overview of how to configure and general summary of project |
-| [Architecture Overview](docs/architecture/01-system-overview.md) | System design and data flow                   |
-| [Parser Internals](docs/architecture/07-parser-internals.md)     | How `eulix_parser` works                      |
-| [Query Pipeline](docs/architecture/03-query-pipeline.md)         | End-to-end query flow and retrieval           |
-| [Query Package](docs/query-package.md)                           | Comprehensive query system documentation      |
-| [Context Builder](docs/architecture/08-context-builder.md)       | Multi-layer retrieval and MMR selection       |
-| [Classifier](docs/architecture/06-classifier.md)                 | Intent recognition and routing                |
-| [Cache Architecture](docs/architecture/05-cache-architecture.md) | Caching layer design                          |
-| [Embedding Pipeline](docs/eulix-embed/architecture.md)           | Embedder internals                            |
-| [Parser Architecture](docs/eulix-parser/Architecture.md)        | Detailed parser design and implementation      |
-| [Known Issues](docs/known-issues.md)                             | Current limitations                           |
-| [Installation Guide](docs/installation.md)                       | Detailed platform setup                       |
-| [Model Selection](docs/models-to-use.md)                         | Recommended embedding and LLM models          |
+| Doc                                                              | Description                                                 |
+| ---------------------------------------------------------------- | ----------------------------------------------------------- |
+| [basic introduction and config](docs/About-Eulix.md)             | overview of how to configure and general summary of project |
+| [Architecture Overview](docs/architecture/01-system-overview.md) | System design and data flow                                 |
+| [Parser Internals](docs/architecture/07-parser-internals.md)     | How `eulix_parser` works                                    |
+| [Query Pipeline](docs/architecture/03-query-pipeline.md)         | End-to-end query flow and retrieval                         |
+| [Query Package](docs/query-package.md)                           | Comprehensive query system documentation                    |
+| [Context Builder](docs/architecture/08-context-builder.md)       | Multi-layer retrieval and MMR selection                     |
+| [Classifier](docs/architecture/06-classifier.md)                 | Intent recognition and routing                              |
+| [Cache Architecture](docs/architecture/05-cache-architecture.md) | Caching layer design                                        |
+| [Embedding Pipeline](docs/eulix-embed/architecture.md)           | Embedder internals                                          |
+| [Parser Architecture](docs/eulix-parser/Architecture.md)         | Detailed parser design and implementation                   |
+| [Known Issues](docs/known-issues.md)                             | Current limitations                                         |
+| [Installation Guide](docs/installation.md)                       | Detailed platform setup                                     |
+| [Model Selection](docs/models-to-use.md)                         | Recommended embedding and LLM models                        |
 
 ## Contributing
 
