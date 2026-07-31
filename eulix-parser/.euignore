@@ -1,0 +1,369 @@
+pub fn build_call_graph_v2(structure: &HashMap<String, FileData>) -> CallGraph {
+    // ── 0. file list (stable order) ───────────────────────
+    let file_list: Vec<&str> = {
+        let mut v: Vec<&str> = structure.keys().map(String::as_str).collect();
+        v.sort_unstable();
+        v
+    };
+    let file_map: HashMap<&str, usize> =
+        file_list.iter().enumerate().map(|(i, &s)| (s, i)).collect();
+
+    // ── 1. collect nodes (parallel, single pass) ──────────
+    const CHUNK_SIZE: usize = 2_000;
+    let file_vec: Vec<(&str, &FileData)> =
+        structure.iter().map(|(k, v)| (k.as_str(), v)).collect();
+
+    let raw_nodes: Vec<(&str, CompactNode)> = file_vec
+        .par_chunks(CHUNK_SIZE)
+        .flat_map(|chunk| {
+            let mut local: Vec<(&str, CompactNode)> = Vec::with_capacity(chunk.len() * 10);
+            for &(filepath, filedata) in chunk {
+                let fidx = *file_map.get(filepath).unwrap_or(&0);
+                for func in &filedata.functions {
+                    local.push((
+                        func.id.as_str(),
+                        CompactNode {
+                            id: func.id.clone(),
+                            node_type: if func.id.starts_with("method_") { 1 } else { 0 },
+                            file_idx: fidx,
+                            is_entry: func.tags.contains(&"entry-point".to_string()),
+                        },
+                    ));
+                }
+                for class in &filedata.classes {
+                    local.push((
+                        class.id.as_str(),
+                        CompactNode {
+                            id: class.id.clone(),
+                            node_type: 2,
+                            file_idx: fidx,
+                            is_entry: false,
+                        },
+                    ));
+                    for method in &class.methods {
+                        local.push((
+                            method.id.as_str(),
+                            CompactNode {
+                                id: method.id.clone(),
+                                node_type: 1,
+                                file_idx: fidx,
+                                is_entry: false,
+                            },
+                        ));
+                    }
+                }
+            }
+            local
+        })
+        .collect();
+
+    let mut node_map: HashMap<&str, usize> = HashMap::with_capacity(raw_nodes.len());
+    let mut unique_nodes: Vec<CompactNode> = Vec::with_capacity(raw_nodes.len());
+    for (id, node) in raw_nodes {
+        if !node_map.contains_key(id) {
+            node_map.insert(id, unique_nodes.len());
+            unique_nodes.push(node);
+        }
+    }
+
+    // ── 2a. BUILD SUFFIX INDEX ONCE (before hot path) ────
+    let suffix_index: HashMap<&str, Vec<usize>> = {
+        let mut idx: HashMap<&str, Vec<usize>> = HashMap::default();
+        for (&id, &node_idx) in &node_map {
+            if let Some((_, suffix)) = id.rsplit_once('_') {
+                idx.entry(suffix).or_default().push(node_idx);
+            }
+        }
+        idx
+    };
+
+    // ── 2b. build auxiliary indices (parallel per chunk) ───
+    struct ChunkIndex {
+        imports: Vec<(String, Vec<(String, String)>)>,
+        class_methods: Vec<(String, String, usize)>,
+        inheritance_ids: Vec<(usize, usize)>,
+    }
+
+    let chunk_indices: Vec<ChunkIndex> = file_vec
+        .par_chunks(CHUNK_SIZE)
+        .map(|chunk| {
+            let mut imports: Vec<(String, Vec<(String, String)>)> = Vec::new();
+            let mut class_methods: Vec<(String, String, usize)> = Vec::new();
+            let mut inheritance_ids: Vec<(usize, usize)> = Vec::new();
+
+            for &(filepath, filedata) in chunk {
+                let imps: Vec<(String, String)> = filedata
+                    .imports
+                    .iter()
+                    .flat_map(|i| {
+                        i.items
+                            .iter()
+                            .map(move |item| (item.clone(), i.module.clone()))
+                    })
+                    .collect();
+                if !imps.is_empty() {
+                    imports.push((filepath.to_string(), imps));
+                }
+
+                for class in &filedata.classes {
+                    let class_idx = match node_map.get(class.id.as_str()) {
+                        Some(&i) => i,
+                        None => continue,
+                    };
+                    for method in &class.methods {
+                        if let Some(&mid) = node_map.get(method.id.as_str()) {
+                            let short = short_name_of(&method.id, 1).to_string();
+                            class_methods.push((class.id.clone(), short, mid));
+                        }
+                    }
+                    for base in &class.bases {
+                        let base_idx = Self::find_base_idx(base, &node_map, &suffix_index);
+                        if let Some(bi) = base_idx {
+                            inheritance_ids.push((class_idx, bi));
+                        }
+                    }
+                }
+            }
+            ChunkIndex {
+                imports,
+                class_methods,
+                inheritance_ids,
+            }
+        })
+        .collect();
+
+    // ── merge chunk indices ───────────────────────────────
+    let total_methods: usize = chunk_indices.iter().map(|c| c.class_methods.len()).sum();
+    let total_inh: usize = chunk_indices.iter().map(|c| c.inheritance_ids.len()).sum();
+
+    let mut imports_per_file: HashMap<String, Vec<(String, String)>> =
+        HashMap::with_capacity(file_list.len());
+    let mut class_methods_map: HashMap<&str, HashMap<String, usize>> =
+        HashMap::with_capacity(total_methods / 4 + 1);
+    let mut inheritance_ids: HashMap<usize, Vec<usize>> =
+        HashMap::with_capacity(total_inh / 2 + 1);
+
+    for ci in &chunk_indices {
+        for (file, imps) in &ci.imports {
+            imports_per_file.insert(file.clone(), imps.clone());
+        }
+        for (cid, short, mid) in &ci.class_methods {
+            if let Some((&key, _)) = node_map.get_key_value(cid.as_str()) {
+                class_methods_map
+                    .entry(key)
+                    .or_default()
+                    .insert(short.clone(), *mid);
+            }
+        }
+        for &(child, parent) in &ci.inheritance_ids {
+            inheritance_ids.entry(child).or_default().push(parent);
+        }
+    }
+
+    let mut descendants_ids: HashMap<usize, Vec<usize>> =
+        HashMap::with_capacity(inheritance_ids.len());
+    for (&child, parents) in &inheritance_ids {
+        for &parent in parents {
+            descendants_ids.entry(parent).or_default().push(child);
+        }
+    }
+
+    let idx_to_key: Vec<&str> = {
+        let mut v = vec![""; unique_nodes.len()];
+        for (&id, &idx) in &node_map {
+            v[idx] = id;
+        }
+        v
+    };
+
+    let mut file_scope: HashMap<&str, HashMap<&str, Vec<usize>>> =
+        HashMap::with_capacity(file_list.len());
+    for (i, node) in unique_nodes.iter().enumerate() {
+        let file = file_list.get(node.file_idx).copied().unwrap_or("");
+        let short: &str = short_name_of(idx_to_key[i], node.node_type);
+        file_scope
+            .entry(file)
+            .or_default()
+            .entry(short)
+            .or_default()
+            .push(i);
+    }
+
+    let mut symbol_index: HashMap<&str, usize> = HashMap::with_capacity(node_map.len());
+    for (&id, &idx) in &node_map {
+        let short = short_name_of(id, unique_nodes[idx].node_type);
+        symbol_index.entry(short).or_insert(idx);
+    }
+
+    let module_to_files: HashMap<String, Vec<&str>> =
+        Self::build_module_to_files_borrowed(&file_list);
+
+    // ── 3. edge collection (parallel) ────────────────────
+    let ctx = ResolveCtx {
+        node_map: &node_map,
+        symbol_index: &symbol_index,
+        class_methods: &class_methods_map,
+        inheritance_ids: &inheritance_ids,
+        descendants_ids: &descendants_ids,
+        file_scope: &file_scope,
+        imports_per_file: &imports_per_file,
+        module_to_files: &module_to_files,
+        idx_to_key: &idx_to_key,
+    };
+
+    let all_edges: Vec<RawEdge> = file_vec
+        .par_chunks(CHUNK_SIZE)
+        .flat_map(|chunk| {
+            let mut seen: HashSet<(usize, usize)> = HashSet::new();
+            let mut local: Vec<RawEdge> = Vec::new();
+
+            for &(filepath, filedata) in chunk {
+                for func in &filedata.functions {
+                    let from = match ctx.node_map.get(func.id.as_str()) {
+                        Some(&i) => i,
+                        None => continue,
+                    };
+                    for call in &func.calls {
+                        if let Some(to) = ctx.resolve(&call.callee, filepath, None) {
+                            if seen.insert((from, to)) {
+                                local.push(RawEdge {
+                                    from,
+                                    to,
+                                    kind: 0,
+                                    conditional: call.is_conditional,
+                                    line: call.line,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                for class in &filedata.classes {
+                    let class_idx = match ctx.node_map.get(class.id.as_str()) {
+                        Some(&i) => i,
+                        None => continue,
+                    };
+
+                    for base in &class.bases {
+                        if let Some(bi) = Self::find_base_idx(base, ctx.node_map, &suffix_index) {
+                            if seen.insert((class_idx, bi)) {
+                                local.push(RawEdge {
+                                    from: class_idx,
+                                    to: bi,
+                                    kind: 1,
+                                    conditional: false,
+                                    line: class.line_start,
+                                });
+                            }
+                        }
+                    }
+
+                    for method in &class.methods {
+                        let from = match ctx.node_map.get(method.id.as_str()) {
+                            Some(&i) => i,
+                            None => continue,
+                        };
+                        let self_class: Option<&str> = if first_self_param(&method.params) {
+                            Some(class.id.as_str())
+                        } else {
+                            None
+                        };
+                        for call in &method.calls {
+                            if let Some(to) = ctx.resolve(&call.callee, filepath, self_class) {
+                                if seen.insert((from, to)) {
+                                    local.push(RawEdge {
+                                        from,
+                                        to,
+                                        kind: 0,
+                                        conditional: call.is_conditional,
+                                        line: call.line,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            local
+        })
+        .collect();
+
+    // ── 4. build final graph ──────────────────────────────
+    let mut counts = vec![0u32; unique_nodes.len()];
+    for e in &all_edges {
+        counts[e.to] += 1;
+    }
+
+    let final_nodes: Vec<CallGraphNode> = unique_nodes
+        .into_iter()
+        .enumerate()
+        .map(|(i, node)| CallGraphNode {
+            id: node.id,
+            node_type: match node.node_type {
+                0 => "function",
+                1 => "method",
+                _ => "class",
+            }
+            .to_string(),
+            file: file_list
+                .get(node.file_idx)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            is_entry_point: node.is_entry,
+            call_count_estimate: counts[i] as usize,
+        })
+        .collect();
+
+    let node_count = final_nodes.len();
+    let final_edges: Vec<CallGraphEdge> = all_edges
+        .into_iter()
+        .filter(|e| e.from < node_count && e.to < node_count)
+        .map(|e| CallGraphEdge {
+            from: final_nodes[e.from].id.clone(),
+            to: final_nodes[e.to].id.clone(),
+            edge_type: if e.kind == 1 {
+                "inheritance".to_string()
+            } else {
+                "call".to_string()
+            },
+            conditional: e.conditional,
+            call_site_line: e.line,
+        })
+        .collect();
+
+    CallGraph {
+        nodes: final_nodes,
+        edges: final_edges,
+    }
+}
+
+// Updated find_base_idx with suffix_index parameter
+#[inline]
+fn find_base_idx(
+    base: &str,
+    node_map: &HashMap<&str, usize>,
+    suffix_index: &HashMap<&str, Vec<usize>>,
+) -> Option<usize> {
+    if let Some(&i) = node_map.get(base) {
+        return Some(i);
+    }
+
+    for prefix in ["class_", "func_", "method_"] {
+        let mut buf = [0u8; 256];
+        let plen = prefix.len();
+        let blen = base.len();
+        if plen + blen <= buf.len() {
+            buf[..plen].copy_from_slice(prefix.as_bytes());
+            buf[plen..plen + blen].copy_from_slice(base.as_bytes());
+            let candidate = unsafe { std::str::from_utf8_unchecked(&buf[..plen + blen]) };
+            if let Some(&i) = node_map.get(candidate) {
+                return Some(i);
+            }
+        }
+    }
+
+    // Fast suffix lookup instead of O(n) scan
+    suffix_index
+        .get(base)
+        .and_then(|candidates| candidates.first().copied())
+}

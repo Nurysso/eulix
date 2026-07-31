@@ -39,7 +39,10 @@ from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 
 import ijson.common
 
-# Optional fast JSON backend
+# Optional fast JSON backend: orjson is 2-10x faster than stdlib json for
+# both parsing and serialization. We bind dumps() variants once at import
+# time so hot loops (serve mode, batch writes) don't pay a per-call
+# "is orjson available?" branch cost.
 try:
     import orjson as _orjson
 
@@ -71,7 +74,10 @@ def _json_dumps(obj: Any, *, indent: bool = False) -> str:
         return _json_dumps_no_indent(obj)
 
 
-# ijson ObjectBuilder — used by the single-pass state machine
+# ijson.common.ObjectBuilder incrementally assembles Python objects (dicts/
+# lists/scalars) from a stream of (event, value) pairs. We use it instead of
+# json.load() so we never hold the full multi-GB knowledge_base.json in RAM —
+# see _stream_kb() below for the single-pass design this enables.
 try:
     from ijson.common import ObjectBuilder as _OB
 except ImportError:
@@ -107,14 +113,19 @@ def _require_numpy():
     return np
 
 
-# Constants — mirrors Rust exactly
+# Sequence-length "buckets" for embedding inference. Instead of padding every
+# batch to the longest sequence (wasteful) or padding to one global max
+# (also wasteful), we snap each chunk's estimated token length up to the
+# nearest bucket. This keeps the number of distinct tensor shapes small
+# (good for GPU kernel reuse / CUDA graph capture) while avoiding excess
+# padding.
 BUCKETS_STANDARD: List[int] = [32, 64, 128, 192, 256, 384, 512]
 BUCKETS_JINA: List[int] = [32, 64, 128, 192, 256, 384, 512, 768, 1024, 2048, 4096, 8192]
 
-BINARY_MAGIC = b"COVX"
-BINARY_VERSION = 4
-# VECTOR_MAGIC = b"COVX"
-Version = "0.3.8"  # different from Binary and vector magic
+BINARY_MAGIC = b"EULX"   # 4-byte file signature written at the start of embeddings.bin / vectors.bin
+BINARY_VERSION = 5        # Bump this whenever the on-disk binary layout changes (see save_embeddings_bin docstring)
+# VECTOR_MAGIC = b"EULX"
+Version = "0.3.9"  # different from Binary and vector magic
 
 # Dataclass slots: Python ≥3.10 natively; earlier versions fall back gracefully.
 _DC_KW: Dict[str, Any] = {"slots": True} if sys.version_info >= (3, 10) else {}
@@ -122,6 +133,9 @@ _DC_KW: Dict[str, Any] = {"slots": True} if sys.version_info >= (3, 10) else {}
 
 # Snap-to-bucket helper — identical to Rust
 def snap_to_bucket(seq_len: int, buckets: List[int]) -> int:
+    """Return the smallest bucket size >= seq_len, or the largest bucket
+    if seq_len exceeds all of them (sequence gets truncated at inference
+    time rather than raising an error)."""
     for b in buckets:
         if seq_len <= b:
             return b
@@ -130,12 +144,15 @@ def snap_to_bucket(seq_len: int, buckets: List[int]) -> int:
 
 def _sq8_encode(vec: "np.ndarray") -> tuple["np.ndarray", float]:
     """
-    Scalar-quantize a float32 vector to int8.
+    Scalar quantization to int8 (SQ8): shrinks a float32 vector to 1/4 the
+    size at the cost of ~1% retrieval quality, by mapping the vector's
+    [-max, max] range onto the int8 range [-127, 127].
 
     Returns (int8_vec, scale) where:
         dequantized ≈ int8_vec.astype(float32) * scale
         scale       = max(|vec|) / 127.0
-    Handles zero vectors safely.
+    A near-zero vector is mapped to all-zeros with scale=1.0 to avoid
+    dividing by ~0 (which would blow up the quantized values).
     """
     np = _require_numpy()
     amax = np.abs(vec).max()
@@ -151,7 +168,10 @@ def _sq8_decode(q: "np.ndarray", scale: float) -> "np.ndarray":
     return q.astype(np.float32) * scale
 
 
-# ChunkType
+# The unit of retrieval: one Chunk == one embeddable "thing" extracted from
+# source code (a function body, a class overview, a method, or a whole-file
+# summary). ChunkType.entry_point exists in the enum for parity with the
+# Rust side but isn't currently emitted by chunk_one_file().
 class ChunkType(str, Enum):
     function = "function"
     class_ = "class"
@@ -173,7 +193,9 @@ class ChunkMetadata:
     name: str = ""
     complexity: Optional[int] = None
 
-
+# __slots__ (via _DC_KW) matters here: a large codebase can produce hundreds
+# of thousands of Chunk objects, and __slots__ removes the per-instance
+# __dict__, cutting memory roughly in half for objects this simple.
 @dataclass(**_DC_KW)
 class Chunk:
     id: str
@@ -189,26 +211,31 @@ class Chunk:
 
 def _stream_kb(path: Path) -> Generator:
     """
-    Single-pass generator over the Knowledge Base JSON using ijson.parse().
+    Single-pass streaming reader for the (potentially multi-GB) knowledge
+    base JSON, replacing what used to be two full passes over the file.
 
-    Yields one of:
-      ('meta',      key: str,       value: Any)        — small top-level keys
-      ('structure', file_path: str, file_struct: dict) — one per source file
+    The KB JSON has two kinds of top-level content:
+      - small keys (metadata, entry_points, patterns, external_dependencies)
+        that are cheap to hold in memory whole
+      - "structure": a huge map of {file_path: file_struct}, which is the
+        part that doesn't fit in RAM for large repos
 
-    Memory profile
+    ijson.parse() emits a flat stream of (prefix, event, value) events as it
+    reads the file byte-by-byte, so we never materialize more than one
+    "small key" or one "file_struct" at a time. We track two independent
+    ObjectBuilder instances (col_builder for small keys, st_builder for the
+    current file inside "structure") and yield as soon as each one is
+    complete, then discard it.
 
-      Collected:  metadata + entry_points + patterns + external_dependencies
-                  These are intentionally small (no structure / graphs).
-      Streaming:  one file_struct at a time  (a few KB–MB each)
-                  one edge dict at a time    (a few hundred bytes)
-      Peak ≈ size of a single large file_struct + a few hundred bytes per edge.
+    Yields:
+      ('meta', key, value)              — one per small top-level key
+      ('structure', file_path, struct)  — one per file, in file order
 
-    Why not two passes?
-    ─
-      The old code made two full passes (load_kb_metadata → stream_kb_structure).
-      For a 4.6 GB file that is 9.2 GB of disk I/O and loads call_graph /
-      dependency_graph entirely into Python dicts (10–20× RAM overhead).
-      Here we read the file exactly once and skip or stream-parse every key.
+    Why this matters: the old two-pass approach read a 4.6GB KB file twice
+    (9.2GB of I/O) and fully materialized nested call_graph/dependency_graph
+    dicts, causing 10-20x memory blowup relative to the JSON's on-disk size.
+    This version reads the file exactly once and never holds more than one
+    file_struct in memory.
     """
     # Keys whose entire value is small enough to buffer in RAM.
     COLLECT_KEYS: Set[str] = {"metadata", "structure"}
@@ -253,7 +280,9 @@ def _stream_kb(path: Path) -> Generator:
                     col_builder = None
                 continue
 
-            #  Stream structure entries one file at a time ─
+            # A "structure" map_key event means we've hit a new file path.
+            # Start a fresh builder for it; the previous file's builder (if
+            # any) was already yielded and dropped when its depth hit 0.
             if top_key == "structure":
                 # prefix == "structure" + event == "map_key" → new file path
                 if prefix == "structure" and event == "map_key":
@@ -300,8 +329,15 @@ def _generate_tags(func: Dict[str, Any], base_tag: str) -> List[str]:
             tags.append("test")
     return sorted(set(tags))
 
-
+# These _fmt_* functions render a parsed function/class/file dict back into
+# a plain-text "card" that gets embedded and shown to the retriever. They're
+# deliberately comment-like (// File:, // Function:) rather than JSON, since
+# that reads naturally to both humans and the embedding model.
 def _fmt_function_with_context(func: Dict, file_path: str) -> str:
+    """Render one function as a text card: signature, params, return type,
+    up to 10 outgoing calls and 5 incoming callers (truncated with a "...
+    and N more" line to keep card size bounded), control-flow complexity,
+    and any exceptions raised/handled."""
     buf = io.StringIO()
     w = buf.write
     w(f"// File: {file_path}")
@@ -433,8 +469,27 @@ def _fmt_file_summary(file_path: str, fs: Dict) -> str:
 
 # USED FOR testing no comments and docstring in embedder and vector
 # to see how it effects context window creation
+
+# Stripping comments/boilerplate before embedding is a quality experiment:
+# license headers, TODOs, and dense comment blocks add tokens that dilute
+# the semantic signal of the actual code. These are best-effort, regex-based
+# passes (not a real parser) good enough for embedding input, NOT safe to
+# use for anything that needs correctness (e.g. don't use this to strip
+# comments before executing code).
+# It is no longer used and is a dead code kept for future reference
 def strip_comments(content: str, lang: str) -> str:
-    """Remove comments from source code based on language."""
+    """
+    Best-effort comment stripper, per language family.
+    Python: removes '# ...' comments with a simple quote-tracking scanner
+        (handles comments after string literals on the same line, but is
+        not a full tokenizer — edge cases like triple-quoted strings
+        containing '#' are not handled).
+    C-like (c/cpp/java/go/javascript/typescript/rust): regex-strips //...
+        and /* ... */ blocks. DOTALL means multi-line block comments are
+        matched greedily; nested block comments are not supported (C-like
+        languages don't nest them anyway).
+    Any other `lang` value: returned unchanged.
+    """
     if lang == "python":
         # Remove # comments (but not # inside strings – simple version)
         lines = []
@@ -510,10 +565,19 @@ def chunk_one_file(
     max_size: int,
     seen_ids: Set[str],
 ) -> List[Chunk]:
-    """
-    Produce all Chunk objects for a single file struct.
-    Docstrings are stripped by _drop_docstrings() in _submit before this
-    is called, so they never appear in chunk content or stay in RAM.
+     """
+    Turn one parsed file_struct into a flat list of Chunks: one per
+    function, one per class (overview card) + one per method inside it,
+    and one file-level summary card if the file has any content worth
+    summarizing.
+
+    `seen_ids` dedupes within this call (methods can't collide with
+    functions since IDs are assigned upstream by the parser, but this guards
+    against any accidental duplicate emission from malformed input).
+    Docstrings must already be stripped from `fs` by the caller
+    (_drop_docstrings) before this runs — this function doesn't do it
+    itself so it can be called from a worker thread without re-touching
+    fields other threads might be reading.
     """
     chunks: List[Chunk] = []
     lang = fs.get("language", "")
@@ -631,10 +695,21 @@ def chunk_one_file(
 
 # PYTORCH EMBEDDER
 
-
 class EmbeddingGenerator:
-    """Wraps a HuggingFace model for batched embedding generation.
-    Mirrors the Rust EmbeddingGenerator including MIGraphX bucket logic."""
+    """
+    Thin wrapper around a HuggingFace encoder model for batched embedding
+    generation. Auto-detects the best available accelerator (CUDA, ROCm/HIP
+    on AMD, Apple MPS, or CPU fallback) and picks a sensible default batch
+    size per device. Jina v2 models are routed through sentence-transformers
+    instead of raw AutoModel/AutoTokenizer because they require custom
+    remote code (trust_remote_code=True) that sentence-transformers handles
+    for us.
+
+    All heavy imports (torch, transformers, tqdm) are deferred to
+    _require_ml() and called exactly once here, so importing this module
+    doesn't pull in the ML stack for callers that only need the binary
+    I/O helpers (save/load embeddings.bin).
+    """
 
     def __init__(
         self,
@@ -732,7 +807,9 @@ class EmbeddingGenerator:
                         f"\033[1;31;40m Failed to load model weights for \{model_name}.\n\033[0m"
                         f"Original error: {e}"
                     )
-            # Probe dimension
+            # Probe the model's actual output dimension by running a single
+            # dummy input through it. We can't trust a hardcoded dimension
+            # per model name since users can pass in arbitrary HF model IDs.
             try:
                 if self._use_st:
                     test_emb = self._st_model.encode(["hello"], convert_to_numpy=True)
@@ -782,6 +859,18 @@ class EmbeddingGenerator:
     def _embed_batch(
         self, texts: List[str], fixed_len: Optional[int] = None
     ) -> "np.ndarray":
+        """
+        Embed a batch of texts in one forward pass.
+
+        fixed_len, when given, forces tokenization/padding to that exact
+        length instead of padding to the batch's longest sequence — this is
+        what makes the sequence-length bucketing in generate_vectors()
+        effective, since it guarantees every batch within a bucket shares
+        the same tensor shape.
+        Mean-pooling (masked average over token embeddings) is used rather
+        than a [CLS] token, matching the sentence-transformers convention
+        these models were trained with.
+        """:
 
         torch = self._torch
         F = self._F
@@ -818,6 +907,26 @@ class EmbeddingGenerator:
             return emb.cpu().float().numpy()
 
     def generate_vectors(self, chunks: List[Chunk]) -> Dict[str, "np.ndarray"]:
+        """
+        Embed all chunks and return {chunk_id: vector}.
+
+        When bucketing is enabled (GPU/MPS only — see use_bucketing), chunks
+        are grouped by estimated token length into buckets, and each bucket
+        is embedded with a fixed padding length. This trades a small amount
+        of wasted padding for far fewer distinct tensor shapes, which
+        significantly speeds up GPU inference (avoids shape-triggered
+        kernel re-selection / graph recapture on every batch).
+
+        Token length is estimated as len(content) // 4 (a rough
+        chars-per-token heuristic) purely for bucket assignment — the real
+        tokenizer still runs during _embed_batch and will truncate if the
+        estimate was wrong.
+
+        Original chunk order is restored at the end (results are processed
+        out-of-order across buckets, then re-sorted by original index)
+        before building the returned dict, and duplicate chunk IDs are
+        collapsed with a warning rather than silently overwritten.
+        """
         np = self._np
         tqdm = self._tqdm
         total = len(chunks)
@@ -908,8 +1017,11 @@ class EmbeddingGenerator:
         return self._embed_batch([query])[0]
 
 
-# BINARY I/O — v3 format (unchanged from original)
-
+# BINARY I/O
+# Custom binary formats for embeddings, chosen over something like npy/
+# parquet to (a) support append-free single-pass streaming writes from
+# Python generators, (b) stay byte-compatible with the Rust implementation,
+# and (c) keep per-vector overhead minimal (no per-row schema/metadata).
 
 def _write_str(fh, s: str) -> None:
     b = s.encode("utf-8")
@@ -931,12 +1043,18 @@ def save_embeddings_bin(
     quantize: bool = False,
 ) -> None:
     """
-    Save embeddings binary.  v4 format adds a 1-byte quant flag
-    immediately after the dimension field.
+    Stream-write embeddings.bin without ever holding all vectors in memory
+    at once — `entries` is consumed lazily as an iterator, so this can be
+    fed directly from a generator (see EmbeddingPipeline.generate_vectors_streaming).
+
+    v4 format adds a single quantization-flag byte after `dimension` so
+    readers can distinguish float32 vs SQ8 payloads; v3 files (no flag byte)
+    are still readable by load_embeddings_bin for backwards compatibility.
+    v5 changed name of script and magicByte
 
     File Layout (Little-Endian):
     ─────────────────────────────────────────────────────────
-    4  bytes  magic          "COVX"
+    4  bytes  magic          "EULX"
     4  bytes  version        4
     4+n bytes model_name     uint32 len + UTF-8
     4  bytes  count          number of embeddings
@@ -990,10 +1108,19 @@ def save_embeddings_bin(
 
 def load_embeddings_bin(path: "Path", dequantize: bool = True):
     """
-    Load embeddings.bin — handles v3 (float32) and v4 (float32 or SQ8).
+    Load embeddings.bin, transparently handling both v3 (always float32)
+    and v4 (float32 or SQ8, flagged) files.
 
-    Returns list of (id, float32_array) when dequantize=True (default),
-    or (id, int8_array, scale) when dequantize=False and file is quantized.
+    On a corrupt/truncated entry, logs the error and stops reading rather
+    than raising — callers get back whatever was successfully parsed plus
+    a `count` mismatch they can detect by comparing len(entries) to the
+    header's declared count.
+
+    dequantize=True (default): always returns (id, float32_vector) pairs,
+        transparently converting SQ8 data back to float32.
+    dequantize=False: for SQ8 files, returns (id, int8_vector, scale)
+        instead — useful if the caller wants to do quantized-domain math
+        (e.g. int8 dot products) without paying the conversion cost.
     """
     with open(path, "rb") as fh:
         magic = fh.read(4)
@@ -1052,7 +1179,7 @@ def save_vectors_bin(
     =============================
     Offset   | Size     | Field       | Description
     ---------|----------|-------------|-----------------------------
-    0        | 4        | magic       | "COVX" file signature
+    0        | 4        | magic       | "EULX" file signature
     4        | 4        | version     | Format version (currently 1)
     8        | variable | model_name  | 4-byte len + UTF-8 bytes
     8+mlen   | 4        | count       | Number of IDs
@@ -1097,6 +1224,19 @@ def load_vectors_bin(path: Path) -> Tuple[str, List[str]]:
 
 # PIPELINE
 class EmbeddingPipeline:
+    """
+    End-to-end driver: KB JSON -> chunks -> embeddings.bin + vectors.bin.
+
+    Structured as 3 conceptual steps, executed as 2 physical passes to
+    minimize peak memory:
+      Step 1+2 (single pass): stream-parse the KB and chunk each file as it
+        arrives, using a bounded thread pool (MAX_INFLIGHT futures) so we
+        never queue up more in-flight work than we can hold in memory, and
+        never block sequentially on one file at a time either.
+      Step 3+4 (single pass): embed chunks and write both binary files
+        directly from a generator — embeddings.bin is written incrementally
+        so peak RAM is one batch's worth of vectors, not all of them.
+    """
     def __init__(
         self,
         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
@@ -1357,7 +1497,7 @@ class EmbeddingPipeline:
         sep = "-" * 70
 
         print(f"\n{SEP}")
-        print("  CORVUX EMBED — EMBEDDING PIPELINE (Python/PyTorch)")
+        print("  EULIX EMBED — EMBEDDING PIPELINE (Python/PyTorch)")
         print(f"  ijson backend : {ijson.backend}")
         print(f"  orjson        : {'yes' if _HAS_ORJSON else 'no (stdlib json)'}")
         print(f"  Chunk slots   : {'yes' if _DC_KW else 'no (Python <3.10)'}")
@@ -1379,6 +1519,12 @@ class EmbeddingPipeline:
 
         MAX_INFLIGHT = 32
         inflight: deque[Future] = deque()
+        # Bounded producer/consumer: keep submitting file-chunking work to
+        # the thread pool as files stream in from _stream_kb, but once
+        # MAX_INFLIGHT futures are outstanding, drain half of them before
+        # submitting more. This caps memory (each in-flight future holds
+        # one file_struct + its future chunk list) without serializing
+        # chunking behind KB parsing.
 
         def _submit(file_path: str, fs: dict) -> Future:
             max_size = self.max_chunk_size
@@ -1487,12 +1633,12 @@ def cmd_serve(args: argparse.Namespace) -> None:
     process can separate them from the protocol stream.
 
     Usage:
-        python corvux_embed.py serve -m sentence-transformers/all-MiniLM-L6-v2
+        python eulix_embed.py serve -m sentence-transformers/all-MiniLM-L6-v2
     """
     # All diagnostic output goes to stderr — stdout is the protocol channel.
     _err = sys.stderr
 
-    print("  CORVUX EMBED — SERVE MODE", file=_err)
+    print("  EULIX EMBED — SERVE MODE", file=_err)
     print(f"  Model:  {args.model}", file=_err)
     if args.device:
         print(f"  Device: {args.device}", file=_err)
@@ -1694,6 +1840,12 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
 
 def check_python_version():
+    """
+    Hard version gate: some pinned ML dependencies (torch/transformers
+    versions used elsewhere in this project) aren't validated against
+    Python 3.12+, so we fail fast with actionable instructions rather than
+    letting the user hit a confusing downstream import error.
+    """
     # Define your allowed Python boundaries
     MIN_VERSION = (3, 10)
     MAX_VERSION = (3, 11)  # Stop before 3.12+ if your ML libraries aren't ready
@@ -1721,12 +1873,12 @@ def check_python_version():
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="corvux_embed.py",
+        prog="eulix_embed.py",
         description="Knowledge Base Embedding Generator (Python/PyTorch)",
         add_help=False,
     )
     sub = p.add_subparsers(dest="command")
-    ep = sub.add_parser("embed", help="Generate embeddings for knowledge base generated by corvux_parser (default)")
+    ep = sub.add_parser("embed", help="Generate embeddings for knowledge base generated by eulix_parser (default)")
     ep.add_argument("-k", "--kb-path",       default="knowledge_base.json", metavar="PATH",
                     help="Path to knowledge base JSON  [default: knowledge_base.json]")
     ep.add_argument("-o", "--output",        default="./embeddings",        metavar="DIR",
@@ -1803,7 +1955,7 @@ def main() -> None:
     args = _PARSER.parse_args()
 
     if args.command is None:
-        # bare `corvux_embed.py` with no subcommand → default to embed
+        # bare `eulix_embed.py` with no subcommand → default to embed
         embed_parser = next(
             a for a in _PARSER._subparsers._actions  # type: ignore[union-attr]
             if hasattr(a, "_name_parser_map")
@@ -1828,7 +1980,7 @@ def main() -> None:
         if hasattr(args, "short") and args.short:
             print(Version)
         else:
-            print(f"corvux-embed version {Version}")
+            print(f"eulix-embed version {Version}")
             print(f"Python: {sys.version.split()[0]}")
             print(f"ijson backend: {ijson.backend}")
     else:
