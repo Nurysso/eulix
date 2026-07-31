@@ -36,6 +36,7 @@ file — vendor SDKs leak into each other, bloat the dependency graph, and turn
 ### Design Philosophy
 
 The Python implementation prioritises:
+
 - **Memory efficiency** through single-pass streaming and `dataclass(slots=True)`
 - **Portability** through PyTorch instead of vendor-specific SDKs
 - **Simplicity** through a single-file implementation with clear CLI interface

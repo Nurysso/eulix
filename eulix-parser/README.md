@@ -30,31 +30,31 @@ cargo build --release
 
 Binary location:
 
-- Debug: `target/debug/corvux-parser`
-- Release: `target/release/corvux-parser`
+- Debug: `target/debug/eulix-parser`
+- Release: `target/release/eulix-parser`
 
 ## Usage
 
 ```bash
 # Basic usage
-corvux-parser \
+eulix-parser \
   --root /path/to/project \
   --output knowledge_base.json
 
 # With verbose output
-corvux-parser \
+eulix-parser \
   --root /path/to/project \
   --output kb.json \
   --verbose
 
 # Custom thread count
-corvux-parser \
+eulix-parser \
   --root /path/to/project \
   --output kb.json \
   --threads 2
 
 # With .euignore file
-corvux-parser \
+eulix-parser \
   --root /path/to/project \
   --output kb.json \
   --euignore .euignore
@@ -164,7 +164,7 @@ This will:
 By default, these are skipped:
 
 - `.git/`
-- `.corvux/`
+- `.eulix/`
 - `__pycache__/`
 - `.venv/`, `venv/`, `env/`
 - `node_modules/`

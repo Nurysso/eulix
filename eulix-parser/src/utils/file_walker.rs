@@ -49,7 +49,7 @@ impl FileWalker {
         // Hard-coded directories that are always excluded regardless of .euignore
         let ignored_dirs = [
             ".git",
-            ".corvux",
+            ".eulix",
             "__pycache__",
             ".venv",
             "venv",
