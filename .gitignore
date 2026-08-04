@@ -3,6 +3,8 @@ examples/
 scripts/
 *.idea/
 test_project/
+__pycache__/
+.pyc/
 eulix-embed/embeddingstestoutputs/
 test/
 build/
