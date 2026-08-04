@@ -1,5 +1,12 @@
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# embedder module is responsible for running torch based embedder to embed json files
+
 from __future__ import annotations
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Optional, List, Dict, Tuple, Any, TYPE_CHECKING
 from core.types import Chunk, ChunkType, ChunkMetadata
 import sys
 import time
@@ -8,6 +15,10 @@ from collections import defaultdict
 from core.constants import BUCKETS_JINA, BUCKETS_STANDARD
 from utils.buckets import snap_to_bucket
 from utils.req import require_ml
+
+if TYPE_CHECKING:
+    import numpy as np
+    import torch
 
 class EmbeddingGenerator:
     """

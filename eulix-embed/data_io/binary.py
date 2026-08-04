@@ -1,11 +1,22 @@
-import os
+# Copyright (c) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+# Maintainer: Dawood (Nurysso) <nurysso@proton.me>
+
+# Binary serialization of embeddings and vector IDs to compact, seekable formats.
+# Uses a streaming writer to avoid holding all vectors in memory; SQ8 support
+# reduces storage by 4x with negligible retrieval loss.
+
 import io
-from typing import List, Tuple, Optional
+import os
 from pathlib import Path
 import struct as _struct
+from typing import List, Optional, Tuple
+
 from core.constants import BINARY_MAGIC, BINARY_VERSION
 from utils.req import require_numpy
+
 from .serialization import sq8_decode, sq8_encode
+
 
 def _write_str(fh, s: str) -> None:
     b = s.encode("utf-8")
@@ -26,20 +37,12 @@ def save_embeddings_bin(
     count: "Optional[int]" = None,
     quantize: bool = False,
 ) -> None:
-    """
-    Stream-write embeddings.bin without ever holding all vectors in memory
-    at once — `entries` is consumed lazily as an iterator, so this can be
-    fed directly from a generator (see EmbeddingPipeline.generate_vectors_streaming).
-
-    v4 format adds a single quantization-flag byte after `dimension` so
-    readers can distinguish float32 vs SQ8 payloads; v3 files (no flag byte)
-    are still readable by load_embeddings_bin for backwards compatibility.
-    v5 changed name of script and magicByte
+    """Stream-write embeddings.bin without holding all vectors in memory at once.
 
     File Layout (Little-Endian):
     ─────────────────────────────────────────────────────────
     4  bytes  magic          "EULX"
-    4  bytes  version        4
+    4  bytes  version        4 or 5
     4+n bytes model_name     uint32 len + UTF-8
     4  bytes  count          number of embeddings
     4  bytes  dimension      vector length (floats)
@@ -87,38 +90,29 @@ def save_embeddings_bin(
                 fh.write(q.tobytes())  # dim bytes (int8)
             else:
                 fh.write(arr.tobytes())  # dim*4 bytes
-            fh.flush()
+        fh.flush()
 
 
 def load_embeddings_bin(path: "Path", dequantize: bool = True):
-    """
-    Load embeddings.bin, transparently handling both v3 (always float32)
-    and v4 (float32 or SQ8, flagged) files.
+    """Load embeddings.bin, transparently handling versions 3, 4, and 5.
 
-    On a corrupt/truncated entry, logs the error and stops reading rather
-    than raising — callers get back whatever was successfully parsed plus
-    a `count` mismatch they can detect by comparing len(entries) to the
-    header's declared count.
-
-    dequantize=True (default): always returns (id, float32_vector) pairs,
-        transparently converting SQ8 data back to float32.
-    dequantize=False: for SQ8 files, returns (id, int8_vector, scale)
-        instead — useful if the caller wants to do quantized-domain math
-        (e.g. int8 dot products) without paying the conversion cost.
+    dequantize=True (default): returns (id, float32_vector) pairs.
+    dequantize=False: for SQ8 files, returns (id, int8_vector, scale).
     """
     np = require_numpy()
     with open(path, "rb") as fh:
         magic = fh.read(4)
         if magic != BINARY_MAGIC:
-            raise ValueError(f"Bad magic: {magic!r}")
+            raise ValueError(f"Bad magic: {magic!r} (expected {BINARY_MAGIC!r})")
         (version,) = _struct.unpack("<I", fh.read(4))
         model_name = _read_str(fh)
         count, dim = _struct.unpack("<II", fh.read(8))
 
-        quantized = False
-        if version == 4:
+        if version in (4, 5):
             quantized = fh.read(1) == b"\x01"
-        elif version != 3:
+        elif version == 3:
+            quantized = False
+        else:
             raise ValueError(f"Unsupported embeddings.bin version: {version}")
 
         print(f"  magic={magic}, version={version}, model={model_name}")
@@ -132,6 +126,9 @@ def load_embeddings_bin(path: "Path", dequantize: bool = True):
                 if quantized:
                     (scale,) = _struct.unpack("<f", fh.read(4))
                     raw = fh.read(dim)
+                    if len(raw) != dim:
+                        print(f"  [ERROR] entry {idx} @{pos}: short read (quantized payload)")
+                        break
                     q = np.frombuffer(raw, dtype=np.int8).copy()
                     if dequantize:
                         entries.append((eid, sq8_decode(q, scale)))
@@ -157,22 +154,22 @@ def save_vectors_bin(
     model_name: str,
     ids: List[str],  # ordered; position == vector index in embeddings.bin
 ) -> None:
-    """
-    Save a vector ID index (no float data).
+    """Save a vector ID index (no float data).
 
     File Format (Little-Endian):
     =============================
     Offset   | Size     | Field       | Description
     ---------|----------|-------------|-----------------------------
     0        | 4        | magic       | "EULX" file signature
-    4        | 4        | version     | Format version (currently 1)
+    4        | 4        | version     | Format version (BINARY_VERSION)
     8        | variable | model_name  | 4-byte len + UTF-8 bytes
     8+mlen   | 4        | count       | Number of IDs
     12+mlen  | variable | id_data     | Repeated for each ID:
              |          |   4 bytes   | id_len (uint32 LE)
              |          |   id_len    | UTF-8 chunk ID
     """
-    with open(path, "wb") as fh:
+    with open(path, "wb") as raw:
+        fh = io.BufferedWriter(raw, buffer_size=4 * 1024 * 1024)
         fh.write(BINARY_MAGIC)
         fh.write(_struct.pack("<I", BINARY_VERSION))
         _write_str(fh, model_name)
@@ -185,23 +182,26 @@ def save_vectors_bin(
                 )
             fh.write(_struct.pack("<I", len(eid_bytes)))
             fh.write(eid_bytes)
+        fh.flush()
 
 
 def load_vectors_bin(path: Path) -> Tuple[str, List[str]]:
-    """
-    Load a vector ID index.
+    """Load a vector ID index.
 
     Returns:
-        (model_name, ids)  — ids[i] is the chunk ID at vector index i.
+        (model_name, ids) — ids[i] is the chunk ID at vector index i.
     """
     with open(path, "rb") as fh:
         magic = fh.read(4)
         if magic != BINARY_MAGIC:
-            raise ValueError(f"Bad magic: {magic!r} (expected {BINARY_VERSION!r})")
+            raise ValueError(f"Bad magic: {magic!r} (expected {BINARY_MAGIC!r})")
+
         (version,) = _struct.unpack("<I", fh.read(4))
-        if version != BINARY_VERSION:
+        if not (1 <= version <= BINARY_VERSION):
             raise ValueError(f"Unsupported vectors.bin version: {version}")
+
         model_name = _read_str(fh)
         (count,) = _struct.unpack("<I", fh.read(4))
         ids: List[str] = [_read_str(fh) for _ in range(count)]
+
     return model_name, ids

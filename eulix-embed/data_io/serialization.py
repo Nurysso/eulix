@@ -1,3 +1,11 @@
+# Copyright (c) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer: Dawood (Nurysso) <nurysso@proton.me>
+# Scalar quantization (SQ8) to reduce embedding storage size by 4× with
+# minimal quality loss (~1% retrieval drop). Enables handling of billion‑scale
+# vector sets on limited disk.
+
 import numpy as np
 # from utils.req import require_numpy
 

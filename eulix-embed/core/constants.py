@@ -1,6 +1,13 @@
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# just constants for eulix_embed
+
 from typing import Any, Dict, Generator, List, Optional, Set, Tuple
 import sys
-
+import ijson.common
 # Sequence-length "buckets" for embedding inference. Instead of padding every
 # batch to the longest sequence (wasteful) or padding to one global max
 # (also wasteful), we snap each chunk's estimated token length up to the
@@ -17,3 +24,5 @@ Version = "0.3.9"  # different from Binary and vector magic
 
 # Dataclass slots: Python ≥3.10 natively; earlier versions fall back gracefully.
 DC_KW: Dict[str, Any] = {"slots": True} if sys.version_info >= (3, 10) else {}
+
+ijson_backend = ijson.backend

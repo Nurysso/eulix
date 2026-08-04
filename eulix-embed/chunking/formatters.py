@@ -1,3 +1,16 @@
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# Chunking module is responsible for chunking files/parts of json file
+#
+# This file is responsible for rendering chunks as plain‑text "cards" with contextual information (calls, called_by,
+# parameters, exceptions) rather than raw JSON. This format is both human‑readable and
+# works well with embedding models because it mimics a natural code explanation.
+# Truncation of callers (e.g., "… and N more") keeps card sizes bounded and prevents
+# excessive token usage.
+
 import os
 import io
 from typing import Dict

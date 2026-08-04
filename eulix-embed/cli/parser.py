@@ -1,5 +1,15 @@
-import argparse
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
 
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# Cli module is responsible for cli related things args,operation yadayada
+# sever mode isnt in this module and is part of seprate package called server
+# why cause thats still experimental and only used in chat mode of eulix cli
+
+# This file is responsible for parsing args
+
+import argparse
 
 def parse_args() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(

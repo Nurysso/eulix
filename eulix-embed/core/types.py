@@ -1,3 +1,9 @@
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+# Types for eulix_embed
+
 from enum import Enum
 from dataclasses import dataclass
 from typing import Optional, List

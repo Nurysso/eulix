@@ -1,4 +1,18 @@
-from typing import Optional, Dict, List, Set, Tuple, Any
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+# Pipline
+
+# Responsible for orchestrates the entire embedding pipeline using torch with streaming to limit memory.
+# Step 1+2: one pass over the KB JSON using ijson (incremental parser) and chunk each
+# file in a bounded thread pool (MAX_INFLIGHT) – this prevents queuing more work than
+# we can hold and avoids sequential blocking. Step 3+4: embed chunks and write binary
+# files incrementally (embeddings.bin, vectors.bin) so peak RAM is just one batch of
+# vectors. Quantization (SQ8) and bucketing further reduce memory and speed up inference.
+# This is also the default engine of eulix_embed
+
+from typing import Optional, Dict, List, Set, Tuple, Any, TYPE_CHECKING
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, Future
 from pathlib import Path
@@ -26,6 +40,10 @@ from utils.req import require_numpy, require_ml
 from chunking.cleaners import drop_docstrings
 from data_io.binary import save_embeddings_bin, save_vectors_bin
 from utils.buckets import snap_to_bucket
+
+if TYPE_CHECKING:
+    import numpy as np
+    import torch
 
 class EmbeddingPipeline:
     """
@@ -311,7 +329,6 @@ class EmbeddingPipeline:
 
         self._check_disk_space(output_dir, kb_path)
 
-        # Step 1+2: Single-pass KB scan + chunk generation
         print("STEP 1+2: Knowledge Base scan + Chunk generation (single pass)")
         print(sep)
         t = time.time()
@@ -343,8 +360,8 @@ class EmbeddingPipeline:
 
         def _harvest(fut: Future) -> None:
             for chunk in fut.result():
-                if chunk.id not in seen_ids:
-                    seen_ids.add(chunk.id)
+                if chunk.id not in seen_ids: # noqa: F821
+                    seen_ids.add(chunk.id)   # noqa: F821
                     ct_counts[chunk.chunk_type.value] += 1
                     chunks.append(chunk)
 
@@ -390,7 +407,6 @@ class EmbeddingPipeline:
         del seen_ids
         gc.collect()
 
-        # Step 3+4: Embed + write (streaming, no full vector_store dict)
         dim = self._process_step3_step4(chunks, output_dir)
 
         # Summary

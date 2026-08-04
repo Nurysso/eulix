@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-
 # Copyright (C) 2026 Dawood
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,74 +13,27 @@
 #
 # Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 #
+# eulix_embed is a general purpose embedding for eulix project with support for ONNX/Torch
 
 from __future__ import annotations
-import sys
-import traceback
+
 import argparse
-import gc
-import re
-import json
-import struct as _struct
-import shutil
-import time
-import site
 import importlib.util
-from functools import partial
-from collections import defaultdict, deque, Counter
-from dataclasses import dataclass
-from enum import Enum
-import io
-import os
-from concurrent.futures import ThreadPoolExecutor, Future
-import threading
-from pathlib import Path
-
-import ijson.common
-
-from cli.parser import parse_args
-from cli.commands import check_python_version
-from core.constants import Version
-from cli.commands import cmd_embed, cmd_query, cmd_compare, ijson_check
-from server.server import cmd_serve
-
-# Optional fast JSON backend: orjson is 2-10x faster than stdlib json for
-# both parsing and serialization. We bind dumps() variants once at import
-# time so hot loops (serve mode, batch writes) don't pay a per-call
-# "is orjson available?" branch cost.
-try:
-    import orjson as _orjson
-
-    if hasattr(_orjson, "OPT_INDENT_2"):
-        _json_dumps_no_indent = partial(_orjson.dumps, option=0)
-        _json_dumps_indent = partial(_orjson.dumps, option=_orjson.OPT_INDENT_2)
-    else:  # fallback for older orjson versions
-        _json_dumps_no_indent = lambda obj: _orjson.dumps(obj).decode()
-        _json_dumps_indent = lambda obj: _orjson.dumps(
-            obj, option=_orjson.OPT_INDENT_2
-        ).decode()
-    _HAS_ORJSON = True
-except ImportError:
-    _HAS_ORJSON = False
-    _json_dumps_no_indent = partial(json.dumps, indent=None)
-    _json_dumps_indent = partial(json.dumps, indent=2)
+import sys
 import warnings
 
-warnings.filterwarnings("ignore", message="optimum is not installed")
+from cli.commands import (
+    check_python_version,
+    cmd_compare,
+    cmd_embed,
+    cmd_query,
+    ijson_check,
+)
+from cli.parser import parse_args
+from core.constants import Version, ijson_backend
+from server.server import cmd_serve
 
-# ijson.common.ObjectBuilder incrementally assembles Python objects (dicts/
-# lists/scalars) from a stream of (event, value) pairs. We use it instead of
-# json.load() so we never hold the full multi-GB knowledge_base.json in RAM —
-# see _stream_kb() below for the single-pass design this enables.
-try:
-    from ijson.common import ObjectBuilder as _OB
-except ImportError:
-    try:
-        from ijson import ObjectBuilder as _OB  # type: ignore[no-redef]
-    except ImportError:
-        raise ImportError(
-            'ijson ObjectBuilder not found — if using "uv" use uv pip install ijson'
-        )
+warnings.filterwarnings("ignore", message="optimum is not installed")
 
 _PARSER = parse_args()
 
@@ -103,6 +55,7 @@ def print_help() -> None:
         subparser.print_help()
         print()
 
+
 def check_engine_dependencies(engine: str) -> None:
     """
     Check if the required dependencies for the selected engine are installed.
@@ -112,7 +65,7 @@ def check_engine_dependencies(engine: str) -> None:
         required_packages = {
             "torch": "torch",
             "transformers": "transformers",
-            "sentence_transformers": "sentence-transformers",  # Package name vs import name
+            "sentence_transformers": "sentence-transformers",
             "tqdm": "tqdm",
             "numpy": "numpy",
         }
@@ -120,7 +73,9 @@ def check_engine_dependencies(engine: str) -> None:
         install_cmd = "pip install torch transformers sentence-transformers tqdm numpy"
 
         if importlib.util.find_spec("uv") is not None:
-            install_cmd = "uv pip install torch transformers sentence-transformers tqdm numpy"
+            install_cmd = (
+                "uv pip install torch transformers sentence-transformers tqdm numpy"
+            )
 
     elif engine == "onnx":
         required_packages = {
@@ -143,9 +98,12 @@ def check_engine_dependencies(engine: str) -> None:
             missing.append(f"{package_name} (imports as '{import_name}')")
 
     if missing:
-        print(f"❌ ERROR: Missing required dependencies for {engine_name} engine", file=sys.stderr)
+        print(
+            f"❌ ERROR: Missing required dependencies for {engine_name} engine",
+            file=sys.stderr,
+        )
         print(f"\nMissing packages: {', '.join(missing)}", file=sys.stderr)
-        print(f"\nTo install all required dependencies:", file=sys.stderr)
+        print("\nTo install all required dependencies:", file=sys.stderr)
         print(f"  {install_cmd}", file=sys.stderr)
 
         # Special note for ONNX GPU
@@ -160,6 +118,7 @@ def check_engine_dependencies(engine: str) -> None:
         sys.exit(1)
 
     print(f"  ✓ {engine_name} dependencies found", file=sys.stderr)
+
 
 def main() -> None:
     if len(sys.argv) == 1 or sys.argv[1] in ("-h", "--help", "help"):
@@ -189,7 +148,9 @@ def main() -> None:
         # This only runs for commands that actually need the ML stack
         if args.command in ("embed", "query", "serve"):
             # Determine which engine to check
-            engine = getattr(args, 'engine', 'torch')  # Default to torch if not specified
+            engine = getattr(
+                args, "engine", "torch"
+            )  # Default to torch if not specified
             check_engine_dependencies(engine)
 
             # Now it's safe to import the engine-specific code
@@ -211,10 +172,11 @@ def main() -> None:
         else:
             print(f"eulix-embed version {Version}")
             print(f"Python: {sys.version.split()[0]}")
-            print(f"ijson backend: {ijson.backend}")
+            print(f"ijson backend: {ijson_backend}")
     else:
         print_help()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

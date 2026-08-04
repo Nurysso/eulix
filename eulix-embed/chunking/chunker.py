@@ -1,3 +1,15 @@
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# Chunking module is responsible for chunking files/parts of json file
+#
+# This file is responsible for splitting code into fine‑grained chunks (functions, methods, classes, file summary)
+# to improve retrieval precision. Deduping via seen_ids prevents duplicate IDs from malformed
+# input. Truncation keeps chunk sizes bounded for embedding models. We use formatters to
+# generate human‑readable cards that include call context, which helps semantic search.
+
 from typing import List, Any, Dict, Set
 from core.types import Chunk, ChunkType, ChunkMetadata
 from .formatters import fmt_class_overview, fmt_file_summary, fmt_function_with_context, fmt_method_with_class_ctx
