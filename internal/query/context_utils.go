@@ -61,7 +61,7 @@ import (
 	"time"
 	"unicode"
 
-	"corvux/internal/types"
+	"eulix/internal/types"
 )
 
 // Close is a no-op placeholder for resource cleanup.

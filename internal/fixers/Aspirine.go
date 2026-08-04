@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package Fixers makes an atempt to fix files present in .corvux
+// Package Fixers makes an atempt to fix files present in .eulix
 // Incase they are corrupted
 
 // This file is responsible for Asprine command and makes a attempt
@@ -30,20 +30,20 @@ type AspirineOptions struct {
 
 // Aspirine validates embeddings.bin and vectors.bin, checks them against
 // kb.json / kb_index.json, and repairs header corruption when possible.
-func Aspirine(corvuxDir string, opts AspirineOptions) error {
-	if corvuxDir == "" {
-		corvuxDir = ".corvux"
+func Aspirine(eulixDir string, opts AspirineOptions) error {
+	if eulixDir == "" {
+		eulixDir = ".eulix"
 	}
 
-	if _, err := os.Stat(corvuxDir); os.IsNotExist(err) {
-		fmt.Printf("☓ Directory not found: %s\n", corvuxDir)
-		fmt.Println("\nMake sure you've run 'corvux analyze' first to generate the knowledge base.")
-		return fmt.Errorf("directory not found: %s", corvuxDir)
+	if _, err := os.Stat(eulixDir); os.IsNotExist(err) {
+		fmt.Printf("☓ Directory not found: %s\n", eulixDir)
+		fmt.Println("\nMake sure you've run 'eulix analyze' first to generate the knowledge base.")
+		return fmt.Errorf("directory not found: %s", eulixDir)
 	}
 
 	fmt.Println("-- Aspirine — KB Binary Repair Tool--")
-	embBinPath := filepath.Join(corvuxDir, "embeddings.bin")
-	vecBinPath := filepath.Join(corvuxDir, "vectors.bin")
+	embBinPath := filepath.Join(eulixDir, "embeddings.bin")
+	vecBinPath := filepath.Join(eulixDir, "vectors.bin")
 
 	//  1. Read both bin files
 	fmt.Println("1. Reading binary files...")
@@ -103,7 +103,7 @@ func Aspirine(corvuxDir string, opts AspirineOptions) error {
 
 	//  4. Cross-check against kb.json / kb_index.json
 	fmt.Println("\n4. Cross-checking against kb.json and kb_index.json...")
-	kbPath := filepath.Join(corvuxDir, "kb.json")
+	kbPath := filepath.Join(eulixDir, "kb.json")
 	if kb, kerr := loadKB(kbPath); kerr == nil {
 		kbFuncs := len(kb.Indices.FunctionsByName)
 		fmt.Printf("   kb.json — functions indexed: %d\n", kbFuncs)
@@ -113,7 +113,7 @@ func Aspirine(corvuxDir string, opts AspirineOptions) error {
 		fmt.Printf("   !  kb.json not readable (%v); skipping cross-check\n", kerr)
 	}
 
-	indexPath := filepath.Join(corvuxDir, "kb_index.json")
+	indexPath := filepath.Join(eulixDir, "kb_index.json")
 	if funcCount, typeCount, ierr := checkIndex(indexPath); ierr == nil {
 		fmt.Printf("   kb_index.json — functions: %d  types: %d\n", funcCount, typeCount)
 	} else {

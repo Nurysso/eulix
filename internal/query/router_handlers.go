@@ -17,7 +17,7 @@ import (
 	"sort"
 	"strings"
 
-	"corvux/internal/types"
+	"eulix/internal/types"
 )
 
 // BuildPromptString composes header + task-specific body + footer.

@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package Fixers makes an atempt to fix files present in .corvux
+// Package Fixers makes an atempt to fix files present in .eulix
 // Incase they are corrupted
 
 // This file is reponsible for Glasdos command that checks wether the
@@ -147,24 +147,24 @@ func printBinDiagnostic(label, path string) (binHeader, error) {
 }
 
 // GLaDOS checks for knowledge base outputs and validates file integrity.
-func GLaDOS(corvuxDir string) error {
-	if corvuxDir == "" {
-		corvuxDir = ".corvux"
+func GLaDOS(eulixDir string) error {
+	if eulixDir == "" {
+		eulixDir = ".eulix"
 	}
 
-	if _, err := os.Stat(corvuxDir); os.IsNotExist(err) {
-		fmt.Printf("☓ Directory not found: %s\n", corvuxDir)
-		fmt.Println("\nMake sure you've run 'corvux analyze' first to generate the knowledge base.")
-		return fmt.Errorf("directory not found: %s", corvuxDir)
+	if _, err := os.Stat(eulixDir); os.IsNotExist(err) {
+		fmt.Printf("☓ Directory not found: %s\n", eulixDir)
+		fmt.Println("\nMake sure you've run 'eulix analyze' first to generate the knowledge base.")
+		return fmt.Errorf("directory not found: %s", eulixDir)
 	}
 
 	fmt.Println("🔍 KB Diagnostic Tool")
 	fmt.Println("================================")
-	fmt.Printf("Analyzing: %s\n\n", corvuxDir)
+	fmt.Printf("Analyzing: %s\n\n", eulixDir)
 
 	// 1. kb.json
 	fmt.Println("1. Checking kb.json (codebase structure)...")
-	kbPath := filepath.Join(corvuxDir, "kb.json")
+	kbPath := filepath.Join(eulixDir, "kb.json")
 	kb, err := loadKB(kbPath)
 	if err != nil {
 		fmt.Printf("   ☓ Failed to load kb.json: %v\n", err)
@@ -185,7 +185,7 @@ func GLaDOS(corvuxDir string) error {
 
 	// 2. kb_call_graph.json
 	fmt.Println("\n2. Checking call graphs...")
-	cgPath := filepath.Join(corvuxDir, "kb_call_graph.json")
+	cgPath := filepath.Join(eulixDir, "kb_call_graph.json")
 	cgNodes, cgEdges, err := checkCallGraph(cgPath)
 	if err != nil {
 		fmt.Printf("   ☓ Failed to load kb_call_graph.json: %v\n", err)
@@ -196,7 +196,7 @@ func GLaDOS(corvuxDir string) error {
 
 	// 3. kb_index.json
 	fmt.Println("\n3. Checking indexes...")
-	indexPath := filepath.Join(corvuxDir, "kb_index.json")
+	indexPath := filepath.Join(eulixDir, "kb_index.json")
 	funcCount, typeCount2, err := checkIndex(indexPath)
 	if err != nil {
 		fmt.Printf("   ☓ Failed to load kb_index.json: %v\n", err)
@@ -207,12 +207,12 @@ func GLaDOS(corvuxDir string) error {
 
 	// 4. embeddings.bin
 	fmt.Println("\n4. Checking embeddings.bin...")
-	embBinPath := filepath.Join(corvuxDir, "embeddings.bin")
+	embBinPath := filepath.Join(eulixDir, "embeddings.bin")
 	embHdr, embErr := printBinDiagnostic("embeddings.bin", embBinPath)
 
 	// 5. vectors.bin
 	fmt.Println("\n5. Checking vectors.bin...")
-	vecBinPath := filepath.Join(corvuxDir, "vectors.bin")
+	vecBinPath := filepath.Join(eulixDir, "vectors.bin")
 	vecHdr, vecErr := printBinDiagnostic("vectors.bin", vecBinPath)
 
 	// 6. Cross-file consistency
@@ -255,7 +255,7 @@ func GLaDOS(corvuxDir string) error {
 	fmt.Println("\n7. File sizes:")
 	files := []string{"kb.json", "kb_call_graph.json", "kb_index.json", "embeddings.bin", "vectors.bin"}
 	for _, file := range files {
-		path := filepath.Join(corvuxDir, file)
+		path := filepath.Join(eulixDir, file)
 		if info, serr := os.Stat(path); serr == nil {
 			sizeMB := float64(info.Size()) / (1024 * 1024)
 			fmt.Printf("   %-20s %.2f MB\n", file, sizeMB)

@@ -2,10 +2,10 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package cli provides the command-line interface implementation for CORVUX.
+// Package cli provides the command-line interface implementation for EULIX.
 /*
 This file is responsible for managing all the commands executed/supported
-by corvux and serves as a entry point for the project
+by eulix and serves as a entry point for the project
 */
 package cli
 
@@ -17,21 +17,21 @@ import (
 	"strings"
 	"time"
 
-	"corvux/internal/cache"
-	"corvux/internal/checksum"
-	"corvux/internal/config"
-	"corvux/internal/embeddings"
-	"corvux/internal/fixers"
-	"corvux/internal/llm"
-	"corvux/internal/query"
+	"eulix/internal/cache"
+	"eulix/internal/checksum"
+	"eulix/internal/config"
+	"eulix/internal/embeddings"
+	"eulix/internal/fixers"
+	"eulix/internal/llm"
+	"eulix/internal/query"
 
-	// "corvux/internal/llm"
+	// "eulix/internal/llm"
 
 	"github.com/spf13/cobra"
 )
 
 const (
-	AppName    = "corvux"
+	AppName    = "eulix"
 	AppVersion = "v0.7.4"
 )
 
@@ -41,14 +41,14 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "corvux",
-	Short: "Corvux [Beta] - Turn your codebase into a searchable book",
-	Long: `Corvux is an intelligent CLI tool for understanding and querying your codebase.
+	Use:   "eulix",
+	Short: "eulix [Beta] - Turn your codebase into a searchable book",
+	Long: `eulix is an intelligent CLI tool for understanding and querying your codebase.
 
 Turn your codebase into a searchable book. Ask questions about your code,
 get accurate answers using local/cloud ML and LLMs.
 
-Corvux is currently in beta.`,
+eulix is currently in beta.`,
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd: true,
 	},
@@ -97,14 +97,14 @@ var checksumCmd = &cobra.Command{
 
 var versionCMD = &cobra.Command{
 	Use:   "version",
-	Short: "Displays version of corvux and corvux_parser, corvux_embed",
+	Short: "Displays version of eulix and eulix_parser, eulix_embed",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("%s: %s\n", AppName, AppVersion)
 
-		// corvux_parser native binary, call directly
-		if output, err := runSubCommand("corvux", "--version"); err != nil {
-			fmt.Fprintf(os.Stderr, "corvux_parser: [Error] %v\n", err)
+		// eulix_parser native binary, call directly
+		if output, err := runSubCommand("eulix", "--version"); err != nil {
+			fmt.Fprintf(os.Stderr, "eulix_parser: [Error] %v\n", err)
 		} else {
 			fmt.Printf("%s", output)
 		}
@@ -112,22 +112,22 @@ var versionCMD = &cobra.Command{
 		// eulix_embed Python script, must go through the venv
 		scriptPath, pythonPath, venvEnv, err := embeddings.FindEulixEmbed()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "corvux_embed: [Error] %v\n", err)
+			fmt.Fprintf(os.Stderr, "eulix_embed: [Error] %v\n", err)
 			return
 		}
 		proc := exec.Command(pythonPath, scriptPath, "--version")
 		proc.Env = venvEnv
 		if output, err := proc.Output(); err != nil {
-			fmt.Fprintf(os.Stderr, "corvux_embed: [Error] %v\n", err)
+			fmt.Fprintf(os.Stderr, "eulix_embed: [Error] %v\n", err)
 		} else {
-			fmt.Printf("corvux_embed: %s\n", strings.TrimSpace(string(output)))
+			fmt.Printf("eulix_embed: %s\n", strings.TrimSpace(string(output)))
 		}
 	},
 }
 
 var embedCMD = &cobra.Command{
 	Use:   "embed [flags]",
-	Short: "Run the corvux_embed pipeline (Python venv)",
+	Short: "Run the eulix_embed pipeline (Python venv)",
 	// Pass-through flags forwarded to eulix_embed.py
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -188,7 +188,7 @@ var queryCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 			return
 		}
-		corvuxDir := ".corvux"
+		eulixDir := ".eulix"
 		// checksum check (todo)
 
 		llmClient, err := llm.MouthClient(cfg)
@@ -198,7 +198,7 @@ var queryCmd = &cobra.Command{
 		}
 		cacheManager, _ := cache.CacheController(cfg)
 
-		router, err := query.QueryTrafficController(corvuxDir, cfg, llmClient, cacheManager)
+		router, err := query.QueryTrafficController(eulixDir, cfg, llmClient, cacheManager)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to init router: %v\n", err)
 			return
@@ -213,7 +213,7 @@ var queryCmd = &cobra.Command{
 			return
 		}
 		if cfg.Project.DebugConfig {
-			if err := writeQueryDebugLog(corvuxDir, userQuery, result); err != nil {
+			if err := writeQueryDebugLog(eulixDir, userQuery, result); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to write query debug log: %v\n", err)
 			}
 		}
@@ -234,12 +234,12 @@ var glaDOSCmd = &cobra.Command{
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		corvuxDir := ".corvux"
+		eulixDir := ".eulix"
 		if len(args) > 0 {
-			corvuxDir = args[0]
+			eulixDir = args[0]
 		}
 
-		if err := fixers.GLaDOS(corvuxDir); err != nil {
+		if err := fixers.GLaDOS(eulixDir); err != nil {
 			fmt.Fprintf(os.Stderr, "holy [moooo]... Even Doctor failed\n")
 			os.Exit(1)
 		}
@@ -260,9 +260,9 @@ var aspirineCmd = &cobra.Command{
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		corvuxDir := ".corvux"
+		eulixDir := ".eulix"
 		if len(args) > 0 {
-			corvuxDir = args[0]
+			eulixDir = args[0]
 		}
 
 		noBackup, _ := cmd.Flags().GetBool("no-backup")
@@ -273,7 +273,7 @@ var aspirineCmd = &cobra.Command{
 			Force:    force,
 		}
 
-		if err := fixers.Aspirine(corvuxDir, opts); err != nil {
+		if err := fixers.Aspirine(eulixDir, opts); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to rebuild embeddings: %v\n", err)
 			os.Exit(1)
 		}
@@ -491,13 +491,13 @@ func init() {
 }
 
 // writeQueryDebugLog appends the final query output to a query-debug log
-// file under corvuxDir, mirroring llm.go's llmdebug.log format.
-func writeQueryDebugLog(corvuxDir, query, result string) error {
-	if err := os.MkdirAll(corvuxDir, 0755); err != nil {
+// file under eulixDir, mirroring llm.go's llmdebug.log format.
+func writeQueryDebugLog(eulixDir, query, result string) error {
+	if err := os.MkdirAll(eulixDir, 0755); err != nil {
 		return fmt.Errorf("failed to create debug directory: %w", err)
 	}
 
-	logFile := filepath.Join(corvuxDir, "debug", "query-debug.log")
+	logFile := filepath.Join(eulixDir, "debug", "query-debug.log")
 	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open debug log file: %w", err)

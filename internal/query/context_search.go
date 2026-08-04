@@ -61,7 +61,7 @@ import (
 	"strings"
 	"time"
 
-	"corvux/internal/types"
+	"eulix/internal/types"
 )
 
 // explicitAnchorPatterns covers the common ways a user pins a location:
