@@ -1,10 +1,17 @@
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# embedder module is responsible for running onnx based embedder to embed json files
+
 from __future__ import annotations
 import os
 import time
 import sys
 import time
 from collections import defaultdict
-from typing import Any, Dict, Generator, List, Optional, Set, Tuple
+from typing import Any, Dict, Generator, List, Optional, Set, Tuple, TYPE_CHECKING
 from pathlib import Path
 import re
 
@@ -13,6 +20,9 @@ from utils.buckets import snap_to_bucket
 from core.constants import BUCKETS_JINA, BUCKETS_STANDARD
 from utils.req import require_ml_onnx, require_numpy
 
+if TYPE_CHECKING:
+    import numpy as np
+    import torch
 
 # ONNX RUNTIME EMBEDDER
 # No PyTorch anywhere in this section — model inference runs entirely

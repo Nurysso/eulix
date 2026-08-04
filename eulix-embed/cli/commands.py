@@ -1,20 +1,34 @@
-import io
-import sys
-from pathlib import Path
-import argparse
-from typing import List
-from collections import Counter
-import struct as _struct
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
 
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# Cli module is responsible for cli related things args,operation yadayada
+# sever mode isnt in this module and is part of seprate package called server
+# why cause thats still experimental and only used in chat mode of eulix cli
+
+# This file is responsible for managing what args do
+
+import argparse
+import io
+import struct as _struct
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import List
+import random
+
+from data_io.binary import load_embeddings_bin, load_vectors_bin
+from embedders.onnx_embed import EmbeddingGeneratorOnnx
+from embedders.torch_embed import EmbeddingGenerator
 from pipeline.onnx_pipeline import EmbeddingPipelineOnnx
 from pipeline.torch_pipeline import EmbeddingPipeline
-from embedders.torch_embed import EmbeddingGenerator
-from embedders.onnx_embed import EmbeddingGeneratorOnnx
-from utils.req import require_numpy
 from utils.json_util import json_dumps
-from data_io.binary import load_embeddings_bin, load_vectors_bin
+from utils.req import require_numpy
+from .comapre import _verify_at_offset, check_duplicate_ids
+from core.constants import BINARY_MAGIC, BINARY_VERSION
 
-
+# cmd_embed handles embed arg and switching of engine
 def cmd_embed(args: argparse.Namespace) -> None:
     if args.engine == "onnx":
         PipelineClass = EmbeddingPipelineOnnx
@@ -36,7 +50,7 @@ def cmd_embed(args: argparse.Namespace) -> None:
         sys.exit(1)
     pipeline.process(kb_path, Path(args.output), args)
 
-
+# cmd_query handles query arg and engine
 def cmd_query(args: argparse.Namespace) -> None:
     if not args.query:
         print("[ERROR] --query is required", file=sys.stderr)
@@ -66,15 +80,98 @@ def cmd_query(args: argparse.Namespace) -> None:
         print(f"[ERROR] Unknown format '{args.format}'", file=sys.stderr)
         sys.exit(1)
 
+# cmd_compare handles comparission of embeddings.bin and vectors.bin,
+# it is used to check wether generated files are correct or not
 def cmd_compare(args: argparse.Namespace) -> None:
-    np = require_numpy()
-    print("Comparing embeddings.bin ↔ vectors.bin...\n")
+    print("==================================================================")
+    print("          COMPARING embeddings.bin ↔ vectors.bin                  ")
+    print("==================================================================\n")
     emb_path = Path(args.emb)
     vec_path = Path(args.vec)
 
-    load_embeddings_bin(emb_path)
-    load_vectors_bin(vec_path)
+    print("[1/3] CHECKING FOR DUPLICATE IDs")
+    emb_dupes = check_duplicate_ids(emb_path)
+    vec_dupes = check_duplicate_ids(vec_path)
 
+    print("\n[2/3] LOADING INDEX & METADATA")
+    vec_model, vec_ids = load_vectors_bin(vec_path)
+    total_entries = len(vec_ids)
+
+    with open(emb_path, "rb") as fh:
+        magic = fh.read(4)
+        if magic != BINARY_MAGIC:
+            raise ValueError(f"Bad magic: {magic!r}")
+
+        (version,) = _struct.unpack("<I", fh.read(4))
+        (name_len,) = _struct.unpack("<I", fh.read(4))
+        emb_model = fh.read(name_len).decode("utf-8")
+
+        count, dim = _struct.unpack("<II", fh.read(8))
+        quantized = fh.read(1) == b"\x01" if version in (4, 5) else False
+
+        print(f"  • vectors.bin    : {total_entries} IDs (model: '{vec_model}')")
+        print(f"  • embeddings.bin : {count} entries, dim={dim}, quantized={quantized} (model: '{emb_model}')")
+
+        # Alignment Checks
+        if vec_model != emb_model:
+            print(f"  ⚠️  [MISMATCH] Model names differ!")
+        else:
+            print(f"  ✓ Model names match.")
+
+        if count != total_entries:
+            print(f"  ⚠️  [MISMATCH] Count mismatch: vectors.bin has {total_entries}, embeddings.bin has {count}")
+        else:
+            print(f"  ✓ Total entry counts match.")
+
+        if total_entries < 9:
+            print("\n[WARNING] At least 9 entries required for spot check sampling. Skipping step 3.")
+            return
+
+        print("\n[3/3] MAPPING FILE OFFSETS & SPOT CHECKING")
+        byte_offsets = []
+        vec_bytes = (4 + dim) if quantized else (dim * 4)
+
+        for _ in range(count):
+            pos = fh.tell()
+            byte_offsets.append(pos)
+            (id_len,) = _struct.unpack("<I", fh.read(4))
+            fh.seek(id_len + vec_bytes, 1)
+
+        # Pick 3 head, 3 random mid, 3 tail indices
+        head_indices = [0, 1, 2]
+        tail_indices = [total_entries - 3, total_entries - 2, total_entries - 1]
+        mid_indices = sorted(random.sample(range(3, total_entries - 3), 3))
+
+        sample_targets = [
+            ("FIRST 3", head_indices),
+            ("RANDOM MID 3", mid_indices),
+            ("LAST 3", tail_indices),
+        ]
+
+        passed = 0
+        total_checks = 0
+
+        for group_label, indices in sample_targets:
+            print(f"\n  --- Category: {group_label} ---")
+            for idx in indices:
+                total_checks += 1
+                expected_id = vec_ids[idx]
+                target_offset = byte_offsets[idx]
+
+                fh.seek(target_offset)
+                ok, msg = _verify_at_offset(fh, expected_id, dim, quantized)
+
+                status = "[OK]" if ok else "[FAIL]"
+                print(f"  Index {idx:5d} @ Offset {target_offset:8d} | {status} {msg}")
+                if ok:
+                    passed += 1
+
+        print("\n==================================================================")
+        print(f"SUMMARY: Spot Checks Passed: {passed}/{total_checks} | Duplicates: emb={len(emb_dupes)}, vec={len(vec_dupes)}")
+        print("==================================================================")
+
+# checks current py version locked between 3.10-3.11 as some libs used arent supported
+# by other py versions
 def check_python_version():
     """
     Hard version gate: some pinned ML dependencies (torch/transformers
@@ -82,9 +179,8 @@ def check_python_version():
     Python 3.12+, so we fail fast with actionable instructions rather than
     letting the user hit a confusing downstream import error.
     """
-    # Define your allowed Python boundaries
     MIN_VERSION = (3, 10)
-    MAX_VERSION = (3, 11)  # Stop before 3.12+ if your ML libraries aren't ready
+    MAX_VERSION = (3, 11)
 
     current_version = sys.version_info[:2]
 
@@ -103,9 +199,9 @@ def check_python_version():
         print(f"  uv venv --python {MIN_VERSION[0]}.{MIN_VERSION[1]}")
         print("=" * 60)
 
-        # Immediately halt execution with a non-zero exit code
         sys.exit(1)
 
+# Checks ijson backend
 def ijson_check():
     """Check which ijson backend is active."""
     try:
@@ -123,24 +219,3 @@ def ijson_check():
     except ImportError:
         print("❌ ijson not installed")
         print("   Install with: uv pip install ijson")
-
-def check_duplicate_ids(path: Path) -> List[str]:
-    with open(path, "rb") as f:
-        f.read(4)
-        f.read(4)  # magic + version
-        n = _struct.unpack("<I", f.read(4))[0]
-        f.read(n)  # model name
-        count, dim = _struct.unpack("<II", f.read(8))
-        ids = []
-        for _ in range(count):
-            n = _struct.unpack("<I", f.read(4))[0]
-            ids.append(f.read(n).decode())
-            f.read(dim * 4)
-
-    dupes = [id for id, cnt in Counter(ids).items() if cnt > 1]
-    if dupes:
-        print(f"\n⚠️ Found {len(dupes)} duplicate IDs in {path}:")
-        for d in dupes:
-            print(f"  {d}")
-
-    return dupes

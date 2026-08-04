@@ -1,3 +1,10 @@
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# Experimental server mode for eulix_embed
+
 import sys
 import json
 import argparse
