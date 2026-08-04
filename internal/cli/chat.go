@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package cli provides the command-line interface implementation for CORVUX.
+// Package cli provides the command-line interface implementation for EULIX.
 /*
 This file is responsible for running the Chat command that launches tui
 and checks for necessary file required by context window creation
@@ -15,12 +15,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"corvux/internal/cache"
-	"corvux/internal/checksum"
-	"corvux/internal/config"
-	"corvux/internal/llm"
-	"corvux/internal/query"
-	"corvux/internal/tui"
+	"eulix/internal/cache"
+	"eulix/internal/checksum"
+	"eulix/internal/config"
+	"eulix/internal/llm"
+	"eulix/internal/query"
+	"eulix/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -47,7 +47,7 @@ func promptConfirm(question string) bool {
 }
 
 // checkEmbeddingsFiles verifies all required files exist
-func checkEmbeddingsFiles(corvuxDir string) []string {
+func checkEmbeddingsFiles(eulixDir string) []string {
 	var missing []string
 
 	requiredFiles := map[string]string{
@@ -59,7 +59,7 @@ func checkEmbeddingsFiles(corvuxDir string) []string {
 	}
 
 	for file, desc := range requiredFiles {
-		path := filepath.Join(corvuxDir, file)
+		path := filepath.Join(eulixDir, file)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			missing = append(missing, fmt.Sprintf("  • %s (%s)", desc, file))
 		}
@@ -76,14 +76,14 @@ func startChat() error {
 	}
 
 	// Check KB files
-	corvuxDir := ".corvux"
-	kbPath := filepath.Join(corvuxDir, "kb.json")
+	eulixDir := ".eulix"
+	kbPath := filepath.Join(eulixDir, "kb.json")
 	if _, err := os.Stat(kbPath); os.IsNotExist(err) {
-		return fmt.Errorf("knowledge base not found. Run 'corvux analyze' first")
+		return fmt.Errorf("knowledge base not found. Run 'eulix analyze' first")
 	}
 
 	// Check for all required files
-	missing := checkEmbeddingsFiles(corvuxDir)
+	missing := checkEmbeddingsFiles(eulixDir)
 	if len(missing) > 0 {
 		printStatusMessage(
 			":(",
@@ -95,7 +95,7 @@ func startChat() error {
 		fmt.Println()
 		printStatusMessage(
 			"[TIP]",
-			"Run 'corvux analyze' to generate all required files",
+			"Run 'eulix analyze' to generate all required files",
 		)
 		return fmt.Errorf("missing required files")
 	}
@@ -105,7 +105,7 @@ func startChat() error {
 	stored, err := detector.Load()
 	if err != nil {
 		printStatusMessage("No checksum found.",
-			"Run 'corvux analyze' to generate one.",
+			"Run 'eulix analyze' to generate one.",
 		)
 		return fmt.Errorf("checksum required")
 	}
@@ -120,12 +120,12 @@ func startChat() error {
 	if changePercent > 0.30 {
 		printStatusMessage(fmt.Sprintf("Codebase changed %.1f%%", changePercent*100),
 			"Knowledge base is significantly stale.",
-			"Run 'corvux analyze' to update.",
+			"Run 'eulix analyze' to update.",
 		)
 		return fmt.Errorf("analysis required")
 	} else if changePercent > 0.10 {
 		printStatusMessage(fmt.Sprintf("Codebase changed %.1f%%", changePercent*100),
-			"Consider running 'corvux analyze' to update.",
+			"Consider running 'eulix analyze' to update.",
 		)
 		if !promptConfirm("Continue anyway?") {
 			return nil
@@ -176,7 +176,7 @@ func startChat() error {
 	// Initialize query router (embeddings will be lazy-loaded)
 	fmt.Println("#####===---,,..This BETA VERSION..,,---===######")
 	fmt.Println("Initializing query system...")
-	router, err := query.QueryTrafficController(corvuxDir, cfg, llmClient, cacheManager)
+	router, err := query.QueryTrafficController(eulixDir, cfg, llmClient, cacheManager)
 	if err != nil {
 		return fmt.Errorf("failed to initialize query router: %w", err)
 	}
@@ -186,7 +186,7 @@ func startChat() error {
 	router.SetCurrentChecksum(current.Hash)
 
 	// Diagnostic info
-	printSystemDiagnostics(corvuxDir)
+	printSystemDiagnostics(eulixDir)
 
 	// Start TUI
 	fmt.Println("Starting chat interface...")
@@ -206,9 +206,9 @@ func startChat() error {
 	return nil
 }
 
-func printSystemDiagnostics(corvuxDir string) {
+func printSystemDiagnostics(eulixDir string) {
 	// Count chunks in kb.json
-	kbPath := filepath.Join(corvuxDir, "kb.json")
+	kbPath := filepath.Join(eulixDir, "kb.json")
 	if data, err := os.ReadFile(kbPath); err == nil {
 		// Quick count of chunks without full parsing
 		chunkCount := strings.Count(string(data), `"id":`)
@@ -218,7 +218,7 @@ func printSystemDiagnostics(corvuxDir string) {
 	}
 
 	// Check embeddings file size
-	embPath := filepath.Join(corvuxDir, "embeddings.bin")
+	embPath := filepath.Join(eulixDir, "embeddings.bin")
 	if info, err := os.Stat(embPath); err == nil {
 		sizeMB := float64(info.Size()) / (1024 * 1024)
 		fmt.Printf("Embeddings file: %.2f MB\n", sizeMB)

@@ -2,10 +2,10 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package cache provides the cache interface implementation for corvux.
+// Package cache provides the cache interface implementation for eulix.
 /*
 This file is responsible for managing cache(database+redis)
-for corvux project Currently kinda buggy/un-tested
+for eulix project Currently kinda buggy/un-tested
 */
 
 package cache
@@ -20,7 +20,7 @@ import (
 	"sort"
 	"time"
 
-	"corvux/internal/config"
+	"eulix/internal/config"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/redis/go-redis/v9"
@@ -65,7 +65,7 @@ func CacheController(cfg *config.Config) (*Manager, error) {
 
 	// Initialize SQL if enabled
 	if cfg.Cache.SQL.Enabled {
-		dbPath := ".corvux/cache.db"
+		dbPath := ".eulix/cache.db"
 		if cfg.Cache.SQL.DSN != "" {
 			dbPath = cfg.Cache.SQL.DSN
 		}
@@ -128,7 +128,7 @@ func (m *Manager) Get(query string, currentChecksumHash string) (string, bool, e
 }
 
 func (m *Manager) getFromRedis(queryHash, currentChecksumHash string) (string, bool, error) {
-	key := fmt.Sprintf("corvux:query:%s", queryHash)
+	key := fmt.Sprintf("eulix:query:%s", queryHash)
 
 	data, err := m.redisClient.Get(m.ctx, key).Result()
 	if err == redis.Nil {
@@ -230,7 +230,7 @@ func (m *Manager) saveToRedis(entry *CacheEntry) error {
 		return err
 	}
 
-	key := fmt.Sprintf("corvux:query:%s", entry.QueryHash)
+	key := fmt.Sprintf("eulix:query:%s", entry.QueryHash)
 	ttl := time.Until(entry.ExpiresAt)
 
 	return m.redisClient.Set(m.ctx, key, data, ttl).Err()
@@ -260,7 +260,7 @@ func (m *Manager) saveToSQL(entry *CacheEntry) error {
 func (m *Manager) Delete(queryHash string) error {
 	// Delete from Redis
 	if m.config.Cache.Redis.Enabled && m.redisClient != nil {
-		key := fmt.Sprintf("corvux:query:%s", queryHash)
+		key := fmt.Sprintf("eulix:query:%s", queryHash)
 		if err := m.redisClient.Del(m.ctx, key).Err(); err != nil {
 			return fmt.Errorf("redis delete failed: %w", err)
 		}
@@ -312,7 +312,7 @@ func (m *Manager) ListAll() ([]CacheEntry, error) {
 
 	// If no SQL, try Redis
 	if len(entries) == 0 && m.config.Cache.Redis.Enabled && m.redisClient != nil {
-		keys, err := m.redisClient.Keys(m.ctx, "corvux:query:*").Result()
+		keys, err := m.redisClient.Keys(m.ctx, "eulix:query:*").Result()
 		if err != nil {
 			return nil, err
 		}

@@ -15,10 +15,10 @@ import (
 	"sync"
 	"time"
 
-	"corvux/internal/cache"
-	"corvux/internal/config"
-	"corvux/internal/llm"
-	"corvux/internal/types"
+	"eulix/internal/cache"
+	"eulix/internal/config"
+	"eulix/internal/llm"
+	"eulix/internal/types"
 )
 
 type QueryType int

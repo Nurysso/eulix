@@ -17,7 +17,7 @@ import (
 	"strconv"
 	"strings"
 
-	"corvux/internal/types"
+	"eulix/internal/types"
 )
 
 type language int

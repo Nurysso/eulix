@@ -32,8 +32,8 @@ import (
 	"strings"
 	"time"
 
-	"corvux/internal/config"
-	"corvux/internal/types"
+	"eulix/internal/config"
+	"eulix/internal/types"
 )
 
 // Provider constants — matches toml provider = "..."
