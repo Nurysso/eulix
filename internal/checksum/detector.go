@@ -5,9 +5,9 @@
 /*
 Package checksum handles project-level source file hashing and change detection.
 It walks a project directory, hashes each source file, and produces a combined
-project hash used by corvux to detect whether re-analysis is needed.
+project hash used by eulix to detect whether re-analysis is needed.
 Ignore rules are read from a .euignore file in the project root (same syntax
-as .gitignore). The .corvux/ output directory is always excluded automatically.
+as .gitignore). The .eulix/ output directory is always excluded automatically.
 */
 
 package checksum
@@ -73,8 +73,8 @@ func (d *Detector) shouldIgnore(path string) bool {
 		return false
 	}
 
-	// Always ignore .corvux directory
-	if strings.HasPrefix(relPath, ".corvux") || strings.Contains(relPath, string(filepath.Separator)+".corvux") {
+	// Always ignore .eulix directory
+	if strings.HasPrefix(relPath, ".eulix") || strings.Contains(relPath, string(filepath.Separator)+".eulix") {
 		return true
 	}
 
@@ -176,12 +176,12 @@ func (d *Detector) Calculate() (*Checksum, error) {
 }
 
 func (d *Detector) Save(checksum *Checksum) error {
-	corvuxDir := filepath.Join(d.projectPath, ".corvux")
-	if err := os.MkdirAll(corvuxDir, 0755); err != nil {
+	eulixDir := filepath.Join(d.projectPath, ".eulix")
+	if err := os.MkdirAll(eulixDir, 0755); err != nil {
 		return err
 	}
 
-	checksumPath := filepath.Join(corvuxDir, "checksum.json")
+	checksumPath := filepath.Join(eulixDir, "checksum.json")
 	data, err := json.MarshalIndent(checksum, "", "  ")
 	if err != nil {
 		return err
@@ -191,7 +191,7 @@ func (d *Detector) Save(checksum *Checksum) error {
 }
 
 func (d *Detector) Load() (*Checksum, error) {
-	checksumPath := filepath.Join(d.projectPath, ".corvux", "checksum.json")
+	checksumPath := filepath.Join(d.projectPath, ".eulix", "checksum.json")
 	data, err := os.ReadFile(checksumPath)
 	if err != nil {
 		return nil, err

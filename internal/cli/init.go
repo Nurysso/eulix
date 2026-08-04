@@ -24,7 +24,7 @@ import (
 	"os"
 	"strings"
 
-	"corvux/internal/config"
+	"eulix/internal/config"
 
 	"github.com/BurntSushi/toml"
 )
