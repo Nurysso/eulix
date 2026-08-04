@@ -1,3 +1,12 @@
+# Copyright (c) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer: Dawood (Nurysso) <nurysso@proton.me>
+#
+# Streaming parser for multi‑GB KB JSON using ijson, yielding file structures
+# one at a time. This avoids loading the entire structure dict into memory,
+# enabling processing of repositories with millions of files.
+
 from typing import Set, Optional, Dict, List, Generator
 from pathlib import Path
 from utils.json_util import ObjectBuilder, HAS_ORJSON

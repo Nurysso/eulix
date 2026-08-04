@@ -1,15 +1,23 @@
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# Chunking module is responsible for chunking files/parts of json file
+#
+# This file is responsible for stripping docstrings and boilerplate before embedding to remove tokens that dilute
+# the semantic signal (license headers, TODOs, dense comments). This is a best‑effort
+# regex‑based pass – good enough for embedding input, but never used for correctness‑critical
+# operations. Docstring removal is done in‑place on the parsed structure to avoid
+# copying large dicts in worker threads.
+
+# USED FOR Experimentaion no comments and docstring in embedder and vector
+# to see how it effects context window creation,
+
+# yeah this was useless kept it for no reason
+
 import re
-# USED FOR testing no comments and docstring in embedder and vector
-# to see how it effects context window creation
 
-
-# Stripping comments/boilerplate before embedding is a quality experiment:
-# license headers, TODOs, and dense comment blocks add tokens that dilute
-# the semantic signal of the actual code. These are best-effort, regex-based
-# passes (not a real parser) good enough for embedding input, NOT safe to
-# use for anything that needs correctness (e.g. don't use this to strip
-# comments before executing code).
-# It is no longer used and is a dead code kept for future reference
 def strip_comments(content: str, lang: str) -> str:
     """
     Best-effort comment stripper, per language family.
