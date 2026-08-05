@@ -42,8 +42,9 @@ func analyzeProject(projectPath string) error {
 	if err != nil {
 		return fmt.Errorf("virtual environment setup failed: %w", err)
 	}
-	fmt.Printf("Using Python venv: %s (interpreter: %s)\n", venvPath, pythonPath)
-
+	if cfg.Project.DebugConfig {
+		fmt.Printf("Using Python venv: %s (interpreter: %s)\n", venvPath, pythonPath)
+	}
 	eulixDir := filepath.Join(projectPath, ".eulix")
 
 	detector := checksum.HashHound(projectPath)
@@ -55,12 +56,16 @@ func analyzeProject(projectPath string) error {
 	// Run parser
 	fmt.Println("Parsing codebase...")
 	kbPath := filepath.Join(eulixDir, "kb.json")
-	parserCmd := exec.Command("eulix_parser",
+	parseArgs := []string{
 		"--root", projectPath,
 		"-o", kbPath,
 		"--threads", fmt.Sprintf("%d", cfg.Parser.Threads),
 		"--prism", fmt.Sprintf("%d", cfg.Parser.PrismV),
-	)
+	}
+	if cfg.Parser.Verbose {
+		parseArgs = append(parseArgs, "--verbose")
+	}
+	parserCmd := exec.Command("eulix_parser", parseArgs...)
 	parserCmd.Stdout = os.Stdout
 	parserCmd.Stderr = os.Stderr
 	if err := parserCmd.Run(); err != nil {
@@ -69,9 +74,9 @@ func analyzeProject(projectPath string) error {
 	fmt.Println("✓ Parser completed")
 	fmt.Println()
 
-	// Generate embeddings via ~/.Eulix/eulix_embed.py
+	// Generate embeddings via ~/.Eulix/eulix_embed/main.py
 	fmt.Println("Generating embeddings...")
-	embedScriptPath := filepath.Join(homeDir, ".Eulix", "eulix_embed.py")
+	embedScriptPath := filepath.Join(homeDir, ".Eulix", "eulix_embed", "main.py")
 	if _, err := os.Stat(embedScriptPath); os.IsNotExist(err) {
 		return fmt.Errorf("embed script not found: %s", embedScriptPath)
 	}
