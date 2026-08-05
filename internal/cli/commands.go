@@ -103,7 +103,7 @@ var versionCMD = &cobra.Command{
 		fmt.Printf("%s: %s\n", AppName, AppVersion)
 
 		// eulix_parser native binary, call directly
-		if output, err := runSubCommand("eulix", "--version"); err != nil {
+		if output, err := runSubCommand("eulix_parser", "--version"); err != nil {
 			fmt.Fprintf(os.Stderr, "eulix_parser: [Error] %v\n", err)
 		} else {
 			fmt.Printf("%s", output)
@@ -129,6 +129,36 @@ var embedCMD = &cobra.Command{
 	Use:   "embed [flags]",
 	Short: "Run the eulix_embed pipeline (Python venv)",
 	// Pass-through flags forwarded to eulix_embed.py
+	DisableFlagParsing: true,
+	Run: func(cmd *cobra.Command, args []string) {
+		scriptPath, pythonPath, venvEnv, err := embeddings.FindEulixEmbed()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "eulix embed: setup failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Build: python3 ~/.Eulix/eulix_embed.py [args...]
+		cmdArgs := append([]string{scriptPath}, args...)
+		proc := exec.Command(pythonPath, cmdArgs...)
+		proc.Env = venvEnv
+		proc.Stdin = os.Stdin
+		proc.Stdout = os.Stdout
+		proc.Stderr = os.Stderr
+
+		if err := proc.Run(); err != nil {
+			// Preserve the Python exit code if available
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				os.Exit(exitErr.ExitCode())
+			}
+			fmt.Fprintf(os.Stderr, "eulix embed: run failed: %v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
+var parserCMD = &cobra.Command{
+	Use:                "embed [flags]",
+	Short:              "wrapper around eulix_parser",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		scriptPath, pythonPath, venvEnv, err := embeddings.FindEulixEmbed()
@@ -493,11 +523,11 @@ func init() {
 // writeQueryDebugLog appends the final query output to a query-debug log
 // file under eulixDir, mirroring llm.go's llmdebug.log format.
 func writeQueryDebugLog(eulixDir, query, result string) error {
-	if err := os.MkdirAll(eulixDir, 0755); err != nil {
+	logFile := filepath.Join(eulixDir, "debug", "query-debug.log")
+	if err := os.MkdirAll(filepath.Dir(logFile), 0755); err != nil {
 		return fmt.Errorf("failed to create debug directory: %w", err)
 	}
 
-	logFile := filepath.Join(eulixDir, "debug", "query-debug.log")
 	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open debug log file: %w", err)

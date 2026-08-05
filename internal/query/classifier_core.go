@@ -109,12 +109,50 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     1,
 		}
 	}
+	if c.understandingPattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeUnderstanding,
+			Confidence:   0.95,
+			Reasoning:    "Level 1: understanding pattern match",
+			NeedsContext: true,
+			Priority:     3,
+		}
+	}
 
-	// For long queries, only high-signal unambiguous patterns fire at Level 1
 	if longQuery {
 		return nil
 	}
 
+	// --- HIGH SPECIFICITY PATTERNS (Check these first) ---
+	if c.callGraphPattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeCallGraph,
+			Confidence:   0.95,
+			Reasoning:    "Level 1: call graph pattern",
+			NeedsContext: false,
+			Priority:     4,
+		}
+	}
+	if c.entryPointPattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeEntryPoints,
+			Confidence:   0.95,
+			Reasoning:    "Level 1: entry point pattern",
+			NeedsContext: false,
+			Priority:     4,
+		}
+	}
+	if c.usagePrefixPattern.MatchString(queryLower) {
+		return &Classification{
+			Type:         QueryTypeUsage,
+			Confidence:   0.97,
+			Reasoning:    "Level 1: usage prefix pattern",
+			NeedsContext: false,
+			Priority:     4,
+		}
+	}
+
+	// --- GENERAL / BROADER PATTERNS (Check these after) ---
 	if c.comparisonPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeComparison,
@@ -196,16 +234,6 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Priority:     4,
 		}
 	}
-	// Bare "usage <symbol>" prefix — must be first to avoid falling through to Understanding
-	if c.usagePrefixPattern.MatchString(queryLower) {
-		return &Classification{
-			Type:         QueryTypeUsage,
-			Confidence:   0.97,
-			Reasoning:    "Level 1: usage prefix pattern",
-			NeedsContext: false,
-			Priority:     4,
-		}
-	}
 	if c.architecturePattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeArchitecture,
@@ -222,24 +250,6 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 			Reasoning:    "Level 1: implementation pattern match",
 			NeedsContext: true,
 			Priority:     2,
-		}
-	}
-	if c.callGraphPattern.MatchString(queryLower) {
-		return &Classification{
-			Type:         QueryTypeCallGraph,
-			Confidence:   0.95,
-			Reasoning:    "Level 1: call graph pattern",
-			NeedsContext: false,
-			Priority:     4,
-		}
-	}
-	if c.entryPointPattern.MatchString(queryLower) {
-		return &Classification{
-			Type:         QueryTypeEntryPoints,
-			Confidence:   0.95,
-			Reasoning:    "Level 1: entry point pattern",
-			NeedsContext: false,
-			Priority:     4,
 		}
 	}
 	if c.fileStructPattern.MatchString(queryLower) {
@@ -325,18 +335,6 @@ func (c *Classifier) level2SymbolAnalysis(queryLower string, symbols []string, e
 		if containsAny(queryLower, []string{"example", "how to use", "sample"}) {
 			return &Classification{
 				Type:         QueryTypeExample,
-				Confidence:   0.90,
-				Symbols:      symbols,
-				Keywords:     keywords,
-				Entities:     entities,
-				Reasoning:    "Level 2: single symbol with example keywords",
-				NeedsContext: true,
-				Priority:     2,
-			}
-		}
-		if containsAny((queryLower), []string{"calls", "uses", "used by", "usage"}) {
-			return &Classification{
-				Type:         QueryTypeUsage,
 				Confidence:   0.90,
 				Symbols:      symbols,
 				Keywords:     keywords,
