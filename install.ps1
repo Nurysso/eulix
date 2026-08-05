@@ -7,10 +7,10 @@ $ErrorActionPreference = "Stop"
 
 # ═══════════════════════════════════════════════════════════
 #  EULIX INSTALLER - Windows PowerShell
-#  Secure, user-friendly, Written By AI
+#  user-friendly, Written By AI
 # ═══════════════════════════════════════════════════════════
 
-# ─── Configuration ────────────────────────────────────────
+#  Configuration
 $REPO_URL    = "https://github.com/Nurysso/eulix"
 $INSTALL_DIR = "$env:USERPROFILE\.local\bin"
 $EULIX_DIR   = "$env:USERPROFILE\.Eulix"
@@ -21,7 +21,7 @@ $script:IS_UV            = $false
 $script:COMPUTE_PLATFORM = ""
 $script:Arch             = if ($env:PROCESSOR_ARCHITECTURE -like "*ARM64*") { "arm64" } else { "amd64" }
 
-# ─── Tool Requirements ──────────────────────────────────────
+#  Tool Requirements
 # Only pin minimum versions and critical bootstrappers
 $REQUIRED_TOOLS = @{
     "Git" = @{
@@ -63,7 +63,7 @@ $REQUIRED_TOOLS = @{
     }
 }
 
-# ─── Logging Functions ─────────────────────────────────────
+#  Logging Functions
 function Write-Info    { param($msg) Write-Host "[INFO]  $msg" -ForegroundColor Cyan }
 function Write-Success { param($msg) Write-Host "[OK]    $msg" -ForegroundColor Green }
 function Write-Warn    { param($msg) Write-Host "[WARN]  $msg" -ForegroundColor Yellow }
@@ -77,7 +77,7 @@ function Write-Banner  {
     Write-Host ""
 }
 
-# ─── Security Utilities ────────────────────────────────────
+#  Security Utilities
 function Invoke-SecureDownload {
     param(
         [string]$Uri,
@@ -170,7 +170,7 @@ function Expand-SafeZip {
     }
 }
 
-# ─── Path Management ───────────────────────────────────────
+#  Path Management
 function Add-ToUserPath {
     param([string]$Path)
 
@@ -194,7 +194,7 @@ function Update-SessionPath {
     $env:PATH = ($env:PATH -split ';' | Select-Object -Unique) -join ';'
 }
 
-# ─── Version Comparison ────────────────────────────────────
+#  Version Comparison
 function Compare-Versions {
     param(
         [string]$Version1,
@@ -207,7 +207,7 @@ function Compare-Versions {
     return $v1.CompareTo($v2)
 }
 
-# ─── Tool Verification ─────────────────────────────────────
+#  Tool Verification
 function Test-ToolAvailability {
     param(
         [string]$ToolName,
@@ -299,7 +299,7 @@ function Request-ManualInstall {
     }
 }
 
-# ─── Tool Installation Functions ───────────────────────────
+#  Tool Installation Functions
 function Install-UV {
     if (Get-Command uv -ErrorAction SilentlyContinue) {
         Write-Success "uv is already installed"
@@ -453,7 +453,7 @@ function Install-Go {
     }
 }
 
-# ─── Dependency Management ─────────────────────────────────
+#  Dependency Management
 function Assert-Dependencies {
     Write-Banner "Checking Dependencies"
 
@@ -528,7 +528,7 @@ function Assert-Dependencies {
     Write-Success "All critical dependencies satisfied ✓"
 }
 
-# ─── OS Check ──────────────────────────────────────────────
+#  OS Check
 function Assert-Windows {
     Write-Info "Verifying operating system..."
 
@@ -543,7 +543,7 @@ function Assert-Windows {
     Write-Success "Windows detected: $([System.Environment]::OSVersion.VersionString)"
 }
 
-# ─── GPU Detection ─────────────────────────────────────────
+#  GPU Detection
 function Get-ComputePlatform {
     Write-Banner "GPU Detection"
     Write-Info "Detecting compute platform..."
@@ -594,7 +594,7 @@ function Get-ComputePlatform {
     $script:COMPUTE_PLATFORM = "cpu"
 }
 
-# ─── Repository Management ────────────────────────────────
+#  Repository Management
 function Update-Repository {
     Write-Banner "Preparing Eulix Repository"
     Write-Info "Cloning/updating repository at $CLONE_DIR..."
@@ -650,7 +650,7 @@ function Update-Repository {
     Write-Success "Repository structure verified ✓"
 }
 
-# ─── Build Process ─────────────────────────────────────────
+#  Build Process
 function Build-Eulix {
     Write-Banner "Building Eulix"
 
@@ -665,7 +665,7 @@ function Build-Eulix {
     Write-Info "Building eulix-parser (Rust)..."
     Push-Location "$CLONE_DIR\eulix-parser"
     try {
-        $env:RUSTFLAGS = "-C target-feature=+crt-static"  # Static linking for portability
+        $env:RUSTFLAGS = "-C target-cpu=native"
 
         & cargo build --release
 
@@ -686,17 +686,19 @@ function Build-Eulix {
     }
 
     # Build eulix CLI (Go)
-    Write-Info "Building eulix CLI (Go)..."
+    Write-Info "Building eulix CLI (Go) for windows/$($script:Arch)..."
     Push-Location $CLONE_DIR
     try {
-        $env:CGO_ENABLED = "0"  # Pure Go, no C dependencies
+        $env:GOOS = "windows"
+        $env:GOARCH = $script:Arch
+        $env:CGO_ENABLED = "1"
 
         $goEntry = "cmd\eulix\main.go"
         if (-not (Test-Path $goEntry)) {
             throw "Go entry point not found: $goEntry"
         }
 
-        & go build -ldflags="-s -w" -o "$INSTALL_DIR\eulix.exe" $goEntry
+        & go build -ldflags="-s -w" -trimpath -o "$INSTALL_DIR\eulix.exe" $goEntry
 
         if ($LASTEXITCODE -ne 0) {
             throw "eulix CLI build failed"
@@ -708,52 +710,77 @@ function Build-Eulix {
 
         Write-Success "eulix.exe → $INSTALL_DIR"
     } finally {
+        $env:GOOS = ""
+        $env:GOARCH = ""
         $env:CGO_ENABLED = ""
         Pop-Location
     }
 
-    # Copy eulix-embed
-    Write-Info "Setting up eulix-embed..."
-    $embedSrc = "$CLONE_DIR\eulix-embed\eulix-embed.py"
+    # Copy eulix_embed (entire folder)
+    Write-Info "Setting up eulix_embed..."
+    $embedSrc = "$CLONE_DIR\eulix-embed"
     if (-not (Test-Path $embedSrc)) {
-        throw "eulix-embed.py not found"
+        throw "eulix-embed folder not found"
     }
 
-    Copy-Item $embedSrc "$EULIX_DIR\eulix_embed.py" -Force
-    Write-Success "eulix_embed.py → $EULIX_DIR"
+    $embedDest = "$EULIX_DIR\eulix_embed"
+    if (Test-Path $embedDest) {
+        Remove-Item $embedDest -Recurse -Force
+    }
+    Copy-Item $embedSrc $embedDest -Recurse -Force
+    Write-Success "eulix_embed → $embedDest"
 }
 
-# ─── Python Environment ────────────────────────────────────
+#  Python Environment
 function Initialize-PythonEnvironment {
     Write-Banner "Setting up Python Environment"
 
-    # Create virtual environment
-    Write-Info "Creating virtual environment at $EULIX_VENV..."
-
-    if ($script:IS_UV) {
-        & uv venv --python 3.10 $EULIX_VENV
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to create virtual environment"
-        }
-    } else {
-        $pythonExe = Get-Command python -ErrorAction SilentlyContinue
-        if (-not $pythonExe) {
-            throw "Python not found"
-        }
-
-        & $pythonExe.Source -m venv $EULIX_VENV
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to create virtual environment"
+    # Reuse an existing compatible venv if one is already present
+    $venvPython = "$EULIX_VENV\Scripts\python.exe"
+    $existingVer = ""
+    if (Test-Path $venvPython) {
+        try {
+            $existingVer = & $venvPython -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
+            $existingVer = $existingVer.Trim()
+        } catch {
+            $existingVer = ""
         }
     }
 
-    Write-Success "Virtual environment created"
+    if ($existingVer -eq "3.10" -or $existingVer -eq "3.11") {
+        Write-Success "Compatible virtual environment already exists (Python $existingVer) - reusing it"
+    } else {
+        if (Test-Path $EULIX_VENV) {
+            Write-Warn "Existing venv at $EULIX_VENV is missing or incompatible (found: $(if ($existingVer) { $existingVer } else { 'none' })) - recreating"
+            Remove-Item $EULIX_VENV -Recurse -Force
+        }
+
+        Write-Info "Creating virtual environment at $EULIX_VENV..."
+
+        if ($script:IS_UV) {
+            & uv venv --python 3.10 $EULIX_VENV
+
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to create virtual environment"
+            }
+        } else {
+            $pythonExe = Get-Command python -ErrorAction SilentlyContinue
+            if (-not $pythonExe) {
+                throw "Python not found"
+            }
+
+            & $pythonExe.Source -m venv $EULIX_VENV
+
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to create virtual environment"
+            }
+        }
+
+        Write-Success "Virtual environment created"
+    }
 
     # Install requirements
-    $venvPython = "$EULIX_VENV\Scripts\python.exe"
-    $reqFile = "$CLONE_DIR\eulix-embed\requirements.txt"
+    $reqFile = "$EULIX_DIR\eulix_embed\requirements.txt"
 
     if (-not (Test-Path $reqFile)) {
         throw "requirements.txt not found at $reqFile"
@@ -807,7 +834,7 @@ function Initialize-PythonEnvironment {
     Write-Success "PyTorch ($($script:COMPUTE_PLATFORM)) installed"
 }
 
-# ─── Final Setup ───────────────────────────────────────────
+#  Final Setup
 function Complete-Setup {
     Write-Banner "Finalizing Installation"
 
@@ -844,7 +871,7 @@ function Complete-Setup {
     Write-Host ""
 }
 
-# ─── Main Execution ────────────────────────────────────────
+#  Main Execution
 function Main {
     Write-Host ""
     Write-Host "╔═══════════════════════════════════════════════════════╗" -ForegroundColor Cyan
@@ -900,5 +927,5 @@ function Main {
     }
 }
 
-# ─── Start ─────────────────────────────────────────────────
+#  Start
 Main
