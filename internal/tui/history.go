@@ -4,9 +4,7 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package embeddings provides the command-line interface implementation for EULIX.
 
-/*
-This file is responsible for history tui.
-*/
+// Cache history browser: list + detail views over cached query/response pairs.
 package tui
 
 import (
@@ -16,7 +14,6 @@ import (
 
 	"eulix/internal/cache"
 
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -39,41 +36,6 @@ type cacheItem struct {
 	entry cache.CacheEntry
 	index int
 }
-type keyMap struct {
-	Up     key.Binding
-	Down   key.Binding
-	Enter  key.Binding
-	Delete key.Binding
-	Back   key.Binding
-	Quit   key.Binding
-}
-
-var keys = keyMap{
-	Up: key.NewBinding(
-		key.WithKeys("up", "k"),
-		key.WithHelp("↑/k", "up"),
-	),
-	Down: key.NewBinding(
-		key.WithKeys("down", "j"),
-		key.WithHelp("↓/j", "down"),
-	),
-	Enter: key.NewBinding(
-		key.WithKeys("enter"),
-		key.WithHelp("enter", "view details"),
-	),
-	Delete: key.NewBinding(
-		key.WithKeys("d", "delete"),
-		key.WithHelp("d", "delete entry"),
-	),
-	Back: key.NewBinding(
-		key.WithKeys("esc", "b"),
-		key.WithHelp("esc", "back"),
-	),
-	Quit: key.NewBinding(
-		key.WithKeys("q", "ctrl+c"),
-		key.WithHelp("q", "quit"),
-	),
-}
 
 func (i cacheItem) Title() string {
 	query := i.entry.Query
@@ -81,16 +43,16 @@ func (i cacheItem) Title() string {
 		query = query[:57] + "..."
 	}
 
-	status := "✓"
+	status := lipgloss.NewStyle().Foreground(successColor).Render("✓")
 	if time.Now().After(i.entry.ExpiresAt) {
-		status = "⏱"
+		status = lipgloss.NewStyle().Foreground(warningColor).Render("⏱")
 	}
 
-	return fmt.Sprintf("%s [%d] %s", status, i.index+1, query)
+	return fmt.Sprintf("%s  [%d] %s", status, i.index+1, query)
 }
 
 func (i cacheItem) Description() string {
-	return fmt.Sprintf("Created: %s • Expires: %s",
+	return fmt.Sprintf("Created %s   •   Expires %s",
 		i.entry.CreatedAt.Format("2006-01-02 15:04"),
 		i.entry.ExpiresAt.Format("2006-01-02 15:04"))
 }
@@ -99,14 +61,38 @@ func (i cacheItem) FilterValue() string {
 	return i.entry.Query
 }
 
+// themedDelegate returns a list delegate styled to match the chat view's theme.
+func themedDelegate() list.DefaultDelegate {
+	d := list.NewDefaultDelegate()
+
+	d.Styles.SelectedTitle = d.Styles.SelectedTitle.Copy().
+		Foreground(primaryColor).
+		BorderForeground(primaryColor).
+		Bold(true)
+	d.Styles.SelectedDesc = d.Styles.SelectedDesc.Copy().
+		Foreground(highlightColor).
+		BorderForeground(primaryColor)
+	d.Styles.NormalTitle = d.Styles.NormalTitle.Copy().Foreground(textColor)
+	d.Styles.NormalDesc = d.Styles.NormalDesc.Copy().Foreground(mutedColor)
+	d.Styles.DimmedTitle = d.Styles.DimmedTitle.Copy().Foreground(mutedColor)
+	d.Styles.DimmedDesc = d.Styles.DimmedDesc.Copy().Foreground(mutedColor)
+
+	return d
+}
+
 func HistoryView(entries []cache.CacheEntry, manager *cache.Manager) CacheViewerModel {
 	items := make([]list.Item, len(entries))
 	for i, entry := range entries {
 		items[i] = cacheItem{entry: entry, index: i}
 	}
 
-	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
-	l.Title = "Eulix [BETA] Cache History"
+	l := list.New(items, themedDelegate(), 0, 0)
+	l.Title = "◆ Eulix Cache History"
+	l.Styles.Title = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(textColor).
+		Background(secondaryColor).
+		Padding(0, 2)
 	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(true)
 
@@ -176,22 +162,29 @@ func (m CacheViewerModel) View() string {
 	if m.quitting {
 		return ""
 	}
-
 	if m.showDetail {
 		return m.renderDetailView()
 	}
-
 	return m.renderListView()
 }
 
 func (m CacheViewerModel) renderListView() string {
 	var b strings.Builder
 
-	b.WriteString(m.list.View())
+	listStyle := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1)
+	b.WriteString(listStyle.Render(m.list.View()))
 	b.WriteString("\n")
 
-	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Padding(1, 0)
-	b.WriteString(helpStyle.Render("enter: view • d: delete • q: quit"))
+	help := fmt.Sprintf(
+		"%s view   %s delete   %s quit",
+		keyHintStyle.Render("Enter"),
+		keyHintStyle.Render("d"),
+		keyHintStyle.Render("q"),
+	)
+	b.WriteString(helpBarStyle.Render(help))
 
 	return b.String()
 }
@@ -199,27 +192,30 @@ func (m CacheViewerModel) renderListView() string {
 func (m CacheViewerModel) renderDetailView() string {
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("39")).
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("39")).
-		Padding(0, 1).
+		Foreground(textColor).
+		Background(secondaryColor).
+		Padding(0, 2).
 		Width(m.width - 2)
 
 	contentStyle := lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
-		Padding(1).
+		BorderForeground(borderColor).
+		Padding(1, 2).
 		Width(m.width - 4)
 
-	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-
 	var b strings.Builder
-
-	b.WriteString(titleStyle.Render("Cache Entry Details"))
+	b.WriteString(titleStyle.Render("◆ Cache Entry Details"))
 	b.WriteString("\n\n")
 	b.WriteString(contentStyle.Render(m.viewport.View()))
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("esc: back • d: delete • q: quit"))
+
+	help := fmt.Sprintf(
+		"%s back   %s delete   %s quit",
+		keyHintStyle.Render("Esc"),
+		keyHintStyle.Render("d"),
+		keyHintStyle.Render("q"),
+	)
+	b.WriteString(helpBarStyle.Render(help))
 
 	return b.String()
 }
@@ -231,51 +227,63 @@ func (m CacheViewerModel) renderDetail() string {
 
 	entry := m.entries[m.selected]
 
+	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(primaryColor)
+	valueStyle := lipgloss.NewStyle().Foreground(textColor)
+	metaStyle := lipgloss.NewStyle().Foreground(mutedColor)
+	statusOkStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(successColor).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(successColor).
+		Padding(0, 1)
+	statusExpiredStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(warningColor).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(warningColor).
+		Padding(0, 1)
+
+	wrapWidth := m.width - 8
+	if wrapWidth < 30 {
+		wrapWidth = 30
+	}
+
 	var b strings.Builder
 
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	expiredStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	validStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-
-	// Status
 	expired := time.Now().After(entry.ExpiresAt)
 	if expired {
-		b.WriteString(expiredStyle.Render("⏱ EXPIRED"))
+		b.WriteString(statusExpiredStyle.Render("⏱ EXPIRED"))
 	} else {
-		b.WriteString(validStyle.Render("✓ VALID"))
+		b.WriteString(statusOkStyle.Render("✓ VALID"))
 	}
 	b.WriteString("\n\n")
 
-	// Query
-	b.WriteString(labelStyle.Render("Query:"))
+	b.WriteString(labelStyle.Render("Query"))
 	b.WriteString("\n")
-	b.WriteString(valueStyle.Render(wrapTextCache(entry.Query, m.width-8)))
+	b.WriteString(valueStyle.Render(wrapText(entry.Query, wrapWidth)))
 	b.WriteString("\n\n")
 
-	// Response
-	b.WriteString(labelStyle.Render("Response:"))
+	b.WriteString(labelStyle.Render("Response"))
 	b.WriteString("\n")
 	responsePreview := entry.Response
 	if len(responsePreview) > 500 {
 		responsePreview = responsePreview[:497] + "..."
 	}
-	b.WriteString(valueStyle.Render(wrapTextCache(responsePreview, m.width-8)))
+	b.WriteString(valueStyle.Render(wrapText(responsePreview, wrapWidth)))
 	b.WriteString("\n\n")
 
-	// Metadata
-	b.WriteString(labelStyle.Render("Metadata:"))
+	b.WriteString(labelStyle.Render("Metadata"))
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("  Created:  %s\n", entry.CreatedAt.Format("2006-01-02 15:04:05")))
-	b.WriteString(fmt.Sprintf("  Expires:  %s\n", entry.ExpiresAt.Format("2006-01-02 15:04:05")))
+	fmt.Fprintf(&b, "%s Created:   %s\n", metaStyle.Render("•"), entry.CreatedAt.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, "%s Expires:   %s\n", metaStyle.Render("•"), entry.ExpiresAt.Format("2006-01-02 15:04:05"))
 
 	if !expired {
 		timeLeft := time.Until(entry.ExpiresAt)
-		b.WriteString(fmt.Sprintf("  Time left: %s\n", formatDuration(timeLeft)))
+		fmt.Fprintf(&b, "%s Time left: %s\n", metaStyle.Render("•"), formatDuration(timeLeft))
 	}
 
-	b.WriteString(fmt.Sprintf("  Hash:     %s\n", entry.QueryHash))
-	b.WriteString(fmt.Sprintf("  Checksum: %s\n", entry.ChecksumHash[:16]+"..."))
+	fmt.Fprintf(&b, "%s Hash:      %s\n", metaStyle.Render("•"), entry.QueryHash)
+	fmt.Fprintf(&b, "%s Checksum:  %s\n", metaStyle.Render("•"), entry.ChecksumHash[:16]+"...")
 
 	return b.String()
 }
@@ -291,10 +299,8 @@ func (m CacheViewerModel) deleteCurrentEntry() tea.Cmd {
 			return nil
 		}
 
-		// Remove from local list
 		m.entries = append(m.entries[:m.selected], m.entries[m.selected+1:]...)
 
-		// Update list items
 		items := make([]list.Item, len(m.entries))
 		for i, e := range m.entries {
 			items[i] = cacheItem{entry: e, index: i}
@@ -302,45 +308,8 @@ func (m CacheViewerModel) deleteCurrentEntry() tea.Cmd {
 		m.list.SetItems(items)
 
 		m.showDetail = false
-
 		return nil
 	}
-}
-
-func wrapTextCache(text string, width int) string {
-	if width <= 0 {
-		width = 80
-	}
-
-	var result strings.Builder
-	var currentLine strings.Builder
-	currentLength := 0
-
-	words := strings.Fields(text)
-	for i, word := range words {
-		wordLen := len(word)
-
-		if currentLength > 0 && currentLength+1+wordLen > width {
-			result.WriteString(currentLine.String())
-			result.WriteString("\n")
-			currentLine.Reset()
-			currentLength = 0
-		}
-
-		if currentLength > 0 {
-			currentLine.WriteString(" ")
-			currentLength++
-		}
-
-		currentLine.WriteString(word)
-		currentLength += wordLen
-
-		if i == len(words)-1 {
-			result.WriteString(currentLine.String())
-		}
-	}
-
-	return result.String()
 }
 
 func formatDuration(d time.Duration) string {
