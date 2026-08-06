@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"eulix/internal/types"
 )
@@ -99,63 +100,37 @@ func firstSymbolOrExtracted(class *Classification, query string) string {
 	return extracted
 }
 
-func (r *Router) findTransitiveDependencies(funcName string, depth int) []string {
-	if depth <= 0 {
-		return nil
-	}
-	visited := make(map[string]bool)
-	var result []string
-
-	var traverse func(name string, d int)
-	traverse = func(name string, d int) {
-		if d > depth || visited[name] {
-			return
-		}
-		visited[name] = true
-		if fn, ok := r.callGraph.Functions[name]; ok {
-			for _, callee := range fn.Calls {
-				if !visited[callee] && callee != funcName {
-					result = append(result, callee)
-					traverse(callee, d+1)
-				}
-			}
-		}
-	}
-	traverse(funcName, 0)
-	return result
-}
-
 func formatFileData(path string, fd *types.FileData) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("File: %s  [%s, %d LOC]\n", path, fd.Language, fd.LOC))
+	fmt.Fprintf(&b, "File: %s  [%s, %d LOC]\n", path, fd.Language, fd.LOC)
 
 	if len(fd.Functions) > 0 {
-		b.WriteString(fmt.Sprintf("\nFunctions (%d):\n", len(fd.Functions)))
+		fmt.Fprintf(&b, "\nFunctions (%d):\n", len(fd.Functions))
 		for _, fn := range fd.Functions {
-			b.WriteString(fmt.Sprintf("  • %s  (lines %d–%d, complexity %d, importance %.2f)\n",
-				fn.Name, fn.LineStart, fn.LineEnd, fn.Complexity, fn.ImportanceScore))
+			fmt.Fprintf(&b, "  • %s  (lines %d–%d, complexity %d, importance %.2f)\n",
+				fn.Name, fn.LineStart, fn.LineEnd, fn.Complexity, fn.ImportanceScore)
 		}
 	}
 
 	if len(fd.Classes) > 0 {
-		b.WriteString(fmt.Sprintf("\nClasses (%d):\n", len(fd.Classes)))
+		fmt.Fprintf(&b, "\nClasses (%d):\n", len(fd.Classes))
 		for _, cls := range fd.Classes {
-			b.WriteString(fmt.Sprintf("  • %s  (lines %d–%d, %d methods)\n",
-				cls.Name, cls.LineStart, cls.LineEnd, len(cls.Methods)))
+			fmt.Fprintf(&b, "  • %s  (lines %d–%d, %d methods)\n",
+				cls.Name, cls.LineStart, cls.LineEnd, len(cls.Methods))
 		}
 	}
 
 	if len(fd.Todos) > 0 {
-		b.WriteString(fmt.Sprintf("\nTODOs (%d):\n", len(fd.Todos)))
+		fmt.Fprintf(&b, "\nTODOs (%d):\n", len(fd.Todos))
 		for _, td := range fd.Todos {
-			b.WriteString(fmt.Sprintf("  [%s] line %d: %s\n", td.Priority, td.Line, td.Text))
+			fmt.Fprintf(&b, "  [%s] line %d: %s\n", td.Priority, td.Line, td.Text)
 		}
 	}
 
 	if len(fd.SecurityNotes) > 0 {
-		b.WriteString(fmt.Sprintf("\nSecurity notes (%d):\n", len(fd.SecurityNotes)))
+		fmt.Fprintf(&b, "\nSecurity notes (%d):\n", len(fd.SecurityNotes))
 		for _, sn := range fd.SecurityNotes {
-			b.WriteString(fmt.Sprintf("  [%s] line %d: %s\n", sn.NoteType, sn.Line, sn.Description))
+			fmt.Fprintf(&b, "  [%s] line %d: %s\n", sn.NoteType, sn.Line, sn.Description)
 		}
 	}
 
@@ -216,8 +191,6 @@ func isLikelySymbol(word string) bool {
 	return strings.Contains(word, "_")
 }
 
-//  Fuzzy search
-
 func (r *Router) fuzzySearch(entity string) []string {
 
 	var matches []match
@@ -243,10 +216,6 @@ func (r *Router) fuzzySearch(entity string) []string {
 		out = append(out, fmt.Sprintf("%s (%s)", m.name, m.typ))
 	}
 	return out
-}
-
-func newCallGraphIndex() *callGraphIndex {
-	return &callGraphIndex{cache: make(map[string]string, 256)}
 }
 
 func fuzzyScore(pattern, target string) int {
@@ -591,9 +560,7 @@ func BuildCallGraphIndex(ref *types.CallGraphRef) *CallGraphIdx {
 			idx.Calls[e.From] = append(idx.Calls[e.From], e.To)
 			idx.CalledBy[e.To] = append(idx.CalledBy[e.To], e.From)
 		}
-		// inheritance edges stored separately if you need them later
 	}
-	// In BuildCallGraphIndex, after the edge loop, deduplicate
 	for id, callers := range idx.CalledBy {
 		idx.CalledBy[id] = dedupStrings(callers)
 	}
@@ -653,46 +620,6 @@ func (cb *ContextBuilder) GetExternalDeps() []types.ExternalDependency {
 	return cb.externalDeps
 }
 
-// depNameMatches returns true when the dep name is a fuzzy match for the query term.
-// Handles cases like "serde" matching "serde::{Deserialize, Serialize}".
-func depNameMatches(name, term string) bool {
-	nameLow := strings.ToLower(name)
-
-	// Exact substring — fastest, covers most cases
-	if strings.Contains(nameLow, term) {
-		return true
-	}
-
-	// The dep name may be "pkg::{A, B}" or "pkg::module::Type" —
-	//    extract the root segment and check that alone.
-	root := nameLow
-	if idx := strings.Index(nameLow, "::"); idx != -1 {
-		root = nameLow[:idx]
-	} else if idx := strings.Index(nameLow, "/"); idx != -1 {
-		// Go-style: "github.com/foo/bar" → check each segment
-		for _, seg := range strings.Split(nameLow, "/") {
-			if strings.Contains(seg, term) {
-				return true
-			}
-		}
-	}
-	if strings.Contains(root, term) {
-		return true
-	}
-
-	// Token match — split on non-alpha and check each token
-	tokens := strings.FieldsFunc(nameLow, func(r rune) bool {
-		return !('a' <= r && r <= 'z') && !('0' <= r && r <= '9')
-	})
-	for _, tok := range tokens {
-		if tok == term {
-			return true
-		}
-	}
-
-	return false
-}
-
 var (
 	depCountPhrases = []string{"how many", "count", "total", "number of"}
 	depBroadPhrases = []string{
@@ -731,23 +658,6 @@ func classifyDepIntent(queryLow, entityLow string) depIntent {
 	return depIntentLookup
 }
 
-func (e *depEntry) depMatches(term string) bool {
-	if strings.Contains(e.nameLow, term) || strings.Contains(e.rootLow, term) {
-		return true
-	}
-	for _, segment := range e.segments {
-		if strings.Contains(segment, term) {
-			return true
-		}
-		for _, tokens := range e.tokens {
-			if tokens == term {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 type depIndex struct {
 	entries  []depEntry
 	byFile   map[string][]*types.ExternalDependency // lowercased exact path -> deps
@@ -760,7 +670,7 @@ func buildDepIndex(deps []types.ExternalDependency) *depIndex {
 		byFile:  make(map[string][]*types.ExternalDependency),
 	}
 	isTokenSep := func(r rune) bool {
-		return !('a' <= r && r <= 'z') && !('0' <= r && r <= '9')
+		return !unicode.IsLower(r) && !unicode.IsDigit(r)
 	}
 	for i := range deps {
 		d := &deps[i]

@@ -12,8 +12,6 @@ This file is provids utils/helpers for query classification
 package query
 
 import (
-	"encoding/json"
-	"os"
 	"strings"
 	"unicode"
 )
@@ -101,60 +99,19 @@ func extractKeywords(queryLower string) []string {
 	return keywords
 }
 
-func (c *Classifier) loadSymbols(path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-
-	var kbIndex struct {
-		FunctionsByName map[string][]string `json:"functions_by_name"`
-		TypesByName     map[string][]string `json:"types_by_name"`
-	}
-
-	if err := json.Unmarshal(data, &kbIndex); err != nil {
-		return err
-	}
-	if kbIndex.FunctionsByName != nil {
-		for funcName := range kbIndex.FunctionsByName {
-			c.validSymbols[funcName] = true
-		}
-	}
-	if kbIndex.TypesByName != nil {
-		for typeName := range kbIndex.TypesByName {
-			c.validSymbols[typeName] = true
-			c.validTypes[typeName] = true
-		}
-	}
-
-	for funcName := range kbIndex.FunctionsByName {
-		c.validSymbols[funcName] = true
-	}
-
-	for typeName := range kbIndex.TypesByName {
-		c.validSymbols[typeName] = true
-		c.validTypes[typeName] = true
-	}
-
-	return nil
-}
-
 // isCommonWord contains common words in english+programming language that may occur in query,
 // this is all based upon speculation no concrete proof exists
 func isCommonWord(word string) bool {
 	commonWords := map[string]bool{
-		// English question words & auxiliaries
 		"the": true, "this": true, "that": true, "these": true, "those": true,
 		"what": true, "where": true, "when": true, "why": true, "how": true,
 		"can": true, "will": true, "should": true, "would": true, "could": true,
 		"does": true, "has": true, "have": true, "been": true, "are": true,
-		"is": true, "was": true, "were": true, "being": true,
-		"do": true, "did": true, "done": true, "doing": true,
-		"might": true, "may": true, "must": true, "shall": true,
-		"who": true, "whom": true, "whose": true, "which": true,
-
-		// Common English words
-		"and": true, "but": true, "or": true, "nor": true, "for": true, "so": true, "yet": true,
+		"is": true, "was": true, "were": true, "being": true, "do": true,
+		"did": true, "done": true, "doing": true, "might": true, "may": true,
+		"must": true, "shall": true, "who": true, "whom": true, "whose": true,
+		"which": true, "yet": true,
+		"and": true, "but": true, "or": true, "nor": true, "for": true, "so": true,
 		"with": true, "without": true, "within": true, "about": true, "above": true,
 		"after": true, "before": true, "between": true, "into": true, "through": true,
 		"during": true, "until": true, "against": true, "among": true,
@@ -164,15 +121,11 @@ func isCommonWord(word string) bool {
 		"here": true, "there": true, "each": true, "every": true, "both": true,
 		"few": true, "many": true, "much": true, "another": true, "any": true,
 		"all": true, "none": true, "not": true, "also": true,
-
-		// Common programming terms
 		"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
 		"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
 		"float32": true, "float64": true, "complex64": true, "complex128": true,
 		"bool": true, "byte": true, "rune": true, "string": true, "error": true,
 		"uintptr": true, "nil": true, "true": true, "false": true, "iota": true,
-
-		// General programming language keywords
 		"break": true, "case": true, "catch": true, "class": true, "const": true,
 		"continue": true, "debugger": true, "default": true, "delete": true,
 		"else": true, "enum": true, "export": true, "extends": true,
@@ -191,17 +144,14 @@ func isCommonWord(word string) bool {
 		"ref": true, "mut": true, "unsafe": true, "extern": true, "crate": true,
 		"abstract": true, "sealed": true, "internal": true, "virtual": true,
 		"override": true, "final": true, "strictfp": true, "native": true,
-
 		"chan": true, "defer": true, "fallthrough": true, "go": true,
 		"map": true, "range": true, "select": true, "struct": true,
-		"type": true,
-
+		"type":    true,
 		"boolean": true, "integer": true,
 		"float": true, "double": true, "array": true,
 		"list": true, "set": true, "dict": true, "dictionary": true,
 		"tuple": true, "optional": true, "union": true,
 		"never": true, "undefined": true, "null": true,
-
 		"object": true, "method": true, "implementation": true,
 		"variable": true, "parameter": true, "argument": true, "value": true,
 		"instance": true, "module": true, "library": true, "framework": true,

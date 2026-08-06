@@ -6,41 +6,12 @@
 // RAG (Retrieval-Augmented Generation) system.
 
 /*
-This file implements chunk ranking, diversity-aware selection,
-and context assembly for the RAG pipeline.
-
-This file provides two selection strategies:
-
-1. MMR (Maximal Marginal Relevance) selection — preferred when embeddings are available.
-   Uses a weighted combination of query relevance and diversity (inter-chunk similarity)
-   to avoid redundant context. The mmrLambda parameter (0.7) weights relevance 70% and
-   diversity 30%, tuned to favor topically-relevant chunks while penalizing
-   near-duplicates. Anchor files (exact symbol matches) receive a 1.25× relevance boost.
-
-2. Greedy selection — fallback when embeddings are unavailable.
-   Sorts chunks by score, groups by file to maintain code locality, and merges
-   adjacent chunks (within 5 lines) to reduce header overhead.
-
-Similarity computation (simBetween) uses embeddings when available, but falls back
-to boilerplate-filtered symbol overlap (Jaccard similarity). This hybrid approach
-ensures meaningful diversity even in low-embedding regimes.
-
-Key optimizations:
-  - Boilerplate filtering: common tokens (ctx, err, i, j) are stripped before
-    computing symbol overlap, reducing false positives on unrelated chunks.
-  - Chunk merging: adjacent chunks in the same file are fused to reduce per-chunk
-    overhead (20 tokens) and produce contiguous code spans.
-  - Same-file locality penalty: chunks in the same file separated by > 150 lines
-    have their inter-similarity penalized by 1.20× to encourage cross-file diversity.
-  - Token budgeting: selection respects per-query token limits; chunks are ranked
-    and added until the budget is exhausted.
-
-Trace output (ChunkTrace) captures:
-  - Inclusion decision and exclusion reason (budget exhausted, redundancy, etc.)
-  - Match type and details (exact symbol, semantic, keyword, etc.)
-  - Final rank and token cost
+Package query provides context window building and query routing for Eulix's RAG system.
+Key Responsibilities:
+  - Applies MMR or greedy file-locality strategies for diversity-aware chunk selection
+  - Merges adjacent code spans and penalizes same-file redundancy
+  - Assembles final context windows within strict token budgets and records chunk traces
 */
-
 package query
 
 import (
@@ -244,8 +215,6 @@ func (cb *ContextBuilder) mmrSelect(
 	}
 	return selected
 }
-
-//  Exact / partial symbol search
 
 func (cb *ContextBuilder) selectChunks(scored []ScoredChunk, budget int) []Chunk {
 	selected := make([]Chunk, 0)

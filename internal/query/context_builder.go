@@ -5,45 +5,6 @@
 // Package query is responsible for query identification,
 // running functions/tools based on query and build context window.
 
-/*
-This file  orchestrates the full retrieval pipeline:
-The Eulix's context window builder the core RAG engine
-that transforms a natural language query into a ranked, token-budgeted slice of
-code context optimized for LLM reasoning.
-
-  1. Query classification (intent detection + specificity scoring)
-  2. Budget allocation (token limits based on query intent and model capacity)
-  3. Multi-strategy candidate search:
-     - Exact symbol anchors (direct matches in function/class names)
-     - Call-site discovery (caller/callee relationships)
-     - Semantic search (embeddings-based similarity)
-     - Keyword search (inverted index term matching)
-     - Symbol overlap (shared identifiers between chunks)
-  4. Graph expansion (if call graph is available)
-  5. Selection (MMR diversity-aware or greedy fallback)
-  6. Source code hydration (map chunks back to actual file content)
-  7. Assembly (final ContextWindow for the LLM)
-
-Memory and performance notes:
-  - Embeddings are optional; queries degrade gracefully to keyword+symbol scoring
-  - Call graphs are optional; context expansion works without them
-  - Knowledge base (kb.json) is always loaded; it provides the chunk universe
-  - For large corpora (> 50k chunks), chunk content is lazy-loaded on demand
-  - Boilerplate symbols (ctx, err, i, j) are pre-filtered to reduce false matches
-
-File loading happens in context_loader.go:
-  - kb.json + kb_index.json → chunk definitions
-  - embeddings.bin → vector embeddings
-  - vectors.bin → ID→embedding index
-  - kb_call_graph.json → call relationships
-
-See:
-  - context_loader.go: artifact loading and boilerplate detection setup
-  - context_search.go: multi-strategy search implementation
-  - context_mmr.go: Maximal Marginal Relevance selection
-  - content_intent.go: query intent classification & token budget allocation
-*/
-
 package query
 
 import (
@@ -56,14 +17,12 @@ import (
 	"eulix/internal/types"
 )
 
-// Constants
 const (
 	BinaryVersion = uint32(4)
 	MagicBytes    = "EULX"
 )
 
-//  Constructor
-
+// ContextWindowCreator initializes ContextBuilder, loads index artifacts, and sets up search resources.
 func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Client, sourceRoot string) (*ContextBuilder, error) {
 	cb := &ContextBuilder{
 		eulixDir:      eulixDir,
@@ -85,9 +44,6 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	}
 	cb.queryEmbedder = queryEmbedder
 
-	// loadChunks calls buildDerivedIndices which calls
-	// buildSubsystemTree and detectNoisePatterns internally,
-	// so subsystemTree and noisePaths are populated here.
 	if err := cb.loadChunks(); err != nil {
 		return nil, fmt.Errorf("failed to load chunks from KB: %w", err)
 	}
@@ -107,7 +63,6 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 		cb.debugLog.Log("Loaded %d vector mappings", len(cb.vectorMap))
 	}
 
-	// Single unified call graph load, runs after chunks are ready
 	cb.loadAndIndexCallGraph()
 	cb.hasKB = true
 	cb.debugLog.Log("ContextBuilder initialized: %d chunks, %d subsystem nodes, %d noise paths",
@@ -115,6 +70,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	return cb, nil
 }
 
+// BuildContext constructs the ContextWindow for the target query.
 func (cb *ContextBuilder) BuildContext(query string) (*types.ContextWindow, error) {
 	maxLines := cb.config.Project.MaxLines
 	ctx, _, err := cb.buildContextInternal(query, maxLines)
@@ -124,7 +80,6 @@ func (cb *ContextBuilder) BuildContext(query string) (*types.ContextWindow, erro
 
 	if cb.config.Project.DebugConfig {
 		if err := cb.writeContextToFile(ctx); err != nil {
-			// don’t fail main flow for debug write issues
 			fmt.Printf("failed to write debug context: %v\n", err)
 		}
 	}
@@ -180,7 +135,6 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	}
 
 	candidateLimit := cb.candidateLimitForIntent(intent)
-	// Passes budget weights so multiStrategySearch uses the same allocation
 	candidates := cb.multiStrategySearch(query, candidateLimit, intent, budget.StrategyWeights, trace, qEmb)
 	trace.TotalCandidates = len(candidates)
 	cb.debugLog.Log("Multi-strategy search: %d candidates", len(candidates))
@@ -217,9 +171,12 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 		selected = cb.selectChunks(expanded, budget.ContextBudget)
 		for i, c := range selected {
 			trace.ChunkTraces = append(trace.ChunkTraces, ChunkTrace{
-				ID: c.ID, File: c.File,
-				Lines:  [2]int{c.StartLine, c.EndLine},
-				Tokens: c.Tokens, Rank: i + 1, Included: true,
+				ID:       c.ID,
+				File:     c.File,
+				Lines:    [2]int{c.StartLine, c.EndLine},
+				Tokens:   c.Tokens,
+				Rank:     i + 1,
+				Included: true,
 			})
 		}
 	}
@@ -230,8 +187,6 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 		cb.debugLog.Log("Hydrated KB content for %d chunks", len(selected))
 	}
 
-	// Source hydration gets the full remaining budget — applyBudget's
-	// bin-packing already handles fitting; no second discount needed.
 	selected = cb.hydrateSourceCode(selected, budget.ContextBudget, maxLinesDefault)
 
 	ctx := cb.assembleContext(selected)
@@ -249,14 +204,13 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	return ctx, trace, nil
 }
 
-// candidateLimitForIntent avoids pulling 120 candidates for narrow queries
 func (cb *ContextBuilder) candidateLimitForIntent(intent QueryIntent) int {
 	scale := 1.0
 	n := len(cb.chunks)
 	switch {
 	case n > 500_000:
 		scale = 4.0
-	case n > 100_00:
+	case n > 100_000:
 		scale = 2.5
 	case n > 50_000:
 		scale = 1.5
@@ -283,8 +237,7 @@ func (cb *ContextBuilder) candidateLimitForIntent(intent QueryIntent) int {
 	default:
 		base = 80
 	}
-	// Hard cap: MMR over 600 candidates is still fast beyound that
-	// just adds noise without improving recall.
+
 	limit := int(float64(base) * scale)
 	if limit > 600 {
 		limit = 600
@@ -292,8 +245,6 @@ func (cb *ContextBuilder) candidateLimitForIntent(intent QueryIntent) int {
 	return limit
 }
 
-// mergeWithPriority blends pre-computed high-priority slices (anchors, callsites)
-// into the main candidate list, ensuring they appear at the top.
 func mergeWithPriority(anchors, callSites, candidates []ScoredChunk) []ScoredChunk {
 	seen := make(map[string]bool, len(anchors)+len(callSites)+len(candidates))
 	out := make([]ScoredChunk, 0, len(anchors)+len(callSites)+len(candidates))

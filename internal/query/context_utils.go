@@ -9,48 +9,10 @@ RAG (Retrieval-Augmented Generation) system.
 
 This file contains utility functions for tokenization, text processing, binary
 parsing, debug logging, and math operations used throughout the context builder.
-
-Core utilities:
-
- 1. Binary parsing (readStr): Length-prefixed UTF-8 string deserialization
-    from embeddings.bin and vectors.bin formats.
-
- 2. Query tokenization:
-    - extractQueryKeywords: Stop-word filtered keywords (length > 2)
-    - extractPotentialSymbols: Code identifier detection (snake_case, camelCase, PascalCase)
-    - splitIdentifierToTokens: CamelCase/snake_case decomposition
-
- 3. Code identifier detection (isCodeIdentifier):
-    - Matches snake_case (underscore), camelCase (lowercase→uppercase),
-    and PascalCase (≥2 uppercase letters)
-    - Filters out plain English words to avoid polluting symbol searches
-
- 4. Inverted index building (buildInvertedIndexFromKB):
-    - Tokenizes chunks without rebuilding them from KB structures
-    - Uses lazy-loaded content when available
-    - Applies term frequency weighting: name (+5), symbols (+3), keywords (+1)
-    - Produces TF-normalized postings for invertedKeywordSearch
-
- 5. Vector operations (cosineSimilarity):
-    - Normalized dot product for embedding comparison
-    - Used by vectorSearch and vectorSearchIVF
-
- 6. Debug logging (DebugLogger):
-    - File-based debug output with timestamps
-    - Thread-safe (mutex-protected)
-    - Gracefully falls back if file creation fails
-
-See:
-  - context_search.go: Uses extractQueryKeywords, extractPotentialSymbols
-  - context_loader.go: Uses readStr for binary embedding/vector deserialization
-  - context_kb.go: Uses splitIdentifierToTokens for partial matching
-  - context_vectorIVF.go: Uses cosineSimilarity for vector distance
-  - context_builder.go: Owns DebugLogger instance
 */
 package query
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -68,16 +30,6 @@ import (
 // Kept for interface compatibility.
 func (cb *ContextBuilder) Close() error { return nil }
 
-// isIdentRune returns true if b is a valid identifier character:
-// underscore, letter (a-z, A-Z), or digit (0-9).
-// Used by buildCallSiteIndex to backtrack from "(" to collect function names.
-//
-// See:
-//   - buildCallSiteIndex: Uses this to recognize identifier boundaries
-func isIdentRune(b byte) bool {
-	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
-}
-
 func getHeapAlloc() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -92,7 +44,9 @@ func getHeapAlloc() uint64 {
 //   - context_builder.go: DebugTrace storage and lifecycle
 func (cb *ContextBuilder) GetLastTrace() *DebugTrace {
 	cb.mu.Lock()
-	defer cb.mu.Unlock()
+	defer func() {
+		cb.mu.Unlock()
+	}()
 	return cb.lastTrace
 }
 
@@ -110,8 +64,8 @@ func (cb *ContextBuilder) writeContextToFile(ctx *types.ContextWindow) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = f.WriteString(fmt.Sprintf("%+v\n", ctx))
+	defer func() { _ = f.Close() }()
+	_, err = fmt.Fprintf(f, "%+v\n", ctx)
 	return err
 }
 
@@ -167,130 +121,16 @@ func (d *DebugLogger) Log(format string, args ...interface{}) {
 	if !strings.HasSuffix(msg, "\n") {
 		msg += "\n"
 	}
-	d.file.WriteString(msg)
+	_, _ = d.file.WriteString(msg)
 }
 
 // Close closes the debug log file.
 // Safe to call multiple times (checks for nil).
-func (d *DebugLogger) Close() {
+func (d *DebugLogger) Close() error {
 	if d.file != nil {
-		d.file.Close()
+		return d.file.Close()
 	}
-}
-
-// readStr reads a length-prefixed string from binary data.
-// Format: [4B LE uint32 length][length bytes of UTF-8 string]
-// Returns: (string_value, new_offset, error)
-// Used by loadEmbeddings and loadVectorMap to deserialize string fields.
-//
-// Error cases:
-//   - Truncated header (offset+4 > len(data)): "unexpected EOF reading string length"
-//   - Truncated body (offset+length > len(data)): "unexpected EOF reading string body"
-//
-// See:
-//   - loadEmbeddings: Uses to read model name and embedding IDs
-//   - loadVectorMap: Uses to read model name and vector IDs
-func readStr(data []byte, off int) (string, int, error) {
-	if off+4 > len(data) {
-		return "", off, fmt.Errorf("unexpected EOF reading string length at offset %d", off)
-	}
-	l := int(binary.LittleEndian.Uint32(data[off : off+4]))
-	off += 4
-	if off+l > len(data) {
-		return "", off, fmt.Errorf("unexpected EOF reading string body at offset %d (len=%d)", off, l)
-	}
-	return string(data[off : off+l]), off + l, nil
-}
-
-// buildInvertedIndexFromKB constructs a TF-IDF inverted index from KB structures.
-// Tokenizes chunk metadata (signature, docstring, name) without rebuilding chunks.
-// For lazy-loaded corpora, reads content directly from KnowledgeBase to avoid
-// materializing chunks unnecessarily.
-//
-// Algorithm:
-//  1. Create key→chunkIdx map for O(1) chunk metadata lookup
-//  2. For each function/class/method in KB.Structure:
-//     - Retrieve corresponding chunk index via key lookup
-//     - Extract content: signature + docstring
-//     - Tokenize content (extractQueryKeywords) and name/symbols
-//  3. Calculate term frequency: weight name (+5), symbols (+3), keywords (+1)
-//  4. Normalize TF by total term count in chunk
-//  5. Append to Postings[term]
-//
-// Postings format: map[term_string] → []Posting{ChunkIdx, TF}
-// TF values are normalized [0, 1] per chunk for consistency.
-//
-// Why signature+docstring only (not full body):
-//   - Reduces noise: body contains variable names, control flow noise
-//   - Improves precision: docstring + signature capture intent
-//   - Faster indexing: shorter tokens to process
-//
-// See:
-//   - invertedKeywordSearch: Uses postings to retrieve chunks by TF-IDF score
-//   - context_loader.go: buildInvertedIndexFromKB called during setup
-//   - extractQueryKeywords: Keyword extraction with stop-word filtering
-func (cb *ContextBuilder) buildInvertedIndexFromKB(kb *types.KnowledgeBaseRef) *InvertedIndex {
-	idx := &InvertedIndex{
-		Postings: make(map[string][]Posting, len(cb.chunks)*10),
-		DocCount: len(cb.chunks),
-	}
-
-	// Build a key→chunkIdx map so we can look up chunk metadata without rebuilding
-	keyToIdx := make(map[string]int, len(cb.chunks))
-	for i, c := range cb.chunks {
-		key := fmt.Sprintf("%s:%d-%d", c.File, c.StartLine, c.EndLine)
-		keyToIdx[key] = i
-	}
-	// Index directly from KB structures - never call buildChunksFromKB* here
-	indexChunk := func(chunkIdx int, content, name string, symbols []string) {
-		termFreq := make(map[string]int, 32)
-		for _, kw := range extractQueryKeywords(strings.ToLower(content)) {
-			termFreq[kw]++
-		}
-		for _, sym := range symbols {
-			termFreq[strings.ToLower(sym)] += 3
-		}
-		if name != "" {
-			termFreq[strings.ToLower(name)] += 5
-		}
-		total := 0
-		for _, cnt := range termFreq {
-			total += cnt
-		}
-		if total == 0 {
-			return
-		}
-		for term, cnt := range termFreq {
-			idx.Postings[term] = append(idx.Postings[term], Posting{
-				ChunkIdx: chunkIdx,
-				TF:       float32(cnt) / float32(total),
-			})
-		}
-	}
-
-	for filePath, fs := range kb.Structure {
-		for _, fn := range fs.Functions {
-			key := fmt.Sprintf("%s:%d-%d", filePath, fn.LineStart, fn.LineEnd)
-			if i, ok := keyToIdx[key]; ok {
-				// Use signature+docstrings only not full body - from indexing
-				indexChunk(i, fn.Signature+" "+fn.Docstring, fn.Name, nil)
-			}
-		}
-		for _, cls := range fs.Classes {
-			key := fmt.Sprintf("%s:%d-%d", filePath, cls.LineStart, cls.LineEnd)
-			if i, ok := keyToIdx[key]; ok {
-				indexChunk(i, cls.Name+" "+cls.Docstring, cls.Name, nil)
-			}
-			for _, m := range cls.Methods {
-				mk := fmt.Sprintf("%s:%d-%d", filePath, m.LineStart, m.LineEnd)
-				if i, ok := keyToIdx[mk]; ok {
-					indexChunk(i, m.Signature+" "+m.Docstring, m.Name, nil)
-				}
-			}
-		}
-	}
-
-	return idx
+	return nil
 }
 
 // cosineSimilarity computes normalized dot product of two vectors.
