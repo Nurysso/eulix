@@ -28,7 +28,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -121,8 +120,6 @@ type ollamaResponse struct {
 	Error   string  `json:"error,omitempty"`
 }
 
-// Gemini
-
 type geminiRequest struct {
 	Contents         []geminiContent        `json:"contents"`
 	GenerationConfig geminiGenerationConfig `json:"generationConfig"`
@@ -150,8 +147,6 @@ type geminiResponse struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
 }
-
-// Client
 
 // MouthClient — cause that's what llm is used for, to speak.
 func MouthClient(cfg *config.Config) (*Client, error) {
@@ -211,7 +206,6 @@ func resolveProvider(l config.LLMConfig) string {
 }
 
 func (c *Client) LlmResponse(prompt string) (string, error) {
-	// Debug logging
 	if c.config.Project.DebugConfig {
 		logDir := filepath.Join(c.config.Project.Path, ".eulix")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
@@ -223,7 +217,7 @@ func (c *Client) LlmResponse(prompt string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to open debug log file: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		debugEntry := fmt.Sprintf("\n%s\n=== LLM DEBUG ENTRY ===\nTimestamp: %s\nProvider: %s\nModel: %s\n\n=== PROMPT ===\n%s\n=== END PROMPT ===\n%s\n",
 			strings.Repeat("=", 80),
@@ -239,19 +233,17 @@ func (c *Client) LlmResponse(prompt string) (string, error) {
 	}
 
 	// Use the prompt directly
-	switch p := resolveProvider(c.config.LLM); {
-	case p == ProviderAnthropic:
+	switch p := resolveProvider(c.config.LLM); p {
+	case ProviderAnthropic:
 		return c.queryAnthropic(prompt)
-	case p == ProviderOllama:
+	case ProviderOllama:
 		return c.queryOllama(prompt)
-	case p == ProviderGemini:
+	case ProviderGemini:
 		return c.queryGemini(prompt)
 	default:
 		return c.queryOpenAI(prompt)
 	}
 }
-
-// Provider implementations
 
 func (c *Client) queryAnthropic(prompt string) (string, error) {
 	l := c.config.LLM
@@ -408,15 +400,13 @@ func (c *Client) queryGemini(prompt string) (string, error) {
 	return resp.Candidates[0].Content.Parts[0].Text, nil
 }
 
-// Helpers
-
 // do executes req, checks the status code, and decodes JSON into out.
 func (c *Client) do(req *http.Request, out any) error {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -472,18 +462,12 @@ func resolveEndpoint(provider, cfgEndpoint string) string {
 	return "/v1/chat/completions"
 }
 
-// BuildPromptString returns the full prompt string that would be sent to the LLM
-// without making an actual API call.
 // BuildFullPrompt returns the complete prompt string that would be sent to the LLM,
 // including context chunks, user query, and any additional system instructions.
 // This is used when you want the prompt without making an API call.
 func (c *Client) BuildFullPrompt(context *types.ContextWindow, userQuery string, additionalPrompt ...string) string {
 	var sb strings.Builder
-
-	// Context chunks section
 	sb.WriteString(c.buildPrompt(context, userQuery))
-
-	// Any additional prompt content (e.g., CoT instructions from query package)
 	for _, p := range additionalPrompt {
 		sb.WriteString("\n")
 		sb.WriteString(p)
@@ -506,18 +490,16 @@ func (c *Client) buildPrompt(context *types.ContextWindow, userQuery string) str
 			metaChunks = append(metaChunks, chunk)
 		}
 	}
-
-	// Compact inventory header — just counts, no per-token explanation
-	sb.WriteString(fmt.Sprintf(
+	fmt.Fprintf(&sb,
 		"Context: %d source chunks, %d metadata, %d tokens across %d files\n\n",
 		len(srcChunks), len(metaChunks), context.TotalTokens, len(context.Sources),
-	))
+	)
 
 	if len(srcChunks) > 0 {
 		sb.WriteString("── SOURCE ──\n\n")
 		for i, chunk := range srcChunks {
-			sb.WriteString(fmt.Sprintf("[%d] %s:%d-%d (score %.2f)\n",
-				i+1, chunk.File, chunk.StartLine, chunk.EndLine, chunk.Importance))
+			fmt.Fprintf(&sb, "[%d] %s:%d-%d (score %.2f)\n",
+				i+1, chunk.File, chunk.StartLine, chunk.EndLine, chunk.Importance)
 			sb.WriteString(chunk.Content)
 			sb.WriteString("\n\n")
 		}
@@ -526,8 +508,8 @@ func (c *Client) buildPrompt(context *types.ContextWindow, userQuery string) str
 	if len(metaChunks) > 0 {
 		sb.WriteString("── METADATA ──\n\n")
 		for i, chunk := range metaChunks {
-			sb.WriteString(fmt.Sprintf("[M%d] %s:%d-%d\n",
-				i+1, chunk.File, chunk.StartLine, chunk.EndLine))
+			fmt.Fprintf(&sb, "[M%d] %s:%d-%d\n",
+				i+1, chunk.File, chunk.StartLine, chunk.EndLine)
 			sb.WriteString(chunk.Content)
 			sb.WriteString("\n\n")
 		}
@@ -538,38 +520,4 @@ func (c *Client) buildPrompt(context *types.ContextWindow, userQuery string) str
 	sb.WriteString("\n")
 
 	return sb.String()
-}
-
-// fillResidualBudget does a second bin-packing pass over skipped chunks,
-// fitting any that are small enough to fill the remaining token budget.
-// Call this after the primary greedy hydration loop.
-//
-// skipped: chunks that didn't fit in order (index → token cost)
-// remaining: tokens left after the greedy pass
-// addChunk: callback that appends the chunk content and returns new remaining
-func fillResidualBudget(
-	skipped []types.ContextChunk,
-	remaining int,
-	addChunk func(chunk types.ContextChunk) int, // returns new remaining
-) int {
-	if remaining <= 0 || len(skipped) == 0 {
-		return remaining
-	}
-
-	// Sort skipped by token cost ascending — fit smallest first
-	sorted := make([]types.ContextChunk, len(skipped))
-	copy(sorted, skipped)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Tokens < sorted[j].Tokens
-	})
-
-	for _, chunk := range sorted {
-		if remaining <= 0 {
-			break
-		}
-		if chunk.Tokens <= remaining {
-			remaining = addChunk(chunk)
-		}
-	}
-	return remaining
 }
