@@ -34,7 +34,6 @@ const (
 	QueryTypeExample
 	QueryTypeTesting
 	QueryTypeCodeGeneration
-	// QueryTypeCallGraph QueryType = iota + 17
 	QueryTypeCallGraph
 	QueryTypeEntryPoints
 	QueryTypeFileStructure

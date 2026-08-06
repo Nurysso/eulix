@@ -59,12 +59,10 @@ func (c *Classifier) Classify(query string) *Classification {
 	query = strings.TrimSpace(query)
 	queryLower := strings.ToLower(query)
 
-	// Level 1: Fast Pattern Matching with new types
 	if result := c.level1PatternMatch(queryLower); result != nil && result.Confidence >= 0.95 {
 		return result
 	}
 
-	// Level 2: Symbol Validation with entity extraction
 	symbols := c.extractSymbols(query)
 	validSymbols := c.validateSymbols(symbols)
 	entities := c.extractEntities(validSymbols)
@@ -75,7 +73,6 @@ func (c *Classifier) Classify(query string) *Classification {
 		}
 	}
 
-	// Level 3: Enhanced Keyword Analysis
 	return c.level3KeywordAnalysis(queryLower, validSymbols, entities)
 }
 
@@ -123,7 +120,7 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 		return nil
 	}
 
-	// --- HIGH SPECIFICITY PATTERNS (Check these first) ---
+	// HIGH SPECIFICITY PATTERNS (Check these first)
 	if c.callGraphPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeCallGraph,
@@ -152,7 +149,7 @@ func (c *Classifier) level1PatternMatch(queryLower string) *Classification {
 		}
 	}
 
-	// --- GENERAL / BROADER PATTERNS (Check these after) ---
+	// GENERAL / BROADER PATTERNS (Check these after)
 	if c.comparisonPattern.MatchString(queryLower) {
 		return &Classification{
 			Type:         QueryTypeComparison,

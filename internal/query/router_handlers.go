@@ -57,13 +57,13 @@ func cotHeader(query string, class *Classification, sourceAvailable bool) string
 	}
 
 	if len(class.Symbols) > 0 {
-		b.WriteString(fmt.Sprintf("Relevant symbols : %v\n", class.Symbols))
+		fmt.Fprintf(&b, "Relevant symbols : %v\n", class.Symbols)
 	}
 	if len(class.Keywords) > 0 {
-		b.WriteString(fmt.Sprintf("Key terms        : %v\n", class.Keywords))
+		fmt.Fprintf(&b, "Key terms        : %v\n", class.Keywords)
 	}
-	b.WriteString(fmt.Sprintf("Query type       : %s  (confidence %.1f%%)\n", class.Type.String(), class.Confidence*100))
-	b.WriteString(fmt.Sprintf("Question you need to anser is  %s\n\n", query))
+	fmt.Fprintf(&b, "Query type       : %s  (confidence %.1f%%)\n", class.Type.String(), class.Confidence*100)
+	fmt.Fprintf(&b, "Question you need to anser is  %s\n\n", query)
 
 	b.WriteString("=== CHAIN-OF-THOUGHT INSTRUCTIONS ===\n")
 	b.WriteString("Before writing your final answer, reason through the following steps.\n")
@@ -178,7 +178,7 @@ func (r *Router) handleDataFlow(query string, class *Classification) (string, er
 	var chainInfo strings.Builder
 	for _, sym := range class.Symbols {
 		if fn, ok := r.callGraph.Functions[sym]; ok {
-			chainInfo.WriteString(fmt.Sprintf("\n%s → %v", sym, fn.Calls))
+			fmt.Fprintf(&chainInfo, "\n%s → %v", sym, fn.Calls)
 		}
 	}
 
@@ -464,12 +464,12 @@ func (r *Router) handleMetrics(query string, class *Classification) (string, err
 	var b strings.Builder
 	meta := ref.Metadata
 
-	b.WriteString(fmt.Sprintf("Project metrics: %s\n\n", meta.ProjectName))
-	b.WriteString(fmt.Sprintf("  Files       : %d\n", meta.TotalFiles))
-	b.WriteString(fmt.Sprintf("  Total LOC   : %d\n", meta.TotalLOC))
-	b.WriteString(fmt.Sprintf("  Functions   : %d\n", meta.TotalFunctions))
-	b.WriteString(fmt.Sprintf("  Languages   : %s\n", strings.Join(meta.Languages, ", ")))
-	b.WriteString(fmt.Sprintf("  Parsed at   : %s\n\n", meta.ParsedAt))
+	fmt.Fprintf(&b, "Project metrics: %s\n\n", meta.ProjectName)
+	fmt.Fprintf(&b, "  Files       : %d\n", meta.TotalFiles)
+	fmt.Fprintf(&b, "  Total LOC   : %d\n", meta.TotalLOC)
+	fmt.Fprintf(&b, "  Functions   : %d\n", meta.TotalFunctions)
+	fmt.Fprintf(&b, "  Languages   : %s\n", strings.Join(meta.Languages, ", "))
+	fmt.Fprintf(&b, "  Parsed at   : %s\n\n", meta.ParsedAt)
 
 	b.WriteString("Top 10 most complex functions:\n")
 
@@ -481,8 +481,8 @@ func (r *Router) handleMetrics(query string, class *Classification) (string, err
 
 	for i := 0; i < limit; i++ {
 		e := topComplex[i]
-		b.WriteString(fmt.Sprintf("  %2d. %s  (%s, complexity %d, importance %.2f)\n",
-			i+1, e.fn.Name, e.file, e.fn.Complexity, e.fn.ImportanceScore))
+		fmt.Fprintf(&b, "  %2d. %s  (%s, complexity %d, importance %.2f)\n",
+			i+1, e.fn.Name, e.file, e.fn.Complexity, e.fn.ImportanceScore)
 	}
 
 	return b.String(), nil
@@ -499,6 +499,7 @@ func (r *Router) handleEntryPoints(_ string, _ *Classification) (string, error) 
 	if err := json.Unmarshal(data, &ref); err != nil {
 		return "", fmt.Errorf("failed to parse kb_entry_points.json: %w", err)
 	}
+	// TODO: uncomment when level based debugger
 	// log.Printf("[DEBUG] entry points loaded: %d entries, raw: %s", len(ref.EntryPoint), string(data[:min(200, len(data))]))
 	var b strings.Builder
 	b.WriteString("Entry points \n")
@@ -509,19 +510,19 @@ func (r *Router) handleEntryPoints(_ string, _ *Classification) (string, error) 
 	}
 
 	for epType, eps := range byType {
-		b.WriteString(fmt.Sprintf("── %s ──\n", strings.ToUpper(epType)))
+		fmt.Fprintf(&b, "── %s ──\n", strings.ToUpper(epType))
 		for _, ep := range eps {
 			if ep.Path != nil {
 				methods := strings.Join(ep.Methods, ", ")
-				b.WriteString(fmt.Sprintf("  [%s] %s → %s  (%s:%d)\n", methods, *ep.Path, ep.Handler, ep.File, ep.Line))
+				fmt.Fprintf(&b, "  [%s] %s → %s  (%s:%d)\n", methods, *ep.Path, ep.Handler, ep.File, ep.Line)
 			} else {
-				b.WriteString(fmt.Sprintf("  %s  (%s:%d)\n", ep.Handler, ep.File, ep.Line))
+				fmt.Fprintf(&b, "  %s  (%s:%d)\n", ep.Handler, ep.File, ep.Line)
 			}
 		}
 		b.WriteString("\n")
 	}
 	if r.Patterns != nil && r.Patterns.ArchitectureStyle != nil {
-		b.WriteString(fmt.Sprintf("Architecture style : %s\n", *r.Patterns.ArchitectureStyle))
+		fmt.Fprintf(&b, "Architecture style : %s\n", *r.Patterns.ArchitectureStyle)
 	}
 	return b.String(), nil
 }
@@ -536,11 +537,11 @@ func (r *Router) handleFileStructure(query string) (string, error) {
 	if target == "" {
 		// List all files
 		var b strings.Builder
-		b.WriteString(fmt.Sprintf("Project: %s  (%d files, %d LOC)\n\n",
-			r.kb.Metadata.ProjectName, r.kb.Metadata.TotalFiles, r.kb.Metadata.TotalLOC))
+		fmt.Fprintf(&b, "Project: %s  (%d files, %d LOC)\n\n",
+			r.kb.Metadata.ProjectName, r.kb.Metadata.TotalFiles, r.kb.Metadata.TotalLOC)
 		for path, fd := range r.kb.Structure {
-			b.WriteString(fmt.Sprintf("  %s  [%s, %d LOC, %d fns, %d classes]\n",
-				path, fd.Language, fd.LOC, len(fd.Functions), len(fd.Classes)))
+			fmt.Fprintf(&b, "  %s  [%s, %d LOC, %d fns, %d classes]\n",
+				path, fd.Language, fd.LOC, len(fd.Functions), len(fd.Classes))
 		}
 		return b.String(), nil
 	}
@@ -587,9 +588,9 @@ func (r *Router) handleTodosQuery(_ string, _ *Classification) (string, error) {
 
 	var b strings.Builder
 	if len(secNotes) > 0 {
-		b.WriteString(fmt.Sprintf("⚠ Security notes (%d):\n", len(secNotes)))
+		fmt.Fprintf(&b, "⚠ Security notes (%d):\n", len(secNotes))
 		for _, sn := range secNotes {
-			b.WriteString(fmt.Sprintf("  [%s] %s:%d — %s\n", sn.noteType, sn.file, sn.line, sn.desc))
+			fmt.Fprintf(&b, "  [%s] %s:%d — %s\n", sn.noteType, sn.file, sn.line, sn.desc)
 		}
 		b.WriteString("\n")
 	}
@@ -598,9 +599,9 @@ func (r *Router) handleTodosQuery(_ string, _ *Classification) (string, error) {
 		if len(items) == 0 {
 			return
 		}
-		b.WriteString(fmt.Sprintf("%s (%d):\n", label, len(items)))
+		fmt.Fprintf(&b, "%s (%d):\n", label, len(items))
 		for _, td := range items {
-			b.WriteString(fmt.Sprintf("  %s:%d — %s\n", td.file, td.line, td.text))
+			fmt.Fprintf(&b, "  %s:%d — %s\n", td.file, td.line, td.text)
 		}
 		b.WriteString("\n")
 	}
@@ -629,34 +630,34 @@ func (r *Router) handleLocation(query string, class *Classification) (string, er
 	found := false
 
 	if locations, ok := r.kbIndex.FunctionsByName[entity]; ok {
-		b.WriteString(fmt.Sprintf("Function '%s' defined at:\n", entity))
+		fmt.Fprintf(&b, "Function '%s' defined at:\n", entity)
 		for _, loc := range dedupe(locations) {
-			b.WriteString(fmt.Sprintf("  %s\n", loc))
+			fmt.Fprintf(&b, "  %s\n", loc)
 		}
 		found = true
 	}
 
 	if locations, ok := r.kbIndex.TypesByName[entity]; ok {
-		b.WriteString(fmt.Sprintf("Type '%s' defined at:\n", entity))
+		fmt.Fprintf(&b, "Type '%s' defined at:\n", entity)
 		for _, loc := range dedupe(locations) {
-			b.WriteString(fmt.Sprintf("  %s\n", loc))
+			fmt.Fprintf(&b, "  %s\n", loc)
 		}
 		found = true
 	}
 
 	if callers, ok := r.kbIndex.FunctionsCalling[entity]; ok {
-		b.WriteString(fmt.Sprintf("'%s' is called by:\n", entity))
+		fmt.Fprintf(&b, "'%s' is called by:\n", entity)
 		for _, caller := range dedupe(callers) {
-			b.WriteString(fmt.Sprintf("  %s\n", caller))
+			fmt.Fprintf(&b, "  %s\n", caller)
 		}
 		found = true
 	}
 
 	if !found {
 		if matches := r.fuzzySearch(entity); len(matches) > 0 {
-			b.WriteString(fmt.Sprintf("No exact match for '%s'. Closest symbols:\n", entity))
+			fmt.Fprintf(&b, "No exact match for '%s'. Closest symbols:\n", entity)
 			for _, m := range matches {
-				b.WriteString(fmt.Sprintf("  %s\n", m))
+				fmt.Fprintf(&b, "  %s\n", m)
 			}
 		} else {
 			return fmt.Sprintf("'%s' was not found in the knowledge base.", entity), nil
