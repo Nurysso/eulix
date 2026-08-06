@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -53,7 +54,9 @@ func (d *Detector) loadIgnorePatterns() {
 		// .euignore doesn't exist, that's okay
 		return
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -64,6 +67,10 @@ func (d *Detector) loadIgnorePatterns() {
 		}
 		d.ignorePatterns = append(d.ignorePatterns, line)
 	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("warning: error reading %s: %v\n", ignorePath, err)
+	}
 }
 
 // shouldIgnore checks if a path should be ignored
@@ -73,19 +80,16 @@ func (d *Detector) shouldIgnore(path string) bool {
 		return false
 	}
 
-	// Always ignore .eulix directory
 	if strings.HasPrefix(relPath, ".eulix") || strings.Contains(relPath, string(filepath.Separator)+".eulix") {
 		return true
 	}
 
-	// Check against ignore patterns
 	for _, pattern := range d.ignorePatterns {
 		matched, err := filepath.Match(pattern, relPath)
 		if err == nil && matched {
 			return true
 		}
 
-		// Also check if pattern matches any component of the path
 		pathParts := strings.Split(relPath, string(filepath.Separator))
 		for _, part := range pathParts {
 			matched, err := filepath.Match(pattern, part)
@@ -94,14 +98,12 @@ func (d *Detector) shouldIgnore(path string) bool {
 			}
 		}
 
-		// Check for prefix match (directory patterns)
 		if strings.HasSuffix(pattern, "/") {
 			if strings.HasPrefix(relPath, strings.TrimSuffix(pattern, "/")) {
 				return true
 			}
 		}
 
-		// Check for exact match or prefix match
 		if strings.HasPrefix(relPath, pattern) {
 			return true
 		}
@@ -120,7 +122,6 @@ func (d *Detector) Calculate() (*Checksum, error) {
 			return err
 		}
 
-		// Check if path should be ignored
 		if d.shouldIgnore(path) {
 			if info.IsDir() {
 				return filepath.SkipDir
@@ -128,21 +129,18 @@ func (d *Detector) Calculate() (*Checksum, error) {
 			return nil
 		}
 
-		// Skip directories and hidden files
 		if info.IsDir() || filepath.Base(path)[0] == '.' {
 			return nil
 		}
 
-		// Skip non-source files
 		ext := filepath.Ext(path)
 		if !isSourceFile(ext) {
 			return nil
 		}
 
-		// Calculate file hash
 		hash, lines, err := hashFile(path)
 		if err != nil {
-			return nil // Skip files we can't read
+			return nil
 		}
 
 		relPath, _ := filepath.Rel(d.projectPath, path)
@@ -157,7 +155,6 @@ func (d *Detector) Calculate() (*Checksum, error) {
 		return nil, err
 	}
 
-	// Calculate project hash
 	h := sha256.New()
 	for _, hash := range fileHashes {
 		h.Write([]byte(hash))
@@ -214,7 +211,6 @@ func (d *Detector) CompareChecksums(stored, current *Checksum) float64 {
 	deleted := 0
 	modified := 0
 
-	// Count changes
 	for file := range current.FileHashes {
 		if storedHash, exists := stored.FileHashes[file]; !exists {
 			added++
@@ -242,7 +238,9 @@ func hashFile(path string) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	h := sha256.New()
 	lines := 0

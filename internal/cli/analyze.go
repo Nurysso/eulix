@@ -53,7 +53,6 @@ func analyzeProject(projectPath string) error {
 		return fmt.Errorf("checksum calculation failed: %w", err)
 	}
 
-	// Run parser
 	fmt.Println("Parsing codebase...")
 	kbPath := filepath.Join(eulixDir, "kb.json")
 	parseArgs := []string{
@@ -74,7 +73,6 @@ func analyzeProject(projectPath string) error {
 	fmt.Println("✓ Parser completed")
 	fmt.Println()
 
-	// Generate embeddings via ~/.Eulix/eulix_embed/main.py
 	fmt.Println("Generating embeddings...")
 	embedScriptPath := filepath.Join(homeDir, ".Eulix", "eulix_embed", "main.py")
 	if _, err := os.Stat(embedScriptPath); os.IsNotExist(err) {
@@ -98,7 +96,6 @@ func analyzeProject(projectPath string) error {
 	fmt.Println("   ✓ Embeddings completed")
 	fmt.Println()
 
-	// Save checksum
 	fmt.Println("Saving checksum...")
 	if err := detector.Save(currentChecksum); err != nil {
 		return fmt.Errorf("failed to save checksum: %w", err)

@@ -90,9 +90,6 @@ func VectorWeaver(model string) (*Embedder, error) {
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 
-	// Discard stderr — the Python serve command writes human-readable
-	// progress there (e.g. "Loading model…", "✓ Ready"). We don't parse it.
-	// If you want to see it, replace with os.Stderr.
 	cmd.Stderr = nil // inherits /dev/null; swap to os.Stderr to debug
 
 	if err := cmd.Start(); err != nil {
@@ -115,7 +112,9 @@ func VectorWeaver(model string) (*Embedder, error) {
 	// The Python serve command writes its ready JSON as the FIRST line on
 	// stdout (not stderr). Block here until we see it or timeout.
 	if err := e.waitReady(); err != nil {
-		cmd.Process.Kill()
+		if killErr := cmd.Process.Kill(); killErr != nil {
+			return nil, fmt.Errorf("embed process failed to start: %w (failed to kill process: %v)", err, killErr)
+		}
 		return nil, fmt.Errorf("embed process failed to start: %w", err)
 	}
 
@@ -203,7 +202,7 @@ func (e *Embedder) EmbedQueryBinary(query string) ([]float32, error) {
 func (e *Embedder) Close() error {
 	// Ask the server to shut down gracefully first.
 	_ = e.enc.Encode(map[string]bool{"shutdown": true})
-	e.stdin.Close()
+	_ = e.stdin.Close()
 	return e.cmd.Wait()
 }
 
