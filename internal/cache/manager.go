@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -48,7 +49,6 @@ func CacheController(cfg *config.Config) (*Manager, error) {
 		ctx:    context.Background(),
 	}
 
-	// Initialize Redis if enabled
 	if cfg.Cache.Redis.Enabled {
 		opt, err := redis.ParseURL(cfg.Cache.Redis.URL)
 		if err != nil {
@@ -57,13 +57,11 @@ func CacheController(cfg *config.Config) (*Manager, error) {
 
 		m.redisClient = redis.NewClient(opt)
 
-		// Test connection
 		if err := m.redisClient.Ping(m.ctx).Err(); err != nil {
 			return nil, fmt.Errorf("redis connection failed: %w", err)
 		}
 	}
 
-	// Initialize SQL if enabled
 	if cfg.Cache.SQL.Enabled {
 		dbPath := ".eulix/cache.db"
 		if cfg.Cache.SQL.DSN != "" {
@@ -77,7 +75,6 @@ func CacheController(cfg *config.Config) (*Manager, error) {
 
 		m.sqlDB = db
 
-		// Create table if not exists
 		if err := m.initSQLSchema(); err != nil {
 			return nil, fmt.Errorf("failed to initialize SQL schema: %w", err)
 		}
@@ -88,36 +85,33 @@ func CacheController(cfg *config.Config) (*Manager, error) {
 
 func (m *Manager) initSQLSchema() error {
 	schema := `
-	CREATE TABLE IF NOT EXISTS cache_entries (
-		query_hash TEXT PRIMARY KEY,
-		query TEXT NOT NULL,
-		response TEXT NOT NULL,
-		checksum_hash TEXT NOT NULL,
-		created_at DATETIME NOT NULL,
-		expires_at DATETIME NOT NULL
-	);
+    CREATE TABLE IF NOT EXISTS cache_entries (
+        query_hash TEXT PRIMARY KEY,
+        query TEXT NOT NULL,
+        response TEXT NOT NULL,
+        checksum_hash TEXT NOT NULL,
+        created_at DATETIME NOT NULL,
+        expires_at DATETIME NOT NULL
+    );
 
-	CREATE INDEX IF NOT EXISTS idx_checksum_hash ON cache_entries(checksum_hash);
-	CREATE INDEX IF NOT EXISTS idx_expires_at ON cache_entries(expires_at);
-	CREATE INDEX IF NOT EXISTS idx_created_at ON cache_entries(created_at);
-	`
+    CREATE INDEX IF NOT EXISTS idx_checksum_hash ON cache_entries(checksum_hash);
+    CREATE INDEX IF NOT EXISTS idx_expires_at ON cache_entries(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_created_at ON cache_entries(created_at);
+    `
 
 	_, err := m.sqlDB.Exec(schema)
 	return err
 }
 
-// Get retrieves a cached response if it exists and the checksum matches
 func (m *Manager) Get(query string, currentChecksumHash string) (string, bool, error) {
 	queryHash := m.hashQuery(query)
 
-	// Try Redis first (if enabled)
 	if m.config.Cache.Redis.Enabled && m.redisClient != nil {
 		if response, found, err := m.getFromRedis(queryHash, currentChecksumHash); err == nil && found {
 			return response, true, nil
 		}
 	}
 
-	// Try SQL (if enabled)
 	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
 		if response, found, err := m.getFromSQL(queryHash, currentChecksumHash); err == nil && found {
 			return response, true, nil
@@ -143,16 +137,13 @@ func (m *Manager) getFromRedis(queryHash, currentChecksumHash string) (string, b
 		return "", false, err
 	}
 
-	// Verify checksum matches
 	if entry.ChecksumHash != currentChecksumHash {
-		// Checksum mismatch - invalidate cache
-		m.redisClient.Del(m.ctx, key)
+		_ = m.redisClient.Del(m.ctx, key).Err()
 		return "", false, nil
 	}
 
-	// Check expiration
 	if time.Now().After(entry.ExpiresAt) {
-		m.redisClient.Del(m.ctx, key)
+		_ = m.redisClient.Del(m.ctx, key).Err()
 		return "", false, nil
 	}
 
@@ -163,10 +154,10 @@ func (m *Manager) getFromSQL(queryHash, currentChecksumHash string) (string, boo
 	var entry CacheEntry
 
 	query := `
-		SELECT query_hash, query, response, checksum_hash, created_at, expires_at
-		FROM cache_entries
-		WHERE query_hash = ? AND checksum_hash = ?
-	`
+        SELECT query_hash, query, response, checksum_hash, created_at, expires_at
+        FROM cache_entries
+        WHERE query_hash = ? AND checksum_hash = ?
+    `
 
 	err := m.sqlDB.QueryRow(query, queryHash, currentChecksumHash).Scan(
 		&entry.QueryHash,
@@ -184,17 +175,16 @@ func (m *Manager) getFromSQL(queryHash, currentChecksumHash string) (string, boo
 		return "", false, err
 	}
 
-	// Check expiration
 	if time.Now().After(entry.ExpiresAt) {
-		// Delete expired entry
-		m.sqlDB.Exec("DELETE FROM cache_entries WHERE query_hash = ?", queryHash)
+		if _, err := m.sqlDB.Exec("DELETE FROM cache_entries WHERE query_hash = ?", queryHash); err != nil {
+			log.Printf("warning: failed to delete expired cache entry for hash %s: %v", queryHash, err)
+		}
 		return "", false, nil
 	}
 
 	return entry.Response, true, nil
 }
 
-// Set stores a response in cache with the current checksum
 func (m *Manager) Set(query, response, checksumHash string) error {
 	queryHash := m.hashQuery(query)
 
@@ -207,14 +197,12 @@ func (m *Manager) Set(query, response, checksumHash string) error {
 		ExpiresAt:    time.Now().Add(m.getTTL()),
 	}
 
-	// Save to Redis
 	if m.config.Cache.Redis.Enabled && m.redisClient != nil {
 		if err := m.saveToRedis(&entry); err != nil {
 			return fmt.Errorf("redis save failed: %w", err)
 		}
 	}
 
-	// Save to SQL
 	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
 		if err := m.saveToSQL(&entry); err != nil {
 			return fmt.Errorf("sql save failed: %w", err)
@@ -238,10 +226,10 @@ func (m *Manager) saveToRedis(entry *CacheEntry) error {
 
 func (m *Manager) saveToSQL(entry *CacheEntry) error {
 	query := `
-		INSERT OR REPLACE INTO cache_entries
-		(query_hash, query, response, checksum_hash, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`
+        INSERT OR REPLACE INTO cache_entries
+        (query_hash, query, response, checksum_hash, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `
 
 	_, err := m.sqlDB.Exec(
 		query,
@@ -258,7 +246,6 @@ func (m *Manager) saveToSQL(entry *CacheEntry) error {
 
 // Delete removes a specific cache entry from both backends
 func (m *Manager) Delete(queryHash string) error {
-	// Delete from Redis
 	if m.config.Cache.Redis.Enabled && m.redisClient != nil {
 		key := fmt.Sprintf("eulix:query:%s", queryHash)
 		if err := m.redisClient.Del(m.ctx, key).Err(); err != nil {
@@ -266,7 +253,6 @@ func (m *Manager) Delete(queryHash string) error {
 		}
 	}
 
-	// Delete from SQL
 	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
 		_, err := m.sqlDB.Exec("DELETE FROM cache_entries WHERE query_hash = ?", queryHash)
 		if err != nil {
@@ -281,17 +267,18 @@ func (m *Manager) Delete(queryHash string) error {
 func (m *Manager) ListAll() ([]CacheEntry, error) {
 	var entries []CacheEntry
 
-	// Get from SQL (primary source of truth)
 	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
 		rows, err := m.sqlDB.Query(`
-			SELECT query_hash, query, response, checksum_hash, created_at, expires_at
-			FROM cache_entries
-			ORDER BY created_at DESC
-		`)
+            SELECT query_hash, query, response, checksum_hash, created_at, expires_at
+            FROM cache_entries
+            ORDER BY created_at DESC
+        `)
 		if err != nil {
 			return nil, err
 		}
-		defer rows.Close()
+		defer func() {
+			_ = rows.Close()
+		}()
 
 		for rows.Next() {
 			var entry CacheEntry
@@ -304,13 +291,16 @@ func (m *Manager) ListAll() ([]CacheEntry, error) {
 				&entry.ExpiresAt,
 			)
 			if err != nil {
-				continue
+				return nil, err
 			}
 			entries = append(entries, entry)
 		}
+
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
 
-	// If no SQL, try Redis
 	if len(entries) == 0 && m.config.Cache.Redis.Enabled && m.redisClient != nil {
 		keys, err := m.redisClient.Keys(m.ctx, "eulix:query:*").Result()
 		if err != nil {
@@ -330,7 +320,6 @@ func (m *Manager) ListAll() ([]CacheEntry, error) {
 			entries = append(entries, entry)
 		}
 
-		// Sort by creation time
 		sort.Slice(entries, func(i, j int) bool {
 			return entries[i].CreatedAt.After(entries[j].CreatedAt)
 		})
@@ -341,7 +330,6 @@ func (m *Manager) ListAll() ([]CacheEntry, error) {
 
 // InvalidateByChecksum removes all cache entries with a different checksum
 func (m *Manager) InvalidateByChecksum(currentChecksumHash string) error {
-	// Invalidate in SQL
 	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
 		_, err := m.sqlDB.Exec(
 			"DELETE FROM cache_entries WHERE checksum_hash != ?",
@@ -377,11 +365,16 @@ func (m *Manager) GetStats() (map[string]interface{}, error) {
 	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
 		var totalEntries, validEntries int
 
-		m.sqlDB.QueryRow("SELECT COUNT(*) FROM cache_entries").Scan(&totalEntries)
-		m.sqlDB.QueryRow(
+		if err := m.sqlDB.QueryRow("SELECT COUNT(*) FROM cache_entries").Scan(&totalEntries); err != nil {
+			return nil, fmt.Errorf("failed to count total entries: %w", err)
+		}
+
+		if err := m.sqlDB.QueryRow(
 			"SELECT COUNT(*) FROM cache_entries WHERE expires_at > ?",
 			time.Now(),
-		).Scan(&validEntries)
+		).Scan(&validEntries); err != nil {
+			return nil, fmt.Errorf("failed to count valid entries: %w", err)
+		}
 
 		stats["sql_total_entries"] = totalEntries
 		stats["sql_valid_entries"] = validEntries

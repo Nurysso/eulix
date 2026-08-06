@@ -12,10 +12,10 @@ package fixers
 import (
 	"encoding/binary"
 	"encoding/json"
+	t "eulix/internal/types"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // binHeader holds the decoded header common to embeddings.bin and vectors.bin.
@@ -62,17 +62,6 @@ func readBinHeader(data []byte) (binHeader, int, error) {
 		Count:     count,
 		Dim:       dim,
 	}, off, nil
-}
-
-// checkBinFile reads a .bin file and returns its header.
-// Retained for callers (e.g. Aspirine) that only need the header.
-func checkBinFile(path string) (binHeader, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return binHeader{}, err
-	}
-	hdr, _, err := readBinHeader(data)
-	return hdr, err
 }
 
 // checkBinFileFull reads a .bin file and returns the header, raw bytes, and
@@ -162,7 +151,6 @@ func GLaDOS(eulixDir string) error {
 	fmt.Println("================================")
 	fmt.Printf("Analyzing: %s\n\n", eulixDir)
 
-	// 1. kb.json
 	fmt.Println("1. Checking kb.json (codebase structure)...")
 	kbPath := filepath.Join(eulixDir, "kb.json")
 	kb, err := loadKB(kbPath)
@@ -171,19 +159,12 @@ func GLaDOS(eulixDir string) error {
 	} else {
 		fmt.Printf("   ✓ Loaded KB for project: %s\n", kb.Metadata.ProjectName)
 		fmt.Printf("      Languages:  %v\n", kb.Metadata.Languages)
-		fmt.Printf("      Files:      %d\n", kb.Metadata.TotalFiles)
+		fmt.Printf("      Files:      %d (structure entries: %d)\n", kb.Metadata.TotalFiles, len(kb.Structure))
 		fmt.Printf("      LOC:        %d\n", kb.Metadata.TotalLOC)
 		fmt.Printf("      Functions:  %d   Classes: %d   Methods: %d\n",
 			kb.Metadata.TotalFunctions, kb.Metadata.TotalClasses, kb.Metadata.TotalMethods)
-		fmt.Printf("      Entry pts:  %d\n", len(kb.EntryPoints))
-		fmt.Printf("      Ext deps:   %d\n", len(kb.ExternalDeps))
-		fmt.Printf("      Index — functions: %d   types: %d\n",
-			len(kb.Indices.FunctionsByName), len(kb.Indices.TypesByName))
-		fmt.Printf("      Call graph — nodes: %d   edges: %d\n",
-			len(kb.CallGraph.Nodes), len(kb.CallGraph.Edges))
 	}
 
-	// 2. kb_call_graph.json
 	fmt.Println("\n2. Checking call graphs...")
 	cgPath := filepath.Join(eulixDir, "kb_call_graph.json")
 	cgNodes, cgEdges, err := checkCallGraph(cgPath)
@@ -194,28 +175,24 @@ func GLaDOS(eulixDir string) error {
 		fmt.Printf("      Nodes: %d   Edges: %d\n", cgNodes, cgEdges)
 	}
 
-	// 3. kb_index.json
 	fmt.Println("\n3. Checking indexes...")
 	indexPath := filepath.Join(eulixDir, "kb_index.json")
-	funcCount, typeCount2, err := checkIndex(indexPath)
+	funcCount, typeCount, err := checkIndex(indexPath)
 	if err != nil {
 		fmt.Printf("   ☓ Failed to load kb_index.json: %v\n", err)
 	} else {
 		fmt.Printf("   ✓ Loaded index\n")
-		fmt.Printf("      Functions: %d   Types: %d\n", funcCount, typeCount2)
+		fmt.Printf("      Functions: %d   Types: %d\n", funcCount, typeCount)
 	}
 
-	// 4. embeddings.bin
 	fmt.Println("\n4. Checking embeddings.bin...")
 	embBinPath := filepath.Join(eulixDir, "embeddings.bin")
 	embHdr, embErr := printBinDiagnostic("embeddings.bin", embBinPath)
 
-	// 5. vectors.bin
 	fmt.Println("\n5. Checking vectors.bin...")
 	vecBinPath := filepath.Join(eulixDir, "vectors.bin")
 	vecHdr, vecErr := printBinDiagnostic("vectors.bin", vecBinPath)
 
-	// 6. Cross-file consistency
 	fmt.Println("\n6. Cross-file consistency checks:")
 	if embErr == nil && vecErr == nil {
 		if embHdr.Count != vecHdr.Count {
@@ -238,20 +215,20 @@ func GLaDOS(eulixDir string) error {
 		}
 	}
 
-	if kb != nil && embErr == nil {
-		kbFuncs := len(kb.Indices.FunctionsByName)
+	// Compare embedding count against the index's function count (both now
+	// come from the canonical eulix/internal/types definitions).
+	if err == nil && embErr == nil {
 		embCount := int(embHdr.Count)
-		ratio := float64(embCount) / float64(max(kbFuncs, 1))
+		ratio := float64(embCount) / float64(max(funcCount, 1))
 		if ratio < 0.1 || ratio > 100 {
 			fmt.Printf("   ⚠  Unusual ratio: %d embeddings vs %d indexed functions\n",
-				embCount, kbFuncs)
+				embCount, funcCount)
 		} else {
 			fmt.Printf("   ✓ Embedding count (%d) looks reasonable relative to %d indexed functions\n",
-				embCount, kbFuncs)
+				embCount, funcCount)
 		}
 	}
 
-	// 7. File sizes
 	fmt.Println("\n7. File sizes:")
 	files := []string{"kb.json", "kb_call_graph.json", "kb_index.json", "embeddings.bin", "vectors.bin"}
 	for _, file := range files {
@@ -268,14 +245,12 @@ func GLaDOS(eulixDir string) error {
 	return nil
 }
 
-//  Loaders
-
-func loadKB(path string) (*KBFile, error) {
+func loadKB(path string) (*t.KnowledgeBaseRef, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var kb KBFile
+	var kb t.KnowledgeBaseRef
 	if err := json.Unmarshal(data, &kb); err != nil {
 		return nil, err
 	}
@@ -287,34 +262,23 @@ func checkCallGraph(path string) (nodes, edges int, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	var cg CallGraph
+	var cg t.CallGraphRef
 	if err := json.Unmarshal(data, &cg); err != nil {
 		return 0, 0, err
 	}
 	return len(cg.Nodes), len(cg.Edges), nil
 }
 
-func checkIndex(path string) (int, int, error) {
+func checkIndex(path string) (funcCount, typeCount int, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, 0, err
 	}
-	var index Indices
-	if err := json.Unmarshal(data, &index); err != nil {
+	var idx t.IndexRef
+	if err := json.Unmarshal(data, &idx); err != nil {
 		return 0, 0, err
 	}
-	return len(index.FunctionsByName), len(index.TypesByName), nil
-}
-
-//  Helpers
-
-func truncate(s string, maxLen int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.TrimSpace(s)
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen]
+	return len(idx.Indices.FunctionsByName), len(idx.Indices.TypesByName), nil
 }
 
 func max(a, b int) int {
