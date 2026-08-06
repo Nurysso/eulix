@@ -22,6 +22,8 @@ IS_UV=false
 DETECTED_OS=""
 COMPUTE_PLATFORM=""   # cuda126 | cuda130 | cuda132 | rocm72 | cpu | mac
 PKG_MGR=""
+GO_OS=""
+GO_ARCH=""
 
 # Check OS
 Check_OS() {
@@ -348,6 +350,27 @@ compute_platform() {
     COMPUTE_PLATFORM="cpu"
 }
 
+# Detect GOOS / GOARCH for the Go build
+detect_go_target() {
+    info "Detecting Go build target..."
+
+    if [[ "$DETECTED_OS" == "mac" ]]; then
+        GO_OS="darwin"
+    else
+        GO_OS="linux"
+    fi
+
+    local arch
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64|amd64)   GO_ARCH="amd64" ;;
+        aarch64|arm64)  GO_ARCH="arm64" ;;
+        *) die "Unsupported architecture for Go build: $arch" ;;
+    esac
+
+    success "Go target: ${GO_OS}/${GO_ARCH}"
+}
+
 # Clone repo
 clone_repo() {
     info "Cloning eulix into $CLONE_DIR..."
@@ -369,42 +392,49 @@ build() {
     info "  cargo build --release (eulix-parser)..."
     (
         cd "$CLONE_DIR/eulix-parser"
-        if [[ "$DETECTED_OS" == "linux" ]]; then
-            RUSTFLAGS="-C target-cpu=native" cargo build --release
-        else
-            cargo build --release
-        fi
-        cp target/release/eulix_parser "$INSTALL_DIR/eulix-parser"
+        RUSTFLAGS="-C target-cpu=native" cargo build --release
+        cp target/release/eulix_parser "$INSTALL_DIR/eulix_parser"
     )
-    success "  eulix-parser → $INSTALL_DIR/eulix-parser"
+    success "  eulix-parser → $INSTALL_DIR/eulix_parser"
 
     # eulix CLI (Go)
-    info "  go build (eulix)..."
+    info "  go build (eulix) for ${GO_OS}/${GO_ARCH}..."
     (
         cd "$CLONE_DIR"
-        if [[ "$DETECTED_OS" == "linux" ]]; then
-            CGO_ENABLED=0 GOFLAGS="-ldflags=-s -w" \
-                go build -o "$INSTALL_DIR/eulix" cmd/eulix/main.go
-        else
-            go build -o "$INSTALL_DIR/eulix" cmd/eulix/main.go
-        fi
+        GOOS="$GO_OS" GOARCH="$GO_ARCH" CGO_ENABLED=1 \
+            go build -ldflags="-s -w" -trimpath -o "$INSTALL_DIR/eulix" ./cmd/eulix/main.go
     )
     success "  eulix → $INSTALL_DIR/eulix"
 
-    # eulix-embed (Python script)
-    cp "$CLONE_DIR/eulix-embed/eulix-embed.py" "$EULIX_DIR/eulix_embed.py"
-    success "  eulix_embed.py → $EULIX_DIR/eulix_embed.py"
+    # eulix_embed (Python package — copy the whole folder)
+    info "  copying eulix-embed → $EULIX_DIR/eulix_embed..."
+    rm -rf "$EULIX_DIR/eulix_embed"
+    cp -r "$CLONE_DIR/eulix-embed" "$EULIX_DIR/eulix_embed"
+    success "  eulix_embed → $EULIX_DIR/eulix_embed"
 }
 
 # Create venv and install Python deps
 install_venv_deps() {
     info "Setting up Python venv at $EULIX_VENV..."
-    uv venv --python 3.10 "$EULIX_VENV"
-    success "Virtual environment created."
+
+    local existing_ver=""
+    if [[ -x "$EULIX_VENV/bin/python" ]]; then
+        existing_ver="$("$EULIX_VENV/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
+    fi
+
+    if [[ "$existing_ver" == "3.10" || "$existing_ver" == "3.11" ]]; then
+        success "Compatible virtual environment already exists (Python $existing_ver) — reusing it."
+    else
+        if [[ -d "$EULIX_VENV" ]]; then
+            warn "Existing venv at $EULIX_VENV is missing or incompatible (found: ${existing_ver:-none}) — recreating."
+        fi
+        uv venv --python 3.10 "$EULIX_VENV" --clear
+        success "Virtual environment created."
+    fi
 
     info "Installing Python requirements..."
     uv pip install --python "$EULIX_VENV/bin/python" \
-        -r "$CLONE_DIR/eulix-embed/requirements.txt"
+        -r "$EULIX_DIR/eulix_embed/requirements.txt"
     success "requirements.txt installed."
 
     info "Installing PyTorch for platform: $COMPUTE_PLATFORM..."
@@ -463,6 +493,7 @@ main() {
     install_UV
     check_deps
     compute_platform
+    detect_go_target
     clone_repo
     build
     install_venv_deps

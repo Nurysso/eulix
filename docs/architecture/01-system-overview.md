@@ -85,7 +85,7 @@ graph TB
 |-----------|----------|--------------------|
 | `eulix` CLI | Go | User interface, orchestration, config, caching, TUI |
 | `eulix_parser` | Rust | Static analysis — symbols, call graphs, complexity |
-| `eulix_embed` | Rust | Vector generation — ONNX models, binary/JSON output |
+| `eulix_embed` | Python | Vector generation — PyTorch models, binary/JSON output |
 | `.eulix/` dir | — | All persistent state lives here (no server required) |
 | LLM backend | — | Natural-language generation only; never sees raw source |
 
@@ -98,4 +98,6 @@ graph TB
 | Three separate binaries | Independent release, language-appropriate tooling | More complex build; subprocess IPC instead of in-process calls |
 | All state in local files | Zero infrastructure — works offline | No multi-user sharing; large codebases produce large JSON files |
 | LLM only sees AST/semantic data | Prevents leaking raw source to remote APIs | LLM cannot see implementation logic; answers are structural only |
-| Rust for parser + embedder | Performance — 9M LOC/40s parsing; ONNX GPU acceleration | Requires Rust toolchain on top of Go |
+| Rust for parser | Performance — high-throughput parsing with Rayon | Requires Rust toolchain on top of Go |
+| Python for embedder | Portability across platforms; PyTorch ecosystem | Slightly slower than native implementations |
+| Single-pass streaming in embedder | Memory efficiency for large KB files | Cannot randomly access KB without re-parsing |

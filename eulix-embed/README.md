@@ -1,6 +1,6 @@
 # eulix_embed.py
 
-Eulix_Embed is a Python-based knowledge base embedding generator that processes kb json created by `eulix_parser` into semantic vector embeddings. It analyzes code structure, creates chunks, generates embeddings using AutoModel/AutoTokenizer from Hugging Face, and builds searchable indices for code understanding and retrieval.
+eulix_Embed is a Python-based knowledge base embedding generator that processes kb json created by `eulix_parser` into semantic vector embeddings. It analyzes code structure, creates chunks, generates embeddings using AutoModel/AutoTokenizer from Hugging Face, and builds searchable indices for code understanding and retrieval.
 
 > This is a python port of original [rust version](https://github.com/Nurysso/eulix/tree/Embedder-Rust-Onnx/eulix-embed)
 
@@ -112,7 +112,7 @@ uv run  eulix_embed.py embed -k .eulix/kb.json -o .eulix -m BAAI/bge-base-en-v1.
 Useful for testing similarity search at the CLI level.
 
 ```bash
-uv run  eulix_embed.py query -q "how does authentication work" -m BAAI/bge-base-en-v1.5
+uv run eulix_embed.py query -q "how does authentication work" -m BAAI/bge-base-en-v1.5
 ```
 
 | Option            | Default            | Description                       |

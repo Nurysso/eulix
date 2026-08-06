@@ -35,7 +35,7 @@ func decodeViaMmap(path string, size int64, v any) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Close the stat-then-mmap TOCTOU race: re-stat the open fd and
 	// use the live size. If the file chanfed, retry with the new size.
@@ -55,7 +55,7 @@ func decodeViaMmap(path string, size int64, v any) error {
 	if err != nil {
 		return fmt.Errorf("mmap: %w", err)
 	}
-	defer unix.Munmap(data)
+	defer func() { _ = unix.Munmap(data) }()
 
 	mmapAdvisePlatform(data)
 
@@ -73,26 +73,29 @@ func mmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
 		return nil, nil, err
 	}
 
-	fi, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, nil, err
+	// If size isn't provided (<= 0), fetch it via Stat()
+	if size <= 0 {
+		fi, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return nil, nil, err
+		}
+		size = fi.Size()
 	}
-	size = fi.Size()
+
 	if sizeOverflows(size) || size == 0 {
-		f.Close()
+		_ = f.Close()
 		return nil, nil, fmt.Errorf("mmapForSequentialRead: invalid size %d for %s", size, path)
 	}
 
-	// mapped, err := unix.Mmap(int(f.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
 	mmaped, err := mmapPlatform(f, int(size))
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, nil, err
 	}
 
-	// _ = unix.Madvise(mapped, unix.MADV_SEQUENTIAL)
 	_ = f.Close() // mapping holds the pages; fd not needed after mmap
 	mmapAdvisePlatform(mmaped)
+
 	return bytes.NewReader(mmaped), func() { _ = unix.Munmap(mmaped) }, nil
 }

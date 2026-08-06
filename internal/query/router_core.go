@@ -5,22 +5,11 @@
 // Package query manages query routing and retrival for EULIX.
 
 /*
-       Package query implements the query routing, classification, and LLM prompt
-       pipeline for eulix. Incoming natural-language questions are classified by
-       QuerySheriff, dispatched to a type-specific handler, and answered using a
-       mix of real source code (≈65%) and AST metadata retrieved by ContextBuilder.
-
-       Key types
-
-               Router                  — top-level dispatcher; holds KB index, call
-graph, cache
-               ContextBuilder  — assembles the context window for LLM calls
-               Classifier              — maps a query string to a QueryType + confidence score
-
-       Prompt construction follows a chain-of-thought pattern: every LLM prompt is
-       composed of a shared header (cotHeader), a handler-specific reasoning body,
-       and a shared footer (cotFooter). Handlers label each claim as one of:
-               CONFIRMED IN SOURCE / INFERRED FROM SIGNATURE / CANNOT DETERMINE
+Package query implements query routing, intent classification, and LLM prompt assembly for Eulix.
+Key Components:
+  - Router: Top-level dispatcher managing KB indexes, call graphs, and response caches
+  - ContextBuilder: Assembles token-budgeted context windows from source code and AST metadata
+  - Classifier: Maps input query strings to distinct query types and confidence scores
 */
 
 package query
@@ -66,7 +55,7 @@ func (r *Router) PromptOrAnswer(query string) (string, error) {
 	classification := r.classifier.Classify(query)
 	r.contextBuilder.debugLog.Log("[ROUTE] PromptOrAnswer: query=%q type=%v", query, classification.Type)
 
-	// ── Non‑LLM queries – return direct answer ──
+	// Non‑LLM queries – return direct answer
 	switch classification.Type {
 	case QueryTypeLocation:
 		return r.handleLocation(query, classification)
@@ -88,7 +77,7 @@ func (r *Router) PromptOrAnswer(query string) (string, error) {
 		return r.handleCodeGeneration()
 	}
 
-	// LLM queries – build context + return the full prompt
+	// LLM queries build context + return the full prompt
 	if err := r.ensureContextBuilder(); err != nil {
 		return "", err
 	}
@@ -109,8 +98,6 @@ func (r *Router) PromptOrAnswer(query string) (string, error) {
 	fullPrompt := contextPrompt + "\n\n" + cotPrompt
 	return fullPrompt, nil
 }
-
-// Main dispatch
 
 func (r *Router) QueryEngine(query string) (string, error) {
 	if r.cache != nil && r.currentChecksum != "" {

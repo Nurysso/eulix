@@ -11,7 +11,6 @@ package fixers
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -20,11 +19,8 @@ import (
 
 // AspirineOptions holds configuration for the Aspirine rebuild process
 type AspirineOptions struct {
-	NoBackup bool
-	Force    bool
-	// FixTarget selects which bin to rewrite if headers disagree.
-	// Valid values: "embeddings", "vectors", "".
-	// When empty and the files disagree, Aspirine will error out unless --force.
+	NoBackup  bool
+	Force     bool
 	FixTarget string
 }
 
@@ -41,11 +37,12 @@ func Aspirine(eulixDir string, opts AspirineOptions) error {
 		return fmt.Errorf("directory not found: %s", eulixDir)
 	}
 
-	fmt.Println("-- Aspirine — KB Binary Repair Tool--")
+	fmt.Println("-- Aspirine — KB Binary Repair Tool --")
 	embBinPath := filepath.Join(eulixDir, "embeddings.bin")
 	vecBinPath := filepath.Join(eulixDir, "vectors.bin")
+	kbPath := filepath.Join(eulixDir, "kb.json")
+	indexPath := filepath.Join(eulixDir, "kb_index.json")
 
-	//  1. Read both bin files
 	fmt.Println("1. Reading binary files...")
 
 	embData, embHdr, embPayloadOff, err := readBinFull(embBinPath)
@@ -64,20 +61,22 @@ func Aspirine(eulixDir string, opts AspirineOptions) error {
 	fmt.Printf("   ✓ vectors.bin    — model: %q  count: %d  dim: %d  magic: 0x%08X  ver: %d\n",
 		vecHdr.ModelName, vecHdr.Count, vecHdr.Dim, vecHdr.Magic, vecHdr.Version)
 
-	//  2. Validate payload sizes
 	fmt.Println("\n2. Validating payload sizes...")
 	embOK := validatePayload("embeddings.bin", embData, embPayloadOff, embHdr)
 	vecOK := validatePayload("vectors.bin", vecData, vecPayloadOff, vecHdr)
 
-	//  3. Cross-file consistency
-	fmt.Println("\n3. Cross-file consistency...")
+	fmt.Println("\n3. Running binary diagnostics...")
+	_, embErr := printBinDiagnostic("embeddings.bin", embBinPath)
+	_, vecErr := printBinDiagnostic("vectors.bin", vecBinPath)
+
+	fmt.Println("\n4. Cross-file header consistency...")
 	consistent := true
 
 	if embHdr.Count != vecHdr.Count {
 		fmt.Printf("   ⚠  Count mismatch: embeddings=%d  vectors=%d\n", embHdr.Count, vecHdr.Count)
 		consistent = false
 	} else {
-		fmt.Printf("   ✓ Counts match (%d)\n", embHdr.Count)
+		fmt.Printf("   ✓ Chunk counts match (%d)\n", embHdr.Count)
 	}
 
 	if embHdr.Dim != vecHdr.Dim {
@@ -101,38 +100,49 @@ func Aspirine(eulixDir string, opts AspirineOptions) error {
 		consistent = false
 	}
 
-	//  4. Cross-check against kb.json / kb_index.json
-	fmt.Println("\n4. Cross-checking against kb.json and kb_index.json...")
-	kbPath := filepath.Join(eulixDir, "kb.json")
-	if kb, kerr := loadKB(kbPath); kerr == nil {
-		kbFuncs := len(kb.Indices.FunctionsByName)
-		fmt.Printf("   kb.json — functions indexed: %d\n", kbFuncs)
-		crossCheckRatio("embeddings.bin", int(embHdr.Count), kbFuncs)
-		crossCheckRatio("vectors.bin", int(vecHdr.Count), kbFuncs)
-	} else {
-		fmt.Printf("   !  kb.json not readable (%v); skipping cross-check\n", kerr)
-	}
-
-	indexPath := filepath.Join(eulixDir, "kb_index.json")
-	if funcCount, typeCount, ierr := checkIndex(indexPath); ierr == nil {
+	fmt.Println("\n5. Cross-checking against KB JSON metadata...")
+	funcCount, typeCount, ierr := checkIndex(indexPath)
+	if ierr == nil {
 		fmt.Printf("   kb_index.json — functions: %d  types: %d\n", funcCount, typeCount)
+		if embErr == nil {
+			crossCheckRatio("embeddings.bin", int(embHdr.Count), funcCount)
+		}
+		if vecErr == nil {
+			crossCheckRatio("vectors.bin", int(vecHdr.Count), funcCount)
+		}
 	} else {
-		fmt.Printf("   !  kb_index.json not readable (%v)\n", ierr)
+		fmt.Printf("   !  kb_index.json not readable (%v); skipping cross-check\n", ierr)
 	}
 
-	//  5. Spot-check first/last vector for NaN / Inf
-	fmt.Println("\n5. Spot-checking vectors for NaN/Inf...")
+	if kb, kerr := loadKB(kbPath); kerr == nil {
+		fmt.Printf("   kb.json — total_functions (metadata): %d\n", kb.Metadata.TotalFunctions)
+	} else {
+		fmt.Printf("   !  kb.json not readable (%v)\n", kerr)
+	}
+
+	fmt.Println("\n6. Checking vector payloads for NaN/Inf...")
 	spotCheck("embeddings.bin", embData, embPayloadOff, embHdr)
 	spotCheck("vectors.bin", vecData, vecPayloadOff, vecHdr)
 
-	//  6. Repair if needed
-	allGood := embOK && vecOK && consistent
+	fmt.Println("\n7. File sizes:")
+	files := []string{"kb.json", "kb_call_graph.json", "kb_index.json", "embeddings.bin", "vectors.bin"}
+	for _, file := range files {
+		path := filepath.Join(eulixDir, file)
+		if info, serr := os.Stat(path); serr == nil {
+			sizeMB := float64(info.Size()) / (1024 * 1024)
+			fmt.Printf("   %-20s %.2f MB\n", file, sizeMB)
+		} else {
+			fmt.Printf("   %-20s NOT FOUND\n", file)
+		}
+	}
+
+	allGood := embOK && vecOK && consistent && embErr == nil && vecErr == nil
 	if allGood {
 		fmt.Println("\n✓ Both binary files look healthy — no repair needed.")
 		return nil
 	}
 
-	fmt.Println("\n6. Repair plan...")
+	fmt.Println("\n8. Executing repair plan...")
 
 	if !consistent && opts.FixTarget == "" && !opts.Force {
 		fmt.Println("   ☓ Files are inconsistent and no --fix-target specified.")
@@ -141,7 +151,6 @@ func Aspirine(eulixDir string, opts AspirineOptions) error {
 		return fmt.Errorf("inconsistent bin files; specify --fix-target to repair")
 	}
 
-	// Decide authoritative header + which file to rewrite.
 	var authHdr binHeader
 	var rewritePath string
 	var rewriteData []byte
@@ -149,20 +158,16 @@ func Aspirine(eulixDir string, opts AspirineOptions) error {
 
 	switch opts.FixTarget {
 	case "embeddings":
-		// Rewrite vectors.bin header to match embeddings.bin
 		authHdr = embHdr
 		rewritePath = vecBinPath
 		rewriteData = vecData
 		rewritePayloadOff = vecPayloadOff
 	case "vectors":
-		// Rewrite embeddings.bin header to match vectors.bin
 		authHdr = vecHdr
 		rewritePath = embBinPath
 		rewriteData = embData
 		rewritePayloadOff = embPayloadOff
 	default:
-		// Force mode without a target: try to self-heal each file independently
-		// (payload size determines the real count).
 		if err := selfHeal(embBinPath, embData, embHdr, embPayloadOff, opts); err != nil {
 			fmt.Printf("   ☓ embeddings.bin self-heal failed: %v\n", err)
 		}
@@ -176,8 +181,6 @@ func Aspirine(eulixDir string, opts AspirineOptions) error {
 	fmt.Printf("   Authority: %s header → rewriting %s\n", opts.FixTarget, filepath.Base(rewritePath))
 	return rewriteHeader(rewritePath, rewriteData, rewritePayloadOff, authHdr, opts)
 }
-
-//  Helpers
 
 // readBinFull reads a file, parses its header, and returns the raw bytes,
 // the parsed header, and the byte offset where the payload begins.
@@ -193,9 +196,6 @@ func readBinFull(path string) ([]byte, binHeader, int, error) {
 	return data, hdr, off, nil
 }
 
-// validatePayload checks that the payload contains exactly count entries,
-// each formatted as [4B id_len][id bytes][dim*4B float32 vector].
-// Returns true if the payload is well-formed.
 func validatePayload(name string, data []byte, payloadOff int, hdr binHeader) bool {
 	pos := payloadOff
 	for i := uint32(0); i < hdr.Count; i++ {
@@ -208,7 +208,6 @@ func validatePayload(name string, data []byte, payloadOff int, hdr binHeader) bo
 		idLen := int(binary.LittleEndian.Uint32(data[pos : pos+4]))
 		pos += 4
 
-		// Skip id string
 		if pos+idLen > len(data) {
 			fmt.Printf("   ⚠  %s: truncated at entry %d while reading id (%d bytes, byte %d)\n",
 				name, i, idLen, pos)
@@ -389,7 +388,7 @@ func rewriteHeader(path string, data []byte, payloadOff int, hdr binHeader, opts
 	if err != nil {
 		return fmt.Errorf("could not open %s for writing: %w", path, err)
 	}
-	defer out.Close()
+	func() { _ = out.Close() }()
 
 	if _, err := out.Write(newHeader); err != nil {
 		return fmt.Errorf("header write failed: %w", err)
@@ -421,19 +420,4 @@ func buildBinHeader(hdr binHeader) []byte {
 	off += 4
 	binary.LittleEndian.PutUint32(buf[off:], hdr.Dim)
 	return buf
-}
-
-// loadKBForIndex is a thin wrapper used only inside this file to avoid
-// the import cycle that would arise from calling the GLaDOS-local loadKB.
-// (Remove if loadKB is already package-level in fixers.)
-func loadKBForIndex(path string) (*KBFile, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var kb KBFile
-	if err := json.Unmarshal(data, &kb); err != nil {
-		return nil, err
-	}
-	return &kb, nil
 }

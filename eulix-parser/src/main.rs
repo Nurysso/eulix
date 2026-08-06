@@ -63,11 +63,9 @@ use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use mimalloc::MiMalloc;
 use rayon::prelude::*;
-use std::collections::HashMap;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 mod parser;
 mod struc;
@@ -94,6 +92,8 @@ use parser::language::Language;
 use parser::python;
 use parser::rust as rust_parser;
 use parser::typescript;
+use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 use utils::file_walker::FileWalker;
 
 #[global_allocator]
@@ -142,12 +142,14 @@ mod os_io {
     }
 
     // No-op for writes - let kernel handle it
+    #[allow(dead_code)]
     pub fn flush_output(_f: &File) {}
 
+    #[allow(dead_code)]
     pub fn hint_write_sequential(_f: &File) {
         // Intentionally empty - writes don't need read hints
     }
-
+    #[allow(dead_code)]
     pub fn flush_and_drop(f: &std::fs::File) {
         if let Ok(metadata) = f.metadata() {
             if metadata.len() > MIN_CACHE_EVICT_SIZE {
@@ -350,6 +352,10 @@ struct Args {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+    }
     let mut args = Args::parse();
     let version = env!("CARGO_PKG_VERSION");
     let bin_hash = "miku"; // temperoraly placeholder till I figure out how to store git hash.
@@ -652,12 +658,12 @@ fn print_final_summary(metadata: &Metadata, stats: &ParseStats, total_time: f64)
         println!("   • {}", lang);
     }
     println!();
-    if !stats.failed.is_empty() {
-        println!("[!]  FAILED FILES:");
-        for (file, reason) in &stats.failed {
-            println!("   • {} - {}", file, reason);
-        }
-    }
+    // if !stats.failed.is_empty() {
+    //     println!("[!]  FAILED FILES:");
+    //     for (file, reason) in &stats.failed {
+    //         println!("   • {} - {}", file, reason);
+    //     }
+    // }
     println!(" PARSING STATISTICS");
     println!("   ✓ Successfully Parsed:  {} files", stats.parsed.len());
     println!("   ⊘ Skipped:              {} files", stats.skipped.len());
@@ -675,21 +681,17 @@ fn parse_directory(
 ) -> Result<(KnowledgeBase, ParseStats), Box<dyn std::error::Error>> {
     let path = PathBuf::from(dir);
 
-    // Determine euignore path
     let euignore = euignore_path.map(PathBuf::from).or_else(|| {
         let default_path = path.join(".euignore");
-        if default_path.exists() {
-            Some(default_path)
-        } else {
-            None
-        }
+        default_path.exists().then_some(default_path)
     });
 
-    if verbose && euignore.is_some() {
-        println!("   [!] Using .euignore: {:?}", euignore.as_ref().unwrap());
+    if verbose {
+        if let Some(ref p) = euignore {
+            println!("   [!] Using .euignore: {:?}", p);
+        }
     }
 
-    // Collect all source files based on language filter
     let files = collect_source_files(&path, languages, euignore.as_deref(), verbose)?;
 
     if verbose {
@@ -712,106 +714,125 @@ fn parse_directory(
         None
     };
 
-    // Thread-safe stats collection
-    let stats = Arc::new(Mutex::new(ParseStats::new()));
-
-    // Prefetch large files to overlap I/O with parsing
     #[cfg(target_os = "linux")]
     if files.len() > 1 {
-        // Prefetch in chunks to avoid overwhelming the I/O subsystem
         let prefetch_limit = files.len().min(1000);
-        let prefetch_files = &files[0..prefetch_limit];
-        for p in prefetch_files {
+        for p in &files[0..prefetch_limit] {
             os_io::prefetch(p);
         }
     }
 
-    let chunk_size = if files.len() > 10000 { 100 } else { 50 };
+    // Scale chunk size to thread count so every worker gets a handful of chunks,
+    // rather than a size cliff at 10k files.
+    let num_threads = rayon::current_num_threads().max(1);
+    let chunk_size = (files.len() / (num_threads * 8)).clamp(16, 200);
 
-    // Parse files in parallel using Rayon
-    let (structure, total_loc, total_functions, total_classes, total_methods, languages_set) = {
-        type Acc = (
-            HashMap<String, FileData>,
-            usize,
-            usize,
-            usize,
-            usize,
-            std::collections::HashSet<String>,
-        );
+    type Acc = (
+        FxHashMap<String, FileData>,
+        usize,                 // total_loc
+        usize,                 // total_functions
+        usize,                 // total_classes
+        usize,                 // total_methods
+        FxHashSet<String>,     // languages
+        Vec<String>,           // parsed (no more Mutex!)
+        Vec<(String, String)>, // failed: (path, error)
+    );
 
-        files
-            .par_chunks(chunk_size)
-            .fold(
-                || {
-                    (
-                        HashMap::new(),
-                        0usize,
-                        0usize,
-                        0usize,
-                        0usize,
-                        std::collections::HashSet::new(),
-                    )
-                },
-                |mut acc: Acc, chunk: &[PathBuf]| {
-                    for file_path in chunk {
-                        let relative_path = file_path
-                            .strip_prefix(&path)
-                            .unwrap_or(file_path)
-                            .to_string_lossy()
-                            .to_string();
+    let (
+        structure,
+        total_loc,
+        total_functions,
+        total_classes,
+        total_methods,
+        languages_set,
+        parsed,
+        failed,
+    ) = files
+        .par_chunks(chunk_size)
+        .fold(
+            || {
+                (
+                    FxHashMap::default(),
+                    0usize,
+                    0usize,
+                    0usize,
+                    0usize,
+                    FxHashSet::default(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+            },
+            |mut acc: Acc, chunk: &[PathBuf]| {
+                for file_path in chunk {
+                    let relative_path = file_path
+                        .strip_prefix(&path)
+                        .unwrap_or(file_path)
+                        .to_string_lossy()
+                        .into_owned();
 
-                        match parse_file(file_path, &path) {
-                            Ok((rel, file_data)) => {
-                                if let Some(ref pb) = pb {
-                                    pb.inc(1);
-                                    pb.set_message(format!("Parsed: {}", relative_path));
-                                }
-                                stats.lock().unwrap().parsed.push(relative_path.clone());
-
-                                acc.1 += file_data.loc;
-                                acc.2 += file_data.functions.len();
-                                acc.3 += file_data.classes.len();
-                                acc.4 += file_data
-                                    .classes
-                                    .iter()
-                                    .map(|c| c.methods.len())
-                                    .sum::<usize>();
-                                acc.5.insert(file_data.language.clone());
-                                acc.0.insert(rel, file_data);
+                    match parse_file(file_path, &path) {
+                        Ok((rel, file_data)) => {
+                            if let Some(ref pb) = pb {
+                                pb.inc(1);
+                                // Only format a message when verbose is already true,
+                                // and reuse relative_path instead of cloning it again.
+                                pb.set_message(format!("Parsed: {relative_path}"));
                             }
-                            Err(e) => {
-                                if let Some(ref pb) = pb {
-                                    pb.println(format!("   ✗ Failed: {} - {}", relative_path, e));
-                                    pb.inc(1);
-                                }
-                                stats
-                                    .lock()
-                                    .unwrap()
-                                    .failed
-                                    .push((relative_path, e.to_string()));
+                            acc.1 += file_data.loc;
+                            acc.2 += file_data.functions.len();
+                            acc.3 += file_data.classes.len();
+                            acc.4 += file_data
+                                .classes
+                                .iter()
+                                .map(|c| c.methods.len())
+                                .sum::<usize>();
+                            acc.5.insert(file_data.language.clone());
+                            acc.6.push(relative_path); // no clone — this string is done being used
+                            acc.0.insert(rel, file_data);
+                        }
+                        Err(e) => {
+                            if let Some(ref pb) = pb {
+                                pb.println(format!("   ✗ Failed: {relative_path} - {e}"));
+                                pb.inc(1);
                             }
+                            acc.7.push((relative_path, e.to_string()));
                         }
                     }
-                    acc
-                },
-            )
-            .reduce(
-                || (HashMap::new(), 0, 0, 0, 0, std::collections::HashSet::new()),
-                |mut a, b| {
-                    for (k, v) in b.0 {
-                        a.0.insert(k, v);
-                    }
-                    a.1 += b.1;
-                    a.2 += b.2;
-                    a.3 += b.3;
-                    a.4 += b.4;
-                    a.5.extend(b.5);
-                    a
-                },
-            )
-    };
+                }
+                acc
+            },
+        )
+        .reduce(
+            || {
+                (
+                    FxHashMap::default(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    FxHashSet::default(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+            },
+            |mut a, b| {
+                a.0.extend(b.0);
+                a.1 += b.1;
+                a.2 += b.2;
+                a.3 += b.3;
+                a.4 += b.4;
+                a.5.extend(b.5);
+                a.6.extend(b.6);
+                a.7.extend(b.7);
+                a
+            },
+        );
 
-    let final_stats = Arc::try_unwrap(stats).unwrap().into_inner().unwrap();
+    let final_stats = ParseStats {
+        parsed,
+        failed,
+        ..ParseStats::new()
+    }; // adjust to your struct's actual fields
 
     let project_name = path
         .file_name()
@@ -834,7 +855,7 @@ fn parse_directory(
 
     let kb = KnowledgeBase {
         metadata,
-        structure,
+        structure: structure.into_iter().collect(), // if downstream needs std::HashMap
         call_graph: CallGraph::default(),
         dependency_graph: DependencyGraph::default(),
         indices: Indices::default(),
@@ -849,15 +870,12 @@ fn parse_directory(
 
     Ok((kb, final_stats))
 }
-
 fn collect_source_files(
     root: &Path,
     languages: &str,
     euignore_path: Option<&Path>,
     verbose: bool,
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
-    let mut all_files = Vec::new();
-
     let lang_filters: Vec<Language> = if languages == "all" {
         vec![
             Language::C,
@@ -894,68 +912,57 @@ fn collect_source_files(
         println!("    Searching for files...");
     }
 
+    // Build a single extension set instead of walking once per extension.
+    let mut ext_set: FxHashSet<&'static str> = FxHashSet::default();
+    for lang in &lang_filters {
+        match lang {
+            Language::Cpp => {
+                for ext in ["cpp", "cc", "cxx", "hpp", "hxx"] {
+                    ext_set.insert(ext);
+                }
+            }
+            Language::C => {
+                ext_set.insert("c");
+            }
+            Language::Python => {
+                ext_set.insert("py");
+            }
+            Language::JavaScript => {
+                ext_set.insert("js");
+            }
+            Language::TypeScript => {
+                ext_set.insert("ts");
+            }
+            Language::Go => {
+                ext_set.insert("go");
+            }
+            Language::Rust => {
+                ext_set.insert("rs");
+            }
+            Language::Unknown => {}
+        }
+    }
+
     let walker = if let Some(ignore_path) = euignore_path {
         FileWalker::new(root.to_path_buf()).with_euignore(ignore_path.to_path_buf())
     } else {
         FileWalker::new(root.to_path_buf())
     };
 
-    for lang in &lang_filters {
-        if *lang == Language::Cpp {
-            for ext in &["cpp", "cc", "cxx", "hpp", "hxx"] {
-                match walker.walk_files(|path| {
-                    path.extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e == *ext)
-                        .unwrap_or(false)
-                }) {
-                    Ok(files) => {
-                        if verbose && !files.is_empty() {
-                            println!("      • Found {} .{} files", files.len(), ext);
-                        }
-                        all_files.extend(files);
-                    }
-                    Err(e) => {
-                        if verbose {
-                            eprintln!("        Failed to collect .{} files: {}", ext, e);
-                        }
-                    }
-                }
-            }
-            continue;
-        }
+    // One traversal of the tree, checking membership in a hash set instead of
+    // string-comparing a single extension per pass.
+    let mut all_files = walker.walk_files(|path| {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| ext_set.contains(e))
+            .unwrap_or(false)
+    })?;
 
-        let extension = match lang {
-            Language::C => "c",
-            Language::Python => "py",
-            Language::JavaScript => "js",
-            Language::TypeScript => "ts",
-            Language::Go => "go",
-            Language::Rust => "rs",
-            _ => continue,
-        };
-
-        match walker.walk_files(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| ext == extension)
-                .unwrap_or(false)
-        }) {
-            Ok(files) => {
-                if verbose && !files.is_empty() {
-                    println!("      • Found {} .{} files", files.len(), extension);
-                }
-                all_files.extend(files);
-            }
-            Err(e) => {
-                if verbose {
-                    eprintln!("        Failed to collect .{} files: {}", extension, e);
-                }
-            }
-        }
+    if verbose {
+        println!("      • Found {} matching files", all_files.len());
     }
 
-    all_files.sort();
+    all_files.sort_unstable();
     all_files.dedup();
     Ok(all_files)
 }

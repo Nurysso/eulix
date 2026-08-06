@@ -16,6 +16,7 @@ type KnowledgeBaseRef struct {
 type IndexRef struct {
 	Indices KBIndices `json:"indices"`
 }
+
 type CallGraphRef struct {
 	Nodes []CallGraphNode `json:"nodes"`
 	Edges []CallGraphEdge `json:"edges"`

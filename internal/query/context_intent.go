@@ -2,88 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package query provides the context window builder and query routing for Eulix's
-// RAG (Retrieval-Augmented Generation) system.
-
-/*
-This implements query intent classification and token budget
-allocation for adaptive context window sizing.
-
-INTENT CLASSIFICATION
-
-Classifies user queries into eight intent types, each triggering different retrieval
-and ranking strategies:
-
-	IntentCallers       — "who calls X?" / "call sites of X"
-                        High priority: call-site discovery + graph expansion
-                        Focus: IntentCallers relationships
-
-	IntentCallees       — "what does X call?" / "dependencies of X"
-                        High priority: call-site discovery + graph expansion
-                        Focus: IntentCallees relationships
-
-	IntentSymbolExact   — "show me function foo" / explicit symbol lookup
-                        High priority: kb.json exact match
-                        Focus: definition + signature only, no dependency chasing
-
-	IntentSymbolFuzzy   — rare; reserved for future fuzzy symbol matching
-
-	IntentFlow          — "trace the execution" / "sequence of operations"
-                        High priority: call graph + control flow
-                        Focus: chaining related functions across files
-
-	IntentConcept       — "how does X work?" / "explain Y"
-                        High priority: semantic similarity + related symbols
-                        Focus: multi-faceted understanding
-
-	IntentDebug         — "why does this crash?" / error analysis
-                        High priority: exception handling + error paths
-                        Focus: error propagation + debugging context
-
-	IntentUnknown       — fallback for ambiguous queries
-
-Detection uses keyword matching with phrase-level priority (call-graph keywords
-take precedence), combined with heuristics on code symbols (CamelCase, underscores)
-and keyword frequency scoring. Specificity is computed from code symbol density
-(0 for pure English, up to 1.0 for symbol-heavy queries).
-
-BUDGET ALLOCATION
-
-Distributes the LLM's context window across four retrieval strategies:
-
-	kb_exact  — kb.json symbol table lookups (exact definitions)
-	keyword   — inverted index term matching
-	semantic  — embedding-based similarity search
-	graph     — call graph expansion (callers/callees)
-
-Strategy weights adapt to intent type:
-	- Callers/Callees: 45% kb_exact (call-site priority) + 15% graph
-	- SymbolExact: 55% kb_exact (definition-only)
-	- Concept: 50% semantic (multi-faceted understanding)
-	- Flow: 40% graph (execution sequencing)
-	- Debug: 35% kb_exact + 35% keyword (error traces + error handling)
-
-Token accounting reserves:
-	- System prompt overhead: 150 tokens
-	- Query encoding: len(query) / 4
-	- Safety buffer: 200 tokens
-	- Response reserve: 2000 tokens for LLM output
-	- Context budget: 85% of remaining capacity
-
-Example: 8k model (8192 tokens) with 50-char query:
-	Query: ~12 tokens
-	Reserves: 150 + 200 + 2000 = 2350 tokens
-	Available: 8192 - 12 - 2350 = 5830 tokens
-	Context budget: 5830 * 0.85 ≈ 4955 tokens
-
-INTEGRATION
-
-classifyQueryIntent: runs first in buildContextInternal, informs all downstream
-decisions (candidate limit, strategy weights, selection method).
-
-allocateBudget: runs after intent classification, determines per-strategy token
-limits for multi-strategy search.
-*/
+// Package query provides context window building and query routing for Eulix.
 
 package query
 
@@ -104,6 +23,7 @@ const (
 	IntentCallees
 )
 
+// classifyQueryIntent categorizes the query into an intent type to guide retrieval and scoring.
 func (cb *ContextBuilder) classifyQueryIntent(query string) QueryIntent {
 	lower := strings.ToLower(query)
 	words := strings.Fields(lower)
@@ -112,7 +32,6 @@ func (cb *ContextBuilder) classifyQueryIntent(query string) QueryIntent {
 		wordSet[w] = true
 	}
 
-	// Call-graph direction detection — checked first, highest priority
 	callersKW := []string{"call sites", "who calls", "called by", "callers of", "invokes", "usage of", "uses of"}
 	calleesKW := []string{"what does", "calls internally", "invokes inside", "dependencies of", "callees"}
 
@@ -201,7 +120,6 @@ func (cb *ContextBuilder) classifyQueryIntent(query string) QueryIntent {
 			Confidence:  math.Min(1, flow/2),
 		}
 	case codeSymbols >= 2 && len(words) <= 5:
-		// Short, symbol-heavy query → likely a "what does X call?"
 		return QueryIntent{
 			Type:        IntentCallees,
 			Symbols:     symbols,
@@ -210,7 +128,6 @@ func (cb *ContextBuilder) classifyQueryIntent(query string) QueryIntent {
 			Confidence:  0.85,
 		}
 	case codeSymbols >= 1:
-		// IntentSymbolExact look up the symbol, don't chase its dependencies.
 		return QueryIntent{
 			Type:        IntentSymbolExact,
 			Symbols:     symbols,
@@ -237,26 +154,24 @@ func (cb *ContextBuilder) classifyQueryIntent(query string) QueryIntent {
 	}
 }
 
+// Budget calculates strategy weights based on query specificity.
 func (qi QueryIntent) Budget() map[string]float64 {
 	return map[string]float64{"keyword": qi.Specificity, "semantic": 1 - qi.Specificity}
 }
 
+// allocateBudget divides token capacity between reserves and retrieval strategies based on query intent.
 func (cb *ContextBuilder) allocateBudget(query string, intent QueryIntent) BudgetAllocation {
 	total := cb.config.LLM.MaxTokens
 
-	// Token costs that eat into the model's context window
-	sysPromptTokens := 130           // buildSystemPrompt measure once and hardcode
-	qTokens := (len(query) / 4) + 10 // rough tiktoken estimate + small pad
-	respReserve := 2048              // room for the LLM to write its answer
+	sysPromptTokens := 130
+	qTokens := (len(query) / 4) + 10
+	respReserve := 2048
 
-	// Single safety margin — don't double-penalize with both subtraction and *0.85
 	ctxBudget := total - sysPromptTokens - qTokens - respReserve
 	if ctxBudget < 512 {
-		ctxBudget = 512 // floor: always allow some context
+		ctxBudget = 512
 	}
 
-	// Strategy weights sum to 1.0 for each intent
-	// Needs to update weight after trial and error
 	type weights struct{ kbExact, keyword, semantic, graph float64 }
 	var ww weights
 	switch intent.Type {
@@ -291,7 +206,7 @@ func (cb *ContextBuilder) allocateBudget(query string, intent QueryIntent) Budge
 	}
 }
 
-// applyBudget truncates a pre-sorted slice to fit within the token budget.
+// applyBudget selects scored chunks greedily and bin-packs remaining capacity to fit the token budget.
 func (cb *ContextBuilder) applyBudget(chunks []ScoredChunk, budget int) []ScoredChunk {
 	if len(chunks) == 0 || budget <= 0 {
 		return nil
@@ -301,11 +216,10 @@ func (cb *ContextBuilder) applyBudget(chunks []ScoredChunk, budget int) []Scored
 	var skipped []ScoredChunk
 	remaining := budget
 
-	// Pass 1: greedy in score order
 	for _, sc := range chunks {
-		cost := sc.Chunk.Tokens
+		cost := sc.Tokens
 		if cost <= 0 {
-			cost = 1 // guard against zero-token chunks causing infinite loops
+			cost = 1
 		}
 		if cost <= remaining {
 			included = append(included, sc)
@@ -315,16 +229,15 @@ func (cb *ContextBuilder) applyBudget(chunks []ScoredChunk, budget int) []Scored
 		}
 	}
 
-	// Pass 2: bin-pack skipped chunks by ascending token cost
 	if remaining > 0 && len(skipped) > 0 {
 		sort.Slice(skipped, func(i, j int) bool {
-			return skipped[i].Chunk.Tokens < skipped[j].Chunk.Tokens
+			return skipped[i].Tokens < skipped[j].Tokens
 		})
 		for _, sc := range skipped {
 			if remaining <= 0 {
 				break
 			}
-			cost := sc.Chunk.Tokens
+			cost := sc.Tokens
 			if cost <= remaining {
 				included = append(included, sc)
 				remaining -= cost

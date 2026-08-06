@@ -7,23 +7,8 @@
 	This file acts as the primary controller for cache-related CLI operations.
 	It provides high-level commands to manage, inspect, and test the
 	underlying caching backends (SQL and Redis[havent tested redis yet]).
-
-Usage Guidelines:
-	- Standard Operations: Use 'eulix cache stats' for health checks or
-		'eulix cache clear' to reset state.
-	- Testing: 'eulix cache test' performs a full read/write/validate cycle
-	using the current file checksum.
-	- Developer Note: These functions depend on the 'internal/cache' manager.
-		Ensure configuration is loaded via 'internal/config' before invoking
-		cache controllers to maintain environment consistency.
-	- Interaction: Cache management commands that alter state (Delete/Clear)
-		require user confirmation to prevent accidental data loss.
-
-Architecture:
-	This layer separates UI concerns (printing to stdout/stderr) from
-	business logic (cache invalidation/storage). Do not import this package
-	into core engine modules to avoid circular dependencies.
 */
+
 package cli
 
 import (
@@ -55,8 +40,7 @@ func CacheStats() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
-	defer cacheManager.Close()
-
+	defer func() { _ = cacheManager.Close() }()
 	stats, err := cacheManager.GetStats()
 	if err != nil {
 		return fmt.Errorf("failed to get stats: %w", err)
@@ -113,7 +97,7 @@ func CacheClear() error {
 
 	fmt.Print("⚠️  This will delete all cached queries. Continue? [y/N]: ")
 	var response string
-	fmt.Scanln(&response)
+	_, _ = fmt.Scanln(&response)
 
 	if response != "y" && response != "yes" {
 		fmt.Println("Cancelled")
@@ -124,7 +108,7 @@ func CacheClear() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
-	defer cacheManager.Close()
+	defer func() { _ = cacheManager.Close() }()
 
 	// Clear by invalidating all entries (pass empty checksum)
 	if err := cacheManager.InvalidateByChecksum(""); err != nil {
@@ -151,7 +135,7 @@ func CacheCleanup() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
-	defer cacheManager.Close()
+	defer func() { _ = cacheManager.Close() }()
 
 	fmt.Println("🧹 Cleaning expired cache entries...")
 
@@ -179,7 +163,7 @@ func CacheTest() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
-	defer cacheManager.Close()
+	defer func() { _ = cacheManager.Close() }()
 
 	// Get current checksum
 	detector := checksum.HashHound(".")
@@ -247,7 +231,7 @@ func CacheHistory() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
-	defer cacheManager.Close()
+	defer func() { _ = cacheManager.Close() }()
 
 	// Get all entries
 	entries, err := cacheManager.ListAll()
@@ -303,7 +287,7 @@ func CacheView() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
-	defer cacheManager.Close()
+	defer func() { _ = cacheManager.Close() }()
 
 	// Get all entries
 	entries, err := cacheManager.ListAll()
@@ -343,7 +327,7 @@ func CacheDelete(identifier string) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize cache: %w", err)
 	}
-	defer cacheManager.Close()
+	defer func() { _ = cacheManager.Close() }()
 
 	// Get all entries to find the one to delete
 	entries, err := cacheManager.ListAll()
@@ -393,7 +377,7 @@ func CacheDelete(identifier string) error {
 
 	fmt.Print("⚠️  Continue? [y/N]: ")
 	var response string
-	fmt.Scanln(&response)
+	_, _ = fmt.Scanln(&response)
 
 	if response != "y" && response != "yes" {
 		fmt.Println("Cancelled")

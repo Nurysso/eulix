@@ -4,42 +4,12 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 /*
-Package query provides the context window builder and query routing for Eulix's
-RAG (Retrieval-Augmented Generation) system.
+Package query provides context window building and query routing for Eulix's RAG system.
 
-This file implements exact symbol matching and KB-based chunk construction.
-It bridges the knowledge base (kb.json) and the chunk universe, enabling:
-
- 1. Exact symbol lookup: Extract potential identifiers from queries and
-    locate matching functions, classes, and methods in the KB.
- 2. Intent-driven expansion: For CalleeIntent queries, include callees of
-    matched functions with lower scores to provide calling context.
- 3. Chunk materialization: Build Chunk objects from KB structures (KBFunction,
-    KBClass) with metadata, signatures, and docstrings.
- 4. Content hydration: Fill empty chunk content on-demand in lazy-loading mode,
-    avoiding bulk materialization until needed.
-
-Chunk IDs are hierarchical:
-  - Function: "path/to/file.go:123-456" (startLine-endLine)
-  - Class: "path/to/file.go:100-200"
-  - Method: "path/to/file.go:150-180" (stored as function, parent class tracked separately)
-
-Lookup strategy:
- 1. Query extraction via extractPotentialSymbols (case-insensitive matching)
- 2. Fast path: kb_index.json FunctionsByName lookup (if available)
- 3. Full path: Scan kbData.Structure for exact matches
- 4. Intent filtering: Expand to callees if intent == IntentCallees
-
-Content materialization:
-  - eager: All chunk content is inlined at load time (small corpora)
-  - lazy: Chunks begin with empty Content; hydrateContent fills on demand
-    when selected for final context window (large corpora)
-
-See:
-  - context_loader.go: KB loading and chunk population from kb.json
-  - context_search.go: Integration with multi-strategy search pipeline
-  - context_intent.go: Intent detection (IntentCallees, etc.)
-  - boilerplate.go: Symbol filtering during inverted index construction
+Key Responsibilities:
+  - Exact symbol search and lookup via knowledge base index (kb.json)
+  - Materialization of Chunk objects from KB structures (functions, classes, methods)
+  - On-demand content hydration for lazy-loaded chunks in large corpora
 */
 package query
 
@@ -54,22 +24,6 @@ import (
 // Extracts potential identifiers from the query and searches for exact matches
 // in functions, classes, and methods. Returns matched chunks with match type
 // and origin details for transparency.
-//
-// Scoring tiers (higher = more relevant):
-//   - 120.0: KB index direct hit
-//   - 118.0: Exact class match
-//   - 115.0: Exact function match
-//   - 113.0: Exact method match
-//   - 110.0: Callees of matched function (IntentCallees only)
-//   - 95.0: Parent class of matched method
-//
-// Deduplicates results by chunk ID to avoid duplicate scoring.
-// Gracefully skips if KB is unavailable.
-//
-// See:
-//   - extractPotentialSymbols: Query tokenization and candidate extraction
-//   - context_intent.go: IntentCallees and other intent types
-//   - expandFromKBFunction: Callee expansion for IntentCallees queries
 func (cb *ContextBuilder) kbExactLookup(query string, intent QueryIntent) []ScoredChunk {
 	if !cb.hasKB || cb.kbData == nil {
 		return nil
@@ -153,14 +107,6 @@ func (cb *ContextBuilder) kbExactLookup(query string, intent QueryIntent) []Scor
 // findChunkForLocation locates a chunk in cb.chunks that covers a given
 // location string in the format "file:line" or "file:startLine-endLine".
 // Returns nil if no matching chunk is found.
-//
-// Location format:
-//   - Single line: "path/to/file.go:42"
-//   - Range: "path/to/file.go:10-50"
-//
-// See:
-//   - kbExactLookup: Uses this to materialize results from kb_index.json
-//   - Chunk: StartLine, EndLine fields used for overlap detection
 func (cb *ContextBuilder) findChunkForLocation(loc string) *Chunk {
 	parts := strings.Split(loc, ":")
 	if len(parts) < 2 {
@@ -171,8 +117,8 @@ func (cb *ContextBuilder) findChunkForLocation(loc string) *Chunk {
 		rp := strings.Split(parts[1], "-")
 		if len(rp) == 2 {
 			var s, e int
-			fmt.Sscanf(rp[0], "%d", &s)
-			fmt.Sscanf(rp[1], "%d", &e)
+			_, _ = fmt.Sscanf(rp[0], "%d", &s)
+			_, _ = fmt.Sscanf(rp[1], "%d", &e)
 			for i := range cb.chunks {
 				if cb.chunks[i].File == file && cb.chunks[i].StartLine <= e && cb.chunks[i].EndLine >= s {
 					return &cb.chunks[i]
@@ -181,7 +127,7 @@ func (cb *ContextBuilder) findChunkForLocation(loc string) *Chunk {
 		}
 	} else {
 		var line int
-		fmt.Sscanf(parts[1], "%d", &line)
+		_, _ = fmt.Sscanf(parts[1], "%d", &line)
 		for i := range cb.chunks {
 			if cb.chunks[i].File == file && cb.chunks[i].StartLine <= line && cb.chunks[i].EndLine >= line {
 				return &cb.chunks[i]
@@ -191,7 +137,6 @@ func (cb *ContextBuilder) findChunkForLocation(loc string) *Chunk {
 	return nil
 }
 
-// Extractors
 func extractFnParts(fn types.KBFunction) fnParts {
 	calls := make([]callPart, len(fn.Calls))
 	for i, c := range fn.Calls {
@@ -220,8 +165,6 @@ func extractClassParts(cls types.KBClass) classParts {
 		methods:   methods,
 	}
 }
-
-// Content builders (mirror buildChunkFromKBFunction/Class exactly)
 
 func (cb *ContextBuilder) buildChunkFromParts(p fnParts, filePath string) Chunk {
 	content := fmt.Sprintf("Function: %s\nSignature: %s\nLines: %d-%d\n",
@@ -268,8 +211,6 @@ func (cb *ContextBuilder) buildClassFromParts(p classParts, filePath string) Chu
 		Symbols: syms, Name: p.name, Importance: 0.95,
 	}
 }
-
-// addChunksFromFile
 
 func (cb *ContextBuilder) addChunksFromFile(filePath string, fs *types.FileData) {
 	for _, fn := range fs.Functions {
@@ -326,19 +267,6 @@ func (cb *ContextBuilder) addChunksFromFile(filePath string, fs *types.FileData)
 // buildChunkFromKBFunction constructs a Chunk from a KBFunction (function or method).
 // Materializes signature, docstring, and call relationships into a human-readable
 // chunk with metadata for retrieval scoring.
-//
-// Chunk fields set:
-//   - ID: "file:startLine-endLine" for deduplication
-//   - ChunkType: "function"
-//   - Content: Signature, docstring, and calls list (formatted text)
-//   - Symbols: [function_name]
-//   - Importance: 0.9 (high signal for exact matches)
-//   - Tokens: Estimated as content length / 4
-//
-// See:
-//   - buildChunkFromKBClass: Similar construction for class chunks
-//   - hydrateOne: Called in lazy mode to backfill Content
-//   - context_loader.go: Chunk population from kb.json
 func (cb *ContextBuilder) buildChunkFromKBFunction(fn types.KBFunction, filePath string) Chunk {
 	content := fmt.Sprintf("Function: %s\nSignature: %s\nLines: %d-%d\n",
 		fn.Name, fn.Signature, fn.LineStart, fn.LineEnd)
@@ -363,19 +291,6 @@ func (cb *ContextBuilder) buildChunkFromKBFunction(fn types.KBFunction, filePath
 // buildChunkFromKBClass constructs a Chunk from a KBClass.
 // Materializes class definition with docstring and methods list.
 // Sets Importance to 0.95 (slightly higher than functions due to structural significance).
-//
-// Chunk fields set:
-//   - ID: "file:startLine-endLine" for deduplication
-//   - ChunkType: "class"
-//   - Content: Class name, docstring, and methods list (formatted text)
-//   - Symbols: [class_name, method1_name, method2_name, ...] (all methods included)
-//   - Importance: 0.95
-//   - Tokens: Estimated as content length / 4
-//
-// See:
-//   - buildChunkFromKBFunction: Similar construction for function chunks
-//   - hydrateOne: Called in lazy mode to backfill Content
-//   - context_loader.go: Chunk population from kb.json
 func (cb *ContextBuilder) buildChunkFromKBClass(class types.KBClass, filePath string) Chunk {
 	content := fmt.Sprintf("Class: %s\nLines: %d-%d\n", class.Name, class.LineStart, class.LineEnd)
 	if class.Docstring != "" {
@@ -403,14 +318,6 @@ func (cb *ContextBuilder) buildChunkFromKBClass(class types.KBClass, filePath st
 // hydrateContent fills Chunk.Content for selected chunks when in lazy-loading mode.
 // Reads directly from kbData without requiring a separate content file.
 // Skips chunks that already have content (materialized during eager mode or earlier).
-//
-// Call this just before final context assembly to backfill content for the
-// selected chunks that were deferred during lazy loading.
-//
-// See:
-//   - context_loader.go: Lazy-loading decision (cb.lazyContent)
-//   - hydrateOne: Lower-level helper that retrieves a single chunk's content
-//   - context_search.go: Call site where final chunks are assembled
 func (cb *ContextBuilder) hydrateContent(chunks []Chunk) {
 	if cb.kbData == nil {
 		return
@@ -423,21 +330,8 @@ func (cb *ContextBuilder) hydrateContent(chunks []Chunk) {
 	}
 }
 
-// hydrateOne returns the Content for a chunk that was lazily stored.
-// Uses the pre-built hydrateIdx for O(1) lookup instead of linear scan.
-// Used internally by hydrateContent and during call-site scanning in lazy mode.
-//
-// Lookup strategy:
-// 1. Find file in kbData.Structure
-// 2. Match startLine and endLine against functions at file level
-// 3. Match against classes and their methods
-// 4. Returns empty string if no match found (chunk not in KB)
-//
-// See:
-//   - hydrateContent: Batch hydration wrapper
-//   - buildCallSiteIndex: Call-site discovery in lazy mode
-//   - context_loader.go: lazyContent threshold decision
-
+// hydrateOne lazily retrieves the content for a chunk using the pre-built hydrateIdx.
+// It performs an O(1) index lookup by file and line range, returning an empty string if unindexed.
 func (cb *ContextBuilder) hydrateOne(c Chunk) string {
 	if cb.hydrateIdx == nil {
 		return ""

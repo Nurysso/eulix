@@ -31,8 +31,8 @@ import (
 )
 
 const (
-	AppName    = "Eulix"
-	AppVersion = "v0.7.3"
+	AppName    = "eulix"
+	AppVersion = "v0.7.5"
 )
 
 var (
@@ -42,13 +42,13 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "eulix",
-	Short: "Eulix [Beta] - Turn your codebase into a searchable book",
-	Long: `Eulix is an intelligent CLI tool for understanding and querying your codebase.
+	Short: "eulix [Beta] - Turn your codebase into a searchable book",
+	Long: `eulix is an intelligent CLI tool for understanding and querying your codebase.
 
 Turn your codebase into a searchable book. Ask questions about your code,
 get accurate answers using local/cloud ML and LLMs.
 
-Eulix is currently in beta.`,
+eulix is currently in beta.`,
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd: true,
 	},
@@ -81,17 +81,21 @@ var checksumCmd = &cobra.Command{
 		}
 		return checkInitialized()
 	},
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		detector := checksum.HashHound(".")
+
 		currentChecksum, err := detector.Calculate()
 		if err != nil {
-			// return fmt.Errorf("checksum calculation failed: %w", err)
+			return fmt.Errorf("checksum calculation failed: %w", err)
 		}
+
 		fmt.Printf("   Found: %d files\n", currentChecksum.TotalFiles)
+
 		if err := detector.Save(currentChecksum); err != nil {
-			// return fmt.Errorf("failed to save checksum: %w", err)
+			return fmt.Errorf("failed to save checksum: %w", err)
 		}
-		os.Exit(1)
+
+		return nil
 	},
 }
 
@@ -156,6 +160,37 @@ var embedCMD = &cobra.Command{
 	},
 }
 
+//nolint:unused
+var parserCMD = &cobra.Command{
+	Use:                "embed [flags]",
+	Short:              "wrapper around eulix_parser",
+	DisableFlagParsing: true,
+	Run: func(cmd *cobra.Command, args []string) {
+		scriptPath, pythonPath, venvEnv, err := embeddings.FindEulixEmbed()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "eulix embed: setup failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Build: python3 ~/.Eulix/eulix_embed.py [args...]
+		cmdArgs := append([]string{scriptPath}, args...)
+		proc := exec.Command(pythonPath, cmdArgs...)
+		proc.Env = venvEnv
+		proc.Stdin = os.Stdin
+		proc.Stdout = os.Stdout
+		proc.Stderr = os.Stderr
+
+		if err := proc.Run(); err != nil {
+			// Preserve the Python exit code if available
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				os.Exit(exitErr.ExitCode())
+			}
+			fmt.Fprintf(os.Stderr, "eulix embed: run failed: %v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
 var configCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Manage eulix configuration",
@@ -163,8 +198,6 @@ var configCmd = &cobra.Command{
 		fmt.Println("Configuration management coming soon!")
 	},
 }
-
-// cmd/query.go (or wherever the command is defined)
 
 var queryCmd = &cobra.Command{
 	Use:   "query [question]",
@@ -182,7 +215,6 @@ var queryCmd = &cobra.Command{
 		}
 		userQuery := strings.Join(args, " ")
 
-		// Load config, LLM client, cache, etc. (same as startChat)
 		cfg, err := config.Load()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
@@ -196,16 +228,16 @@ var queryCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "LLM init failed: %v\n", err)
 			return
 		}
-		// Cache may be nil if not configured
-		cacheManager, _ := cache.CacheController(cfg) // handle error appropriately
+		cacheManager, _ := cache.CacheController(cfg)
 
 		router, err := query.QueryTrafficController(eulixDir, cfg, llmClient, cacheManager)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to init router: %v\n", err)
 			return
 		}
-		defer router.Close()
-
+		defer func() {
+			_ = router.Close()
+		}()
 		// Get either the prompt or the direct answer
 		// answer from non llm queries and prompt for llm based queries
 		result, err := router.PromptOrAnswer(userQuery)
@@ -295,7 +327,7 @@ var chatCmd = &cobra.Command{
 		}
 		// Chat needs an actual knowledge base, not just the .eulix skeleton.
 		if !hasKnowledgeBase(root) {
-			return fmt.Errorf("no knowledge base found at %s\nRun 'eulix analyze' to generate it.", getKnowledgeBasePath(root))
+			return fmt.Errorf("no knowledge base found at %s\nRun 'eulix analyze' to generate it", getKnowledgeBasePath(root))
 		}
 		return nil
 	},
@@ -310,7 +342,6 @@ var chatCmd = &cobra.Command{
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize eulix in the current directory",
-	// init intentionally does NOT call requireProjectRoot — it bootstraps
 	// whatever directory the user is sitting in.
 	Run: func(cmd *cobra.Command, args []string) {
 		// --fix: create only missing components, never overwrite existing ones
@@ -326,8 +357,6 @@ var initCmd = &cobra.Command{
 		}
 	},
 }
-
-// Cache command group
 
 var cacheCmd = &cobra.Command{
 	Use:   "cache",
@@ -392,7 +421,9 @@ var cacheClearCmd = &cobra.Command{
 				fmt.Fprintf(os.Stderr, "Failed to initialize cache: %v\n", err)
 				os.Exit(1)
 			}
-			defer mgr.Close()
+			defer func() {
+				_ = mgr.Close()
+			}()
 			entries, err := mgr.ListAll()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to list entries: %v\n", err)
@@ -494,17 +525,18 @@ func init() {
 // writeQueryDebugLog appends the final query output to a query-debug log
 // file under eulixDir, mirroring llm.go's llmdebug.log format.
 func writeQueryDebugLog(eulixDir, query, result string) error {
-	if err := os.MkdirAll(eulixDir, 0755); err != nil {
+	logFile := filepath.Join(eulixDir, "debug", "query-debug.log")
+	if err := os.MkdirAll(filepath.Dir(logFile), 0755); err != nil {
 		return fmt.Errorf("failed to create debug directory: %w", err)
 	}
 
-	logFile := filepath.Join(eulixDir, "query-debug.log")
 	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open debug log file: %w", err)
 	}
-	defer f.Close()
-
+	defer func() {
+		_ = f.Close()
+	}()
 	entry := fmt.Sprintf("\n%s\n=== QUERY DEBUG ENTRY ===\nTimestamp: %s\n\n=== QUERY ===\n%s\n=== END QUERY ===\n\n=== OUTPUT ===\n%s\n=== END OUTPUT ===\n%s\n",
 		strings.Repeat("=", 80),
 		time.Now().Format("2006-01-02 15:04:05"),
@@ -544,13 +576,6 @@ func setupCacheCommands() {
 	)
 }
 
-// func disableDefaultHelp() {
-// 	rootCmd.SetHelpCommand(&cobra.Command{
-// 		Use:    "no-help",
-// 		Hidden: true,
-// 	})
-// }
-
 func registerCommands() {
 	rootCmd.AddCommand(
 		versionCMD,
@@ -568,10 +593,6 @@ func registerCommands() {
 	)
 }
 
-// Project-root discovery + initialization helpers
-
-// projectMarkerFiles lists the files/directories that mark a directory as
-// the root of an eulix project. Either one is enough.
 var projectMarkerFiles = []string{".eulix", ".euignore"}
 
 // findProjectRoot walks up from startDir looking for any project marker. It
@@ -657,8 +678,6 @@ func hasKnowledgeBase(root string) bool {
 	return err == nil
 }
 
-// Initialization check
-
 // checkInitialized returns nil if the current directory is a fully
 // initialized eulix project, or a descriptive error otherwise. It is
 // intended to be used from a command's PreRunE.
@@ -667,13 +686,10 @@ func checkInitialized() error {
 	// requireProjectRoot has run, cwd is the project root.
 	if !isInitialized(".") {
 		return fmt.Errorf(
-			"\nEulix is not fully initialized in the current directory.\n" +
-				"Run 'eulix init' to set it up, or 'cd' into a project that has been initialized.\n",
+			"\nEulix is not fully initialized in the current directory\n" +
+				"Run 'eulix init' to set it up, or 'cd' into a project that has been initialized",
 		)
 	}
-
-	// Deeper check: are the internal components the user actually needs
-	// (kb, embeddings, ...) present?
 	state := checkInitState()
 	if state.fullyInitialized() {
 		return nil
@@ -683,7 +699,7 @@ func checkInitialized() error {
 	var b strings.Builder
 	b.WriteString("\nEulix is not fully initialized. Missing:\n")
 	for _, m := range missing {
-		b.WriteString("  - " + m + "\n")
+		fmt.Fprintf(&b, "  - "+m+"\n")
 	}
 	b.WriteString("\nRun 'eulix init --fix' to restore missing files, or 'eulix init --force' to reset.\n\n")
 	return fmt.Errorf("%s", b.String())

@@ -10,6 +10,7 @@ and checks for necessary file required by context window creation
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -40,8 +41,8 @@ func printStatusMessageWithIcon(icon, primaryMsg string, additionalLines ...stri
 // promptConfirm asks for user confirmation
 func promptConfirm(question string) bool {
 	fmt.Printf("%s [y/N]: ", question)
-	var response string
-	fmt.Scanln(&response)
+	reader := bufio.NewReader(os.Stdin)
+	response, _ := reader.ReadString('\n')
 	response = strings.TrimSpace(strings.ToLower(response))
 	return response == "y" || response == "yes"
 }
@@ -69,20 +70,17 @@ func checkEmbeddingsFiles(eulixDir string) []string {
 }
 
 func startChat() error {
-	// Load config
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Check KB files
 	eulixDir := ".eulix"
 	kbPath := filepath.Join(eulixDir, "kb.json")
 	if _, err := os.Stat(kbPath); os.IsNotExist(err) {
 		return fmt.Errorf("knowledge base not found. Run 'eulix analyze' first")
 	}
 
-	// Check for all required files
 	missing := checkEmbeddingsFiles(eulixDir)
 	if len(missing) > 0 {
 		printStatusMessage(
@@ -100,7 +98,6 @@ func startChat() error {
 		return fmt.Errorf("missing required files")
 	}
 
-	// Validate checksum
 	detector := checksum.HashHound(".")
 	stored, err := detector.Load()
 	if err != nil {
@@ -130,10 +127,9 @@ func startChat() error {
 		if !promptConfirm("Continue anyway?") {
 			return nil
 		}
-		fmt.Println() // Add spacing after user response
+		fmt.Println()
 	}
 
-	// Initialize cache with checksum
 	var cacheManager *cache.Manager
 	if cfg.Cache.Redis.Enabled || cfg.Cache.SQL.Enabled {
 		cacheManager, err = cache.CacheController(cfg)
@@ -142,7 +138,9 @@ func startChat() error {
 				"Caching disabled, continuing...",
 			)
 		} else {
-			defer cacheManager.Close()
+			defer func() {
+				_ = cacheManager.Close()
+			}()
 
 			// Clean expired entries on startup
 			if err := cacheManager.CleanExpired(); err != nil {
@@ -167,7 +165,6 @@ func startChat() error {
 		}
 	}
 
-	// Initialize LLM client
 	llmClient, err := llm.MouthClient(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize LLM: %w", err)
@@ -180,15 +177,12 @@ func startChat() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize query router: %w", err)
 	}
-	defer router.Close() // Clean up embeddings if they were initialized
+	defer func() { _ = router.Close() }() // Clean up embeddings if they were initialized
 
-	// Store current checksum in router for cache operations
 	router.SetCurrentChecksum(current.Hash)
 
-	// Diagnostic info
 	printSystemDiagnostics(eulixDir)
 
-	// Start TUI
 	fmt.Println("Starting chat interface...")
 	fmt.Println()
 
@@ -207,17 +201,14 @@ func startChat() error {
 }
 
 func printSystemDiagnostics(eulixDir string) {
-	// Count chunks in kb.json
 	kbPath := filepath.Join(eulixDir, "kb.json")
 	if data, err := os.ReadFile(kbPath); err == nil {
-		// Quick count of chunks without full parsing
 		chunkCount := strings.Count(string(data), `"id":`)
 		if chunkCount > 0 {
 			fmt.Printf("Loaded %d code chunks\n", chunkCount)
 		}
 	}
 
-	// Check embeddings file size
 	embPath := filepath.Join(eulixDir, "embeddings.bin")
 	if info, err := os.Stat(embPath); err == nil {
 		sizeMB := float64(info.Size()) / (1024 * 1024)
