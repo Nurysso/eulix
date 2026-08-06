@@ -10,12 +10,6 @@ const (
 )
 
 // bm25Score computes the BM25 contribution of a single term in a single chunk.
-//
-//	tf        — term frequency in this chunk
-//	df        — document (chunk) frequency of this term in the corpus
-//	n         — total number of chunks
-//	chunkLen  — token count of this chunk
-//	avgLen    — average token count across all chunks
 func bm25Score(tf float32, df, n, chunkLen int, avgLen float64) float64 {
 	if df == 0 || n == 0 {
 		return 0
