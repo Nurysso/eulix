@@ -1,0 +1,85 @@
+run:
+  timeout: 5m
+  tests: true
+  concurrency: 0
+
+output:
+  formats:
+    - format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck # Checks for unchecked errors
+    - govet # Reports suspicious constructs (printf format, alignment, etc.)
+    - ineffassign # Detects unused assignments to variables
+    - staticcheck # Comprehensive suite of static analysis checks (includes dead code checks)
+    - unused # Finds unused constants, variables, functions, types, and fields
+    - bodyclose # Checks whether HTTP response body is closed
+    - nilerr # Finds code that returns nil even when error is non-nil
+    - durationcheck # Prevents multiplication of time.Duration with two durations
+    - copyloopvar # Detects places where loop variables are copied unnecessarily
+    - makezero # Finds slice declarations initialized with non-zero length and appended to
+    - prealloc # Suggests pre-allocating slices when capacities are known ahead of time
+    - gosec # Inspects source code for security problems (CWE)
+    - gocritic # Highly extensible linter providing micro-structural checks
+    - goconst # Finds repeated strings that could be replaced with constants
+    - misspell # Finds commonly misspelled English words
+    - revive # Fast, configurable, extensible drop-in replacement for golint
+    - whitespace # Tool for detection of leading and trailing whitespace
+
+linters-settings:
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+
+  gosec:
+    excludes:
+      - G104
+
+  unused:
+    check-exported: false
+
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+    disabled-checks:
+      - hugeParam
+
+  revive:
+    rules:
+      - name: exported
+        disabled: false
+      - name: package-comments
+        disabled: true
+      - name: blank-imports
+        disabled: false
+
+  misspell:
+    locale: UK
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - errcheck
+        - goconst
+
+    - text: 'shadow: declaration of "err" shadows declaration'
+      linters:
+        - govet
+
+  exclude-use-default: false
