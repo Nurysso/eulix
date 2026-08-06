@@ -2,43 +2,13 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package query provides the context window builder and query routing for Eulix's
-// RAG (Retrieval-Augmented Generation) system.
 
 /*
-Package query implements Inverted File (IVF) vector indexing for efficient
-semantic search over embeddings.
-
-This file provides fast approximate nearest neighbor search through:
- 1. Clustering: K-means partitioning of embedding space into centroids
- 2. Inverted lists: Per-cluster assignment of embedding indices
- 3. Probing: nProbe closest clusters searched at query time
- 4. Scoring: Cosine similarity ranking of candidates
-
-The IVF index trades recall for speed: instead of comparing a query
-against all embeddings (O(n*d)), we:
-  - Compute distances to k centroids (O(k*d))
-  - Search nProbe closest clusters (O(nProbe * avg_cluster_size))
-  - Re-rank candidates by exact similarity
-
-Performance notes:
-  - Index building: O(k * maxIter * n * d) via k-means
-  - Query: O(k*d + nProbe*L) where L = avg embeddings per cluster
-  - Memory: O(n*d + k*d) for embeddings + centroids
-  - For large corpora (>100k embeddings), IVF provides 10-100x speedup
-    at ~90% recall vs brute-force search
-
-The index is built once during context setup (context_loader.go) and
-reused across all queries. Fallback to brute-force search if index
-is unavailable or disabled.
-
-See:
-  - context_loader.go: loading files for context window creations
-  - context_search.go: integration with multi-strategy search pipeline
-  - context_builder.go: vectorSearchIVF entry point and scoring
-
-// This implements the standard k-means IVF variant. Other variants
-// (e.g., residual encoding, product quantization) are not implemented.
+Package query provides context window building and query routing for Eulix's RAG system.
+Key Responsibilities:
+  - K-means clustering and inverted list construction over embedding spaces
+  - Fast approximate nearest neighbor (ANN) retrieval using centroid probing
+  - Cosine similarity candidate re-ranking with brute-force fallback
 */
 package query
 
@@ -122,17 +92,6 @@ func (cb *ContextBuilder) vectorSearchIVF(qEmb []float32, topK int, threshold fl
 // Returns nil if embs is empty or k <= 0.
 // The index clusters embeddings into k groups and creates inverted lists
 // mapping each centroid to its assigned embedding indices.
-//
-// Algorithm:
-//  1. Initialize k centroids by random selection from input embeddings
-//  2. Iterate up to maxIter times:
-//     a. Assign each embedding to nearest centroid (by cosine similarity)
-//     b. Recompute centroids as mean of assigned embeddings
-//     c. Stop if no assignments changed
-//  3. Build inverted lists: for each centroid, collect its assigned indices
-//
-// Time complexity: O(k * maxIter * n * d)
-// Space complexity: O(n*d + k*d)
 func buildIVFIndex(embs [][]float32, k, maxIter int) *IVFIndex {
 	n := len(embs)
 	if n == 0 || k <= 0 {

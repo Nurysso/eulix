@@ -138,13 +138,11 @@ func Load() (*Config, error) {
 }
 
 func DefaultConfig() *Config {
-	// Get current working directory
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "."
 	}
-	// home, _ := os.UserHomeDir()
-	// PathVenv := filepath.Join(home, ".Eulix", ".venv")
+
 	return &Config{
 		Project: ProjectConfig{
 			Path:        cwd,

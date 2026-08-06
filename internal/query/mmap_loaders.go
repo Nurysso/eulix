@@ -12,26 +12,6 @@ Memory model:
 	os.ReadFile + Unmarshal 	in heap 	in heap		~2x file
 	mmap + Unmarshal	page cache 		in heap		->~ file
 	mmap + streaming Decode 	page cache 		built incrementally -> bounded
-
-Strategy:
-	1.  Files >= mmapThreshold: mmap the files, advise the kernel for
-		sequential / huge-page access, decode directly. On Linux kernel
-		use MAP_POPULATE so the page tables are pre-faulted before
-		sonic starts walking the bytes, this hides page-fault latency
-		behind syscall overhead.
-
-	2.  Files < mmapThreshold, or mmap unavailable: buffered reader +
-		sonic streaming decoder. The 1MiB read buffer (jsonBufSize)
-		keeps syscall frequency low without bloating heap.
-
-why mmap for large JSON files?
-	A 4 GB file read into heap and then parsed gives 4 GB raw + 4-12 GB
-	parsed (string headers, slice buffers, map overhead) → OOM. With
-	mmap, the raw bytes live in the kernel page cache, sonic reads
-	them directly, and the only heap cost is the parsed struct + the
-	copied strings. For huge kb.json that's the difference between a
-	~14 GB peak RSS and a ~6-8 GB peak RSS.
-
 Platform notes:
 	- Linux kernel(tested on 6.18 lts): MAP_POPULATE + MADV_SEQUENTIAL + MADV_HUGEPAGE.
 	- Windows 11: FILE_FLAG_SEQUENTIAL_ONLY at file-open time +
@@ -142,7 +122,7 @@ func decodeViaReader(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return sonicCopy.
 		NewDecoder(bufio.NewReaderSize(f, jsonBufSize)).
 		Decode(v)
@@ -184,5 +164,5 @@ func openForSequentialRead(path string) (r io.Reader, cleanup func(), err error)
 	if err != nil {
 		return nil, nil, err
 	}
-	return bufio.NewReaderSize(f, jsonBufSize), func() { f.Close() }, nil
+	return bufio.NewReaderSize(f, jsonBufSize), func() { _ = f.Close() }, nil
 }

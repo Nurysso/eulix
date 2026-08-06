@@ -249,11 +249,11 @@ install: parser cli install-embed
 	@$(ECHO) "$(BLUE)Installing binaries to $(INSTALL_DIR)...$(NC)"
 ifeq ($(DETECTED_OS),Windows)
 	$(MKDIR) "$(INSTALL_DIR)" $(NULL) 2>&1 || echo. >$(NULL)
-	$(CP) "$(BUILD_PARSER)" "$(INSTALL_DIR)$(SEP)$(PARSER_BIN)" >$(NULL) 2>&1
+	$(CP) "$(PARSER_BUILD)" "$(INSTALL_DIR)$(SEP)$(PARSER_BIN)" >$(NULL) 2>&1
 	$(CP) "$(BUILD_CLI)" "$(INSTALL_DIR)$(SEP)$(CLI_BIN)" >$(NULL) 2>&1
 else
 	$(MKDIR) $(INSTALL_DIR)
-	$(CP) $(BUILD_PARSER) $(INSTALL_DIR)/$(PARSER_BIN)
+	$(CP) $(PARSER_BUILD) $(INSTALL_DIR)/$(PARSER_BIN)
 	$(CP) $(BUILD_CLI) $(INSTALL_DIR)/$(CLI_BIN)
 	chmod +x $(INSTALL_DIR)/$(PARSER_BIN)
 	chmod +x $(INSTALL_DIR)/$(CLI_BIN)

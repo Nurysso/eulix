@@ -1,4 +1,12 @@
-// query/prompts.go
+// Copyright (C) 2026 Dawood Khan
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+/*
+Package query provides context window building and query routing for Eulix's RAG system.
+This files contains prompts based on intent
+*/
 
 package query
 
@@ -59,12 +67,12 @@ Be explicit: "Source shows…" vs "Signature implies…" vs "Cannot determine…
 		var cgSummary strings.Builder
 		for _, sym := range class.Symbols {
 			if fn, ok := r.callGraph.Functions[sym]; ok {
-				cgSummary.WriteString(fmt.Sprintf("\n%s  (@ %s)\n", sym, fn.Location))
+				fmt.Fprintf(&cgSummary, "\n%s  (@ %s)\n", sym, fn.Location)
 				if len(fn.Calls) > 0 {
-					cgSummary.WriteString(fmt.Sprintf("  calls   : %v\n", fn.Calls))
+					fmt.Fprintf(&cgSummary, "  calls   : %v\n", fn.Calls)
 				}
 				if len(fn.CalledBy) > 0 {
-					cgSummary.WriteString(fmt.Sprintf("  calledBy: %v\n", fn.CalledBy))
+					fmt.Fprintf(&cgSummary, "  calledBy: %v\n", fn.CalledBy)
 				}
 			}
 		}
@@ -190,7 +198,7 @@ f) SUGGESTIONS — only for findings with at least SUSPECTED confidence.
 		var chainInfo strings.Builder
 		for _, sym := range class.Symbols {
 			if fn, ok := r.callGraph.Functions[sym]; ok {
-				chainInfo.WriteString(fmt.Sprintf("\n%s → %v", sym, fn.Calls))
+				fmt.Fprintf(&chainInfo, "\n%s → %v", sym, fn.Calls)
 			}
 		}
 		return fmt.Sprintf(`Trace how data flows through the system for the queried operation.

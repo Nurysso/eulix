@@ -91,7 +91,7 @@ func FindEulixEmbed() (scriptPath, pythonPath string, venvEnv []string, err erro
 		return "", "", nil, fmt.Errorf("cannot determine home directory: %w", err)
 	}
 
-	script := filepath.Join(homeDir, ".Eulix", "eulix_embed.py")
+	script := filepath.Join(homeDir, ".Eulix", "eulix_embed", "main.py")
 	if _, err := os.Stat(script); err != nil {
 		return "", "", nil, fmt.Errorf("eulix_embed.py not found (expected at %s)", script)
 	}
