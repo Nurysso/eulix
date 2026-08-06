@@ -4,52 +4,12 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 /*
-Package query provides the context window builder and query routing for Eulix's
-RAG (Retrieval-Augmented Generation) system.
+Package query provides context window building and query routing for Eulix's RAG system.
 
-This file implements the multi-strategy retrieval pipeline that combines five
-orthogonal search techniques to maximize recall and precision:
-
- 1. KB Exact Lookup: Symbol-based search in the knowledge base (highest precision)
- 2. Exact Symbol Search: Direct chunk name and symbol matching (high precision)
- 3. Partial Identifier Match: Token-level matching on camelCase/snake_case names
- 4. Keyword Search: Content-based TF-IDF or linear scan with symbol boosting
- 5. Semantic Search: Vector embeddings (optional, skipped for certain intents)
-
-Strategy execution:
-  - Each strategy runs independently and returns scored chunks.
-  - Results are merged into a deduplication map (by chunk ID).
-  - When a chunk appears in multiple strategies, scores are combined with
-    inter-strategy boost factors (multiBoost), and MatchType is concatenated.
-  - Final ranking: Exact matches pinned to top, then by score descending.
-  - Only top-K results returned for efficiency.
-
-Intent-aware budget allocation:
-  - IntentCallers/IntentCallees: Skip semantic search (focused, structural intent)
-  - High specificity (>0.85): Skip semantic search (query is precise enough)
-  - Otherwise: Allocate keyword/semantic budgets based on intent.Budget()
-
-Keyword search modes:
-  - Inverted index (invertedKeywordSearch): For large corpora (>5k chunks),
-    uses TF-IDF with postings lists for O(term_count) lookup.
-  - Linear scan (keywordSearch): For small corpora, scans all chunks
-    with symbol name boosting and underscore penalization.
-
-Call-site indexing:
-  - buildCallSiteIndex scans chunk content for function calls (identifier + "(" pattern)
-  - Used by callee/caller discovery strategies to find related code.
-
-Vector search modes:
-  - IVF approximate search (vectorSearchIVF): For >10k embeddings, clusters
-    via k-means and probes nProbe closest clusters.
-  - Brute-force search (vectorSearch): For smaller corpora, compares against all.
-
-See:
-  - context_kb.go: kbExactLookup implementation and KB symbol matching
-  - context_intent.go: QueryIntent, budget allocation, intent types
-  - context_vectorIVF.go: IVF index construction and approximate search
-  - boilerplate.go: Symbol filtering in keyword/inverted index paths
-  - context_mmr.go: Diversity-aware selection after multi-strategy merging
+Key Responsibilities:
+  - Orchestrates multi-strategy retrieval (KB exact, partial identifier, keyword, and vector search)
+  - Deduplicates and merges candidate scores using strategy-specific boost multipliers
+  - Adjusts strategy weights and search paths dynamically based on query intent and corpus scale
 */
 package query
 
@@ -86,45 +46,14 @@ type ExplicitAnchor struct {
 	Score    float64
 }
 
-// multiStrategySearch orchestrates five orthogonal retrieval strategies and
-// merges their results into a single ranked list.
-//
-// Strategies executed (in order):
-//  1. kb_exact (if hasKB): KB-based symbol lookup, multiBoost=2.5
-//  2. exact: Direct chunk name and symbol matching, multiBoost=2.0
-//  3. partial: Token-level identifier matching, multiBoost=1.5
-//  4. keyword: TF-IDF or linear scan with symbol boosting, multiBoost=2.0
-//  5. semantic: Vector embeddings (optional, multiBoost=1.5)
-//
-// Merging:
-//   - Each chunk is identified by its unique ID.
-//   - If a chunk appears in multiple strategies, scores are combined as:
-//     new_score = max(existing_score, strategy_score) + multiBoost
-//   - MatchType is concatenated: "exact+keyword"
-//   - Final result is sorted by MatchType (exact first) then score descending.
-//
-// Keyword budget:
-//   - kwTopK = topK * (0.4 + 0.3 * intent.Budget()["keyword"])
-//   - Inverted index used if available, otherwise linear scan.
-//   - Symbol boosting: +25.0 if query symbol appears as call in chunk.
-//   - Underscore penalization: -10.0 for _symbol matches.
-//
-// Semantic skipping:
-//   - Skipped if intent is IntentCallers or IntentCallees (structural).
-//   - Skipped if specificity > 0.85 (query is precise enough).
-//   - semTopK = topK * (0.3 + 0.3 * intent.Budget()["semantic"]) when enabled.
-//
-// Tracing:
-//   - If trace is non-nil, appends StrategyTrace for each strategy
-//     with timing, result count, top score, and average score.
-//
-// See:
-//   - kbExactLookup: KB symbol-based retrieval
-//   - exactSymbolSearch: Direct chunk name/symbol matching
-//   - partialIdentifierMatch: Token-level matching
-//   - keywordSearch / invertedKeywordSearch: Content-based retrieval
-//   - vectorSearchIVF / vectorSearch: Semantic vector search
-//   - context_intent.go: QueryIntent and budget allocation
+type scoredIdx struct {
+	idx   int
+	score float64
+}
+
+// multiStrategySearch executes up to five retrieval strategies (kb_exact, exact, partial, keyword, semantic),
+// merging duplicate chunk scores with multi-strategy boosts and sorting by match type and score.
+// If trace is non-nil, it records performance and score metrics for each executed strategy.
 func (cb *ContextBuilder) multiStrategySearch(
 	query string,
 	topK int,
@@ -172,6 +101,9 @@ func (cb *ContextBuilder) multiStrategySearch(
 			if ex, ok := all[m.ID]; ok {
 				m.Score = math.Max(ex.Score, m.Score) + multiBoost
 				m.MatchType = ex.MatchType + "+" + name
+				m.IsExact = ex.IsExact || name == "exact" || name == "kb_exact"
+			} else {
+				m.IsExact = name == "exact" || name == "kb_exact"
 			}
 			all[m.ID] = m
 			if m.Score > st.TopScore {
@@ -282,12 +214,9 @@ func (cb *ContextBuilder) multiStrategySearch(
 			}
 		}
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].MatchType == "exact" && result[j].MatchType != "exact" {
-			return true
-		}
-		if result[i].MatchType != "exact" && result[j].MatchType == "exact" {
-			return false
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].IsExact != result[j].IsExact {
+			return result[i].IsExact
 		}
 		return result[i].Score > result[j].Score
 	})
@@ -300,15 +229,6 @@ func (cb *ContextBuilder) multiStrategySearch(
 // exactSymbolSearch performs direct matching on chunk names and symbols.
 // Returns chunks whose name or symbol list exactly matches (case-insensitive)
 // a token extracted from the query.
-//
-// Scoring:
-//   - Exact name match: 100.0
-//   - Exact symbol match: 90.0
-//
-// See:
-//   - extractPotentialSymbols: Query tokenization
-//   - multiStrategySearch: Orchestration point
-//   - partialIdentifierMatch: Lower-precision token-level matching
 func (cb *ContextBuilder) exactSymbolSearch(query string) []ScoredChunk {
 	potSyms := extractPotentialSymbols(query)
 	scored := make([]ScoredChunk, 0)
@@ -339,23 +259,12 @@ func (cb *ContextBuilder) exactSymbolSearch(query string) []ScoredChunk {
 	return scored
 }
 
-// partialIdentifierMatch performs token-level matching on identifiers.
-// Splits camelCase and snake_case names and symbols, then matches against
-// query tokens. Returns chunks with 2+ token matches or 1 match with score ≥15.
+// partialIdentifierMatch performs sub-token matching across camelCase and snake_case identifiers.
 //
-// Scoring per match type:
-//   - Exact token match in chunk name: +15.0
-//   - Substring match in chunk name: +8.0
-//   - Exact token match in chunk symbol: +12.0
-//   - Substring match in chunk symbol: +6.0
-//
-// Filtering: Only returns chunks with matchCount >= 2 or (matchCount == 1 && score >= 15).
-// Deduplication by chunk ID to avoid scoring same chunk multiple times.
-//
-// See:
-//   - splitIdentifierToTokens: CamelCase/snake_case tokenization
-//   - extractPotentialSymbols: Query tokenization
-//   - multiStrategySearch: Orchestration point
+// Key Behaviors:
+//   - Tokenizes chunk names and symbols into constituent sub-words.
+//   - Scores exact and substring token matches with deduplication by chunk ID.
+//   - Filters out weak matches requiring multi-token agreement or a high-confidence single match.
 func (cb *ContextBuilder) partialIdentifierMatch(query string) []ScoredChunk {
 	qTokens := extractPotentialSymbols(query)
 
@@ -436,31 +345,12 @@ func (cb *ContextBuilder) partialIdentifierMatch(query string) []ScoredChunk {
 	return scored
 }
 
-// keywordSearch performs linear content scanning with TF-based scoring.
-// For each chunk, scores are accumulated from:
-//   - Symbol name exact/substring match: ±20.0 / +10.0
-//   - Chunk symbol exact/substring match: +15.0 / +7.0
-//   - Chunk symbol keyword match: +10.0 / +5.0
-//   - Content keyword match: +2.0
-//   - File path keyword match: +1.0
-//   - Chunk type bonus (function +1.0, class +0.8, method +0.6)
-//   - Underscore penalization: -10.0 for _symbol matches
-//     Pre-filtering strategy:
-//     1. Look up every potential symbol and keyword in cb.symbolIndex (O(1) per term)
-//     2. Union all matching chunk indices into a candidate set
-//     3. Fallback: quick name-only scan if no symbol matches (no content hydration)
-//     4. Score only the candidate set using metadata fields
+// keywordSearch performs pre-filtered term frequency scoring against chunk candidates.
 //
-// This avoids the O(n) full-corpus scan and zero-content hydration that
-// previously caused 6+ second latencies and 1.69 GB RSS on 892-chunk corpora.
-// Only returns chunks with score > 0, sorted by score descending, limited to topK.
-// Hydrates content on-demand if lazy-loaded.
-//
-// See:
-//   - extractQueryKeywords: Query tokenization
-//   - extractPotentialSymbols: Potential identifiers extraction
-//   - invertedKeywordSearch: TF-IDF variant using inverted index
-//   - hydrateOne: Content materialization for lazy-loaded chunks
+// Key Behaviors:
+//   - Pre-filters candidate chunks using cb.symbolIndex to avoid O(n) full scans.
+//   - Scores candidate matches across symbol names, content, file paths, and chunk types.
+//   - Hydrates content on demand for top-scoring lazy-loaded chunks.
 func (cb *ContextBuilder) keywordSearch(query string, topK int) []ScoredChunk {
 	qLow := strings.ToLower(query)
 	keywords := extractQueryKeywords(qLow)
@@ -568,21 +458,10 @@ func (cb *ContextBuilder) keywordSearch(query string, topK int) []ScoredChunk {
 
 // invertedKeywordSearch performs TF-IDF retrieval using an inverted index.
 // Falls back to linear keywordSearch if index is unavailable.
+// TODO: Allow users to switch between tf-idf and bm24.
+// Currently a DEADCODE
 //
-// Algorithm:
-//  1. Extract keywords and symbols from query
-//  2. Combine unique tokens for postings lookup
-//  3. For each term, retrieve postings (chunkIdx, TF)
-//  4. Score each chunk as: sum(TF * IDF) where IDF = log(docCount / docFreq) + 1
-//  5. Apply symbol name boost: +20.0 if chunk name == query symbol
-//  6. Return top-K results sorted by score descending
-//
-// Locking: Acquires RWMutex read lock on invertedIdx for thread-safe access.
-//
-// See:
-//   - InvertedIndex: Postings lists and term frequency data structure
-//   - keywordSearch: Linear scan alternative
-//   - extractQueryKeywords / extractPotentialSymbols: Query tokenization
+//nolint:unused
 func (cb *ContextBuilder) invertedKeywordSearchTFIDF(query string, topK int) []ScoredChunk {
 	if cb.invertedIdx == nil {
 		return cb.keywordSearch(query, topK)
@@ -671,12 +550,23 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int) []Sc
 	// Proximity bonus: reward chunks where query terms appear near each
 	// other in content. Only applied to the top candidates by BM25 score
 	// to keep this O(topK) rather than O(all matched chunks).
-	//
-	// We need at least 2 matched terms in a chunk for proximity to be
-	// meaningful; single-term chunks skip the scan entirely.
 	const proximityWindow = 300 // characters
+	proximityLimit := topK * 4  // todo: make this multiplier customizable via config
+
+	candidates := make([]scoredIdx, 0, len(scores))
+	for idx, s := range scores {
+		candidates = append(candidates, scoredIdx{idx, s})
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+
+	if proximityLimit > len(candidates) {
+		proximityLimit = len(candidates)
+	}
+
 	if len(terms) >= 2 {
-		for idx, matchedTerms := range matched {
+		for _, c := range candidates[:proximityLimit] {
+			idx := c.idx
+			matchedTerms := matched[idx]
 			if len(matchedTerms) < 2 {
 				continue
 			}
@@ -718,17 +608,6 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int) []Sc
 //
 // Used for caller/callee discovery: if chunk[i] calls foo(), then callSiteIndex["foo"]
 // includes i, enabling quick lookup of callers.
-//
-// Algorithm:
-//  1. For each chunk, scan content for "(" characters
-//  2. Backtrack from each "(" to collect the identifier (alphanumeric + underscore)
-//  3. Extract lowercased function name
-//  4. Append chunk index to callSiteIndex[name]
-//
-// See:
-//   - isIdentRune: Character predicate for identifier matching
-//   - context_graph.go: expandGraph uses this index for caller/callee expansion
-//   - context_loader.go: Called during KB loading
 func buildCallSiteIndex(cg *types.CallGraphRef, chunks []Chunk) callSiteIndex {
 	// primary lookup: symbol stored in chunk.Symbols
 	symToChunks := make(map[string][]int, len(chunks))
@@ -775,98 +654,10 @@ func normalizeToCallGraphID(c Chunk) string {
 	return "func_" + name
 }
 
-func buildCallSiteIndexFromGraph(graph *types.CallGraphRef, chunks []Chunk) callSiteIndex {
-	// node ID → file, built from nodes array
-	nodeFile := make(map[string]string, len(graph.Nodes))
-	for _, n := range graph.Nodes {
-		nodeFile[n.ID] = n.File
-	}
-
-	// file → sorted chunk indices for line-range lookup
-	byFile := make(map[string][]int, len(chunks))
-	for i, c := range chunks {
-		byFile[c.File] = append(byFile[c.File], i)
-	}
-
-	idx := make(callSiteIndex, 1024)
-
-	for _, edge := range graph.Edges {
-		if edge.EdgeType != "calls" {
-			continue
-		}
-		callee := strings.ToLower(edge.To)
-		if len(callee) <= 1 {
-			continue
-		}
-
-		// Attribute to the *caller's* chunk (the chunk containing the call site),
-		// not the callee's chunk — consistent with what buildCallSiteIndexFromKB did.
-		callerFile := nodeFile[edge.From]
-		chunkIdxs := byFile[callerFile]
-		if len(chunkIdxs) == 0 {
-			continue
-		}
-
-		ci := findChunkForLine(chunks, chunkIdxs, edge.CallSiteLine)
-		idx[callee] = append(idx[callee], ci)
-	}
-
-	// Deduplicate
-	for sym, idxs := range idx {
-		seen := make(map[int]bool, len(idxs))
-		deduped := idxs[:0]
-		for _, i := range idxs {
-			if !seen[i] {
-				seen[i] = true
-				deduped = append(deduped, i)
-			}
-		}
-		idx[sym] = deduped
-	}
-	return idx
-}
-
-func buildRelationshipMap(cg *types.CallGraphRef) map[string][]Relationship {
-	m := make(map[string][]Relationship, len(cg.Nodes))
-	for _, e := range cg.Edges {
-		if e.EdgeType == "calls" {
-			m[e.From] = append(m[e.From], Relationship{
-				Type: "calls", Target: e.To, Distance: 1,
-			})
-			m[e.To] = append(m[e.To], Relationship{
-				Type: "called_by", Target: e.From, Distance: 1,
-			})
-		}
-	}
-	return m
-}
-func findChunkForLine(chunks []Chunk, chunkIdxs []int, line int) int {
-	if line == 0 {
-		return chunkIdxs[0] // no line info, fall back to first chunk in file
-	}
-	for _, ci := range chunkIdxs {
-		c := chunks[ci]
-		if c.StartLine <= line && line <= c.EndLine {
-			return ci
-		}
-	}
-	return chunkIdxs[0] // line out of range (off-by-one, generated edge), best effort
-}
-
 // vectorSearch performs brute-force semantic search over all embeddings.
 // Compares query embedding against all chunk embeddings using cosine similarity.
 // Returns chunks with similarity >= threshold, sorted by score descending, limited to topK.
-//
-// Complexity: O(n * d) where n = number of embeddings, d = embedding dimension.
-// Use vectorSearchIVF for n > 10k to reduce to O(k*d + nProbe*L).
-//
 // Threshold typically 0.5 for semantic search (cosine similarity in [0, 1]).
-//
-// See:
-//   - vectorSearchIVF: Approximate search using IVF clustering
-//   - cosineSimilarity: Embedding distance metric
-//   - context_vectorIVF.go: IVF index and approximate search
-//   - context_loader.go: ivfBuildThreshold decision
 func (cb *ContextBuilder) vectorSearch(qEmb []float32, topK int, threshold float64) []ScoredChunk {
 	scored := make([]ScoredChunk, 0)
 	for i, chunkEmb := range cb.embeddings {
@@ -884,39 +675,6 @@ func (cb *ContextBuilder) vectorSearch(qEmb []float32, topK int, threshold float
 	return scored
 }
 
-func boostBySubsystemPath(result []ScoredChunk, query string) {
-	// Extract lowercase path tokens from the query (words that look
-	// like directory/subsystem names: all-lowercase, length 3-20,
-	// no CamelCase, no underscores at start).
-	words := strings.Fields(strings.ToLower(query))
-	pathTokens := make([]string, 0, 4)
-	for _, w := range words {
-		// Strip punctuation
-		w = strings.Trim(w, "().,;:")
-		if len(w) >= 3 && len(w) <= 20 && !strings.HasPrefix(w, "_") {
-			pathTokens = append(pathTokens, w)
-		}
-	}
-	if len(pathTokens) == 0 {
-		return
-	}
-
-	for i := range result {
-		fileLow := strings.ToLower(result[i].File)
-		matches := 0
-		for _, tok := range pathTokens {
-			if strings.Contains(fileLow, tok) {
-				matches++
-			}
-		}
-		if matches >= 2 {
-			result[i].Score *= 1.0 + 0.15*float64(matches)
-		} else if matches == 1 {
-			result[i].Score *= 1.08
-		}
-	}
-}
-
 // extractExplicitAnchors parses the query for any explicit file/line/func
 // references and returns them ranked by specificity.
 func extractExplicitAnchors(query string) []ExplicitAnchor {
@@ -931,21 +689,21 @@ func extractExplicitAnchors(query string) []ExplicitAnchor {
 		}
 	}
 
-	// Tier 1 — file path + line number (highest specificity)
+	// file path + line number (highest specificity)
 	for _, m := range rePathLine.FindAllStringSubmatch(query, -1) {
 		line := 0
-		fmt.Sscanf(m[2], "%d", &line)
+		_, _ = fmt.Sscanf(m[2], "%d", &line)
 		add(ExplicitAnchor{File: m[1], Line: line, Score: 200.0})
 	}
 
-	// Tier 2 — bare filename (with extension) anywhere in query
+	// bare filename (with extension) anywhere in query
 	for _, m := range reFilename.FindAllStringSubmatch(query, -1) {
 		add(ExplicitAnchor{File: m[1], Score: 150.0})
 	}
 
-	// Tier 3 — path fragment (two or more slash-separated components)
+	// path fragment (two or more slash-separated components)
 	for _, m := range rePathFrag.FindAllStringSubmatch(query, -1) {
-		// Skip if already covered by a tier-1 match
+
 		covered := false
 		for _, a := range anchors {
 			if strings.Contains(a.File, m[1]) {
@@ -958,9 +716,8 @@ func extractExplicitAnchors(query string) []ExplicitAnchor {
 		}
 	}
 
-	// Tier 4 — funcName:lineNum without a file (rarer, e.g. from a stack trace)
+	// funcName:lineNum without a file (rarer, e.g. from a stack trace)
 	for _, m := range reFuncLine.FindAllStringSubmatch(query, -1) {
-		// Only fire if it doesn't overlap with a tier-1 match
 		alreadyCovered := false
 		for _, a := range anchors {
 			if a.File != "" && strings.HasSuffix(a.File, m[1]) {
@@ -970,7 +727,7 @@ func extractExplicitAnchors(query string) []ExplicitAnchor {
 		}
 		if !alreadyCovered {
 			line := 0
-			fmt.Sscanf(m[2], "%d", &line)
+			_, _ = fmt.Sscanf(m[2], "%d", &line)
 			add(ExplicitAnchor{FuncName: m[1], Line: line, Score: 130.0})
 		}
 	}

@@ -1,0 +1,128 @@
+run:
+  timeout: 5m
+  tests: true
+  concurrency: 0
+
+output:
+  formats:
+    - format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck # Checks for unchecked errors
+    - govet # Reports suspicious constructs (printf format, alignment, etc.)
+    - ineffassign # Detects unused assignments to variables
+    - staticcheck # Comprehensive suite of static analysis checks (includes dead code checks)
+    - unused # Finds unused constants, variables, functions, types, and fields
+    - bodyclose # Checks whether HTTP response body is closed
+    - nilerr # Finds code that returns nil even when error is non-nil
+    - durationcheck # Prevents multiplication of time.Duration with two durations
+    - copyloopvar # Detects places where loop variables are copied unnecessarily
+    - makezero # Finds slice declarations initialized with non-zero length and appended to
+    - prealloc # Suggests pre-allocating slices when capacities are known ahead of time
+    - gosec # Inspects source code for security problems (CWE)
+    - gocritic # Highly extensible linter providing micro-structural checks
+    - goconst # Finds repeated strings that could be replaced with constants
+    - misspell # Finds commonly misspelled English words
+    - revive # Fast, configurable, extensible drop-in replacement for golint
+    - whitespace # Tool for detection of leading and trailing whitespace
+    - gocyclo # Flags functions with high cyclomatic complexity (hot-path regressions)
+    - nestif # Flags deeply nested if statements (readability + branch-predictor friendliness)
+    - nolintlint # Ensures //nolint directives are specific and justified
+    - unconvert # Flags unnecessary type conversions (avoids redundant allocs/copies)
+    - unparam # Flags unused function parameters (dead surface area in hot paths)
+    - noctx # Flags HTTP requests without context.Context (cancellation/timeout hygiene)
+    - errorlint # Ensures errors.Is/As/Unwrap used correctly with wrapped errors
+
+linters-settings:
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+
+  gosec:
+    excludes:
+      - G104 # unchecked errors on deferred Close() etc. — covered by errcheck where it matters
+      - G204 # subprocess launched with variable input — eulix legitimately execs its own
+        # bundled venv python / eulix_parser binary as core functionality, not
+        # arbitrary user-controlled commands
+
+  unused:
+    check-exported: false
+
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+    # hugeParam and rangeValCopy are intentionally left enabled (not in
+    # disabled-checks) — they catch by-value copies of large structs in loops,
+    # which matters directly for the sub-400ms chunk/embed pipeline. If they
+    # get noisy on a specific known-safe struct, prefer a targeted //nolint
+    # over disabling the check project-wide.
+    settings:
+      hugeParam:
+        sizeThreshold: 80
+      rangeValCopy:
+        sizeThreshold: 80
+
+  revive:
+    rules:
+      - name: exported
+        disabled: false
+      - name: package-comments
+        disabled: true
+      - name: blank-imports
+        disabled: false
+
+  misspell:
+    locale: UK
+
+  gocyclo:
+    # Chunking/embedding hot paths should stay simple enough to reason about
+    # and to keep the JIT/inliner and branch predictor happy. Tune down further
+    # once the codebase stabilizes.
+    min-complexity: 15
+
+  nestif:
+    min-complexity: 4
+
+  nolintlint:
+    require-explanation: true
+    require-specific: true
+    allow-unused: false
+
+  unparam:
+    check-exported: false
+
+  errorlint:
+    errorf: true
+    asserts: true
+    comparison: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - errcheck
+        - goconst
+        - gocyclo
+        - nestif
+        - unparam
+
+    - text: 'shadow: declaration of "err" shadows declaration'
+      linters:
+        - govet
+
+  exclude-use-default: false

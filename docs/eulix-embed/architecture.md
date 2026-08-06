@@ -1,8 +1,8 @@
 # eulix_embed — Architecture
 
-> Python/PyTorch port of the original Rust `eulix_embed` (see `embed` branch).
+> Python/PyTorch implementation of the eulix embedding system.
 > Version: 0.3.8 · License: Apache-2.0 · Maintainer: Dawood (Nurysso)
-> Updated Date Jun 28 2-26
+> Updated Date: Jul 21, 2026
 
 ---
 
@@ -33,14 +33,14 @@ KB / `.bin` contract. They will _not_ be added as feature flags inside this
 file — vendor SDKs leak into each other, bloat the dependency graph, and turn
 "install" into a yak-shave. The split is deliberate; see [#11](#11-compute-platform-strategy)
 
-### Why a separate Rust original at all?
+### Design Philosophy
 
-The Rust implementation exists because Python is not the right tool for
-hot-loop inference on terabyte corpora. This Python port exists because most
-users do _not_ have terabyte corpora, and most users would rather `uv add
-transformers` than compile a Rust toolchain. The two share the binary
-contract, the bucketing logic, and the chunker semantics — they do not share
-runtime code.
+The Python implementation prioritises:
+
+- **Memory efficiency** through single-pass streaming and `dataclass(slots=True)`
+- **Portability** through PyTorch instead of vendor-specific SDKs
+- **Simplicity** through a single-file implementation with clear CLI interface
+- **Performance** through bucketing, parallel chunking, and optional quantization
 
 ---
 
@@ -121,14 +121,11 @@ itself.
 
 **Why:**
 
-- The Rust original locked onto ONNX because it needed predictable latency
-  on the AMD MI300X box it shipped on. Python users are not on that box.
 - HuggingFace gated / dynamic-graph models (Jina v2, Nomic, custom fine-tunes
   with `trust_remote_code`, `attn_implementation="eager"`) **require** the
   HF modelling code. ONNX export breaks on most of them.
 - Model swapping is the dominant use case here. `AutoModel.from_pretrained`
-  - probe-dimension-once covers ~95% of the model zoo. ONNX export-and-validate
-    covers ~70% and adds an entire compile pipeline.
+  covers ~95% of the model zoo without additional compilation steps.
 - The cost is "slower than ORT by 10–25% on stock hardware". That is the
   tax we pay for portability — and exactly the tax the upcoming
   vendor-specific builds will reclaim (see [#11](#11-compute-platform-strategy))

@@ -4,58 +4,12 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 /*
-Package query provides the context window builder and query routing for Eulix's
-RAG (Retrieval-Augmented Generation) system.
+Package query provides context window building and query routing for Eulix's RAG system.
 
-This file orchestrates knowledge base artifact loading and indexing:
-  - kb.json: full codebase structure (functions, classes, methods with signatures,
-    line ranges, complexity, call graphs)
-  - kb_index.json: lightweight symbol index (function/type names and locations)
-  - kb_call_graph.json: inter-procedural call relationships
-  - embeddings.bin: vector embeddings for all chunks (binary v3/v4)
-  - vectors.bin: embedding→chunk ID map
-
-Memory strategy (2-4 GB kb.json based on 16 GB Linux / Windows 11):
-
-	The previous design materialised kb.json as a full
-	types.KnowledgeBaseRef struct in loadKnowledgeBase, then loaded it
-	AGAIN in loadChunksFromKB to build chunks. Peak memory was 2-3× the
-	file size: parsed struct + duplicate parsed struct + chunk slice.
-	On a 4 GB file this OOM'd on 16 GB.
-
-	The new design streams kb.json via mmap + json.NewDecoder. The
-	full struct is never materialised, chunks are built inline as
-	each FileData is decoded and the FileData goes out of scope at
-	the end of each iteration. Peak memory is just the chunk slice
-	+ derived indices, which fits in 16 GB even with a 4 GB source. (hopefully)
-
-	Binary files (embeddings.bin, vectors.bin) still use os.ReadFile
-	because their parsers require direct []byte index arithmetic.
-	TODO: Switch to mmap if your embedding files grow past ~2 GB.
-
-	json.NewDecoder is used (not sonic) for the outer token walk
-	because sonic's streaming decoder doesn't expose Token()/More().
-	The inner FileData is decoded with sonicCopy.Unmarshal a hybrid
-	that combines the streaming flexibility of encoding/json with
-	the JIT field-access speed of sonic.
-
-Boilerplate filtering is applied in three places:
- 1. Symbol index construction (cb.buildDerivedIndices): skip
-    boilerplate symbols when populating cb.symbolIndex.
- 2. Inverted index construction (cb.buildInvertedIndex): tokens
-    are checked via cb.isBoilerplateSymbol before insertion.
- 3. Caller code: simBetween and any custom scorers should call
-    cb.isBoilerplateSymbol.
-
-File format notes:
-  - embeddings.bin / vectors.bin: [4B magic][4B version][4B+str model] [4B count][4B dim]
-    then per-entry: [4B+str id][dim*4B float32 vec]
-  - kb_call_graph.json: flat map of function ID → {Calls, CalledBy}
-
-Standalone routing helpers (loadKBIndex, loadCallGraph) are
-provided for the query-classification path, which operates outside
-the ContextBuilder lifecycle. They share the same mmap-backed
-decode logic as the streaming loader.
+Key Responsibilities:
+  - Memory-optimized streaming loading of knowledge base artifacts (kb.json, call graphs)
+  - Binary decoding of vector embeddings and mapping tables
+  - In-memory index generation (symbol maps, inverted indexes, boilerplate filters)
 */
 package query
 
@@ -76,29 +30,17 @@ import (
 )
 
 const (
-	ivfBuildThreshold = 50_000
-	invIdxThreshold   = 5_000
-	lazyContentLimit  = 50_000
-	ivfNClusters      = 256
-	ivfKMeansIter     = 20
-
-	// dfThresholdDefault: fraction of chunks a symbol must appear in
-	// to be suppressed as boilerplate. 0.30 is the recommended
-	// starting point, raising it if legitimate short identifiers are
-	// being filtered, lower if too many common helpers leak through.
+	ivfBuildThreshold  = 50_000
+	invIdxThreshold    = 5_000
+	lazyContentLimit   = 50_000
+	ivfNClusters       = 256
+	ivfKMeansIter      = 20
 	dfThresholdDefault = 0.30
-
-	// bpMinChunks: minimum corpus size before statistics are trusted.
-	bpMinChunks = 50
-	PreAllocate = 320_000
+	bpMinChunks        = 50
+	PreAllocate        = 320_000
 )
 
 // logFileLoad wraps a file load with timing + RSS delta logging.
-// Usage:
-//
-//	done := cb.logFileLoad("kb.json")
-//	err := decodeJSONFile(path, &kb)
-//	done(err)
 func (cb *ContextBuilder) logFileLoad(name string) func(error) {
 	var memBefore runtime.MemStats
 	runtime.ReadMemStats(&memBefore)
@@ -131,28 +73,6 @@ func (cb *ContextBuilder) logFileLoad(name string) func(error) {
 // they benefit from the same mmap-backed streaming-decode behaviour
 // as the ContextBuilder loaders below.
 
-func loadKBIndex(eulixDir string) (*types.KBIndices, error) {
-	var idx types.KBIndices
-	if err := decodeJSONFile(filepath.Join(eulixDir, "kb_index.json"), &idx); err != nil {
-		return nil, fmt.Errorf("kb_index.json: %w", err)
-	}
-	return &idx, nil
-}
-
-// loadCallGraph returns the routing-layer *CallGraph. Note that a
-// ContextBuilder method of the same name (cb).loadAndIndexCallGraph
-// also exists; it reads the same file but produces the richer
-// internal representation (map[string][]Relationship). In Go a
-// package-level function and a method may share a name without
-// conflict; both are intentional.
-func loadCallGraph(eulixDir string) (*CallGraph, error) {
-	var g CallGraph
-	if err := decodeJSONFile(filepath.Join(eulixDir, "kb_call_graph.json"), &g); err != nil {
-		return nil, fmt.Errorf("kb_call_graph.json: %w", err)
-	}
-	return &g, nil
-}
-
 // loadExternalDeps reads and parses kb_external_deps.json
 func (cb *ContextBuilder) loadExternalDeps() error {
 	done := cb.logFileLoad("kb_external_deps.json")
@@ -178,20 +98,6 @@ func (cb *ContextBuilder) loadExternalDeps() error {
 // KnowledgeBaseRef struct on top of the chunk slice. Peak memory
 // in the old design was 8-12 GB for a 4 GB source OOM on 16 GB.
 // The new design peaks at ~6-8 GB (chunks + derived indices only).
-//
-// Phase breakdown:
-//
-//  1. kb_index.json (small, 10-100 MB): mmap + Unmarshal. No
-//     streaming needed.
-//  2. kb.json (2-4 GB): mmap + json.NewDecoder streaming decode.
-//     Each FileData is decoded inline with sonic and discarded
-//     after chunks are built. The full KnowledgeBaseRef struct
-//     is never materialised.
-//  3. Derived indices: built from cb.chunks in a single pass.
-//  4. State + free intermediate memory: cb.kbIdx is kept (used by
-//     the routing path), kb.json's bytes are released by the
-//     mmap cleanup, and a runtime.GC() reclaims any decoder
-//     buffer that the streaming pass left behind.
 //
 // Note: cb.lazyContent is forced to false in this path. The old
 // design populated a hydrateIdx map with closures that rebuilt
@@ -320,11 +226,6 @@ func (cb *ContextBuilder) streamKBChunks() error {
 
 // buildDerivedIndices populates the boilerplate detector, symbol
 // index, and inverted index from cb.chunks in a single pass.
-//
-// Called once after streamKBChunks has finished. Boilerplate runs
-// first so the symbol index can skip the high-frequency symbols
-// during its pass; the inverted index reuses the same predicate
-// during tokenisation.
 func (cb *ContextBuilder) buildDerivedIndices() {
 	// Boilerplate detector (over the full corpus)
 	cb.buildBoilerplate()
@@ -359,21 +260,6 @@ func (cb *ContextBuilder) buildDerivedIndices() {
 // map from normalised token to the list of chunk indices that
 // contain it. Boilerplate tokens are filtered out via the
 // detector built in buildBoilerplate.
-//
-// Operates on cb.chunks directly so it works with the streaming
-// loader (which doesn't keep the full KnowledgeBaseRef).
-//
-// Tokenisation: strings.FieldsFunc splits on any Unicode
-// whitespace or punctuation boundary. For natural-language chunks
-// this is a reasonable default; for code chunks you may want a
-// language-aware tokenizer (CamelCase split, snake_case split,
-// etc.), drop in a custom splitter via the chunkIndexer hook
-// if your retrieval quality depends on it.
-//
-// Performance: O(total tokens) with one allocation per chunk
-// for the token slice. The inverted map is pre-sized to
-// len(chunks)*8 (heuristic; tune if your token/cardinality
-// ratio differs).
 func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 	postings := make(map[string][]Posting, len(cb.chunks)*8)
 	totalTokens, nonEmpty := 0, 0
@@ -419,10 +305,10 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 // (anything outside [A-Za-z0-9_]). Used as the splitter predicate
 // in buildInvertedIndex.
 func isIdentBoundary(r rune) bool {
-	return !((r >= 'a' && r <= 'z') ||
-		(r >= 'A' && r <= 'Z') ||
-		(r >= '0' && r <= '9') ||
-		r == '_')
+	return (r < 'a' && r > 'z') ||
+		(r < 'A' && r > 'Z') ||
+		(r < '0' && r > '9') ||
+		r != '_'
 }
 
 // loadAndIndexCallGraph loads kb_call_graph.json and builds the
@@ -470,14 +356,6 @@ func (cb *ContextBuilder) loadAndIndexCallGraph() {
 
 // loadEmbeddings reads embeddings.bin (EULX magic, version 2/3/4).
 // Supports legacy (v3, with IDs), and current quantized (v4, SQ8 int8) formats.
-//
-// Uses os.ReadFile rather than mmap because the binary parser
-// requires direct []byte index arithmetic (off+4, off+dim*4
-// slicing) that isn't compatible with an io.Reader-based approach.
-// For typical RAG corpora (100K-1M embeddings, dim 384-1536) the
-// file is 200 MB - 6 GB. If your embeddings grow past ~6 GB, switch
-// to mmap by replacing the os.ReadFile with
-// openForSequentialRead and indexing into a bytes.Reader.
 func (cb *ContextBuilder) loadEmbeddings() error {
 	done := cb.logFileLoad("embeddings.bin")
 	path := filepath.Join(cb.eulixDir, "embeddings.bin")
@@ -486,10 +364,9 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	if err != nil {
 		return fmt.Errorf("embeddings.bin not found: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	br := bufio.NewReaderSize(f, 4<<20) // 4MB read buffer
 
-	// read magic
 	magic := make([]byte, 4)
 	if _, err := io.ReadFull(br, magic); err != nil {
 		return fmt.Errorf("reading magic: %w", err)
@@ -499,7 +376,6 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	}
 
 	var hdr [4]byte
-	// version
 	if _, err := io.ReadFull(br, hdr[:4]); err != nil {
 		return err
 	}
@@ -507,7 +383,6 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	if version != 3 && version != 4 {
 		return fmt.Errorf("unsupported version: %d", version)
 	}
-	// model name (length-prefixed)
 	if _, err := io.ReadFull(br, hdr[:4]); err != nil {
 		return err
 	}
@@ -516,7 +391,6 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	if _, err := io.ReadFull(br, modelBuf); err != nil {
 		return err
 	}
-	// numEmb, dim
 	var meta [8]byte
 	if _, err := io.ReadFull(br, meta[:]); err != nil {
 		return err
@@ -538,8 +412,8 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	cb.embeddings = make([][]float32, numEmb)
 	idLenBuf := make([]byte, 4)
 	scaleBuf := make([]byte, 4)
-	int8Buf := make([]byte, dim)  // reused per vector
-	f32Buf := make([]byte, dim*4) // reused per vector
+	int8Buf := make([]byte, dim)
+	f32Buf := make([]byte, dim*4)
 
 	for i := 0; i < numEmb; i++ {
 		// id length + id bytes (skip id, we use positional index)
@@ -590,47 +464,10 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	return nil
 }
 
-// validateEmbeddingsHeader checks that the declared numEmb is
-// plausible given the file size and embedding format. Catches
-// corrupt or truncated files before we enter the parse loop.
-func validateEmbeddingsHeader(numEmb, dim int, quantized bool, fileLen int) error {
-	var minEntryBytes int
-	if quantized {
-		// SQ8: 4B id-len + id bytes + 4B scale + dim bytes
-		minEntryBytes = 4 + 1 + 4 + dim // minimum 1-char ID
-	} else {
-		// Float32: 4B id-len + id bytes + dim*4 bytes
-		minEntryBytes = 4 + 1 + dim*4 // minimum 1-char ID
-	}
-	maxPossible := fileLen / minEntryBytes
-	if numEmb > maxPossible+1 { // +1 for rounding
-		format := "float32"
-		if quantized {
-			format = "SQ8 int8"
-		}
-		return fmt.Errorf(
-			"embeddings.bin: numEmb=%d is impossible given file size %d bytes, dim=%d, format=%s (max possible ~%d); file is likely corrupt — regenerate with eulix-embed",
-			numEmb, fileLen, dim, format, maxPossible,
-		)
-	}
-	if dim > 8192 {
-		return fmt.Errorf("embeddings.bin: dim=%d exceeds sanity limit 8192", dim)
-	}
-	if numEmb > 10_000_000 {
-		return fmt.Errorf("embeddings.bin: numEmb=%d exceeds sanity limit 10M", numEmb)
-	}
-	return nil
-}
-
 // loadVectorMap reads vectors.bin to build the id→embedding-index
 // map. Maps embedding IDs (from kb_index.json or manually assigned)
 // to their positions in the embeddings slice for fast lookup during
 // scoring.
-//
-// Like loadEmbeddings, this loader uses os.ReadFile because the
-// binary format requires direct []byte index arithmetic; streaming
-// is not applicable here. See loadEmbeddings for the os.ReadFile
-// vs mmap tradeoff.
 func (cb *ContextBuilder) loadVectorMap() error {
 	done := cb.logFileLoad("vectors.bin")
 	data, err := os.ReadFile(filepath.Join(cb.eulixDir, "vectors.bin"))

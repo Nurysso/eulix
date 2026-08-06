@@ -26,19 +26,19 @@ type IntentType int
 type callSiteIndex map[string][]int // symbol → []chunkIdx
 
 type Router struct {
-	eulixDir        string
-	config          *config.Config
-	classifier      *Classifier
-	llmClient       *llm.Client
-	cache           *cache.Manager
-	contextBuilder  *ContextBuilder
-	kbIndex         *types.KBIndices
-	callGraph       *CallGraph
-	kb              *types.KnowledgeBaseRef
-	index           *types.IndexRef
-	Patterns        *types.PatternInfo
-	cgIdx           *callGraphIndex
-	cgRef           *types.CallGraphRef
+	eulixDir       string
+	config         *config.Config
+	classifier     *Classifier
+	llmClient      *llm.Client
+	cache          *cache.Manager
+	contextBuilder *ContextBuilder
+	kbIndex        *types.KBIndices
+	callGraph      *CallGraph
+	kb             *types.KnowledgeBaseRef
+	// index           *types.IndexRef
+	Patterns *types.PatternInfo
+	cgIdx    *callGraphIndex
+	// cgRef           *types.CallGraphRef
 	cgBuild         *CallGraphIdx
 	currentChecksum string
 }
@@ -48,24 +48,15 @@ type metricsEntry struct {
 	file string
 }
 
-type MetricsIndex struct {
-	Metadata   *types.KBMetadata
-	byName     map[string]metricsEntry
-	topComplex []metricsEntry
-}
-
 type callGraphIndex struct {
 	mu    sync.RWMutex
 	cache map[string]string // entity → pre-rendered two-level tree string
 }
 
 type CallGraphIdx struct {
-	// node ID → node
-	Nodes map[string]*types.CallGraphNode
-	// node ID → IDs of nodes that call it (inbound)
+	Nodes    map[string]*types.CallGraphNode
 	CalledBy map[string][]string
-	// node ID → IDs of nodes it calls (outbound)
-	Calls map[string][]string
+	Calls    map[string][]string
 }
 type CGFunction struct {
 	Location string
@@ -75,14 +66,6 @@ type CGFunction struct {
 
 type CallGraph struct {
 	Functions map[string]CGFunction
-}
-type projectSummary struct {
-	name      string
-	files     int
-	loc       int
-	functions int
-	languages string
-	parsedAt  string
 }
 
 type match struct {
@@ -98,11 +81,6 @@ type todoItem struct {
 	priority string
 }
 
-type fnEntry struct {
-	file string
-	fn   *types.KBFunction
-}
-
 type FunctionNode struct {
 	Name     string   `json:"name"`
 	Location string   `json:"location"`
@@ -115,56 +93,37 @@ type TypeNode struct {
 	Location string   `json:"location"`
 	Methods  []string `json:"methods"`
 }
-
-type centralFunction struct {
-	name  string
-	count int
-}
-
-// context_window.go
 type ContextBuilder struct {
 	eulixDir      string
 	config        *config.Config
 	llmClient     *llm.Client
 	queryEmbedder QueryEmbedder
-	// Embeddings (may be nil for very large corpora; use ivfIndex instead)
 	hasEmbeddings bool
 	embeddings    [][]float32
-	embData       *EmbeddingsData
-	// Chunks (Content field is empty when lazyContent is true)
-	chunks      []Chunk
-	callSites   callSiteIndex
-	symbolIndex map[string][]int
-	vectorMap   map[string]int
-	lazyContent bool // true: Content loaded on demand during assembleContext
-	// GB-scale indices — built automatically based on corpus size
-	ivfIndex    *IVFIndex      // non-nil when len(embeddings) > ivfBuildThreshold
-	invertedIdx *InvertedIndex // non-nil when len(chunks) > invIdxThreshold
-	// Knowledge base and call graph
-	hasKB        bool
-	kbData       *types.KnowledgeBaseRef
-	hasCallGraph bool
-	callGraph    map[string][]Relationship
-	cgRef        *types.CallGraphRef
-	kbIdx        *types.KBIndices
-	externalDeps []types.ExternalDependency
-	depIdx       *depIndex
-	sourceRoot   string
-	debugLog     *DebugLogger
-	// Thread-safe trace storage
-	mu          sync.Mutex
-	lastTrace   *DebugTrace
-	boilerplate *BoilerplateDetector
-	hydrateIdx  map[string]map[[2]int]func() string // file -> (start,end) -> content builder
-	// subsystemTree is the set of significant directory nodes built from
-	// chunk file paths during index construction. Read-only after
-	// buildDerivedIndices completes.
+	// embData       *EmbeddingsData
+	chunks        []Chunk
+	callSites     callSiteIndex
+	symbolIndex   map[string][]int
+	vectorMap     map[string]int
+	lazyContent   bool
+	ivfIndex      *IVFIndex      // non-nil when len(embeddings) > ivfBuildThreshold
+	invertedIdx   *InvertedIndex // non-nil when len(chunks) > invIdxThreshold
+	hasKB         bool
+	kbData        *types.KnowledgeBaseRef
+	hasCallGraph  bool
+	callGraph     map[string][]Relationship
+	cgRef         *types.CallGraphRef
+	kbIdx         *types.KBIndices
+	externalDeps  []types.ExternalDependency
+	depIdx        *depIndex
+	sourceRoot    string
+	debugLog      *DebugLogger
+	mu            sync.Mutex
+	lastTrace     *DebugTrace
+	boilerplate   *BoilerplateDetector
+	hydrateIdx    map[string]map[[2]int]func() string // file -> (start,end) -> content builder
 	subsystemTree []*SubsystemNode
-	// noisePaths are path prefixes identified as high-density generic
-	// infrastructure (test fixtures, vendor dirs, shared utils). Chunks
-	// under these paths receive a score penalty when a specific subsystem
-	// is confidently detected for the query.
-	noisePaths []string
+	noisePaths    []string
 }
 
 type Chunk struct {
@@ -197,8 +156,6 @@ type QueryIntent struct {
 	RunnerUpType   string
 	RunnerUpWeight float64
 }
-
-//  Debug / tracing types
 
 // BudgetAllocation records how the token budget was split.
 type BudgetAllocation struct {
@@ -250,8 +207,6 @@ type DebugTrace struct {
 	Warnings        []string
 }
 
-//  Scalability index types
-
 // IVFIndex is an Inverted File Index for sub-linear approximate nearest-neighbour
 // search. It partitions embedding space into ivfNClusters cells via k-means; at
 // query time only ivfNProbe cells are scanned instead of the full corpus.
@@ -283,11 +238,8 @@ type QueryEmbedder interface {
 }
 
 type BoilerplateDetector struct {
-	// symbols whose document-frequency ratio exceeds the threshold
 	boilerplate map[string]bool
-	// raw DF counts, kept for diagnostics / threshold tuning
-	df map[string]int
-	// total number of chunks the detector was built from
+	df          map[string]int
 	totalChunks int
 }
 
@@ -304,13 +256,7 @@ type ScoredChunk struct {
 	FromID       string
 	MatchType    string // "exact", "symbol", "semantic", "keyword", "partial"
 	MatchDetails string
-}
-
-type EmbeddingsData struct {
-	Model       string           `json:"model"`
-	Dimension   int              `json:"dimension"`
-	TotalChunks int              `json:"total_chunks"`
-	Embeddings  []EmbeddingChunk `json:"embeddings"`
+	IsExact      bool
 }
 
 type EmbeddingChunk struct {
@@ -341,10 +287,6 @@ type VectorStoreHeader struct {
 	Count     uint64
 	Dimension uint32
 }
-
-// Lightweight closure-capture types
-// These hold only the fields buildChunkFromKBFunction/Class actually read,
-// avoiding keeping the full types.KBFunction/KBClass alive per closure.
 
 type fnParts struct {
 	name      string

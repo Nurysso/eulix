@@ -35,17 +35,17 @@ Every answer is grounded in actual code structure, not a nearest-neighbor guess.
 - **Grounded, not guessed.** A structured knowledge base — symbols, call graphs, control flow — comes before any retrieval, so answers are backed by real code structure.
 - **Local-first.** Nothing leaves your machine unless you explicitly configure a cloud provider.
 - **Any LLM.** OpenAI, Anthropic, Gemini, Ollama, LM Studio, or any OpenAI-compatible endpoint — one config line to switch.
-- **Small models, real results.** With accurate retrieval as context, a local 7B model can perform exceptionally well(my guess is it can benchmark roughly well as gpt4 equivalent models)
+- **Small models, real results.** With accurate retrieval as context, a local 7B model can perform exceptionally well for code understanding tasks
 - **Built for scale.** Designed for multi-million-LOC repos, monorepos, and legacy systems spanning several languages.
 
 ## Performance
 
 | Component                  | Benchmark                                                                    |
 | -------------------------- | ---------------------------------------------------------------------------- |
-| Parser (Rust, 12 threads)  | **26M LOC/min**, approximate call graphs via PRISM                           |
+| Parser (Rust, 12 threads)  | **Millions of LOC/min**, parallel parsing with Rayon                         |
 | Embedder (Python, PyTorch) | **~35 min** for 1.5GB of parsed JSON, 768-dim model, CUDA/ROCm accelerated   |
 | Embedding index (mmap)     | **O(1)** lookup via IVF — `vectors.bin` + `embeddings.bin` loaded at runtime |
-| Retrieval (Go, warm)       | **<50ms** end-to-end, no model reload                                        |
+| Retrieval (Go, warm)       | **<500ms** end-to-end, no model for very huge corpus 26mLoc reload           |
 | Retrieval (Go, cold)       | **~7.4s** first query — PyTorch init, model load, cache warmup               |
 
 Tested on an AMD Ryzen 5 5600X: 7.4s cold query profile, 95.48% L1 hit rate, IPC 1.26, 16.5B instructions.
@@ -63,7 +63,7 @@ eulix analyze
 Three pipelines run over your source:
 
 1. **Symbol index** — every function, class, variable, and its location
-2. **PRISM call graphs** — fast polyglot call graph approximation, with two selectable resolution algorithms and documented tradeoffs (see [known issues](docs/known-issues.md))
+2. **Call graphs** — inter-procedural call relationships with cross-file resolution
 3. **Semantic embeddings** — per-symbol vectors, written as `embeddings.bin` (tensors) + `vectors.bin` (IVF index for O(1) mmap lookup)
 
 **2. Ask questions**
@@ -84,13 +84,12 @@ Three binaries, one pipeline:
 | `eulix_parser` | Rust     | Static analyzer — symbols, call graphs, control flow, complexity      | GPLv3      |
 | `eulix_embed`  | Python   | Embedder — transformer models via PyTorch, CUDA/ROCm, bucket sharding | Apache 2.0 |
 
-Deeper dives: [system overview](docs/architecture/01-system-overview.md) · [parser internals](docs/architecture/07-parser-internals.md) · [PRISM algorithm](docs/architecture/prism.md) · [retrieval pipeline](docs/architecture/context-builder.md) · [query classifier](docs/architecture/06-classifier.md) · [cache architecture](docs/architecture/05-cache-architecture.md) · [embedder internals](docs/eulix-embed/architecture.md)
+Deeper dives: [system overview](docs/architecture/01-system-overview.md) · [parser internals](docs/architecture/07-parser-internals.md) · [query pipeline](docs/architecture/03-query-pipeline.md) · [query package](docs/query-package.md) · [cache architecture](docs/architecture/05-cache-architecture.md) · [embedder internals](docs/eulix-embed/architecture.md)
 
 ### Supported Languages
 
-**Stable:** Python · Go · C · C++ · Rust
-**Unstable:** TypeScript · JavaScript
-**Not Supported:** Perl · PHP · Java etc
+**Stable:** Python · Go · C · C++ · Rust · TypeScript
+**Not Supported:** JavaScript · Perl · PHP · Java
 
 ### Use Cases
 
@@ -229,26 +228,28 @@ Supported embedding models: `sentence-transformers/all-MiniLM-L6-v2` · `BAAI/bg
 ## Roadmap
 
 - [ ] MCP server — plug Eulix into any editor or agent via Model Context Protocol
-- [ ] Interactive call graph visualization from PRISM output
+- [ ] Interactive call graph visualization
 - [ ] Architecture-aware documentation generation, grounded in call flow
 - [ ] Code navigation — symbol jump, reference finder, caller/callee explorer
-- [ ] TypeScript, JavaScript, and Java support
+- [ ] JavaScript and Java support
 
 ## Documentation
 
-| Doc                                                              | Description                                   |
-| ---------------------------------------------------------------- | --------------------------------------------- |
-| [Architecture Overview](docs/architecture/01-system-overview.md) | System design and data flow                   |
-| [Parser Internals](docs/architecture/07-parser-internals.md)     | How `eulix_parser` works                      |
-| [PRISM Algorithm](docs/architecture/prism.md)                    | Call graph approximation design and tradeoffs |
-| [Retrieval Pipeline](docs/architecture/context-builder.md)       | Multi-layer retrieval and MMR selection       |
-| [Query Classifier](docs/architecture/06-classifier.md)           | Intent recognition and routing                |
-| [Cache Architecture](docs/architecture/05-cache-architecture.md) | Redis/SQL caching layer                       |
-| [Embedding Pipeline](docs/eulix-embed/architecture.md)           | Embedder internals                            |
-| [Parser Benchmarks](docs/eulix-parser/benchmark.md)              | Performance numbers                           |
-| [Known Issues](docs/known-issues.md)                             | Current limitations, including PRISM accuracy |
-| [Installation Guide](docs/installation.md)                       | Detailed platform setup                       |
-| [Model Selection](docs/models-to-use.md)                         | Recommended embedding and LLM models          |
+| Doc                                                              | Description                                                 |
+| ---------------------------------------------------------------- | ----------------------------------------------------------- |
+| [basic introduction and config](docs/About-Eulix.md)             | overview of how to configure and general summary of project |
+| [Architecture Overview](docs/architecture/01-system-overview.md) | System design and data flow                                 |
+| [Parser Internals](docs/architecture/07-parser-internals.md)     | How `eulix_parser` works                                    |
+| [Query Pipeline](docs/architecture/03-query-pipeline.md)         | End-to-end query flow and retrieval                         |
+| [Query Package](docs/query-package.md)                           | Comprehensive query system documentation                    |
+| [Context Builder](docs/architecture/08-context-builder.md)       | Multi-layer retrieval and MMR selection                     |
+| [Classifier](docs/architecture/06-classifier.md)                 | Intent recognition and routing                              |
+| [Cache Architecture](docs/architecture/05-cache-architecture.md) | Caching layer design                                        |
+| [Embedding Pipeline](docs/eulix-embed/architecture.md)           | Embedder internals                                          |
+| [Parser Architecture](docs/eulix-parser/Architecture.md)         | Detailed parser design and implementation                   |
+| [Known Issues](docs/known-issues.md)                             | Current limitations                                         |
+| [Installation Guide](docs/installation.md)                       | Detailed platform setup                                     |
+| [Model Selection](docs/models-to-use.md)                         | Recommended embedding and LLM models                        |
 
 ## Contributing
 

@@ -8,12 +8,6 @@
 This file is responsible for the init command whcih is responsible
 for marking the project/folder ready to be used by EULIX
 OFC this can be skipped by manually calling parser and embedder
-but its best if we only use them seprately only for testing and
-developing purpose.
-
-If testing and developing chat/retrival (context window creation)
-use the checksum subcommand so that the latest metadata+embeddings
-is checked before retrival
 */
 
 package cli
