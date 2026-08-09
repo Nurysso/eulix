@@ -118,15 +118,28 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	cb.debugLog.Log("Budget: %d tokens for context (total: %d)",
 		budget.ContextBudget, budget.MaxTokens)
 
-	anchors := cb.exactSymbolSearch(query)
-	if len(anchors) > 2 {
-		anchors = anchors[:2]
-	}
 	anchorFiles := make(map[string]bool)
+	for _, ea := range explicitAnchor {
+		if ea.File != "" {
+			anchorFiles[ea.File] = true
+		}
+	}
+
+	anchors := cb.exactSymbolSearch(query)
+	filteredAnchors := make([]ScoredChunk, 0, len(anchors))
 	for _, a := range anchors {
+		// Only consider high-confidence exact matches that aren't boilerplate symbols
+		if a.Score >= 90.0 && !cb.isBoilerplateSymbol(a.Name) {
+			filteredAnchors = append(filteredAnchors, a)
+		}
+	}
+	if len(filteredAnchors) > 2 {
+		filteredAnchors = filteredAnchors[:2]
+	}
+	for _, a := range filteredAnchors {
 		anchorFiles[a.File] = true
 	}
-	cb.debugLog.Log("Found %d exact anchors", len(anchors))
+	cb.debugLog.Log("Found %d exact anchors", len(filteredAnchors))
 
 	var callSiteResults []ScoredChunk
 	if intent.Type == IntentCallers || intent.Type == IntentCallees {
@@ -138,6 +151,20 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	candidates := cb.multiStrategySearch(query, candidateLimit, intent, budget.StrategyWeights, trace, qEmb)
 	trace.TotalCandidates = len(candidates)
 	cb.debugLog.Log("Multi-strategy search: %d candidates", len(candidates))
+
+	// Filter weak candidates before graph expansion/MMR to prevent vendor
+	// boilerplate matching single tokens from consuming budget.
+	// Anchors and call-site results are exempt (already high-confidence).
+	preFloorCount := len(candidates)
+	candidates = ApplyPreMMRFloor(candidates, &cb.config.RetrievalConfig)
+	if preFloorCount != len(candidates) {
+		cb.debugLog.Log("Pre-MMR floor: %d → %d candidates (ratio=%.2f)",
+			preFloorCount, len(candidates), cb.config.RetrievalConfig.PreMMRScoreFloorRatio)
+		if trace != nil {
+			trace.Warnings = append(trace.Warnings,
+				fmt.Sprintf("pre-MMR floor filtered %d → %d candidates", preFloorCount, len(candidates)))
+		}
+	}
 
 	candidates = mergeWithPriority(anchors, callSiteResults, candidates)
 	cb.debugLog.Log("After merge: %d candidates", len(candidates))
@@ -220,27 +247,27 @@ func (cb *ContextBuilder) candidateLimitForIntent(intent QueryIntent) int {
 	switch {
 	case intent.Type == IntentCallers || intent.Type == IntentCallees:
 		if intent.Specificity > 0.9 {
-			base = 5
+			base = 80
 		} else {
-			base = 30
+			base = 150
 		}
 	case intent.Type == IntentConcept || intent.Type == IntentFlow:
 		if intent.Specificity > 0.8 {
-			base = 15
+			base = 150
 		} else {
-			base = 50
+			base = 250
 		}
 	case intent.Specificity > 0.8:
-		base = 20
+		base = 150
 	case intent.Specificity > 0.5:
-		base = 50
+		base = 200
 	default:
-		base = 80
+		base = 300
 	}
 
 	limit := int(float64(base) * scale)
-	if limit > 600 {
-		limit = 600
+	if limit > 1000 {
+		limit = 1000
 	}
 	return limit
 }

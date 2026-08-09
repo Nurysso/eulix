@@ -269,6 +269,16 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 			continue
 		}
 		counts := make(map[string]int)
+
+		pathStr := c.ID
+		for _, tok := range strings.FieldsFunc(pathStr, isIdentBoundary) {
+			norm := normalizeSymbol(tok)
+			if norm != "" && !cb.isBoilerplateSymbol(norm) {
+				// Give path tokens a slight artificial frequency boost
+				counts[norm] += 2
+			}
+		}
+
 		for _, tok := range strings.FieldsFunc(c.Content, isIdentBoundary) {
 			norm := normalizeSymbol(tok)
 			if norm == "" || cb.isBoilerplateSymbol(norm) {
@@ -276,6 +286,7 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 			}
 			counts[norm]++
 		}
+
 		if len(counts) == 0 {
 			continue
 		}
@@ -285,7 +296,6 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 			tf := float32(cnt) / float32(len(counts))
 			postings[tok] = append(postings[tok], Posting{ChunkIdx: i, TF: tf})
 		}
-		// counts goes out of scope here and is immediately GC-eligible
 	}
 
 	avgTokens := 0.0
@@ -301,14 +311,17 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 	}
 }
 
-// isIdentBoundary returns true if r is a non-identifier rune
-// (anything outside [A-Za-z0-9_]). Used as the splitter predicate
-// in buildInvertedIndex.
+// isIdentBoundary returns true if r is a boundary character.
+// By returning true for '_', we automatically split snake_case!
 func isIdentBoundary(r rune) bool {
-	return (r < 'a' && r > 'z') ||
-		(r < 'A' && r > 'Z') ||
-		(r < '0' && r > '9') ||
-		r != '_'
+	// If it's a lowercase letter, uppercase letter, or digit, it's NOT a boundary.
+	if (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') {
+		return false
+	}
+	// Everything else (spaces, punctuation, and underscores) is a boundary.
+	return true
 }
 
 // loadAndIndexCallGraph loads kb_call_graph.json and builds the
