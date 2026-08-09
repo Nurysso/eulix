@@ -34,7 +34,7 @@ import (
 var (
 	rePathLine = regexp.MustCompile(`([\w./-]+\.\w+):(\d+)`)
 	reFuncLine = regexp.MustCompile(`(\w{4,}):(\d+)`)
-	reFilename = regexp.MustCompile(`([\w-]+\.(?:c|h|go|rs|py|ts|cpp|hpp)):(\b)`)
+	reFilename = regexp.MustCompile(`\b([\w-]+\.(?:c|h|go|rs|py|ts|cpp|hpp|sh|yaml|yml|json|md))\b`)
 	rePathFrag = regexp.MustCompile(`((?:\w+/){2,}\w+)`)
 )
 
@@ -166,9 +166,9 @@ func (cb *ContextBuilder) multiStrategySearch(
 		run("semantic", func() []ScoredChunk {
 			var raw []ScoredChunk
 			if cb.ivfIndex != nil {
-				raw = cb.vectorSearchIVF(qEmb, semTopK, 0.5)
+				raw = cb.vectorSearchIVF(qEmb, semTopK, 0.15)
 			} else {
-				raw = cb.vectorSearch(qEmb, semTopK, 0.5)
+				raw = cb.vectorSearch(qEmb, semTopK, 0.15)
 			}
 			for i := range raw {
 				raw[i].Score *= 20.0
@@ -201,7 +201,43 @@ func (cb *ContextBuilder) multiStrategySearch(
 			}
 		}
 	}
-	boostByDetectedSubsystems(result, detected, cb.noisePaths)
+	boostByDetectedSubsystems(result, detected, cb.noisePaths, &cb.config.RetrievalConfig)
+	result = filterTestDocChunks(result)
+
+	qLow := strings.ToLower(query)
+	isTestQuery := strings.Contains(qLow, "test") || strings.Contains(qLow, "mock") || strings.Contains(qLow, "spec")
+
+	// Primary repo scope demotion
+	var primaryRepo string
+	if len(detected) > 0 && detected[0].score >= 10.0 {
+		parts := strings.Split(detected[0].node.Path, "/")
+		if len(parts) > 0 {
+			primaryRepo = parts[0]
+		}
+	}
+
+	for i := range result {
+		f := result[i].File
+
+		// Demote test files unless query specifically asks about testing
+		if !isTestQuery && (strings.Contains(f, "/tests/") ||
+			strings.Contains(f, "/test_") ||
+			strings.Contains(f, "fake_") ||
+			strings.Contains(f, "_test.go")) {
+			result[i].Score *= 0.3
+		}
+
+		// Soft demote unrelated top-level repos (e.g. charm-*, requirements/) when primary repo is detected
+		if primaryRepo != "" {
+			fParts := strings.Split(f, "/")
+			if len(fParts) > 0 && fParts[0] != primaryRepo {
+				if strings.HasPrefix(fParts[0], "charm-") || fParts[0] == "requirements" {
+					result[i].Score *= 0.3
+				}
+			}
+		}
+	}
+	boostByDetectedSubsystems(result, detected, cb.noisePaths, &cb.config.RetrievalConfig)
 	result = filterTestDocChunks(result)
 	for i := range result {
 		f := result[i].File
@@ -542,7 +578,11 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int) []Sc
 		df := len(posts)
 		for _, p := range posts {
 			chunkLen := cb.chunks[p.ChunkIdx].Tokens
-			scores[p.ChunkIdx] += bm25Score(p.TF, df, n, chunkLen, avgLen)
+			effectiveLen := chunkLen
+			if effectiveLen < 40 { // Note switch this to lower or higher if We want to customize the micro chunks from bm25 results
+				effectiveLen = 40
+			}
+			scores[p.ChunkIdx] += bm25Score(p.TF, df, n, effectiveLen, avgLen)
 			matched[p.ChunkIdx] = append(matched[p.ChunkIdx], term)
 		}
 	}

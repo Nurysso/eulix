@@ -23,6 +23,7 @@ import (
 	"time"
 	"unicode"
 
+	"eulix/internal/config"
 	"eulix/internal/types"
 )
 
@@ -38,10 +39,6 @@ func getHeapAlloc() uint64 {
 
 // GetLastTrace returns the most recent DebugTrace from the last query execution.
 // Thread-safe via mutex protection.
-//
-// See:
-//   - multiStrategySearch: Populates trace with strategy results
-//   - context_builder.go: DebugTrace storage and lifecycle
 func (cb *ContextBuilder) GetLastTrace() *DebugTrace {
 	cb.mu.Lock()
 	defer func() {
@@ -84,7 +81,7 @@ func jsonSkipToKey(dec *json.Decoder, target string) error {
 			return fmt.Errorf("expected string key, got %T", tok)
 		}
 		if key == target {
-			return nil // dec is now positioned just before the value
+			return nil
 		}
 		var skip json.RawMessage
 		if err := dec.Decode(&skip); err != nil {
@@ -92,6 +89,32 @@ func jsonSkipToKey(dec *json.Decoder, target string) error {
 		}
 	}
 	return fmt.Errorf("key %q not found", target)
+}
+
+func ApplyPreMMRFloor(candidates []ScoredChunk, cfg *config.RetrievalConfig) []ScoredChunk {
+	if len(candidates) == 0 {
+		return candidates
+	}
+
+	// Find the maximum score among all current candidates
+	maxScore := 0.0
+	for _, c := range candidates {
+		if c.Score > maxScore {
+			maxScore = c.Score
+		}
+	}
+
+	// Compute cutoff floor using configured ratio
+	cutoff := maxScore * float64(cfg.PreMMRScoreFloorRatio)
+
+	filtered := make([]ScoredChunk, 0, len(candidates))
+	for _, c := range candidates {
+		if c.Score >= cutoff {
+			filtered = append(filtered, c)
+		}
+	}
+
+	return filtered
 }
 
 // NewDebugLogger creates a thread-safe debug logger writing to eulixDir/context_debug.log.
@@ -116,7 +139,7 @@ func (d *DebugLogger) Log(format string, args ...interface{}) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	msg := fmt.Sprintf("[%s] ", time.Now().Format("15:04:05"))
+	msg := fmt.Sprintf("[%s] ", time.Now().Format("15:04:05.000"))
 	msg += fmt.Sprintf(format, args...)
 	if !strings.HasSuffix(msg, "\n") {
 		msg += "\n"
@@ -135,21 +158,6 @@ func (d *DebugLogger) Close() error {
 
 // cosineSimilarity computes normalized dot product of two vectors.
 // Returns cosine distance in [0, 1] for normalized vectors, or 0 if either is zero.
-//
-// Formula: (a · b) / (‖a‖ * ‖b‖)
-//
-// Used for:
-//   - Vector embedding comparison (vectorSearch, vectorSearchIVF)
-//   - Centroid distance in k-means clustering (buildIVFIndex)
-//
-// Edge cases:
-//   - Mismatched lengths: return 0 (invalid input)
-//   - Zero vectors: return 0 (avoid division by zero)
-//
-// See:
-//   - vectorSearch: Brute-force nearest-neighbor search
-//   - vectorSearchIVF: IVF cluster probing
-//   - buildIVFIndex: Centroid assignment in k-means
 func cosineSimilarity(a, b []float32) float64 {
 	if len(a) != len(b) {
 		return 0
@@ -169,24 +177,6 @@ func cosineSimilarity(a, b []float32) float64 {
 // extractQueryKeywords tokenizes a lowercased query and filters stop words.
 // Returns keywords with length > 2 (to exclude "a", "is", etc.).
 // Splits on whitespace and punctuation; also splits snake_case identifiers.
-//
-// Stop words (filtered):
-// Common English: how, does, the, a, an, is, are, what, where, when, etc.
-// Prepositions: of, in, on, at, to, for, with
-// Pronouns: this, that, these, those
-// Modals: can, will, should, would, could
-//
-// Snake_case splitting:
-//   - "load_chunks" → ["load", "chunks"]
-//   - Applies stop-word filter to each part
-//
-// Example:
-//
-//	"how does load_chunks work" → ["load", "chunks"] (filters "how", "does", "work")
-//
-// See:
-//   - keywordSearch / invertedKeywordSearch: Uses extracted keywords
-//   - extractPotentialSymbols: Complementary to this; extracts code identifiers
 func extractQueryKeywords(queryLower string) []string {
 	stop := map[string]bool{
 		"how": true, "does": true, "the": true, "a": true, "an": true,
@@ -218,23 +208,6 @@ func extractQueryKeywords(queryLower string) []string {
 
 // splitIdentifierToTokens decomposes camelCase and snake_case identifiers into tokens.
 // Handles: snake_case, camelCase, PascalCase.
-//
-// Algorithm:
-//  1. Split on underscores: "build_context" → ["build", "context"]
-//  2. For each part, split on uppercase transitions:
-//     - "BuildContext" → ["build", "context"]
-//     - "buildContext" → ["build", "context"]
-//     - "IOUtils" → ["i", "o", "utils"]
-//  3. Lowercase all tokens
-//
-// Examples:
-//   - "loadChunksFromKB" → ["load", "chunks", "from", "kb"]
-//   - "kb_index_cache" → ["kb", "index", "cache"]
-//   - "HTTPSConnection" → ["https", "connection"]
-//
-// See:
-//   - partialIdentifierMatch: Uses to compare query tokens with chunk tokens
-//   - extractPotentialSymbols: Uses to expand single symbols into subtokens
 func splitIdentifierToTokens(s string) []string {
 	toks := []string{}
 	for _, part := range strings.Split(s, "_") {
@@ -258,23 +231,9 @@ func splitIdentifierToTokens(s string) []string {
 // rather than plain English. Matches:
 //   - snake_case: contains "_" and length > 3 (load_chunks, KB_INDEX)
 //   - camelCase: lowercase→uppercase transition (buildContext, mmrSelect)
-//   - PascalCase: ≥2 uppercase letters (BuildContext, KBIndex, IVFIndex)
+//   - PascalCase: ≥2 uppercase letters
 //
 // Plain words like "how", "does", "work" return false.
-//
-// Used by extractPotentialSymbols to filter out English words from queries
-// and avoid polluting symbol searches with articles, verbs, etc.
-//
-// Examples:
-//   - "BuildContext" → true (PascalCase, 2 uppercase)
-//   - "loadChunks" → true (camelCase transition at 'C')
-//   - "kb_index" → true (snake_case)
-//   - "how" → false (plain English)
-//   - "does" → false (plain English)
-//   - "work" → false (plain English)
-//
-// See:
-//   - extractPotentialSymbols: Uses this for filtering
 func isCodeIdentifier(w string) bool {
 	// snake_case: load_chunks, kb_index, QUERY_BATCH_SIZE
 	if strings.Contains(w, "_") && len(w) > 3 {
@@ -303,27 +262,6 @@ func isCodeIdentifier(w string) bool {
 // the query. Plain English words are excluded so that queries like
 // "how does BuildContext work" don't pollute symbol searches with "how", "does",
 // and "work".
-//
-// Algorithm:
-//  1. Split query on whitespace
-//  2. Strip punctuation: .,!?;:'\"()[]{}
-//  3. Filter by length > 2
-//  4. Filter by isCodeIdentifier (snake_case, camelCase, PascalCase, ≥2 uppercase)
-//  5. For each symbol, add both whole symbol and subtokens (splitIdentifierToTokens)
-//  6. Deduplicate via uniqueStrings
-//
-// Example:
-//
-//	"how does BuildContext load_chunks work"
-//	  → matches: "BuildContext", "load_chunks"
-//	  → subtokens: "build", "context", "load", "chunks"
-//	  → filters out: "how", "does", "work" (plain English)
-//
-// See:
-//   - exactSymbolSearch: Uses symbols for direct chunk name/symbol matching
-//   - partialIdentifierMatch: Uses symbols for token-level matching
-//   - kbExactLookup: Uses symbols for KB lookup
-//   - extractQueryKeywords: Complementary extraction for English keywords
 func extractPotentialSymbols(query string) []string {
 	syms := make([]string, 0)
 	for _, w := range strings.Fields(query) {
@@ -339,11 +277,6 @@ func extractPotentialSymbols(query string) []string {
 
 // uniqueStrings removes duplicates from a string slice, preserving first-seen order.
 // Also filters out empty strings.
-//
-// See:
-//   - extractPotentialSymbols: Uses to deduplicate symbols and subtokens
-//   - partialIdentifierMatch: Uses to deduplicate matched tokens
-//   - invertedKeywordSearch: Uses to deduplicate terms before lookup
 func uniqueStrings(input []string) []string {
 	seen := make(map[string]bool, len(input))
 	out := make([]string, 0, len(input))
