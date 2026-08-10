@@ -13,24 +13,33 @@ parsing, debug logging, and math operations used throughout the context builder.
 package query
 
 import (
+	"bufio"
 	"encoding/json"
+	"eulix/internal/config"
+	"eulix/internal/types"
 	"fmt"
 	"math"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
-	"eulix/internal/config"
-	"eulix/internal/types"
+	"gonum.org/v1/gonum/blas/blas32"
 )
 
-// Close is a no-op placeholder for resource cleanup.
-// Kept for interface compatibility.
-func (cb *ContextBuilder) Close() error { return nil }
-
+// Close cleans up resources used by ContextBuilder
+func (cb *ContextBuilder) Close() error {
+	if cb.debugLog != nil {
+		cb.debugLog.Log("Closing ContextBuilder...")
+		cb.debugLog.Close()
+	}
+	return nil
+}
 func getHeapAlloc() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -117,15 +126,25 @@ func ApplyPreMMRFloor(candidates []ScoredChunk, cfg *config.RetrievalConfig) []S
 	return filtered
 }
 
-// NewDebugLogger creates a thread-safe debug logger writing to eulixDir/context_debug.log.
+// NewDebugLogger creates a thread-safe debug logger writing to eulixDir/debug/context_debug.log.
 // If file creation fails, returns a silent (no-op) logger rather than panicking.
 func NewDebugLogger(eulixDir string) *DebugLogger {
 	logPath := filepath.Join(eulixDir, "debug", "context_debug.log")
+
+	// Ensure directory exists
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		return &DebugLogger{} // silent fallback
+	}
+
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return &DebugLogger{} // silent fallback
 	}
-	return &DebugLogger{file: f}
+
+	return &DebugLogger{
+		file:   f,
+		writer: bufio.NewWriterSize(f, 64*1024), // 64KB buffer
+	}
 }
 
 // Log writes a timestamped debug message to the log file.
@@ -134,7 +153,7 @@ func NewDebugLogger(eulixDir string) *DebugLogger {
 //
 // Format: [HH:MM:SS] <formatted message>
 func (d *DebugLogger) Log(format string, args ...interface{}) {
-	if d.file == nil {
+	if d.file == nil || d.closed {
 		return
 	}
 	d.mu.Lock()
@@ -145,23 +164,91 @@ func (d *DebugLogger) Log(format string, args ...interface{}) {
 		msg += "\n"
 	}
 	_, _ = d.file.WriteString(msg)
+	if d.writer.Buffered() > 50*1024 {
+		_ = d.writer.Flush()
+	}
 }
 
-// Close closes the debug log file.
-// Safe to call multiple times (checks for nil).
-func (d *DebugLogger) Close() error {
-	if d.file != nil {
-		return d.file.Close()
+// Flush forces all buffered logs to disk
+func (d *DebugLogger) Flush() {
+	if d.file == nil || d.closed {
+		return
 	}
-	return nil
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.writer != nil {
+		_ = d.writer.Flush()
+	}
+}
+
+// Close flushes and closes the logger
+func (d *DebugLogger) Close() {
+	if d.file == nil || d.closed {
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.writer != nil {
+		_ = d.writer.Flush()
+	}
+	if d.file != nil {
+		_ = d.file.Close()
+	}
+	d.closed = true
+}
+
+func (cb *ContextBuilder) safeExecute(fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			cb.debugLog.Log("PANIC RECOVERED: %v\nStack trace: %s", r, debug.Stack())
+			cb.debugLog.Flush() // Force flush on panic
+			// Re-panic if you want the program to still crash
+			panic(r)
+		}
+	}()
+	fn()
+}
+
+// StartAutoFlush starts a goroutine that periodically flushes logs to disk
+func (d *DebugLogger) StartAutoFlush(interval time.Duration) {
+	if d.file == nil {
+		return
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			d.Flush()
+		}
+	}()
+}
+
+func (cb *ContextBuilder) setupSignalHandler() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		cb.debugLog.Log("Received shutdown signal, flushing logs...")
+		cb.debugLog.Close()
+		os.Exit(0)
+	}()
 }
 
 // cosineSimilarity computes normalized dot product of two vectors.
 // Returns cosine distance in [0, 1] for normalized vectors, or 0 if either is zero.
 func cosineSimilarity(a, b []float32) float64 {
-	if len(a) != len(b) {
+	n := len(a)
+	if n != len(b) || n == 0 {
 		return 0
 	}
+	_ = b[n-1]
 	var dot, na, nb float64
 	for i := range a {
 		dot += float64(a[i] * b[i])
@@ -171,7 +258,40 @@ func cosineSimilarity(a, b []float32) float64 {
 	if na == 0 || nb == 0 {
 		return 0
 	}
-	return dot / (math.Sqrt(na) * math.Sqrt(nb))
+	return dot / (math.Sqrt(na * nb))
+}
+
+// dotProduct computes the dot product of two equal-length float32 vectors.
+// Callers MUST guarantee both vectors are pre-normalized to unit L2 norm —
+// this does no normalization itself. For unit vectors, dot product IS
+// cosine similarity, without paying for two sqrt calls and two extra
+// accumulators per call.
+func dotProduct(a, b []float32) float32 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	return blas32.Dot(
+		blas32.Vector{N: len(a), Data: a, Inc: 1},
+		blas32.Vector{N: len(b), Data: b, Inc: 1},
+	)
+}
+
+// Normalize scales v in-place to unit L2 norm. Sum-of-squares accumulates
+// in float64 for precision; the final scale pass is float32. No-op on a
+// zero vector, so a zero vector stays zero and always dot-products to 0
+// rather than producing NaN.
+func Normalize(v []float32) {
+	var sumSq float64
+	for _, x := range v {
+		sumSq += float64(x) * float64(x)
+	}
+	if sumSq == 0 {
+		return
+	}
+	invNorm := float32(1.0 / math.Sqrt(sumSq))
+	for i := range v {
+		v[i] *= invNorm
+	}
 }
 
 // extractQueryKeywords tokenizes a lowercased query and filters stop words.
@@ -287,4 +407,15 @@ func uniqueStrings(input []string) []string {
 		}
 	}
 	return out
+}
+
+func byScoreDesc(a, b ScoredChunk) int {
+	switch {
+	case a.Score > b.Score:
+		return -1
+	case a.Score < b.Score:
+		return 1
+	default:
+		return 0
+	}
 }

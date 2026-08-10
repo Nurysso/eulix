@@ -699,13 +699,14 @@ func normalizeToCallGraphID(c Chunk) string {
 // Returns chunks with similarity >= threshold, sorted by score descending, limited to topK.
 // Threshold typically 0.5 for semantic search (cosine similarity in [0, 1]).
 func (cb *ContextBuilder) vectorSearch(qEmb []float32, topK int, threshold float64) []ScoredChunk {
+	threshF := float32(threshold)
 	scored := make([]ScoredChunk, 0)
 	for i, chunkEmb := range cb.embeddings {
 		if i >= len(cb.chunks) {
 			break
 		}
-		if sim := cosineSimilarity(qEmb, chunkEmb); sim >= threshold {
-			scored = append(scored, ScoredChunk{Chunk: cb.chunks[i], Score: sim})
+		if sim := dotProduct(qEmb, chunkEmb); sim >= threshF {
+			scored = append(scored, ScoredChunk{Chunk: cb.chunks[i], Score: float64(sim)})
 		}
 	}
 	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })

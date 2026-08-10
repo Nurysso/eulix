@@ -7,10 +7,18 @@
 package query
 
 import (
-	"sort"
+	"slices"
 	"strings"
 
 	"eulix/internal/types"
+)
+
+const (
+	topNCandidates     = 20
+	maxGraphExpansions = 15 // cap on relationship edges processed
+	maxNewChunksPerRel = 5  // cap chunks pulled per relationship, so one
+	maxCallees         = 5
+	// widely-referenced symbol can't flood the result
 )
 
 // findCallSites scans for exact symbol matches across indexed call sites and returns
@@ -18,7 +26,7 @@ import (
 func (cb *ContextBuilder) findCallSites(query string, intent QueryIntent) []ScoredChunk {
 	symbols := extractPotentialSymbols(query)
 	results := make([]ScoredChunk, 0, 32)
-	seen := make(map[int]bool)
+	seen := make(map[int]bool, 32)
 
 	for _, sym := range symbols {
 		symLower := strings.ToLower(sym)
@@ -28,42 +36,46 @@ func (cb *ContextBuilder) findCallSites(query string, intent QueryIntent) []Scor
 			continue
 		}
 
-		if intent.Type == IntentCallees {
-			for _, rel := range cb.callGraph[symLower] {
-				if rel.Type != "calls" {
-					continue
-				}
-				for _, idx := range indices {
-					if seen[idx] {
-						continue
-					}
-					seen[idx] = true
-
-					chunk := cb.chunks[idx]
-
-					score := 95.0
-					matchDetail := "calls " + sym
-
-					if intent.Type == IntentCallees && strings.EqualFold(chunk.Name, sym) {
-						score = 70.0
-						matchDetail = "definition of " + sym
-					}
-					if strings.HasPrefix(strings.ToLower(chunk.Name), "_"+symLower) {
-						score -= 20.0
-					}
-
-					results = append(results, ScoredChunk{
-						Chunk:        chunk,
-						Score:        score,
-						MatchType:    "callsite",
-						MatchDetails: matchDetail,
-					})
-				}
+		for _, idx := range indices {
+			if seen[idx] {
+				continue
 			}
+			seen[idx] = true
+
+			chunk := cb.chunks[idx]
+
+			score := 95.0
+			matchDetail := "calls " + sym
+
+			if intent.Type == IntentCallees && strings.EqualFold(chunk.Name, sym) {
+				// This "call site" is actually the symbol's own definition,
+				// not a caller -- deprioritize it for a callees query.
+				score = 70.0
+				matchDetail = "definition of " + sym
+			}
+			if strings.HasPrefix(strings.ToLower(chunk.Name), "_"+symLower) {
+				score -= 20.0
+			}
+
+			results = append(results, ScoredChunk{
+				Chunk:        chunk,
+				Score:        score,
+				MatchType:    "callsite",
+				MatchDetails: matchDetail,
+			})
 		}
 	}
 
-	sort.Slice(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+	slices.SortFunc(results, func(a, b ScoredChunk) int {
+		switch {
+		case a.Score > b.Score:
+			return -1
+		case a.Score < b.Score:
+			return 1
+		default:
+			return 0
+		}
+	})
 	return results
 }
 
@@ -73,63 +85,89 @@ func (cb *ContextBuilder) findCallSites(query string, intent QueryIntent) []Scor
 func (cb *ContextBuilder) buildContextWithGraph(
 	candidates []ScoredChunk, budget int, intent QueryIntent,
 ) []ScoredChunk {
-	expanded := make(map[string]ScoredChunk, len(candidates))
-	for _, c := range candidates {
-		expanded[c.ID] = c
-	}
-	topN := 20
-	if len(candidates) < topN {
-		topN = len(candidates)
-	}
-	const maxGraphExpansions = 15
-	relCount := 0
+	// pos + result replaces map[string]ScoredChunk: updates mutate 3 fields
+	// in place via index instead of copying the whole (embedded-Chunk) struct,
+	// and we skip the final "flatten map into slice" pass entirely.
+	result := make([]ScoredChunk, 0, len(candidates)+maxGraphExpansions*maxNewChunksPerRel)
+	pos := make(map[string]int, len(candidates)+maxGraphExpansions*maxNewChunksPerRel)
 
+	for _, c := range candidates {
+		pos[c.ID] = len(result)
+		result = append(result, c)
+	}
+
+	topN := len(candidates)
+	if topN > topNCandidates {
+		topN = topNCandidates
+	}
+
+	relCount := 0
 outerLoop:
 	for i := 0; i < topN; i++ {
 		cand := candidates[i]
 		for _, sym := range cand.Symbols {
-			if rels, ok := cb.callGraph[sym]; ok {
-				for _, rel := range rels {
-					if relCount >= maxGraphExpansions {
-						break outerLoop
-					}
-					score := cand.Score
+			rels, ok := cb.callGraph[sym]
+			if !ok {
+				continue
+			}
+			for _, rel := range rels {
+				if relCount >= maxGraphExpansions {
+					break outerLoop
+				}
 
-					switch {
-					case intent.Type == IntentCallers && rel.Type == "called_by":
-						score *= 1.2
-					case intent.Type == IntentCallees && rel.Type == "calls":
-						score *= 1.2
-					case rel.Type == "calls" || rel.Type == "called_by":
-						score *= 0.9
-					case rel.Distance <= 2:
-						score *= 0.6
-					default:
+				score := cand.Score
+				switch {
+				case intent.Type == IntentCallers && rel.Type == "called_by":
+					score *= 1.2
+				case intent.Type == IntentCallees && rel.Type == "calls":
+					score *= 1.2
+				case rel.Type == "calls" || rel.Type == "called_by":
+					score *= 0.9
+				case rel.Distance <= 2:
+					score *= 0.6
+				default:
+					continue
+				}
+				relCount++
+
+				targets := cb.symbolIndex[rel.Target]
+				if len(targets) > maxNewChunksPerRel {
+					targets = targets[:maxNewChunksPerRel]
+				}
+				for _, idx := range targets {
+					chunk := cb.chunks[idx]
+					if j, ok := pos[chunk.ID]; ok {
+						// Bump score/distance/provenance only -- never touch
+						// MatchType/MatchDetails/IsExact of an existing entry.
+						if ex := &result[j]; score > ex.Score {
+							ex.Score = score
+							ex.Distance = rel.Distance
+							ex.FromID = cand.ID
+						}
 						continue
 					}
-
-					for _, idx := range cb.symbolIndex[rel.Target] {
-						chunk := cb.chunks[idx]
-						if ex, ok := expanded[chunk.ID]; !ok || score > ex.Score {
-							expanded[chunk.ID] = ScoredChunk{
-								Chunk:    chunk,
-								Score:    score,
-								Distance: rel.Distance,
-								FromID:   cand.ID,
-							}
-						}
-					}
-					relCount++
+					pos[chunk.ID] = len(result)
+					result = append(result, ScoredChunk{
+						Chunk:    chunk,
+						Score:    score,
+						Distance: rel.Distance,
+						FromID:   cand.ID,
+					})
 				}
 			}
 		}
 	}
 
-	result := make([]ScoredChunk, 0, len(expanded))
-	for _, sc := range expanded {
-		result = append(result, sc)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Score > result[j].Score })
+	slices.SortFunc(result, func(a, b ScoredChunk) int {
+		switch {
+		case a.Score > b.Score:
+			return -1
+		case a.Score < b.Score:
+			return 1
+		default:
+			return 0
+		}
+	})
 
 	used := 0
 	for i, sc := range result {
@@ -148,37 +186,46 @@ func (cb *ContextBuilder) buildContextWithoutGraph(candidates []ScoredChunk, bud
 		return cb.applyBudget(candidates, budget)
 	}
 
-	fileGroups := make(map[string][]ScoredChunk)
+	type fileStats struct {
+		count int
+		sum   float64
+	}
+	stats := make(map[string]*fileStats)
 	for _, c := range candidates {
-		fileGroups[c.File] = append(fileGroups[c.File], c)
+		s, ok := stats[c.File]
+		if !ok {
+			s = &fileStats{}
+			stats[c.File] = s
+		}
+		s.count++
+		s.sum += c.Score
 	}
-	type hotFile struct {
-		file     string
-		avgScore float64
-	}
-	hot := make([]hotFile, 0)
-	for file, chunks := range fileGroups {
-		if len(chunks) >= 3 {
-			sum := 0.0
-			for _, c := range chunks {
-				sum += c.Score
-			}
-			hot = append(hot, hotFile{file, sum / float64(len(chunks))})
+
+	hot := make(map[string]struct{}, len(stats))
+	for file, s := range stats {
+		if s.count >= 3 {
+			hot[file] = struct{}{}
 		}
 	}
-	sort.Slice(hot, func(i, j int) bool { return hot[i].avgScore > hot[j].avgScore })
-	hotMap := make(map[string]float64, len(hot))
-	for _, h := range hot {
-		hotMap[h.file] = h.avgScore
-	}
+
 	candidatesCopy := make([]ScoredChunk, len(candidates))
 	copy(candidatesCopy, candidates)
 	for i := range candidatesCopy {
-		if _, ok := hotMap[candidatesCopy[i].File]; ok {
+		if _, ok := hot[candidatesCopy[i].File]; ok {
 			candidatesCopy[i].Score += 0.2
 		}
 	}
-	sort.Slice(candidatesCopy, func(i, j int) bool { return candidatesCopy[i].Score > candidatesCopy[j].Score })
+
+	slices.SortFunc(candidatesCopy, func(a, b ScoredChunk) int {
+		switch {
+		case a.Score > b.Score:
+			return -1
+		case a.Score < b.Score:
+			return 1
+		default:
+			return 0
+		}
+	})
 	return cb.applyBudget(candidatesCopy, budget)
 }
 
@@ -191,8 +238,12 @@ func (cb *ContextBuilder) expandFromKBFunction(fn types.KBFunction, filePath str
 		}
 	}
 
-	exp := make([]ScoredChunk, 0)
-	const maxCallees = 5
+	if cb.kbData == nil {
+		log("kbData is nil, cannot expand")
+		return nil
+	}
+
+	exp := make([]ScoredChunk, 0, maxCallees)
 
 	for i, call := range fn.Calls {
 		if len(exp) >= maxCallees {
@@ -201,21 +252,11 @@ func (cb *ContextBuilder) expandFromKBFunction(fn types.KBFunction, filePath str
 
 		log("Processing call %d: Callee=%s", i, call.Callee)
 
-		if call.DefinedIn == nil {
-			log("Skipping call %s: DefinedIn is nil", call.Callee)
+		if call.DefinedIn == nil || *call.DefinedIn == "" {
+			log("Skipping call %s: DefinedIn missing", call.Callee)
 			continue
 		}
-
 		definedIn := *call.DefinedIn
-		if definedIn == "" {
-			log("Skipping call %s: DefinedIn is empty", call.Callee)
-			continue
-		}
-
-		if cb.kbData == nil {
-			log("kbData is nil, cannot expand")
-			continue
-		}
 
 		fs, ok := cb.kbData.Structure[definedIn]
 		if !ok {
