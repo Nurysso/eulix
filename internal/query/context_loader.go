@@ -34,7 +34,7 @@ const (
 	invIdxThreshold    = 5_000
 	lazyContentLimit   = 50_000
 	ivfNClusters       = 256
-	ivfKMeansIter      = 20
+	ivfKMeansIter      = 5
 	dfThresholdDefault = 0.30
 	bpMinChunks        = 50
 	PreAllocate        = 320_000
@@ -361,7 +361,7 @@ func (cb *ContextBuilder) loadAndIndexCallGraph() {
 			Relationship{Type: "called_by", Target: e.From, Distance: 1})
 	}
 
-	cb.callSites = buildCallSiteIndex(&cg, cb.chunks)
+	cb.callSites = buildCallSiteIndex(&cg, cb.chunks, cb.debugLog)
 	cb.hasCallGraph = len(cb.callGraph) > 0
 	cb.debugLog.Log("Call graph indexed: %d relationships, %d call sites",
 		len(cb.callGraph), len(cb.callSites))
@@ -466,11 +466,11 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 
 	if numEmb > ivfBuildThreshold {
 		go func() {
-			idx := buildIVFIndex(cb.embeddings, ivfNClusters, ivfKMeansIter)
+			idx := cb.buildIVFIndex(cb.embeddings, ivfNClusters, ivfKMeansIter)
 			cb.mu.Lock()
 			cb.ivfIndex = idx
 			cb.mu.Unlock()
-			cb.debugLog.Log("IVF index built: %d clusters", ivfNClusters)
+			cb.debugLog.Log("IVF index BUILT completed: %d clusters", ivfNClusters)
 		}()
 		cb.debugLog.Log("IVF build started in background (%d embeddings)", numEmb)
 	}
