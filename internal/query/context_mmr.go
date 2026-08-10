@@ -79,7 +79,7 @@ func (cb *ContextBuilder) mmrSelect(
 		base := 0.0
 		if qEmb != nil {
 			if e := embOf(c.ID); e != nil {
-				base = cosineSimilarity(qEmb, e)
+				base = float64(dotProduct(qEmb, e))
 			}
 		}
 		if base == 0 {
@@ -93,7 +93,7 @@ func (cb *ContextBuilder) mmrSelect(
 
 	simBetween := func(a, b ScoredChunk) float64 {
 		if ea, eb := embOf(a.ID), embOf(b.ID); ea != nil && eb != nil {
-			sim := cosineSimilarity(ea, eb)
+			sim := float64(dotProduct(ea, eb))
 
 			if a.File == b.File && sim > 0.4 {
 				dist := a.StartLine - b.StartLine

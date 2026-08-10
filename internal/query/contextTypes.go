@@ -11,6 +11,7 @@ This file is responsible for the shared types of query package.
 package query
 
 import (
+	"bufio"
 	"os"
 	"sync"
 	"time"
@@ -26,19 +27,17 @@ type IntentType int
 type callSiteIndex map[string][]int // symbol → []chunkIdx
 
 type Router struct {
-	eulixDir       string
-	config         *config.Config
-	classifier     *Classifier
-	llmClient      *llm.Client
-	cache          *cache.Manager
-	contextBuilder *ContextBuilder
-	kbIndex        *types.KBIndices
-	callGraph      *CallGraph
-	kb             *types.KnowledgeBaseRef
-	// index           *types.IndexRef
-	Patterns *types.PatternInfo
-	cgIdx    *callGraphIndex
-	// cgRef           *types.CallGraphRef
+	eulixDir        string
+	config          *config.Config
+	classifier      *Classifier
+	llmClient       *llm.Client
+	cache           *cache.Manager
+	contextBuilder  *ContextBuilder
+	kbIndex         *types.KBIndices
+	callGraph       *CallGraph
+	kb              *types.KnowledgeBaseRef
+	Patterns        *types.PatternInfo
+	cgIdx           *callGraphIndex
 	cgBuild         *CallGraphIdx
 	currentChecksum string
 }
@@ -140,8 +139,10 @@ type Chunk struct {
 	Importance float64
 }
 type DebugLogger struct {
-	file *os.File
-	mu   sync.Mutex
+	file   *os.File
+	writer *bufio.Writer
+	mu     sync.Mutex
+	closed bool
 }
 
 // QueryIntent is derived from the raw query before any search begins.
