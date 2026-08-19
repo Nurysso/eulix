@@ -86,7 +86,7 @@ func (cb *ContextBuilder) hydrateSourceCode(chunks []Chunk, sourceBudget int, ma
 	}
 
 	cb.debugLog.Log("=== SOURCE HYDRATION START ===")
-	cb.debugLog.Log("Source root: %s", cb.sourceRoot)
+	// cb.debugLog.Log("Source root: %s", cb.sourceRoot)
 	cb.debugLog.Log("Budget: %d tokens | Max lines: %d | Chunks: %d", sourceBudget, maxLinesDefault, len(chunks))
 
 	if sourceBudget <= 0 {
@@ -129,7 +129,7 @@ func (cb *ContextBuilder) hydrateSourceCode(chunks []Chunk, sourceBudget int, ma
 		}
 
 		if tokens > remaining {
-			cb.debugLog.Log("Chunk %d: source available but exceeds remaining budget (%d > %d)", i, tokens, remaining)
+			cb.debugLog.Log("Chunk %d (%s:%d-%d): source available but exceeds remaining budget (%d > %d)", i, chunk.File, chunk.StartLine, chunk.EndLine, tokens, remaining)
 			result[i] = chunk
 			continue
 		}

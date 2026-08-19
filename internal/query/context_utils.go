@@ -419,3 +419,32 @@ func byScoreDesc(a, b ScoredChunk) int {
 		return 0
 	}
 }
+
+// hydrationCache memoizes lazily-loaded chunk content for the lifetime of
+// one multiStrategySearch call, so grep/keyword/BM25-proximity don't each
+// pay for hydrating the same chunk.
+type hydrationCache struct {
+	cb    *ContextBuilder
+	cache map[string]string
+}
+
+func newHydrationCache(cb *ContextBuilder) *hydrationCache {
+	return &hydrationCache{cb: cb, cache: make(map[string]string, 64)}
+}
+
+func (h *hydrationCache) content(c *Chunk) string {
+	if c.Content != "" {
+		return c.Content
+	}
+	if v, ok := h.cache[c.ID]; ok {
+		return v
+	}
+	v := h.cb.hydrateOne(*c)
+	h.cache[c.ID] = v
+	return v
+}
+
+// maxContentFallbackHydrations bounds worst-case I/O when a query has
+// no metadata hits at all on a large corpus -- without this, every chunk
+// falls through to the (expensive) content-scan branch.
+const maxContentFallbackHydrations = 500
