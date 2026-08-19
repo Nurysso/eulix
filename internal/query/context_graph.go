@@ -7,10 +7,9 @@
 package query
 
 import (
+	"eulix/internal/utils"
 	"slices"
 	"strings"
-
-	"eulix/internal/types"
 )
 
 const (
@@ -231,7 +230,7 @@ func (cb *ContextBuilder) buildContextWithoutGraph(candidates []ScoredChunk, bud
 
 // expandFromKBFunction resolves functions called by fn using knowledge base data
 // and returns them as scored chunks up to a maximum limit of 5 callees.
-func (cb *ContextBuilder) expandFromKBFunction(fn types.KBFunction, filePath string, baseScore float64) []ScoredChunk {
+func (cb *ContextBuilder) expandFromKBFunction(fn utils.KBFunction, filePath string, baseScore float64) []ScoredChunk {
 	log := func(format string, args ...interface{}) {
 		if cb.debugLog != nil {
 			cb.debugLog.Log(format, args...)

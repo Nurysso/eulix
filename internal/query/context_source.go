@@ -79,18 +79,21 @@ func (cb *ContextBuilder) prefetchFiles(chunks []Chunk, cache *fileCache) {
 	wg.Wait()
 }
 
+// RealCodeBudgetRatio defines the target proportion of the total context budget allocated for real source code.
+const RealCodeBudgetRatio = 0.65
+
 func (cb *ContextBuilder) hydrateSourceCode(chunks []Chunk, sourceBudget int, maxLinesDefault int) []Chunk {
 	if cb.sourceRoot == "" {
 		cb.debugLog.Log("Source hydration skipped: no source root configured")
 		return chunks
 	}
 
+	realCodeBudget := int(float64(sourceBudget) * RealCodeBudgetRatio)
 	cb.debugLog.Log("=== SOURCE HYDRATION START ===")
-	// cb.debugLog.Log("Source root: %s", cb.sourceRoot)
-	cb.debugLog.Log("Budget: %d tokens | Max lines: %d | Chunks: %d", sourceBudget, maxLinesDefault, len(chunks))
+	cb.debugLog.Log("Budget: %d tokens (Real code budget: %d tokens) | Max lines: %d | Chunks: %d", sourceBudget, realCodeBudget, maxLinesDefault, len(chunks))
 
-	if sourceBudget <= 0 {
-		cb.debugLog.Log("Source hydration skipped: zero budget")
+	if realCodeBudget <= 0 {
+		cb.debugLog.Log("Source hydration skipped: zero real code budget")
 		return chunks
 	}
 
@@ -102,14 +105,14 @@ func (cb *ContextBuilder) hydrateSourceCode(chunks []Chunk, sourceBudget int, ma
 	cb.prefetchFiles(chunks, cache)
 
 	for i, chunk := range chunks {
-		remaining := sourceBudget - usedTokens
+		remaining := realCodeBudget - usedTokens
 		if remaining <= 0 {
 			result[i] = chunk
 			continue
 		}
 
 		maxLines := maxLinesDefault
-		budgetFraction := float64(remaining) / float64(sourceBudget)
+		budgetFraction := float64(remaining) / float64(realCodeBudget)
 
 		if budgetFraction < 0.25 {
 			maxLines = maxLinesDefault / 4
@@ -142,14 +145,14 @@ func (cb *ContextBuilder) hydrateSourceCode(chunks []Chunk, sourceBudget int, ma
 
 		cb.debugLog.Log("Chunk %d (%s:%d-%d): ✓ Added %d lines, %d tokens (budget: %d/%d)",
 			i, chunk.File, chunk.StartLine, chunk.EndLine,
-			strings.Count(sourceCode, "\n")+1, tokens, usedTokens, sourceBudget)
+			strings.Count(sourceCode, "\n")+1, tokens, usedTokens, realCodeBudget)
 
 		result[i] = chunk
 	}
 
 	cb.debugLog.Log("=== SOURCE HYDRATION COMPLETE ===")
 	cb.debugLog.Log("Success: %d/%d chunks | Used: %d/%d tokens",
-		successCount, len(chunks), usedTokens, sourceBudget)
+		successCount, len(chunks), usedTokens, realCodeBudget)
 
 	return result
 }
