@@ -20,22 +20,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"eulix/internal/config"
 
 	bolt "go.etcd.io/bbolt"
-)
-
-// reasoningTagRe / answerTagRe pull the model's <reasoning>/<thinking> and
-// <answer> blocks apart. Shared here so the app.go's show-reason
-// command, and the TUI all agree on exactly the same parsing.
-var (
-	reasoningTagRe = regexp.MustCompile(`(?is)<\s*(?:reasoning|thinking)\s*>(.*?)<\s*/\s*(?:reasoning|thinking)\s*>`)
-	answerTagRe    = regexp.MustCompile(`(?is)<\s*answer\s*>(.*?)<\s*/\s*answer\s*>`)
 )
 
 // entriesBucket is the single bucket every record lives in, keyed by an
@@ -44,16 +34,12 @@ var (
 var entriesBucket = []byte("entries")
 
 // Manager is a thin wrapper around a local BoltDB file. It only knows how
-// to append entries and read them back — it is intentionally not a cache
+// to append entries and read them back it is intentionally not a cache
 // in the "avoid recomputation" sense anymore.
 type Manager struct {
 	db *bolt.DB
 }
 
-// CacheEntry is one recorded query turn. Reasoning and Answer are stored
-// as separate fields (rather than one combined Response blob) so callers
-// — the TUI's /think toggle, and app.go's show-reason command — can
-// choose to display the reasoning trace independently of the answer.
 type CacheEntry struct {
 	ID        uint64    `json:"id"`
 	Query     string    `json:"query"`
@@ -62,32 +48,10 @@ type CacheEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// SplitReasoningAndAnswer pulls a <reasoning>/<thinking> block and an
-// <answer> block out of a raw model response. If there's no <answer> tag
-// at all, the whole response (minus any reasoning block) is treated as
-// the answer, so untagged responses still split cleanly.
-func SplitReasoningAndAnswer(raw string) (reasoning, answer string) {
-	var reasoningParts []string
-	for _, m := range reasoningTagRe.FindAllStringSubmatch(raw, -1) {
-		if trimmed := strings.TrimSpace(m[1]); trimmed != "" {
-			reasoningParts = append(reasoningParts, trimmed)
-		}
-	}
-	reasoning = strings.Join(reasoningParts, "\n\n")
-
-	if m := answerTagRe.FindStringSubmatch(raw); m != nil {
-		answer = strings.TrimSpace(m[1])
-		return reasoning, answer
-	}
-
-	answer = strings.TrimSpace(reasoningTagRe.ReplaceAllString(raw, ""))
-	return reasoning, answer
-}
-
-// CacheController opens (creating if needed) the local BoltDB history
-// file. If history is disabled in config it returns (nil, nil) — callers
-// already treat a nil *Manager as "history not enabled" (see the TUI's
-// /history command).
+// CacheController opens/create the local BoltDB file
+// If history is disabled in config it returns (nil, nil) callers
+// already treat a nil *Manager as "history not enabled"
+// see the TUI's '/history' command
 func CacheController(cfg *config.Config) (*Manager, error) {
 	if !cfg.Cache.Enable {
 		return nil, nil
@@ -115,7 +79,7 @@ func CacheController(cfg *config.Config) (*Manager, error) {
 }
 
 // Save appends a new entry and returns it with its assigned ID and
-// timestamp filled in. Both reasoning and answer are stored as given —
+// timestamp filled in. Both reasoning and answer are stored as given
 // pass an empty string for reasoning when a response had none.
 func (m *Manager) Save(query, reasoning, answer string) (CacheEntry, error) {
 	entry := CacheEntry{

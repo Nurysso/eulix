@@ -70,8 +70,8 @@ type RetrievalConfig struct {
 }
 
 type CacheConfig struct {
-	Redis RedisConfig `toml:"redis"`
-	SQL   SQLConfig   `toml:"sql"`
+	Enable bool   `toml:"enable"`
+	Path   string `toml:"path"`
 }
 
 type RedisConfig struct {
@@ -138,13 +138,6 @@ func Load() (*Config, error) {
 		cfg.LLM.APIKey = resolveAPIKeyFromEnv(cfg.LLM.Provider)
 	}
 
-	if cfg.Cache.SQL.Enabled && !filepath.IsAbs(cfg.Cache.SQL.DSN) {
-		absPath, err := filepath.Abs(cfg.Cache.SQL.DSN)
-		if err == nil {
-			cfg.Cache.SQL.DSN = absPath
-		}
-	}
-
 	return &cfg, nil
 }
 
@@ -188,16 +181,8 @@ func DefaultConfig() *Config {
 			MaxGraphExpansionDepth:  1,
 		},
 		Cache: CacheConfig{
-			Redis: RedisConfig{
-				Enabled:  false,
-				URL:      "redis://localhost:6379",
-				TTLHours: 6,
-			},
-			SQL: SQLConfig{
-				Enabled: true,
-				Driver:  "sqlite",
-				DSN:     ".eulix/history.db",
-			},
+			Enable: true,
+			Path:   ".eulix/history.db",
 		},
 		Checksum: ChecksumConfig{
 			ChangeThreshold:         0.10,
