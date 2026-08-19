@@ -14,6 +14,7 @@ Key Responsibilities:
 package query
 
 import (
+	"eulix/internal/utils"
 	"fmt"
 	"math"
 	"regexp"
@@ -21,8 +22,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"eulix/internal/types"
 )
 
 const fileExtPattern = `c|h|cc|cpp|cxx|hpp|hh|go|rs|py|ts|tsx|js|jsx|sh|bash|yaml|yml|json|md|toml|proto|java|kt|rb|php|cs|dts|dtsi`
@@ -740,7 +739,7 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int, hc *
 	return result
 }
 
-func buildCallSiteIndex(cg *types.CallGraphRef, chunks []Chunk, log *DebugLogger) callSiteIndex {
+func buildCallSiteIndex(cg *utils.CallGraphRef, chunks []Chunk, log *DebugLogger) callSiteIndex {
 	symToChunks := make(map[string][]int, len(chunks))
 	for i, c := range chunks {
 		for _, sym := range c.Symbols {

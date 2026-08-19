@@ -11,13 +11,12 @@ package query
 
 import (
 	"encoding/json"
+	"eulix/internal/utils"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"eulix/internal/types"
 )
 
 // BuildPromptString composes header + task-specific body + footer.
@@ -32,7 +31,7 @@ func BuildPromptString(query string, class *Classification, sourceAvailable bool
 // the same way PromptOrAnswer does. Every LLM-calling handler should use
 // this instead of calling BuildPromptString alone, or the retrieved code
 // context never reaches the model.
-func (r *Router) buildFullPromptWithContext(ctx *types.ContextWindow, query string, class *Classification) string {
+func (r *Router) buildFullPromptWithContext(ctx *utils.ContextWindow, query string, class *Classification) string {
 	src := hasSourceCode(ctx)
 	taskBody := getTaskBody(r, query, class)
 
@@ -48,7 +47,7 @@ func (r *Router) buildFullPromptWithContext(ctx *types.ContextWindow, query stri
 func cotHeader(query string, class *Classification, sourceAvailable bool) string {
 	var b strings.Builder
 	if sourceAvailable {
-		b.WriteString("You have been given a mix of REAL SOURCE CODE (≈65%) and AST metadata\n")
+		fmt.Fprintf(&b, "You have been given a mix of REAL SOURCE CODE (≈%d%%) and AST metadata\n", int(RealCodeBudgetRatio*100))
 		b.WriteString("(file paths, line ranges, signatures, call edges) for the remaining symbols.\n")
 		b.WriteString("Treat source blocks as ground truth. Treat metadata as structural hints only.\n")
 	} else {
@@ -95,7 +94,7 @@ func cotFooter() string {
 }
 
 func (r *Router) handleCodeGeneration() (string, error) {
-	return `I have semantic information (function signatures, types, call graphs) but not full source code for every symbol, so I cannot safely generate implementation code — I would likely hallucinate logic.
+	return `I have semantic information (function signatures, utils, call graphs) but not full source code for every symbol, so I cannot safely generate implementation code — I would likely hallucinate logic.
 
 What I CAN help with instead:
 • Showing which functions/classes are involved and their signatures
@@ -231,7 +230,7 @@ func (r *Router) handleTesting(query string, class *Classification) (string, err
 // handleCallGraph renders the two-level call tree with a per-symbol cache.
 // First call for a symbol: O(callers + callees + their neighbours).
 // Subsequent calls: O(1) map lookup + string copy.
-func buildRouterCallGraph(ref *types.CallGraphRef) *CallGraph {
+func buildRouterCallGraph(ref *utils.CallGraphRef) *CallGraph {
 	if ref == nil {
 		return &CallGraph{Functions: map[string]CGFunction{}}
 	}
@@ -417,7 +416,7 @@ func (r *Router) handleMetrics(query string, class *Classification) (string, err
 		return "", fmt.Errorf("failed to read metrics file at %s: %w", metricsPath, err)
 	}
 
-	var ref types.MetricsRef
+	var ref utils.MetricsRef
 	if err := json.Unmarshal(data, &ref); err != nil {
 		return "", fmt.Errorf("failed to parse metrics JSON: %w", err)
 	}
@@ -427,7 +426,7 @@ func (r *Router) handleMetrics(query string, class *Classification) (string, err
 
 	for _, fn := range ref.TopComplexFunctions {
 		// Allocate a local copy to safely take its address
-		kbFn := types.KBFunction{
+		kbFn := utils.KBFunction{
 			Name:            fn.Name,
 			LineStart:       fn.LineStart,
 			LineEnd:         fn.LineEnd,
@@ -495,7 +494,7 @@ func (r *Router) handleEntryPoints(_ string, _ *Classification) (string, error) 
 		return "", fmt.Errorf("failed to read entry points at %s: %w", entryPath, err)
 	}
 
-	var ref types.EntryPointsRef
+	var ref utils.EntryPointsRef
 	if err := json.Unmarshal(data, &ref); err != nil {
 		return "", fmt.Errorf("failed to parse kb_entry_points.json: %w", err)
 	}
@@ -504,7 +503,7 @@ func (r *Router) handleEntryPoints(_ string, _ *Classification) (string, error) 
 	var b strings.Builder
 	b.WriteString("Entry points \n")
 
-	byType := make(map[string][]types.EntryPoint)
+	byType := make(map[string][]utils.EntryPoint)
 	for _, ep := range ref.EntryPoint {
 		byType[ep.EntryType] = append(byType[ep.EntryType], ep)
 	}

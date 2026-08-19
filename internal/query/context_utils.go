@@ -16,7 +16,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"eulix/internal/config"
-	"eulix/internal/types"
+	"eulix/internal/utils"
 	"fmt"
 	"math"
 	"os"
@@ -59,7 +59,7 @@ func (cb *ContextBuilder) GetLastTrace() *DebugTrace {
 // writeContextToFile serializes a ContextWindow to a debug file.
 // Uses timestamp in filename for uniqueness.
 // Intended for offline analysis; not used in production path.
-func (cb *ContextBuilder) writeContextToFile(ctx *types.ContextWindow) error {
+func (cb *ContextBuilder) writeContextToFile(ctx *utils.ContextWindow) error {
 	logDir := filepath.Join(cb.config.Project.Path, ".eulix", "debug", "retrieval")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return err
