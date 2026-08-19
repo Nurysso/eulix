@@ -1,6 +1,6 @@
 module eulix
 
-go 1.23.0
+go 1.24.0
 
 require (
 	github.com/BurntSushi/toml v1.5.0
@@ -42,7 +42,8 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
-	golang.org/x/sync v0.11.0 // indirect
+	golang.org/x/sync v0.12.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/text v0.23.0 // indirect
+	gonum.org/v1/gonum v0.17.0 // indirect
 )

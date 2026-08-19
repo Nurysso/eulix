@@ -18,6 +18,7 @@ package query
 
 import (
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -64,4 +65,26 @@ func mmapPlatform(f *os.File, size int) ([]byte, error) {
 func mmapAdvisePlatform(data []byte) {
 	_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
 	_ = unix.Madvise(data, unix.MADV_HUGEPAGE)
+}
+
+func allocHugepageAligned(n int) []float32 {
+	const hugepage = 2 << 20 // 2MB
+	size := n * 4            // Allocate raw bytes, aligned to hugepage boundary
+	// mmap anonymous gives page-aligned memory; request extra for alignment
+	b, err := unix.Mmap(-1, 0, size+hugepage,
+		unix.PROT_READ|unix.PROT_WRITE,
+		unix.MAP_PRIVATE|unix.MAP_ANONYMOUS)
+	if err != nil {
+		// fallback to make()
+		return make([]float32, n)
+	}
+	// Align to 2MB boundary
+	addr := uintptr(unsafe.Pointer(&b[0]))
+	aligned := (addr + uintptr(hugepage) - 1) &^ (uintptr(hugepage) - 1)
+	offset := int(aligned - addr)
+	aligned_b := b[offset : offset+size]
+	_ = unix.Madvise(b, unix.MADV_HUGEPAGE)
+	// Return as float32 slice
+	ptr := (*float32)(unsafe.Pointer(&aligned_b[0]))
+	return unsafe.Slice(ptr, n)
 }

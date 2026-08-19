@@ -4,304 +4,162 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package cli provides the command-line interface implementation for EULIX.
 /*
-	This file acts as the primary controller for cache-related CLI operations.
-	It provides high-level commands to manage, inspect, and test the
-	underlying caching backends (SQL and Redis[havent tested redis yet]).
+	This file provides CLI commands for the history log — listing, viewing,
+	and deleting recorded query/response turns. The old cache-oriented
+	commands (stats, clear, cleanup, test) have been removed because the
+	underlying store is now a plain append-only log with no TTL, checksums,
+	or cache-hit logic.
 */
 
 package cli
 
 import (
 	"fmt"
-	"time"
+	"strconv"
+	"strings"
 
 	"eulix/internal/cache"
-	"eulix/internal/checksum"
 	"eulix/internal/config"
 	"eulix/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// CacheStats displays cache statistics
-func CacheStats() error {
+// historyManager opens the history database, returning (manager, closer, error).
+// The caller must invoke closer() when done — even if manager is nil.
+func historyManager() (*cache.Manager, func(), error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return nil, func() {}, fmt.Errorf("failed to load config: %w", err)
 	}
 
-	if !cfg.Cache.SQL.Enabled && !cfg.Cache.Redis.Enabled {
-		fmt.Println("❌ No cache backends enabled")
-		fmt.Println("💡 Enable cache in eulix.toml to use caching features")
-		return nil
-	}
-
-	cacheManager, err := cache.CacheController(cfg)
+	m, err := cache.CacheController(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to initialize cache: %w", err)
-	}
-	defer func() { _ = cacheManager.Close() }()
-	stats, err := cacheManager.GetStats()
-	if err != nil {
-		return fmt.Errorf("failed to get stats: %w", err)
+		return nil, func() {}, fmt.Errorf("[history.go] failed to open history database: %w", err)
 	}
 
-	fmt.Println("📊 Cache Statistics")
-	fmt.Println("==================")
-
-	if cfg.Cache.SQL.Enabled {
-		fmt.Printf("\n✓ SQL Cache (SQLite)\n")
-		fmt.Printf("  Path: %s\n", cfg.Cache.SQL.DSN)
-		if total, ok := stats["sql_total_entries"].(int); ok {
-			fmt.Printf("  Total entries: %d\n", total)
-		}
-		if valid, ok := stats["sql_valid_entries"].(int); ok {
-			fmt.Printf("  Valid entries: %d\n", valid)
-		}
-	}
-
-	if cfg.Cache.Redis.Enabled {
-		fmt.Printf("\n✓ Redis Cache\n")
-		fmt.Printf("  URL: %s\n", cfg.Cache.Redis.URL)
-		if connected, ok := stats["redis_connected"].(bool); ok && connected {
-			fmt.Printf("  Status: Connected\n")
-		} else {
-			fmt.Printf("  Status: Disconnected\n")
-		}
-		fmt.Printf("  TTL: %d hours\n", cfg.Cache.Redis.TTLHours)
-	}
-
-	// Show current checksum
-	detector := checksum.HashHound(".")
-	if current, err := detector.Calculate(); err == nil {
-		fmt.Printf("\n🔍 Current Checksum\n")
-		fmt.Printf("  Hash: %s\n", current.Hash[:16]+"...")
-		fmt.Printf("  Files: %d\n", current.TotalFiles)
-		fmt.Printf("  Lines: %d\n", current.TotalLines)
-	}
-
-	return nil
+	closer := func() { _ = m.Close() }
+	return m, closer, nil
 }
 
-// CacheClear clears all cache entries
-func CacheClear() error {
-	cfg, err := config.Load()
+// HistoryList prints every stored entry, newest first (plain text).
+func HistoryList() error {
+	m, close, err := historyManager()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	if !cfg.Cache.SQL.Enabled && !cfg.Cache.Redis.Enabled {
-		fmt.Println("❌ No cache backends enabled")
-		return nil
-	}
-
-	fmt.Print("⚠️  This will delete all cached queries. Continue? [y/N]: ")
-	var response string
-	_, _ = fmt.Scanln(&response)
-
-	if response != "y" && response != "yes" {
-		fmt.Println("Cancelled")
-		return nil
-	}
-
-	cacheManager, err := cache.CacheController(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to initialize cache: %w", err)
-	}
-	defer func() { _ = cacheManager.Close() }()
-
-	// Clear by invalidating all entries (pass empty checksum)
-	if err := cacheManager.InvalidateByChecksum(""); err != nil {
-		return fmt.Errorf("failed to clear cache: %w", err)
-	}
-
-	fmt.Println("✓ Cache cleared successfully")
-	return nil
-}
-
-// CacheCleanup removes expired entries
-func CacheCleanup() error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	if !cfg.Cache.SQL.Enabled {
-		fmt.Println("❌ SQL cache not enabled")
-		return nil
-	}
-
-	cacheManager, err := cache.CacheController(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to initialize cache: %w", err)
-	}
-	defer func() { _ = cacheManager.Close() }()
-
-	fmt.Println("🧹 Cleaning expired cache entries...")
-
-	if err := cacheManager.CleanExpired(); err != nil {
-		return fmt.Errorf("cleanup failed: %w", err)
-	}
-
-	fmt.Println("✓ Cleanup completed")
-	return nil
-}
-
-// CacheTest tests cache functionality
-func CacheTest() error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	if !cfg.Cache.SQL.Enabled && !cfg.Cache.Redis.Enabled {
-		fmt.Println("❌ No cache backends enabled")
-		return nil
-	}
-
-	cacheManager, err := cache.CacheController(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to initialize cache: %w", err)
-	}
-	defer func() { _ = cacheManager.Close() }()
-
-	// Get current checksum
-	detector := checksum.HashHound(".")
-	current, err := detector.Calculate()
-	if err != nil {
-		return fmt.Errorf("failed to calculate checksum: %w", err)
-	}
-
-	fmt.Println("🧪 Testing cache operations...")
-
-	// Test write
-	testQuery := "test query: what is the main function?"
-	testResponse := "This is a test response"
-
-	fmt.Print("  Writing test entry... ")
-	if err := cacheManager.Set(testQuery, testResponse, current.Hash); err != nil {
-		fmt.Printf("❌ Failed: %v\n", err)
 		return err
 	}
-	fmt.Println("✓")
+	defer close()
 
-	// Test read
-	fmt.Print("  Reading test entry... ")
-	response, found, err := cacheManager.Get(testQuery, current.Hash)
-	if err != nil {
-		fmt.Printf("❌ Failed: %v\n", err)
-		return err
-	}
-	if !found {
-		fmt.Println("❌ Not found")
-		return fmt.Errorf("cache entry not found")
-	}
-	if response != testResponse {
-		fmt.Println("❌ Mismatch")
-		return fmt.Errorf("response mismatch")
-	}
-	fmt.Println("✓")
-
-	// Test checksum validation
-	fmt.Print("  Testing checksum validation... ")
-	_, found, _ = cacheManager.Get(testQuery, "invalid_checksum")
-	if found {
-		fmt.Println("❌ Should not find entry with wrong checksum")
-		return fmt.Errorf("checksum validation failed")
-	}
-	fmt.Println("✓")
-
-	fmt.Println("\n✅ All cache tests passed!")
-	return nil
-}
-
-// CacheHistory displays cache history (simple text view)
-func CacheHistory() error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	if !cfg.Cache.SQL.Enabled && !cfg.Cache.Redis.Enabled {
-		fmt.Println("❌ No cache backends enabled")
+	if m == nil {
+		fmt.Println("History is disabled. Set cache.enable = true in eulix.toml.")
 		return nil
 	}
 
-	cacheManager, err := cache.CacheController(cfg)
+	entries, err := m.ListAll()
 	if err != nil {
-		return fmt.Errorf("failed to initialize cache: %w", err)
-	}
-	defer func() { _ = cacheManager.Close() }()
-
-	// Get all entries
-	entries, err := cacheManager.ListAll()
-	if err != nil {
-		return fmt.Errorf("failed to list cache entries: %w", err)
+		return fmt.Errorf("failed to list history: %w", err)
 	}
 
 	if len(entries) == 0 {
-		fmt.Println("📭 No cache entries found")
+		fmt.Println(":( No history entries found.")
 		return nil
 	}
 
-	fmt.Printf("📚 Cache History (%d entries)\n", len(entries))
-	fmt.Println("==================")
+	fmt.Printf(" Query History (%d entries)\n", len(entries))
+	fmt.Println(strings.Repeat("─", 40))
 
-	for i, entry := range entries {
-		expired := time.Now().After(entry.ExpiresAt)
-		status := "✓"
-		if expired {
-			status = "⏱"
-		}
-
-		// Truncate query for display
+	for _, entry := range entries {
 		query := entry.Query
 		if len(query) > 60 {
 			query = query[:57] + "..."
 		}
 
-		fmt.Printf("\n%s [%d] %s\n", status, i+1, query)
-		fmt.Printf("   Created: %s\n", entry.CreatedAt.Format("2006-01-02 15:04:05"))
-		fmt.Printf("   Expires: %s\n", entry.ExpiresAt.Format("2006-01-02 15:04:05"))
-		fmt.Printf("   Hash: %s\n", entry.QueryHash[:16]+"...")
+		reasoningMark := " "
+		if entry.Reasoning != "" {
+			reasoningMark = "◈"
+		}
+
+		fmt.Printf("\n%s [%d] %s\n", reasoningMark, entry.ID, query)
+		fmt.Printf("    Logged: %s\n", entry.CreatedAt.Format("2006-01-02 15:04:05"))
+
+		answerPreview := entry.Answer
+		if len(answerPreview) > 80 {
+			answerPreview = answerPreview[:77] + "..."
+		}
+		fmt.Printf("    Answer: %s\n", answerPreview)
 	}
 
-	fmt.Println("\n💡 Use 'eulix cache view' for interactive viewer")
+	fmt.Println("\n Use 'eulix history view' for the interactive viewer.")
+	return nil
+}
+
+// HistoryShow prints the full detail for a single entry identified by its
+// numeric ID (as shown in HistoryList / the TUI).
+func HistoryShow(idStr string) error {
+	id, err := parseID(idStr)
+	if err != nil {
+		return err
+	}
+
+	m, close, err := historyManager()
+	if err != nil {
+		return err
+	}
+	defer close()
+
+	if m == nil {
+		fmt.Println("History is disabled. Set cache.enable = true in eulix.toml.")
+		return nil
+	}
+
+	entry, found, err := m.Get(id)
+	if err != nil {
+		return fmt.Errorf("failed to read history entry: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("no history entry with ID %d", id)
+	}
+
+	fmt.Printf("ID:     %d\n", entry.ID)
+	fmt.Printf("Logged: %s\n\n", entry.CreatedAt.Format("2006-01-02 15:04:05"))
+	fmt.Printf("Query\n%s\n\n", strings.Repeat("─", 40))
+	fmt.Println(entry.Query)
+
+	if entry.Reasoning != "" {
+		fmt.Printf("\nReasoning\n%s\n", strings.Repeat("─", 40))
+		fmt.Println(entry.Reasoning)
+	}
+
+	fmt.Printf("\nAnswer\n%s\n", strings.Repeat("─", 40))
+	fmt.Println(entry.Answer)
 
 	return nil
 }
 
-// CacheView launches interactive TUI cache viewer
-func CacheView() error {
-	cfg, err := config.Load()
+// HistoryView launches the interactive Bubble Tea history viewer.
+func HistoryView() error {
+	m, close, err := historyManager()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
+	defer close()
 
-	if !cfg.Cache.SQL.Enabled && !cfg.Cache.Redis.Enabled {
-		fmt.Println("❌ No cache backends enabled")
+	if m == nil {
+		fmt.Println("History is disabled. Set cache.enable = true in eulix.toml.")
 		return nil
 	}
 
-	cacheManager, err := cache.CacheController(cfg)
+	entries, err := m.ListAll()
 	if err != nil {
-		return fmt.Errorf("failed to initialize cache: %w", err)
-	}
-	defer func() { _ = cacheManager.Close() }()
-
-	// Get all entries
-	entries, err := cacheManager.ListAll()
-	if err != nil {
-		return fmt.Errorf("failed to list cache entries: %w", err)
+		return fmt.Errorf("failed to list history: %w", err)
 	}
 
 	if len(entries) == 0 {
-		fmt.Println("📭 No cache entries found")
+		fmt.Println(":( No history entries found.")
 		return nil
 	}
 
-	// Launch TUI
-	model := tui.HistoryView(entries, cacheManager)
+	model := tui.HistoryView(entries, m)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
@@ -311,84 +169,91 @@ func CacheView() error {
 	return nil
 }
 
-// CacheDelete deletes a specific cache entry by index or hash
-func CacheDelete(identifier string) error {
-	cfg, err := config.Load()
+// HistoryDelete removes a single entry by its numeric ID, with confirmation.
+func HistoryDelete(idStr string) error {
+	id, err := parseID(idStr)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 
-	if !cfg.Cache.SQL.Enabled && !cfg.Cache.Redis.Enabled {
-		fmt.Println("❌ No cache backends enabled")
+	m, close, err := historyManager()
+	if err != nil {
+		return err
+	}
+	defer close()
+
+	if m == nil {
+		fmt.Println("History is disabled. Set cache.enable = true in eulix.toml.")
 		return nil
 	}
 
-	cacheManager, err := cache.CacheController(cfg)
+	entry, found, err := m.Get(id)
 	if err != nil {
-		return fmt.Errorf("failed to initialize cache: %w", err)
+		return fmt.Errorf("failed to read history entry: %w", err)
 	}
-	defer func() { _ = cacheManager.Close() }()
-
-	// Get all entries to find the one to delete
-	entries, err := cacheManager.ListAll()
-	if err != nil {
-		return fmt.Errorf("failed to list cache entries: %w", err)
+	if !found {
+		return fmt.Errorf("no history entry with ID %d", id)
 	}
 
-	if len(entries) == 0 {
-		fmt.Println("📭 No cache entries found")
-		return nil
+	query := entry.Query
+	if len(query) > 60 {
+		query = query[:57] + "..."
 	}
 
-	// Try to parse as index
-	var queryHash string
-	var index int
-	_, err = fmt.Sscanf(identifier, "%d", &index)
-	if err == nil {
-		// It's an index
-		if index < 1 || index > len(entries) {
-			return fmt.Errorf("invalid index: %d (valid range: 1-%d)", index, len(entries))
-		}
-		queryHash = entries[index-1].QueryHash
-	} else {
-		// It's a hash
-		queryHash = identifier
-	}
+	fmt.Printf("[!]  Deleting history entry:\n")
+	fmt.Printf("      ID:     %d\n", entry.ID)
+	fmt.Printf("      Logged: %s\n", entry.CreatedAt.Format("2006-01-02 15:04:05"))
+	fmt.Printf("      Query:  %s\n\n", query)
+	fmt.Print("[!]  Continue? [y/N]: ")
 
-	// Find and display the entry
-	var found *cache.CacheEntry
-	for i := range entries {
-		if entries[i].QueryHash == queryHash || entries[i].QueryHash[:16] == queryHash {
-			found = &entries[i]
-			break
-		}
-	}
-
-	if found == nil {
-		return fmt.Errorf("cache entry not found: %s", identifier)
-	}
-
-	// Display entry details
-	fmt.Println("🗑️  Deleting cache entry:")
-	fmt.Printf("   Query: %s\n", found.Query)
-	fmt.Printf("   Created: %s\n", found.CreatedAt.Format("2006-01-02 15:04:05"))
-	fmt.Printf("   Hash: %s\n", found.QueryHash[:16]+"...")
-	fmt.Println()
-
-	fmt.Print("⚠️  Continue? [y/N]: ")
 	var response string
 	_, _ = fmt.Scanln(&response)
-
 	if response != "y" && response != "yes" {
-		fmt.Println("Cancelled")
+		fmt.Println("Cancelled.")
 		return nil
 	}
 
-	// Delete from both backends
-	if err := cacheManager.Delete(found.QueryHash); err != nil {
-		return fmt.Errorf("failed to delete entry: %w", err)
+	if err := m.Delete(entry.ID); err != nil {
+		return fmt.Errorf("failed to delete history entry: %w", err)
 	}
 
-	fmt.Println("✓ Cache entry deleted successfully")
+	fmt.Println("✓ History entry deleted.")
 	return nil
+}
+
+// HistoryClear removes every stored entry after confirmation.
+func HistoryClear() error {
+	m, close, err := historyManager()
+	if err != nil {
+		return err
+	}
+	defer close()
+
+	if m == nil {
+		fmt.Println("History is disabled. Set cache.enable = true in eulix.toml.")
+		return nil
+	}
+
+	fmt.Print("[!]  This will delete all history entries. Continue? [y/N]: ")
+	var response string
+	_, _ = fmt.Scanln(&response)
+	if response != "y" && response != "yes" {
+		fmt.Println("Cancelled.")
+		return nil
+	}
+
+	if err := m.Clear(); err != nil {
+		return fmt.Errorf("failed to clear history: %w", err)
+	}
+
+	fmt.Println("✓ History cleared.")
+	return nil
+}
+
+func parseID(s string) (uint64, error) {
+	id, err := strconv.ParseUint(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid ID %q: must be a positive integer", s)
+	}
+	return id, nil
 }

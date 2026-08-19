@@ -11,6 +11,7 @@ This file is responsible for the shared types of query package.
 package query
 
 import (
+	"bufio"
 	"os"
 	"sync"
 	"time"
@@ -18,7 +19,7 @@ import (
 	"eulix/internal/cache"
 	"eulix/internal/config"
 	"eulix/internal/llm"
-	"eulix/internal/types"
+	"eulix/internal/utils"
 )
 
 type QueryType int
@@ -26,25 +27,23 @@ type IntentType int
 type callSiteIndex map[string][]int // symbol → []chunkIdx
 
 type Router struct {
-	eulixDir       string
-	config         *config.Config
-	classifier     *Classifier
-	llmClient      *llm.Client
-	cache          *cache.Manager
-	contextBuilder *ContextBuilder
-	kbIndex        *types.KBIndices
-	callGraph      *CallGraph
-	kb             *types.KnowledgeBaseRef
-	// index           *types.IndexRef
-	Patterns *types.PatternInfo
-	cgIdx    *callGraphIndex
-	// cgRef           *types.CallGraphRef
+	eulixDir        string
+	config          *config.Config
+	classifier      *Classifier
+	llmClient       *llm.Client
+	cache           *cache.Manager
+	contextBuilder  *ContextBuilder
+	kbIndex         *utils.KBIndices
+	callGraph       *CallGraph
+	kb              *utils.KnowledgeBaseRef
+	Patterns        *utils.PatternInfo
+	cgIdx           *callGraphIndex
 	cgBuild         *CallGraphIdx
 	currentChecksum string
 }
 
 type metricsEntry struct {
-	fn   *types.KBFunction
+	fn   *utils.KBFunction
 	file string
 }
 
@@ -54,7 +53,7 @@ type callGraphIndex struct {
 }
 
 type CallGraphIdx struct {
-	Nodes    map[string]*types.CallGraphNode
+	Nodes    map[string]*utils.CallGraphNode
 	CalledBy map[string][]string
 	Calls    map[string][]string
 }
@@ -109,12 +108,12 @@ type ContextBuilder struct {
 	ivfIndex      *IVFIndex      // non-nil when len(embeddings) > ivfBuildThreshold
 	invertedIdx   *InvertedIndex // non-nil when len(chunks) > invIdxThreshold
 	hasKB         bool
-	kbData        *types.KnowledgeBaseRef
+	kbData        *utils.KnowledgeBaseRef
 	hasCallGraph  bool
 	callGraph     map[string][]Relationship
-	cgRef         *types.CallGraphRef
-	kbIdx         *types.KBIndices
-	externalDeps  []types.ExternalDependency
+	cgRef         *utils.CallGraphRef
+	kbIdx         *utils.KBIndices
+	externalDeps  []utils.ExternalDependency
 	depIdx        *depIndex
 	sourceRoot    string
 	debugLog      *DebugLogger
@@ -140,8 +139,10 @@ type Chunk struct {
 	Importance float64
 }
 type DebugLogger struct {
-	file *os.File
-	mu   sync.Mutex
+	file   *os.File
+	writer *bufio.Writer
+	mu     sync.Mutex
+	closed bool
 }
 
 // QueryIntent is derived from the raw query before any search begins.

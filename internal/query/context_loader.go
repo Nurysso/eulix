@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"encoding/json"
+	"eulix/internal/utils"
 	"fmt"
 	"io"
 	"math"
@@ -25,8 +26,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"eulix/internal/types"
 )
 
 const (
@@ -34,7 +33,7 @@ const (
 	invIdxThreshold    = 5_000
 	lazyContentLimit   = 50_000
 	ivfNClusters       = 256
-	ivfKMeansIter      = 20
+	ivfKMeansIter      = 5
 	dfThresholdDefault = 0.30
 	bpMinChunks        = 50
 	PreAllocate        = 320_000
@@ -77,7 +76,7 @@ func (cb *ContextBuilder) logFileLoad(name string) func(error) {
 func (cb *ContextBuilder) loadExternalDeps() error {
 	done := cb.logFileLoad("kb_external_deps.json")
 
-	var FileData types.ExternalDependencyRef
+	var FileData utils.ExternalDependencyRef
 	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_external_deps.json"), &FileData)
 
 	done(err)
@@ -107,7 +106,7 @@ func (cb *ContextBuilder) loadExternalDeps() error {
 // for search use cases.
 func (cb *ContextBuilder) loadChunks() error {
 	done := cb.logFileLoad("kb_index.json")
-	var ref types.IndexRef
+	var ref utils.IndexRef
 	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_index.json"), &ref)
 	done(err)
 	if err != nil {
@@ -145,7 +144,7 @@ func (cb *ContextBuilder) GetDepIndex() *depIndex {
 
 // streamKBChunks opens kb.json with mmap + sequential-read hints
 // and walks the JSON token-by-token, building chunks as each
-// FileData is decoded. The full types.KnowledgeBaseRef struct is
+// FileData is decoded. The full utils.KnowledgeBaseRef struct is
 // never materialised FileData is decoded, passed to
 // addChunksFromFile, and goes out of scope at the end of each
 // iteration. The mmap cleanup (defer cleanup) releases the
@@ -213,12 +212,12 @@ func (cb *ContextBuilder) streamKBChunks() error {
 		// decoder's internal buffer; sonicCopy copies all
 		// decoded strings out before we move to the next
 		// iteration, so the source can be safely reused.
-		var fs types.FileData
+		var fs utils.FileData
 		if err := sonicCopy.Unmarshal(raw, &fs); err != nil {
 			return fmt.Errorf("decoding FileData for %s: %w ", filePath, err)
 		}
 		cb.addChunksFromFile(filePath, &fs)
-		fs = types.FileData{}
+		fs = utils.FileData{}
 	}
 
 	return nil
@@ -269,6 +268,16 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 			continue
 		}
 		counts := make(map[string]int)
+
+		pathStr := c.ID
+		for _, tok := range strings.FieldsFunc(pathStr, isIdentBoundary) {
+			norm := normalizeSymbol(tok)
+			if norm != "" && !cb.isBoilerplateSymbol(norm) {
+				// Give path tokens a slight artificial frequency boost
+				counts[norm] += 2
+			}
+		}
+
 		for _, tok := range strings.FieldsFunc(c.Content, isIdentBoundary) {
 			norm := normalizeSymbol(tok)
 			if norm == "" || cb.isBoilerplateSymbol(norm) {
@@ -276,6 +285,7 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 			}
 			counts[norm]++
 		}
+
 		if len(counts) == 0 {
 			continue
 		}
@@ -285,7 +295,6 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 			tf := float32(cnt) / float32(len(counts))
 			postings[tok] = append(postings[tok], Posting{ChunkIdx: i, TF: tf})
 		}
-		// counts goes out of scope here and is immediately GC-eligible
 	}
 
 	avgTokens := 0.0
@@ -301,14 +310,17 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 	}
 }
 
-// isIdentBoundary returns true if r is a non-identifier rune
-// (anything outside [A-Za-z0-9_]). Used as the splitter predicate
-// in buildInvertedIndex.
+// isIdentBoundary returns true if r is a boundary character.
+// By returning true for '_', we automatically split snake_case!
 func isIdentBoundary(r rune) bool {
-	return (r < 'a' && r > 'z') ||
-		(r < 'A' && r > 'Z') ||
-		(r < '0' && r > '9') ||
-		r != '_'
+	// If it's a lowercase letter, uppercase letter, or digit, it's NOT a boundary.
+	if (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') {
+		return false
+	}
+	// Everything else (spaces, punctuation, and underscores) is a boundary.
+	return true
 }
 
 // loadAndIndexCallGraph loads kb_call_graph.json and builds the
@@ -316,7 +328,7 @@ func isIdentBoundary(r rune) bool {
 // retrieval. Gracefully skips if the file is absent or malformed.
 func (cb *ContextBuilder) loadAndIndexCallGraph() {
 	done := cb.logFileLoad("kb_call_graph.json")
-	var cg types.CallGraphRef
+	var cg utils.CallGraphRef
 	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"), &cg)
 	done(err)
 	if err != nil {
@@ -348,7 +360,7 @@ func (cb *ContextBuilder) loadAndIndexCallGraph() {
 			Relationship{Type: "called_by", Target: e.From, Distance: 1})
 	}
 
-	cb.callSites = buildCallSiteIndex(&cg, cb.chunks)
+	cb.callSites = buildCallSiteIndex(&cg, cb.chunks, cb.debugLog)
 	cb.hasCallGraph = len(cb.callGraph) > 0
 	cb.debugLog.Log("Call graph indexed: %d relationships, %d call sites",
 		len(cb.callGraph), len(cb.callSites))
@@ -453,11 +465,11 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 
 	if numEmb > ivfBuildThreshold {
 		go func() {
-			idx := buildIVFIndex(cb.embeddings, ivfNClusters, ivfKMeansIter)
+			idx := cb.buildIVFIndex(cb.embeddings, ivfNClusters, ivfKMeansIter)
 			cb.mu.Lock()
 			cb.ivfIndex = idx
 			cb.mu.Unlock()
-			cb.debugLog.Log("IVF index built: %d clusters", ivfNClusters)
+			cb.debugLog.Log("IVF index BUILT completed: %d clusters", ivfNClusters)
 		}()
 		cb.debugLog.Log("IVF build started in background (%d embeddings)", numEmb)
 	}
