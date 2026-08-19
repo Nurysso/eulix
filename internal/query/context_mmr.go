@@ -79,7 +79,7 @@ func (cb *ContextBuilder) mmrSelect(
 		base := 0.0
 		if qEmb != nil {
 			if e := embOf(c.ID); e != nil {
-				base = cosineSimilarity(qEmb, e)
+				base = float64(dotProduct(qEmb, e))
 			}
 		}
 		if base == 0 {
@@ -93,7 +93,7 @@ func (cb *ContextBuilder) mmrSelect(
 
 	simBetween := func(a, b ScoredChunk) float64 {
 		if ea, eb := embOf(a.ID), embOf(b.ID); ea != nil && eb != nil {
-			sim := cosineSimilarity(ea, eb)
+			sim := float64(dotProduct(ea, eb))
 
 			if a.File == b.File && sim > 0.4 {
 				dist := a.StartLine - b.StartLine
@@ -205,6 +205,7 @@ func (cb *ContextBuilder) mmrSelect(
 		if n := len(selected); n > 1 && canMerge(selected[n-2], selected[n-1]) {
 			selected[n-2] = mergeChunks(selected[n-2], selected[n-1])
 			selected = selected[:n-1]
+			selSC[n-2].Chunk = selected[n-2]
 			selSC = selSC[:n-1]
 			tokenSum -= headerOverhead
 		}
@@ -223,7 +224,10 @@ func (cb *ContextBuilder) selectChunks(scored []ScoredChunk, budget int) []Chunk
 
 	sort.Slice(scored, func(i, j int) bool {
 		if scored[i].File != scored[j].File {
-			return scored[i].Score > scored[j].Score
+			if scored[i].Score != scored[j].Score {
+				return scored[i].Score > scored[j].Score
+			}
+			return scored[i].File < scored[j].File
 		}
 		return scored[i].StartLine < scored[j].StartLine
 	})

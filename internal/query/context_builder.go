@@ -14,7 +14,7 @@ import (
 	"eulix/internal/config"
 	"eulix/internal/embeddings"
 	"eulix/internal/llm"
-	"eulix/internal/types"
+	"eulix/internal/utils"
 )
 
 const (
@@ -38,13 +38,20 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	cb.init()
 	cb.debugLog.Log("Initializing ContextBuilder with source root: %s", sourceRoot)
 
+	// Start auto-flush every 5 seconds
+	cb.debugLog.StartAutoFlush(5 * time.Second)
+
 	queryEmbedder, err := embeddings.VectorWeaver(cfg.Embeddings.Model)
 	if err != nil {
+		cb.debugLog.Log("Failed to initialize embedder: %v", err)
+		cb.debugLog.Close()
 		return nil, fmt.Errorf("failed to initialize embedder: %w", err)
 	}
 	cb.queryEmbedder = queryEmbedder
 
 	if err := cb.loadChunks(); err != nil {
+		cb.debugLog.Log("Failed to load chunks: %v", err)
+		cb.debugLog.Close()
 		return nil, fmt.Errorf("failed to load chunks from KB: %w", err)
 	}
 
@@ -65,13 +72,13 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 
 	cb.loadAndIndexCallGraph()
 	cb.hasKB = true
-	cb.debugLog.Log("ContextBuilder initialized: %d chunks, %d subsystem nodes, %d noise paths",
+	cb.debugLog.Log("CONTEXT-BUILDER INITIALIZED: %d chunks, %d subsystem nodes, %d noise paths",
 		len(cb.chunks), len(cb.subsystemTree), len(cb.noisePaths))
 	return cb, nil
 }
 
 // BuildContext constructs the ContextWindow for the target query.
-func (cb *ContextBuilder) BuildContext(query string) (*types.ContextWindow, error) {
+func (cb *ContextBuilder) BuildContext(query string) (*utils.ContextWindow, error) {
 	maxLines := cb.config.Project.MaxLines
 	ctx, _, err := cb.buildContextInternal(query, maxLines)
 	if err != nil {
@@ -87,7 +94,7 @@ func (cb *ContextBuilder) BuildContext(query string) (*types.ContextWindow, erro
 	return ctx, nil
 }
 
-func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int) (*types.ContextWindow, *DebugTrace, error) {
+func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int) (*utils.ContextWindow, *DebugTrace, error) {
 	start := time.Now()
 	trace := &DebugTrace{Query: query}
 	explicitAnchor := extractExplicitAnchors(query)
@@ -95,12 +102,13 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 
 	cb.debugLog.Log("\n=== NEW QUERY ===")
 	cb.debugLog.Log("Query: %s", query)
-
+	startRetrival := time.Now()
 	intent := cb.classifyQueryIntent(query)
 	trace.Intent = intent
 	cb.debugLog.Log("Intent: %d (specificity: %.2f, confidence: %.2f)",
 		intent.Type, intent.Specificity, intent.Confidence)
-
+	cb.debugLog.Log("Embedder called Query is getting embedded")
+	etime := time.Now()
 	var qEmb []float32
 	skipSemantic := intent.Type == IntentCallers ||
 		intent.Type == IntentCallees ||
@@ -112,21 +120,35 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 			trace.Warnings = append(trace.Warnings, "query embedding failed: "+err.Error())
 		}
 	}
-
+	elapsed := time.Since(etime)
+	cb.debugLog.Log("Embedder took %d ms to run", elapsed.Milliseconds())
 	budget := cb.allocateBudget(query, intent)
 	trace.Budget = budget
 	cb.debugLog.Log("Budget: %d tokens for context (total: %d)",
 		budget.ContextBudget, budget.MaxTokens)
 
-	anchors := cb.exactSymbolSearch(query)
-	if len(anchors) > 2 {
-		anchors = anchors[:2]
-	}
 	anchorFiles := make(map[string]bool)
+	for _, ea := range explicitAnchor {
+		if ea.File != "" {
+			anchorFiles[ea.File] = true
+		}
+	}
+
+	anchors := cb.exactSymbolSearch(query)
+	filteredAnchors := make([]ScoredChunk, 0, len(anchors))
 	for _, a := range anchors {
+		// Only consider high-confidence exact matches that aren't boilerplate symbols
+		if a.Score >= 90.0 && !cb.isBoilerplateSymbol(a.Name) {
+			filteredAnchors = append(filteredAnchors, a)
+		}
+	}
+	if len(filteredAnchors) > 2 {
+		filteredAnchors = filteredAnchors[:2]
+	}
+	for _, a := range filteredAnchors {
 		anchorFiles[a.File] = true
 	}
-	cb.debugLog.Log("Found %d exact anchors", len(anchors))
+	cb.debugLog.Log("Found %d exact anchors", len(filteredAnchors))
 
 	var callSiteResults []ScoredChunk
 	if intent.Type == IntentCallers || intent.Type == IntentCallees {
@@ -139,6 +161,20 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	trace.TotalCandidates = len(candidates)
 	cb.debugLog.Log("Multi-strategy search: %d candidates", len(candidates))
 
+	// Filter weak candidates before graph expansion/MMR to prevent vendor
+	// boilerplate matching single tokens from consuming budget.
+	// Anchors and call-site results are exempt (already high-confidence).
+	preFloorCount := len(candidates)
+	candidates = ApplyPreMMRFloor(candidates, &cb.config.RetrievalConfig)
+	if preFloorCount != len(candidates) {
+		cb.debugLog.Log("Pre-MMR floor: %d → %d candidates (ratio=%.2f)",
+			preFloorCount, len(candidates), cb.config.RetrievalConfig.PreMMRScoreFloorRatio)
+		if trace != nil {
+			trace.Warnings = append(trace.Warnings,
+				fmt.Sprintf("pre-MMR floor filtered %d → %d candidates", preFloorCount, len(candidates)))
+		}
+	}
+
 	candidates = mergeWithPriority(anchors, callSiteResults, candidates)
 	cb.debugLog.Log("After merge: %d candidates", len(candidates))
 
@@ -147,7 +183,9 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 		expanded = cb.buildContextWithGraph(candidates, budget.ContextBudget, intent)
 		cb.debugLog.Log("Graph expansion: %d chunks", len(expanded))
 	} else {
+		cb.debugLog.Log("Building context without call graphs as they werent find")
 		expanded = cb.buildContextWithoutGraph(candidates, budget.ContextBudget)
+		cb.debugLog.Log("NO CALL GARAPHS: %d Chunks Expanded", len(expanded))
 	}
 
 	var selected []Chunk
@@ -192,12 +230,12 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	ctx := cb.assembleContext(selected)
 	trace.TotalTokens = ctx.TotalTokens
 	trace.Duration = time.Since(start)
-
+	retrivalDuration := time.Since(startRetrival)
 	cb.debugLog.Log("=== QUERY COMPLETE ===")
 	cb.debugLog.Log("Final context: %d chunks, %d tokens, %d sources",
 		len(ctx.Chunks), ctx.TotalTokens, len(ctx.Sources))
+	cb.debugLog.Log("Retrival Duration: %v\n", retrivalDuration)
 	cb.debugLog.Log("Duration: %v\n", trace.Duration)
-
 	cb.mu.Lock()
 	cb.lastTrace = trace
 	cb.mu.Unlock()
@@ -220,27 +258,27 @@ func (cb *ContextBuilder) candidateLimitForIntent(intent QueryIntent) int {
 	switch {
 	case intent.Type == IntentCallers || intent.Type == IntentCallees:
 		if intent.Specificity > 0.9 {
-			base = 5
+			base = 80
 		} else {
-			base = 30
+			base = 150
 		}
 	case intent.Type == IntentConcept || intent.Type == IntentFlow:
 		if intent.Specificity > 0.8 {
-			base = 15
+			base = 150
 		} else {
-			base = 50
+			base = 250
 		}
 	case intent.Specificity > 0.8:
-		base = 20
+		base = 150
 	case intent.Specificity > 0.5:
-		base = 50
+		base = 200
 	default:
-		base = 80
+		base = 300
 	}
 
 	limit := int(float64(base) * scale)
-	if limit > 600 {
-		limit = 600
+	if limit > 1000 {
+		limit = 1000
 	}
 	return limit
 }
@@ -267,14 +305,14 @@ func mergeWithPriority(anchors, callSites, candidates []ScoredChunk) []ScoredChu
 	return out
 }
 
-func (cb *ContextBuilder) assembleContext(chunks []Chunk) *types.ContextWindow {
+func (cb *ContextBuilder) assembleContext(chunks []Chunk) *utils.ContextWindow {
 	totalTokens := 0
 	sources := make(map[string]bool, len(chunks))
-	ctxChunks := make([]types.ContextChunk, len(chunks))
+	ctxChunks := make([]utils.ContextChunk, len(chunks))
 	for i, c := range chunks {
 		totalTokens += c.Tokens + 20
 		sources[c.File] = true
-		ctxChunks[i] = types.ContextChunk{
+		ctxChunks[i] = utils.ContextChunk{
 			File:       c.File,
 			StartLine:  c.StartLine,
 			EndLine:    c.EndLine,
@@ -286,5 +324,5 @@ func (cb *ContextBuilder) assembleContext(chunks []Chunk) *types.ContextWindow {
 	for s := range sources {
 		srcList = append(srcList, s)
 	}
-	return &types.ContextWindow{Chunks: ctxChunks, TotalTokens: totalTokens, Sources: srcList}
+	return &utils.ContextWindow{Chunks: ctxChunks, TotalTokens: totalTokens, Sources: srcList}
 }

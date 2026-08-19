@@ -7,6 +7,7 @@
 package query
 
 import (
+	"eulix/internal/config"
 	"fmt"
 	"math"
 	"os"
@@ -194,6 +195,9 @@ func detectQuerySubsystems(
 	scores := make([]subsystemScore, 0, len(nodes))
 
 	for _, n := range nodes {
+		if isTestDocPath(strings.ToLower(n.Path)) {
+			continue
+		}
 		var sc float64
 		for _, qt := range queryTokens {
 			if len(qt) < 3 {
@@ -249,13 +253,14 @@ func boostByDetectedSubsystems(
 	results []ScoredChunk,
 	detected []subsystemScore,
 	noisePaths []string,
+	cfg *config.RetrievalConfig,
 ) {
 	if len(detected) == 0 {
 		return
 	}
 
 	topConf := detected[0].score
-	applyPenalty := topConf >= 6.0 // Enforce penalties only when top detection is confident.
+	applyPenalty := topConf >= 6.0 // Enforce penalties when top detection is confident.
 
 	for i := range results {
 		fileLow := strings.ToLower(results[i].File)
@@ -268,8 +273,7 @@ func boostByDetectedSubsystems(
 			switch {
 			case strings.HasPrefix(fileLow, pathLow+"/") || fileLow == pathLow:
 				boost = 2.5
-			case strings.Contains(fileLow, "/"+pathLow+"/") ||
-				strings.Contains(fileLow, pathLow):
+			case strings.Contains(fileLow, "/"+pathLow+"/") || strings.Contains(fileLow, pathLow):
 				boost = 1.8
 			default:
 				shared := 0
@@ -283,7 +287,6 @@ func boostByDetectedSubsystems(
 				}
 			}
 
-			// Scale boost proportionally to candidate confidence.
 			if boost > 1.0 {
 				scaled := 1.0 + (boost-1.0)*(ds.score/topConf)
 				if scaled > bestBoost {
@@ -294,9 +297,13 @@ func boostByDetectedSubsystems(
 		}
 
 		if !matched && applyPenalty {
+			// Use configurable penalty instead of hardcoded multiplier
+			bestBoost = float64(cfg.CrossRootPenalty)
+
+			// Keep aggressive noise path check
 			for _, np := range noisePaths {
 				if strings.Contains(fileLow, np) {
-					bestBoost = 0.4
+					bestBoost = 0.01
 					break
 				}
 			}

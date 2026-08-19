@@ -2,11 +2,12 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package types provides Shared type accross project
+// Package utils provides Shared type and func accross project
+
 /*
 Mirrors eulix_parser out exactly
 */
-package types
+package utils
 
 type KnowledgeBaseRef struct {
 	Metadata  KBMetadata          `json:"metadata"`
