@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"encoding/json"
+	"eulix/internal/utils"
 	"fmt"
 	"io"
 	"math"
@@ -25,8 +26,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"eulix/internal/types"
 )
 
 const (
@@ -77,7 +76,7 @@ func (cb *ContextBuilder) logFileLoad(name string) func(error) {
 func (cb *ContextBuilder) loadExternalDeps() error {
 	done := cb.logFileLoad("kb_external_deps.json")
 
-	var FileData types.ExternalDependencyRef
+	var FileData utils.ExternalDependencyRef
 	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_external_deps.json"), &FileData)
 
 	done(err)
@@ -107,7 +106,7 @@ func (cb *ContextBuilder) loadExternalDeps() error {
 // for search use cases.
 func (cb *ContextBuilder) loadChunks() error {
 	done := cb.logFileLoad("kb_index.json")
-	var ref types.IndexRef
+	var ref utils.IndexRef
 	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_index.json"), &ref)
 	done(err)
 	if err != nil {
@@ -145,7 +144,7 @@ func (cb *ContextBuilder) GetDepIndex() *depIndex {
 
 // streamKBChunks opens kb.json with mmap + sequential-read hints
 // and walks the JSON token-by-token, building chunks as each
-// FileData is decoded. The full types.KnowledgeBaseRef struct is
+// FileData is decoded. The full utils.KnowledgeBaseRef struct is
 // never materialised FileData is decoded, passed to
 // addChunksFromFile, and goes out of scope at the end of each
 // iteration. The mmap cleanup (defer cleanup) releases the
@@ -213,12 +212,12 @@ func (cb *ContextBuilder) streamKBChunks() error {
 		// decoder's internal buffer; sonicCopy copies all
 		// decoded strings out before we move to the next
 		// iteration, so the source can be safely reused.
-		var fs types.FileData
+		var fs utils.FileData
 		if err := sonicCopy.Unmarshal(raw, &fs); err != nil {
 			return fmt.Errorf("decoding FileData for %s: %w ", filePath, err)
 		}
 		cb.addChunksFromFile(filePath, &fs)
-		fs = types.FileData{}
+		fs = utils.FileData{}
 	}
 
 	return nil
@@ -329,7 +328,7 @@ func isIdentBoundary(r rune) bool {
 // retrieval. Gracefully skips if the file is absent or malformed.
 func (cb *ContextBuilder) loadAndIndexCallGraph() {
 	done := cb.logFileLoad("kb_call_graph.json")
-	var cg types.CallGraphRef
+	var cg utils.CallGraphRef
 	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"), &cg)
 	done(err)
 	if err != nil {

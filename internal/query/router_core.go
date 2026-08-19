@@ -21,6 +21,7 @@ import (
 	"eulix/internal/cache"
 	"eulix/internal/config"
 	"eulix/internal/llm"
+	"eulix/internal/utils"
 )
 
 func QueryTrafficController(
@@ -100,13 +101,6 @@ func (r *Router) PromptOrAnswer(query string) (string, error) {
 }
 
 func (r *Router) QueryEngine(query string) (string, error) {
-	if r.cache != nil && r.currentChecksum != "" {
-		if cached, found, err := r.cache.Get(query, r.currentChecksum); err == nil && found {
-			r.contextBuilder.debugLog.Log("[ROUTE] QueryEngine: cache hit for query=%q", query)
-			return cached, nil
-		}
-	}
-
 	classification := r.classifier.Classify(query)
 	r.contextBuilder.debugLog.Log("[ROUTE] QueryEngine: query=%q type=%v", query, classification.Type)
 
@@ -228,8 +222,11 @@ func (r *Router) QueryEngine(query string) (string, error) {
 		return "", err
 	}
 
-	if r.cache != nil && r.currentChecksum != "" {
-		_ = r.cache.Set(query, response, r.currentChecksum)
+	if r.cache != nil {
+		reasoning, answer := utils.SplitReasoningAndAnswer(response)
+		if _, saveErr := r.cache.Save(query, reasoning, answer); saveErr != nil {
+			r.contextBuilder.debugLog.Log("[ROUTE] QueryEngine: failed to save history entry: %v", saveErr)
+		}
 	}
 
 	return response, nil

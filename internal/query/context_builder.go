@@ -14,7 +14,7 @@ import (
 	"eulix/internal/config"
 	"eulix/internal/embeddings"
 	"eulix/internal/llm"
-	"eulix/internal/types"
+	"eulix/internal/utils"
 )
 
 const (
@@ -78,7 +78,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 }
 
 // BuildContext constructs the ContextWindow for the target query.
-func (cb *ContextBuilder) BuildContext(query string) (*types.ContextWindow, error) {
+func (cb *ContextBuilder) BuildContext(query string) (*utils.ContextWindow, error) {
 	maxLines := cb.config.Project.MaxLines
 	ctx, _, err := cb.buildContextInternal(query, maxLines)
 	if err != nil {
@@ -94,7 +94,7 @@ func (cb *ContextBuilder) BuildContext(query string) (*types.ContextWindow, erro
 	return ctx, nil
 }
 
-func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int) (*types.ContextWindow, *DebugTrace, error) {
+func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int) (*utils.ContextWindow, *DebugTrace, error) {
 	start := time.Now()
 	trace := &DebugTrace{Query: query}
 	explicitAnchor := extractExplicitAnchors(query)
@@ -305,14 +305,14 @@ func mergeWithPriority(anchors, callSites, candidates []ScoredChunk) []ScoredChu
 	return out
 }
 
-func (cb *ContextBuilder) assembleContext(chunks []Chunk) *types.ContextWindow {
+func (cb *ContextBuilder) assembleContext(chunks []Chunk) *utils.ContextWindow {
 	totalTokens := 0
 	sources := make(map[string]bool, len(chunks))
-	ctxChunks := make([]types.ContextChunk, len(chunks))
+	ctxChunks := make([]utils.ContextChunk, len(chunks))
 	for i, c := range chunks {
 		totalTokens += c.Tokens + 20
 		sources[c.File] = true
-		ctxChunks[i] = types.ContextChunk{
+		ctxChunks[i] = utils.ContextChunk{
 			File:       c.File,
 			StartLine:  c.StartLine,
 			EndLine:    c.EndLine,
@@ -324,5 +324,5 @@ func (cb *ContextBuilder) assembleContext(chunks []Chunk) *types.ContextWindow {
 	for s := range sources {
 		srcList = append(srcList, s)
 	}
-	return &types.ContextWindow{Chunks: ctxChunks, TotalTokens: totalTokens, Sources: srcList}
+	return &utils.ContextWindow{Chunks: ctxChunks, TotalTokens: totalTokens, Sources: srcList}
 }

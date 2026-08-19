@@ -19,7 +19,7 @@ import (
 	"eulix/internal/cache"
 	"eulix/internal/config"
 	"eulix/internal/llm"
-	"eulix/internal/types"
+	"eulix/internal/utils"
 )
 
 type QueryType int
@@ -33,17 +33,17 @@ type Router struct {
 	llmClient       *llm.Client
 	cache           *cache.Manager
 	contextBuilder  *ContextBuilder
-	kbIndex         *types.KBIndices
+	kbIndex         *utils.KBIndices
 	callGraph       *CallGraph
-	kb              *types.KnowledgeBaseRef
-	Patterns        *types.PatternInfo
+	kb              *utils.KnowledgeBaseRef
+	Patterns        *utils.PatternInfo
 	cgIdx           *callGraphIndex
 	cgBuild         *CallGraphIdx
 	currentChecksum string
 }
 
 type metricsEntry struct {
-	fn   *types.KBFunction
+	fn   *utils.KBFunction
 	file string
 }
 
@@ -53,7 +53,7 @@ type callGraphIndex struct {
 }
 
 type CallGraphIdx struct {
-	Nodes    map[string]*types.CallGraphNode
+	Nodes    map[string]*utils.CallGraphNode
 	CalledBy map[string][]string
 	Calls    map[string][]string
 }
@@ -108,12 +108,12 @@ type ContextBuilder struct {
 	ivfIndex      *IVFIndex      // non-nil when len(embeddings) > ivfBuildThreshold
 	invertedIdx   *InvertedIndex // non-nil when len(chunks) > invIdxThreshold
 	hasKB         bool
-	kbData        *types.KnowledgeBaseRef
+	kbData        *utils.KnowledgeBaseRef
 	hasCallGraph  bool
 	callGraph     map[string][]Relationship
-	cgRef         *types.CallGraphRef
-	kbIdx         *types.KBIndices
-	externalDeps  []types.ExternalDependency
+	cgRef         *utils.CallGraphRef
+	kbIdx         *utils.KBIndices
+	externalDeps  []utils.ExternalDependency
 	depIdx        *depIndex
 	sourceRoot    string
 	debugLog      *DebugLogger
