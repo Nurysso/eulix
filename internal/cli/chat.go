@@ -130,41 +130,12 @@ func startChat() error {
 		fmt.Println()
 	}
 
-	var cacheManager *cache.Manager
-	if cfg.Cache.Redis.Enabled || cfg.Cache.SQL.Enabled {
-		cacheManager, err = cache.CacheController(cfg)
-		if err != nil {
-			printStatusMessage(fmt.Sprintf("Cache initialization failed: %v", err),
-				"Caching disabled, continuing...",
-			)
-		} else {
-			defer func() {
-				_ = cacheManager.Close()
-			}()
-
-			// Clean expired entries on startup
-			if err := cacheManager.CleanExpired(); err != nil {
-				fmt.Printf("Failed to clean expired cache: %v\n", err)
-			}
-
-			// Invalidate old cache entries if checksum changed
-			if changePercent > 0 {
-				if err := cacheManager.InvalidateByChecksum(current.Hash); err != nil {
-					fmt.Printf("Failed to invalidate old cache: %v\n", err)
-				} else {
-					printStatusMessage("Cache invalidated due to codebase changes")
-				}
-			}
-
-			// Show cache stats
-			if stats, err := cacheManager.GetStats(); err == nil {
-				if sqlEntries, ok := stats["sql_valid_entries"].(int); ok && sqlEntries > 0 {
-					fmt.Printf("Cache: %d valid entries\n", sqlEntries)
-				}
-			}
-		}
+	cacheManager, err := cache.CacheController(cfg)
+	if err != nil {
+		fmt.Printf("Warning: History database unavailable: %v\n", err)
+	} else if cacheManager != nil {
+		defer cacheManager.Close()
 	}
-
 	llmClient, err := llm.MouthClient(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize LLM: %w", err)
