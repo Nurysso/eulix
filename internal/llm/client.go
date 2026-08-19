@@ -32,7 +32,7 @@ import (
 	"time"
 
 	"eulix/internal/config"
-	"eulix/internal/types"
+	"eulix/internal/utils"
 )
 
 // Provider constants — matches toml provider = "..."
@@ -465,7 +465,7 @@ func resolveEndpoint(provider, cfgEndpoint string) string {
 // BuildFullPrompt returns the complete prompt string that would be sent to the LLM,
 // including context chunks, user query, and any additional system instructions.
 // This is used when you want the prompt without making an API call.
-func (c *Client) BuildFullPrompt(context *types.ContextWindow, userQuery string, additionalPrompt ...string) string {
+func (c *Client) BuildFullPrompt(context *utils.ContextWindow, userQuery string, additionalPrompt ...string) string {
 	var sb strings.Builder
 	sb.WriteString(c.buildPrompt(context, userQuery))
 	for _, p := range additionalPrompt {
@@ -478,11 +478,11 @@ func (c *Client) BuildFullPrompt(context *types.ContextWindow, userQuery string,
 
 // buildPrompt builds only the context payload — no instruction boilerplate.
 // Instructions belong in buildSystemPrompt() which is passed as the system role.
-func (c *Client) buildPrompt(context *types.ContextWindow, userQuery string) string {
+func (c *Client) buildPrompt(context *utils.ContextWindow, userQuery string) string {
 	var sb strings.Builder
 
 	// Separate source vs metadata chunks
-	var srcChunks, metaChunks []types.ContextChunk
+	var srcChunks, metaChunks []utils.ContextChunk
 	for _, chunk := range context.Chunks {
 		if strings.TrimSpace(chunk.Content) != "" && !strings.HasPrefix(chunk.Content, "[METADATA]") {
 			srcChunks = append(srcChunks, chunk)

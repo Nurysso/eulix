@@ -12,7 +12,7 @@ package fixers
 import (
 	"encoding/binary"
 	"encoding/json"
-	t "eulix/internal/types"
+	"eulix/internal/utils"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -130,7 +130,7 @@ func printBinDiagnostic(label, path string) (binHeader, error) {
 	default:
 		payloadBytes := len(data) - payloadOff
 		fmt.Printf("   ✓ Payload OK — %d entries, %d payload bytes (avg %.0f bytes/entry incl. IDs)\n",
-			inferred, payloadBytes, float64(payloadBytes)/float64(max(inferred, 1)))
+			inferred, payloadBytes, float64(payloadBytes)/float64(inferred))
 	}
 	return hdr, nil
 }
@@ -219,7 +219,7 @@ func GLaDOS(eulixDir string) error {
 	// come from the canonical eulix/internal/types definitions).
 	if err == nil && embErr == nil {
 		embCount := int(embHdr.Count)
-		ratio := float64(embCount) / float64(max(funcCount, 1))
+		ratio := float64(embCount) / float64(funcCount)
 		if ratio < 0.1 || ratio > 100 {
 			fmt.Printf("   ⚠  Unusual ratio: %d embeddings vs %d indexed functions\n",
 				embCount, funcCount)
@@ -245,12 +245,12 @@ func GLaDOS(eulixDir string) error {
 	return nil
 }
 
-func loadKB(path string) (*t.KnowledgeBaseRef, error) {
+func loadKB(path string) (*utils.KnowledgeBaseRef, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var kb t.KnowledgeBaseRef
+	var kb utils.KnowledgeBaseRef
 	if err := json.Unmarshal(data, &kb); err != nil {
 		return nil, err
 	}
@@ -262,7 +262,7 @@ func checkCallGraph(path string) (nodes, edges int, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	var cg t.CallGraphRef
+	var cg utils.CallGraphRef
 	if err := json.Unmarshal(data, &cg); err != nil {
 		return 0, 0, err
 	}
@@ -274,16 +274,9 @@ func checkIndex(path string) (funcCount, typeCount int, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	var idx t.IndexRef
+	var idx utils.IndexRef
 	if err := json.Unmarshal(data, &idx); err != nil {
 		return 0, 0, err
 	}
 	return len(idx.Indices.FunctionsByName), len(idx.Indices.TypesByName), nil
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

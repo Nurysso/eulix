@@ -21,12 +21,13 @@ import (
 )
 
 type Config struct {
-	Project    ProjectConfig    `toml:"project"`
-	Parser     ParserConfig     `toml:"parser"`
-	Embeddings EmbeddingsConfig `toml:"embeddings"`
-	LLM        LLMConfig        `toml:"llm"`
-	Cache      CacheConfig      `toml:"cache"`
-	Checksum   ChecksumConfig   `toml:"checksum"`
+	Project         ProjectConfig    `toml:"project"`
+	Parser          ParserConfig     `toml:"parser"`
+	Embeddings      EmbeddingsConfig `toml:"embeddings"`
+	LLM             LLMConfig        `toml:"llm"`
+	RetrievalConfig RetrievalConfig  `toml:"retrievalConfig"`
+	Cache           CacheConfig      `toml:"cache"`
+	Checksum        ChecksumConfig   `toml:"checksum"`
 }
 
 type ProjectConfig struct {
@@ -58,9 +59,19 @@ type LLMConfig struct {
 	Endpoint    string  `toml:"endpoint"`
 }
 
+// --- General RAG / Graph Tuning (Additions will be made here A MASSIVE TODO) ---
+type RetrievalConfig struct {
+	ApplyCrossRootIsolation bool    `json:"apply_cross_root_isolation"` // Toggles whether we care about crossing project boundaries at all.
+	CrossRootPenalty        float32 `json:"cross_root_penalty"`         // Multiplier applied to candidates outside the primary root (e.g., 0.3 = soft penalty, 0.01 = strict).
+	PreMMRScoreFloorRatio   float32 `json:"pre_mmr_score_floor_ratio"`  // Minimum relative score required to survive pre-MMR pruning (e.g., 0.05 = drops candidates < 5% of max score).
+	TopKCandidates          int     `json:"top_k_candidates"`           // How many raw vector hits to pull before applying graph expansion and MMR pruning.
+	MMRDiversityFactor      float32 `json:"mmr_diversity_factor"`       // Balances MMR relevance vs. diversity (0.0 = max diversity, 1.0 = max relevance).
+	MaxGraphExpansionDepth  int     `json:"max_graph_expansion_depth"`  // How many hops to traverse in your Rust call-graph (1 = direct deps, 2 = transitive deps).
+}
+
 type CacheConfig struct {
-	Redis RedisConfig `toml:"redis"`
-	SQL   SQLConfig   `toml:"sql"`
+	Enable bool   `toml:"enable"`
+	Path   string `toml:"path"`
 }
 
 type RedisConfig struct {
@@ -127,13 +138,6 @@ func Load() (*Config, error) {
 		cfg.LLM.APIKey = resolveAPIKeyFromEnv(cfg.LLM.Provider)
 	}
 
-	if cfg.Cache.SQL.Enabled && !filepath.IsAbs(cfg.Cache.SQL.DSN) {
-		absPath, err := filepath.Abs(cfg.Cache.SQL.DSN)
-		if err == nil {
-			cfg.Cache.SQL.DSN = absPath
-		}
-	}
-
 	return &cfg, nil
 }
 
@@ -168,17 +172,17 @@ func DefaultConfig() *Config {
 			BaseURL:     "http://localhost:11434",
 			Endpoint:    "",
 		},
+		RetrievalConfig: RetrievalConfig{
+			ApplyCrossRootIsolation: true,
+			CrossRootPenalty:        0.32,
+			PreMMRScoreFloorRatio:   0.05,
+			TopKCandidates:          150,
+			MMRDiversityFactor:      0.65,
+			MaxGraphExpansionDepth:  1,
+		},
 		Cache: CacheConfig{
-			Redis: RedisConfig{
-				Enabled:  false,
-				URL:      "redis://localhost:6379",
-				TTLHours: 6,
-			},
-			SQL: SQLConfig{
-				Enabled: true,
-				Driver:  "sqlite",
-				DSN:     ".eulix/history.db",
-			},
+			Enable: true,
+			Path:   ".eulix/history.db",
 		},
 		Checksum: ChecksumConfig{
 			ChangeThreshold:         0.10,

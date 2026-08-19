@@ -15,6 +15,7 @@ import (
 	"eulix/internal/cache"
 	"eulix/internal/config"
 	"eulix/internal/query"
+	"eulix/internal/utils"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -39,20 +40,22 @@ type Message struct {
 }
 
 type Model struct {
-	state        AppState
-	input        textinput.Model
-	messages     []Message
-	viewport     viewport.Model
-	spinner      spinner.Model
-	router       *query.Router
-	config       *config.Config
-	cacheManager *cache.Manager
-	width        int
-	height       int
-	processing   bool
+	state         AppState
+	input         textinput.Model
+	messages      []Message
+	viewport      viewport.Model
+	spinner       spinner.Model
+	router        *query.Router
+	config        *config.Config
+	cacheManager  *cache.Manager
+	width         int
+	height        int
+	processing    bool
+	showReasoning bool
 }
 
 type queryResultMsg struct {
+	query  string
 	result string
 	err    error
 }
@@ -60,18 +63,22 @@ type queryResultMsg struct {
 type switchToCacheViewerMsg struct{}
 
 // Theme
+
 var (
-	primaryColor   = lipgloss.Color("#00D9FF")
-	secondaryColor = lipgloss.Color("#7C3AED")
-	successColor   = lipgloss.Color("#10B981")
-	errorColor     = lipgloss.Color("#EF4444")
-	warningColor   = lipgloss.Color("#F59E0B")
-	mutedColor     = lipgloss.Color("#6B7280")
-	textColor      = lipgloss.Color("#F9FAFB")
-	borderColor    = lipgloss.Color("#374151")
-	codeColor      = lipgloss.Color("#FCD34D")
-	highlightColor = lipgloss.Color("#8B5CF6")
-	surfaceColor   = lipgloss.Color("#111827")
+	primaryColor   = lipgloss.Color("#5EEAD4") // teal    — accents, user, links
+	secondaryColor = lipgloss.Color("#A78BFA") // violet  — chrome / titles
+	successColor   = lipgloss.Color("#34D399") // emerald — assistant badge
+	errorColor     = lipgloss.Color("#F87171") // coral   — errors
+	warningColor   = lipgloss.Color("#FBBF24") // amber   — warnings
+	mutedColor     = lipgloss.Color("#7C8798") // slate   — secondary text
+	textColor      = lipgloss.Color("#E7E9EE") // off-white — body text
+	borderColor    = lipgloss.Color("#2A3142") // deep slate — borders
+	codeColor      = lipgloss.Color("#F9E2AF") // warm gold — code
+	codeBgColor    = lipgloss.Color("#1A2030") // code block background
+	highlightColor = lipgloss.Color("#C4B5FD") // light violet — list bullets
+	reasoningColor = lipgloss.Color("#5B6478") // dim slate-blue — reasoning
+	quoteColor     = lipgloss.Color("#8B95A8") // blockquote text
+	titleBarBg     = lipgloss.Color("#1E1B4B") // deep indigo — title bar bg
 )
 
 var headingRe = regexp.MustCompile(`^(#{1,6})\s+(.+)$`)
@@ -80,24 +87,44 @@ var (
 	numberedListRe = regexp.MustCompile(`^(\d+)\.\s+(.+)$`)
 	inlineCodeRe   = regexp.MustCompile("`([^`]+)`")
 	boldRe         = regexp.MustCompile(`(\*\*|__)([^*_]+)(\*\*|__)`)
+	strikeRe       = regexp.MustCompile(`~~([^~]+)~~`)
+	linkRe         = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	isNumberedRe   = regexp.MustCompile(`^\d+\.\s`)
+	reasoningTagRe = regexp.MustCompile(`(?is)<\s*(?:reasoning|thinking)\s*>(.*?)<\s*/\s*(?:reasoning|thinking)\s*>`)
+	answerTagRe    = regexp.MustCompile(`(?is)<\s*answer\s*>(.*?)<\s*/\s*answer\s*>`)
 )
 
 var (
 	codeBlockStyle = lipgloss.NewStyle().
 			Foreground(codeColor).
-			Background(lipgloss.Color("#1F2937")).
+			Background(codeBgColor).
 			Padding(0, 1)
-
+	codeLangStyle   = lipgloss.NewStyle().Bold(true).Foreground(mutedColor)
 	codeInlineStyle = lipgloss.NewStyle().Foreground(codeColor)
-	boldStyle       = lipgloss.NewStyle().Bold(true).Foreground(textColor)
-	listStyle       = lipgloss.NewStyle().Foreground(highlightColor)
-	headingStyle    = lipgloss.NewStyle().Bold(true).Foreground(primaryColor).Underline(true)
+
+	boldStyle     = lipgloss.NewStyle().Bold(true).Foreground(textColor)
+	strikeStyle   = lipgloss.NewStyle().Strikethrough(true).Foreground(mutedColor)
+	linkTextStyle = lipgloss.NewStyle().Underline(true).Foreground(primaryColor)
+	linkURLStyle  = lipgloss.NewStyle().Italic(true).Foreground(mutedColor)
+
+	listStyle = lipgloss.NewStyle().Foreground(highlightColor)
+
+	h1Style = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(primaryColor)
+	h2Style = lipgloss.NewStyle().Bold(true).Foreground(secondaryColor)
+	h3Style = lipgloss.NewStyle().Bold(true).Foreground(highlightColor)
+
+	quoteBarStyle = lipgloss.NewStyle().Foreground(borderColor)
+	quoteStyle    = lipgloss.NewStyle().Italic(true).Foreground(quoteColor)
+	hrStyle       = lipgloss.NewStyle().Foreground(borderColor)
+
+	reasoningLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(reasoningColor)
+	reasoningTextStyle  = lipgloss.NewStyle().Italic(true).Foreground(reasoningColor)
+	reasoningBarStyle   = lipgloss.NewStyle().Foreground(borderColor)
 
 	titleBarStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(textColor).
-			Background(secondaryColor).
+			Foreground(primaryColor).
+			Background(titleBarBg).
 			Padding(0, 2)
 
 	subtitleStyle = lipgloss.NewStyle().
@@ -119,11 +146,11 @@ var (
 func roleMeta(role string) (badge string, badgeStyle, contentStyle lipgloss.Style) {
 	switch role {
 	case "user":
-		return "● YOU", lipgloss.NewStyle().Foreground(primaryColor).Bold(true), lipgloss.NewStyle().Foreground(textColor)
+		return "› YOU", lipgloss.NewStyle().Foreground(primaryColor).Bold(true), lipgloss.NewStyle().Foreground(textColor)
 	case "assistant":
-		return "● EULIX", lipgloss.NewStyle().Foreground(successColor).Bold(true), lipgloss.NewStyle().Foreground(textColor)
+		return "◆ EULIX", lipgloss.NewStyle().Foreground(successColor).Bold(true), lipgloss.NewStyle().Foreground(textColor)
 	case "system":
-		return "◆ SYSTEM", lipgloss.NewStyle().Foreground(highlightColor).Bold(true), lipgloss.NewStyle().Foreground(mutedColor)
+		return "◇ SYSTEM", lipgloss.NewStyle().Foreground(highlightColor).Bold(true), lipgloss.NewStyle().Foreground(mutedColor)
 	case "error":
 		return "✖ ERROR", lipgloss.NewStyle().Foreground(errorColor).Bold(true), lipgloss.NewStyle().Foreground(errorColor)
 	case "warning":
@@ -159,6 +186,7 @@ func MainModel(router *query.Router, cfg *config.Config, cacheManager *cache.Man
 		config:       cfg,
 		cacheManager: cacheManager,
 		messages: []Message{
+			// TODO make these dynamic
 			{
 				Role: "system",
 				Content: "Eulix [Beta] initialized.\n\n" +
@@ -228,6 +256,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: msg.result,
 			})
 			m.state = StateDisplaying
+
+			if m.cacheManager != nil {
+				reasoning, answer := utils.SplitReasoningAndAnswer(msg.result)
+				_, _ = m.cacheManager.Save(msg.query, reasoning, answer)
+			}
 		}
 
 		m.viewport.SetContent(m.renderMessages())
@@ -314,6 +347,7 @@ func (m Model) handleCommand(command string) (tea.Model, tea.Cmd) {
 			Content: "AVAILABLE COMMANDS\n\n" +
 				"  /help     Show this help message\n" +
 				"  /history  View cached queries and responses\n" +
+				"  /think    Toggle visibility of reasoning traces\n" +
 				"  /clear    Clear conversation history\n" +
 				"  /stats    Show system statistics\n" +
 				"  /quit     Exit the application\n\n" +
@@ -325,6 +359,16 @@ func (m Model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		})
 	case "/history":
 		return m, func() tea.Msg { return switchToCacheViewerMsg{} }
+	case "/think", "/reasoning":
+		m.showReasoning = !m.showReasoning
+		visibility := "hidden"
+		if m.showReasoning {
+			visibility = "visible"
+		}
+		m.messages = append(m.messages, Message{
+			Role:    "system",
+			Content: fmt.Sprintf("Reasoning traces are now %s.", visibility),
+		})
 	case "/clear":
 		m.messages = []Message{
 			{Role: "system", Content: "Conversation cleared. How can I help you?"},
@@ -361,14 +405,19 @@ func (m Model) getSystemStats() string {
 	if m.cacheManager != nil {
 		cacheStatus = "Enabled"
 	}
+	reasoningStatus := "Hidden"
+	if m.showReasoning {
+		reasoningStatus = "Visible"
+	}
 	return fmt.Sprintf(
 		"SYSTEM STATISTICS\n\n"+
 			"  Total Messages    %d\n"+
 			"  Your Questions    %d\n"+
 			"  AI Responses      %d\n"+
 			"  Current State     %s\n"+
-			"  Cache Status      %s",
-		len(m.messages), userMessages, userMessages, m.getStateName(), cacheStatus)
+			"  Cache Status      %s\n"+
+			"  Reasoning         %s",
+		len(m.messages), userMessages, userMessages, m.getStateName(), cacheStatus, reasoningStatus)
 }
 
 func (m Model) getStateName() string {
@@ -401,8 +450,12 @@ func (m Model) View() string {
 	if m.cacheManager != nil {
 		cacheStatus = "cache on"
 	}
+	reasoningStatus := "reasoning hidden"
+	if m.showReasoning {
+		reasoningStatus = "reasoning shown"
+	}
 	subtitle := subtitleStyle.Copy().Width(m.width).Render(
-		fmt.Sprintf("state: %s  •  messages: %d  •  %s", m.getStateName(), len(m.messages), cacheStatus))
+		fmt.Sprintf("state: %s  •  messages: %d  •  %s  •  %s", m.getStateName(), len(m.messages), cacheStatus, reasoningStatus))
 	b.WriteString(title)
 	b.WriteString("\n")
 	b.WriteString(subtitle)
@@ -451,10 +504,11 @@ func (m Model) View() string {
 
 	// Footer key hints
 	help := fmt.Sprintf(
-		"%s send   %s quit   %s commands   %s scroll",
+		"%s send   %s quit   %s commands   %s toggle reasoning   %s scroll",
 		keyHintStyle.Render("Enter"),
 		keyHintStyle.Render("Esc"),
 		keyHintStyle.Render("/help"),
+		keyHintStyle.Render("/think"),
 		keyHintStyle.Render("↑/↓"),
 	)
 	b.WriteString(helpBarStyle.Render(help))
@@ -484,7 +538,7 @@ func (m Model) renderMessages() string {
 
 		var content string
 		if msg.Role == "assistant" {
-			content = formatMarkdownResponse(msg.Content, wrapWidth)
+			content = renderAssistantMessage(msg.Content, wrapWidth, m.showReasoning)
 		} else {
 			content = contentStyle.Render(wrapText(msg.Content, wrapWidth))
 		}
@@ -496,8 +550,50 @@ func (m Model) renderMessages() string {
 	return b.String()
 }
 
-// formatMarkdownResponse formats LLM responses with markdown-like styling.
-func formatMarkdownResponse(text string, width int) string {
+// renderAssistantMessage renders a full assistant turn: an optional
+// reasoning block followed by the markdown-formatted answer.
+func renderAssistantMessage(raw string, width int, showReasoning bool) string {
+	reasoning, answer := utils.SplitReasoningAndAnswer(raw)
+
+	var b strings.Builder
+	if reasoning != "" {
+		b.WriteString(renderReasoningBlock(reasoning, width, showReasoning))
+		b.WriteString("\n\n")
+	}
+	b.WriteString(renderMarkdownBody(answer, width))
+
+	return b.String()
+}
+
+// renderReasoningBlock renders the model's reasoning trace. Collapsed by
+// default so the answer stays front and center; /think expands it in
+// place with a dim left rule to keep it visually subordinate to the answer.
+func renderReasoningBlock(reasoning string, width int, expanded bool) string {
+	lines := strings.Count(strings.TrimSpace(reasoning), "\n") + 1
+
+	if !expanded {
+		return reasoningLabelStyle.Render("◔ REASONING") + "  " +
+			reasoningTextStyle.Render(fmt.Sprintf("%d lines hidden — /think to expand", lines))
+	}
+
+	var b strings.Builder
+	b.WriteString(reasoningLabelStyle.Render("◔ REASONING"))
+	b.WriteByte('\n')
+
+	wrapped := wrapText(reasoning, width-2)
+	for _, line := range strings.Split(wrapped, "\n") {
+		b.WriteString(reasoningBarStyle.Render("│ "))
+		b.WriteString(reasoningTextStyle.Render(line))
+		b.WriteByte('\n')
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderMarkdownBody formats markdown-ish text (headings, lists, code
+// blocks, blockquotes, rules, links, bold/strikethrough/inline code) for
+// terminal display.
+func renderMarkdownBody(text string, width int) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(text, "\n")
 
@@ -506,6 +602,7 @@ func formatMarkdownResponse(text string, width int) string {
 
 	inCodeBlock := false
 	inList := false
+	inQuote := false
 	prevWasParagraph := false
 
 	for _, line := range lines {
@@ -514,6 +611,7 @@ func formatMarkdownResponse(text string, width int) string {
 		if line == "" {
 			b.WriteByte('\n')
 			inList = false
+			inQuote = false
 			prevWasParagraph = false
 			continue
 		}
@@ -523,7 +621,7 @@ func formatMarkdownResponse(text string, width int) string {
 			if inCodeBlock {
 				lang := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "```"), "~~~"))
 				if lang != "" {
-					fmt.Fprintf(&b, "%s\n", headingStyle.Render("["+strings.ToUpper(lang)+"]"))
+					fmt.Fprintf(&b, "%s\n", codeLangStyle.Render("["+strings.ToUpper(lang)+"]"))
 				}
 			} else {
 				b.WriteByte('\n')
@@ -541,8 +639,29 @@ func formatMarkdownResponse(text string, width int) string {
 			if prevWasParagraph {
 				b.WriteByte('\n')
 			}
-			fmt.Fprintf(&b, "%s\n", headingStyle.Render(strings.TrimSpace(m[2])))
+			fmt.Fprintf(&b, "%s\n", headingStyleFor(len(m[1])).Render(strings.TrimSpace(m[2])))
 			inList = false
+			inQuote = false
+			prevWasParagraph = false
+			continue
+		}
+
+		if isHorizontalRule(line) {
+			fmt.Fprintf(&b, "%s\n", hrStyle.Render(strings.Repeat("─", clampWidth(width))))
+			inList = false
+			inQuote = false
+			prevWasParagraph = false
+			continue
+		}
+
+		if isBlockquote(line) {
+			quoteText := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), ">"))
+			formatted := processInlineMarkdown(quoteText, width-4)
+			for _, l := range strings.Split(formatted, "\n") {
+				fmt.Fprintf(&b, "%s%s\n", quoteBarStyle.Render("┃ "), quoteStyle.Render(l))
+			}
+			inList = false
+			inQuote = true
 			prevWasParagraph = false
 			continue
 		}
@@ -551,6 +670,7 @@ func formatMarkdownResponse(text string, width int) string {
 			formatted := formatListItem(line, width-4)
 			fmt.Fprintf(&b, "  %s\n", formatted)
 			inList = true
+			inQuote = false
 			prevWasParagraph = false
 			continue
 		}
@@ -566,6 +686,9 @@ func formatMarkdownResponse(text string, width int) string {
 			b.WriteByte('\n')
 			inList = false
 		}
+		if inQuote {
+			inQuote = false
+		}
 
 		formatted := processInlineMarkdown(line, width)
 		fmt.Fprintf(&b, "%s\n", formatted)
@@ -573,6 +696,42 @@ func formatMarkdownResponse(text string, width int) string {
 	}
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func headingStyleFor(level int) lipgloss.Style {
+	switch level {
+	case 1:
+		return h1Style
+	case 2:
+		return h2Style
+	default:
+		return h3Style
+	}
+}
+
+func clampWidth(width int) int {
+	if width < 8 {
+		return 8
+	}
+	return width
+}
+
+func isHorizontalRule(line string) bool {
+	t := strings.TrimSpace(line)
+	if len(t) < 3 {
+		return false
+	}
+	for _, r := range []byte{'-', '*', '_'} {
+		if strings.Count(t, string(r)) == len(t) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBlockquote(line string) bool {
+	t := strings.TrimSpace(line)
+	return t == ">" || strings.HasPrefix(t, "> ")
 }
 
 func isListItem(line string) bool {
@@ -610,8 +769,17 @@ func formatListItem(line string, width int) string {
 	return listStyle.Render(bullet) + " " + processInlineMarkdown(content, width-4)
 }
 
-// processInlineMarkdown handles `code` and **bold** spans, then word-wraps.
+// processInlineMarkdown handles [links](url), `code`, **bold**, and
+// ~~strikethrough~~ spans, then word-wraps the result.
 func processInlineMarkdown(text string, width int) string {
+	text = linkRe.ReplaceAllStringFunc(text, func(match string) string {
+		m := linkRe.FindStringSubmatch(match)
+		if len(m) < 3 {
+			return match
+		}
+		return linkTextStyle.Render(m[1]) + " " + linkURLStyle.Render("("+m[2]+")")
+	})
+
 	text = inlineCodeRe.ReplaceAllStringFunc(text, func(match string) string {
 		return codeInlineStyle.Render(strings.Trim(match, "`"))
 	})
@@ -619,6 +787,13 @@ func processInlineMarkdown(text string, width int) string {
 	text = boldRe.ReplaceAllStringFunc(text, func(match string) string {
 		if inner := boldRe.FindStringSubmatch(match); len(inner) > 2 {
 			return boldStyle.Render(inner[2])
+		}
+		return match
+	})
+
+	text = strikeRe.ReplaceAllStringFunc(text, func(match string) string {
+		if inner := strikeRe.FindStringSubmatch(match); len(inner) > 1 {
+			return strikeStyle.Render(inner[1])
 		}
 		return match
 	})

@@ -13,23 +13,33 @@ parsing, debug logging, and math operations used throughout the context builder.
 package query
 
 import (
+	"bufio"
 	"encoding/json"
+	"eulix/internal/config"
+	"eulix/internal/utils"
 	"fmt"
 	"math"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
-	"eulix/internal/types"
+	"gonum.org/v1/gonum/blas/blas32"
 )
 
-// Close is a no-op placeholder for resource cleanup.
-// Kept for interface compatibility.
-func (cb *ContextBuilder) Close() error { return nil }
-
+// Close cleans up resources used by ContextBuilder
+func (cb *ContextBuilder) Close() error {
+	if cb.debugLog != nil {
+		cb.debugLog.Log("Closing ContextBuilder...")
+		cb.debugLog.Close()
+	}
+	return nil
+}
 func getHeapAlloc() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -38,10 +48,6 @@ func getHeapAlloc() uint64 {
 
 // GetLastTrace returns the most recent DebugTrace from the last query execution.
 // Thread-safe via mutex protection.
-//
-// See:
-//   - multiStrategySearch: Populates trace with strategy results
-//   - context_builder.go: DebugTrace storage and lifecycle
 func (cb *ContextBuilder) GetLastTrace() *DebugTrace {
 	cb.mu.Lock()
 	defer func() {
@@ -53,7 +59,7 @@ func (cb *ContextBuilder) GetLastTrace() *DebugTrace {
 // writeContextToFile serializes a ContextWindow to a debug file.
 // Uses timestamp in filename for uniqueness.
 // Intended for offline analysis; not used in production path.
-func (cb *ContextBuilder) writeContextToFile(ctx *types.ContextWindow) error {
+func (cb *ContextBuilder) writeContextToFile(ctx *utils.ContextWindow) error {
 	logDir := filepath.Join(cb.config.Project.Path, ".eulix", "debug", "retrieval")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return err
@@ -84,7 +90,7 @@ func jsonSkipToKey(dec *json.Decoder, target string) error {
 			return fmt.Errorf("expected string key, got %T", tok)
 		}
 		if key == target {
-			return nil // dec is now positioned just before the value
+			return nil
 		}
 		var skip json.RawMessage
 		if err := dec.Decode(&skip); err != nil {
@@ -94,15 +100,51 @@ func jsonSkipToKey(dec *json.Decoder, target string) error {
 	return fmt.Errorf("key %q not found", target)
 }
 
-// NewDebugLogger creates a thread-safe debug logger writing to eulixDir/context_debug.log.
+func ApplyPreMMRFloor(candidates []ScoredChunk, cfg *config.RetrievalConfig) []ScoredChunk {
+	if len(candidates) == 0 {
+		return candidates
+	}
+
+	// Find the maximum score among all current candidates
+	maxScore := 0.0
+	for _, c := range candidates {
+		if c.Score > maxScore {
+			maxScore = c.Score
+		}
+	}
+
+	// Compute cutoff floor using configured ratio
+	cutoff := maxScore * float64(cfg.PreMMRScoreFloorRatio)
+
+	filtered := make([]ScoredChunk, 0, len(candidates))
+	for _, c := range candidates {
+		if c.Score >= cutoff {
+			filtered = append(filtered, c)
+		}
+	}
+
+	return filtered
+}
+
+// NewDebugLogger creates a thread-safe debug logger writing to eulixDir/debug/context_debug.log.
 // If file creation fails, returns a silent (no-op) logger rather than panicking.
 func NewDebugLogger(eulixDir string) *DebugLogger {
 	logPath := filepath.Join(eulixDir, "debug", "context_debug.log")
+
+	// Ensure directory exists
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		return &DebugLogger{} // silent fallback
+	}
+
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return &DebugLogger{} // silent fallback
 	}
-	return &DebugLogger{file: f}
+
+	return &DebugLogger{
+		file:   f,
+		writer: bufio.NewWriterSize(f, 64*1024), // 64KB buffer
+	}
 }
 
 // Log writes a timestamped debug message to the log file.
@@ -111,49 +153,102 @@ func NewDebugLogger(eulixDir string) *DebugLogger {
 //
 // Format: [HH:MM:SS] <formatted message>
 func (d *DebugLogger) Log(format string, args ...interface{}) {
-	if d.file == nil {
+	if d.file == nil || d.closed {
 		return
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	msg := fmt.Sprintf("[%s] ", time.Now().Format("15:04:05"))
+	msg := fmt.Sprintf("[%s] ", time.Now().Format("15:04:05.000"))
 	msg += fmt.Sprintf(format, args...)
 	if !strings.HasSuffix(msg, "\n") {
 		msg += "\n"
 	}
 	_, _ = d.file.WriteString(msg)
+	if d.writer.Buffered() > 50*1024 {
+		_ = d.writer.Flush()
+	}
 }
 
-// Close closes the debug log file.
-// Safe to call multiple times (checks for nil).
-func (d *DebugLogger) Close() error {
-	if d.file != nil {
-		return d.file.Close()
+// Flush forces all buffered logs to disk
+func (d *DebugLogger) Flush() {
+	if d.file == nil || d.closed {
+		return
 	}
-	return nil
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.writer != nil {
+		_ = d.writer.Flush()
+	}
+}
+
+// Close flushes and closes the logger
+func (d *DebugLogger) Close() {
+	if d.file == nil || d.closed {
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.writer != nil {
+		_ = d.writer.Flush()
+	}
+	if d.file != nil {
+		_ = d.file.Close()
+	}
+	d.closed = true
+}
+
+func (cb *ContextBuilder) safeExecute(fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			cb.debugLog.Log("PANIC RECOVERED: %v\nStack trace: %s", r, debug.Stack())
+			cb.debugLog.Flush() // Force flush on panic
+			// Re-panic if you want the program to still crash
+			panic(r)
+		}
+	}()
+	fn()
+}
+
+// StartAutoFlush starts a goroutine that periodically flushes logs to disk
+func (d *DebugLogger) StartAutoFlush(interval time.Duration) {
+	if d.file == nil {
+		return
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			d.Flush()
+		}
+	}()
+}
+
+func (cb *ContextBuilder) setupSignalHandler() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		cb.debugLog.Log("Received shutdown signal, flushing logs...")
+		cb.debugLog.Close()
+		os.Exit(0)
+	}()
 }
 
 // cosineSimilarity computes normalized dot product of two vectors.
 // Returns cosine distance in [0, 1] for normalized vectors, or 0 if either is zero.
-//
-// Formula: (a · b) / (‖a‖ * ‖b‖)
-//
-// Used for:
-//   - Vector embedding comparison (vectorSearch, vectorSearchIVF)
-//   - Centroid distance in k-means clustering (buildIVFIndex)
-//
-// Edge cases:
-//   - Mismatched lengths: return 0 (invalid input)
-//   - Zero vectors: return 0 (avoid division by zero)
-//
-// See:
-//   - vectorSearch: Brute-force nearest-neighbor search
-//   - vectorSearchIVF: IVF cluster probing
-//   - buildIVFIndex: Centroid assignment in k-means
 func cosineSimilarity(a, b []float32) float64 {
-	if len(a) != len(b) {
+	n := len(a)
+	if n != len(b) || n == 0 {
 		return 0
 	}
+	_ = b[n-1]
 	var dot, na, nb float64
 	for i := range a {
 		dot += float64(a[i] * b[i])
@@ -163,30 +258,45 @@ func cosineSimilarity(a, b []float32) float64 {
 	if na == 0 || nb == 0 {
 		return 0
 	}
-	return dot / (math.Sqrt(na) * math.Sqrt(nb))
+	return dot / (math.Sqrt(na * nb))
+}
+
+// dotProduct computes the dot product of two equal-length float32 vectors.
+// Callers MUST guarantee both vectors are pre-normalized to unit L2 norm —
+// this does no normalization itself. For unit vectors, dot product IS
+// cosine similarity, without paying for two sqrt calls and two extra
+// accumulators per call.
+func dotProduct(a, b []float32) float32 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	return blas32.Dot(
+		blas32.Vector{N: len(a), Data: a, Inc: 1},
+		blas32.Vector{N: len(b), Data: b, Inc: 1},
+	)
+}
+
+// Normalize scales v in-place to unit L2 norm. Sum-of-squares accumulates
+// in float64 for precision; the final scale pass is float32. No-op on a
+// zero vector, so a zero vector stays zero and always dot-products to 0
+// rather than producing NaN.
+func Normalize(v []float32) {
+	var sumSq float64
+	for _, x := range v {
+		sumSq += float64(x) * float64(x)
+	}
+	if sumSq == 0 {
+		return
+	}
+	invNorm := float32(1.0 / math.Sqrt(sumSq))
+	for i := range v {
+		v[i] *= invNorm
+	}
 }
 
 // extractQueryKeywords tokenizes a lowercased query and filters stop words.
 // Returns keywords with length > 2 (to exclude "a", "is", etc.).
 // Splits on whitespace and punctuation; also splits snake_case identifiers.
-//
-// Stop words (filtered):
-// Common English: how, does, the, a, an, is, are, what, where, when, etc.
-// Prepositions: of, in, on, at, to, for, with
-// Pronouns: this, that, these, those
-// Modals: can, will, should, would, could
-//
-// Snake_case splitting:
-//   - "load_chunks" → ["load", "chunks"]
-//   - Applies stop-word filter to each part
-//
-// Example:
-//
-//	"how does load_chunks work" → ["load", "chunks"] (filters "how", "does", "work")
-//
-// See:
-//   - keywordSearch / invertedKeywordSearch: Uses extracted keywords
-//   - extractPotentialSymbols: Complementary to this; extracts code identifiers
 func extractQueryKeywords(queryLower string) []string {
 	stop := map[string]bool{
 		"how": true, "does": true, "the": true, "a": true, "an": true,
@@ -218,23 +328,6 @@ func extractQueryKeywords(queryLower string) []string {
 
 // splitIdentifierToTokens decomposes camelCase and snake_case identifiers into tokens.
 // Handles: snake_case, camelCase, PascalCase.
-//
-// Algorithm:
-//  1. Split on underscores: "build_context" → ["build", "context"]
-//  2. For each part, split on uppercase transitions:
-//     - "BuildContext" → ["build", "context"]
-//     - "buildContext" → ["build", "context"]
-//     - "IOUtils" → ["i", "o", "utils"]
-//  3. Lowercase all tokens
-//
-// Examples:
-//   - "loadChunksFromKB" → ["load", "chunks", "from", "kb"]
-//   - "kb_index_cache" → ["kb", "index", "cache"]
-//   - "HTTPSConnection" → ["https", "connection"]
-//
-// See:
-//   - partialIdentifierMatch: Uses to compare query tokens with chunk tokens
-//   - extractPotentialSymbols: Uses to expand single symbols into subtokens
 func splitIdentifierToTokens(s string) []string {
 	toks := []string{}
 	for _, part := range strings.Split(s, "_") {
@@ -258,23 +351,9 @@ func splitIdentifierToTokens(s string) []string {
 // rather than plain English. Matches:
 //   - snake_case: contains "_" and length > 3 (load_chunks, KB_INDEX)
 //   - camelCase: lowercase→uppercase transition (buildContext, mmrSelect)
-//   - PascalCase: ≥2 uppercase letters (BuildContext, KBIndex, IVFIndex)
+//   - PascalCase: ≥2 uppercase letters
 //
 // Plain words like "how", "does", "work" return false.
-//
-// Used by extractPotentialSymbols to filter out English words from queries
-// and avoid polluting symbol searches with articles, verbs, etc.
-//
-// Examples:
-//   - "BuildContext" → true (PascalCase, 2 uppercase)
-//   - "loadChunks" → true (camelCase transition at 'C')
-//   - "kb_index" → true (snake_case)
-//   - "how" → false (plain English)
-//   - "does" → false (plain English)
-//   - "work" → false (plain English)
-//
-// See:
-//   - extractPotentialSymbols: Uses this for filtering
 func isCodeIdentifier(w string) bool {
 	// snake_case: load_chunks, kb_index, QUERY_BATCH_SIZE
 	if strings.Contains(w, "_") && len(w) > 3 {
@@ -303,27 +382,6 @@ func isCodeIdentifier(w string) bool {
 // the query. Plain English words are excluded so that queries like
 // "how does BuildContext work" don't pollute symbol searches with "how", "does",
 // and "work".
-//
-// Algorithm:
-//  1. Split query on whitespace
-//  2. Strip punctuation: .,!?;:'\"()[]{}
-//  3. Filter by length > 2
-//  4. Filter by isCodeIdentifier (snake_case, camelCase, PascalCase, ≥2 uppercase)
-//  5. For each symbol, add both whole symbol and subtokens (splitIdentifierToTokens)
-//  6. Deduplicate via uniqueStrings
-//
-// Example:
-//
-//	"how does BuildContext load_chunks work"
-//	  → matches: "BuildContext", "load_chunks"
-//	  → subtokens: "build", "context", "load", "chunks"
-//	  → filters out: "how", "does", "work" (plain English)
-//
-// See:
-//   - exactSymbolSearch: Uses symbols for direct chunk name/symbol matching
-//   - partialIdentifierMatch: Uses symbols for token-level matching
-//   - kbExactLookup: Uses symbols for KB lookup
-//   - extractQueryKeywords: Complementary extraction for English keywords
 func extractPotentialSymbols(query string) []string {
 	syms := make([]string, 0)
 	for _, w := range strings.Fields(query) {
@@ -339,11 +397,6 @@ func extractPotentialSymbols(query string) []string {
 
 // uniqueStrings removes duplicates from a string slice, preserving first-seen order.
 // Also filters out empty strings.
-//
-// See:
-//   - extractPotentialSymbols: Uses to deduplicate symbols and subtokens
-//   - partialIdentifierMatch: Uses to deduplicate matched tokens
-//   - invertedKeywordSearch: Uses to deduplicate terms before lookup
 func uniqueStrings(input []string) []string {
 	seen := make(map[string]bool, len(input))
 	out := make([]string, 0, len(input))
@@ -355,3 +408,43 @@ func uniqueStrings(input []string) []string {
 	}
 	return out
 }
+
+func byScoreDesc(a, b ScoredChunk) int {
+	switch {
+	case a.Score > b.Score:
+		return -1
+	case a.Score < b.Score:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// hydrationCache memoizes lazily-loaded chunk content for the lifetime of
+// one multiStrategySearch call, so grep/keyword/BM25-proximity don't each
+// pay for hydrating the same chunk.
+type hydrationCache struct {
+	cb    *ContextBuilder
+	cache map[string]string
+}
+
+func newHydrationCache(cb *ContextBuilder) *hydrationCache {
+	return &hydrationCache{cb: cb, cache: make(map[string]string, 64)}
+}
+
+func (h *hydrationCache) content(c *Chunk) string {
+	if c.Content != "" {
+		return c.Content
+	}
+	if v, ok := h.cache[c.ID]; ok {
+		return v
+	}
+	v := h.cb.hydrateOne(*c)
+	h.cache[c.ID] = v
+	return v
+}
+
+// maxContentFallbackHydrations bounds worst-case I/O when a query has
+// no metadata hits at all on a large corpus -- without this, every chunk
+// falls through to the (expensive) content-scan branch.
+const maxContentFallbackHydrations = 500

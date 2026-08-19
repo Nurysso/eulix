@@ -14,10 +14,9 @@ Key Responsibilities:
 package query
 
 import (
+	"eulix/internal/utils"
 	"fmt"
 	"strings"
-
-	"eulix/internal/types"
 )
 
 // kbExactLookup performs symbol-based retrieval from the knowledge base.
@@ -137,7 +136,7 @@ func (cb *ContextBuilder) findChunkForLocation(loc string) *Chunk {
 	return nil
 }
 
-func extractFnParts(fn types.KBFunction) fnParts {
+func extractFnParts(fn utils.KBFunction) fnParts {
 	calls := make([]callPart, len(fn.Calls))
 	for i, c := range fn.Calls {
 		calls[i] = callPart{callee: c.Callee, line: c.Line}
@@ -152,7 +151,7 @@ func extractFnParts(fn types.KBFunction) fnParts {
 	}
 }
 
-func extractClassParts(cls types.KBClass) classParts {
+func extractClassParts(cls utils.KBClass) classParts {
 	methods := make([]methodPart, len(cls.Methods))
 	for i, m := range cls.Methods {
 		methods[i] = methodPart{name: m.Name, lineStart: m.LineStart, lineEnd: m.LineEnd}
@@ -212,7 +211,7 @@ func (cb *ContextBuilder) buildClassFromParts(p classParts, filePath string) Chu
 	}
 }
 
-func (cb *ContextBuilder) addChunksFromFile(filePath string, fs *types.FileData) {
+func (cb *ContextBuilder) addChunksFromFile(filePath string, fs *utils.FileData) {
 	for _, fn := range fs.Functions {
 		c := cb.buildChunkFromKBFunction(fn, filePath)
 		if cb.lazyContent {
@@ -267,7 +266,7 @@ func (cb *ContextBuilder) addChunksFromFile(filePath string, fs *types.FileData)
 // buildChunkFromKBFunction constructs a Chunk from a KBFunction (function or method).
 // Materializes signature, docstring, and call relationships into a human-readable
 // chunk with metadata for retrieval scoring.
-func (cb *ContextBuilder) buildChunkFromKBFunction(fn types.KBFunction, filePath string) Chunk {
+func (cb *ContextBuilder) buildChunkFromKBFunction(fn utils.KBFunction, filePath string) Chunk {
 	content := fmt.Sprintf("Function: %s\nSignature: %s\nLines: %d-%d\n",
 		fn.Name, fn.Signature, fn.LineStart, fn.LineEnd)
 	if fn.Docstring != "" {
@@ -291,7 +290,7 @@ func (cb *ContextBuilder) buildChunkFromKBFunction(fn types.KBFunction, filePath
 // buildChunkFromKBClass constructs a Chunk from a KBClass.
 // Materializes class definition with docstring and methods list.
 // Sets Importance to 0.95 (slightly higher than functions due to structural significance).
-func (cb *ContextBuilder) buildChunkFromKBClass(class types.KBClass, filePath string) Chunk {
+func (cb *ContextBuilder) buildChunkFromKBClass(class utils.KBClass, filePath string) Chunk {
 	content := fmt.Sprintf("Class: %s\nLines: %d-%d\n", class.Name, class.LineStart, class.LineEnd)
 	if class.Docstring != "" {
 		content += "Documentation: " + class.Docstring + "\n"

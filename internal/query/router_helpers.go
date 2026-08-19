@@ -10,6 +10,7 @@ This file is responsible for Helpers used in Query routing.
 package query
 
 import (
+	"eulix/internal/utils"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,8 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
-
-	"eulix/internal/types"
 )
 
 type language int
@@ -62,7 +61,7 @@ func (r *Router) ensureContextBuilder() error {
 }
 
 // hasSourceCode checks whether any context chunk contains an actual code fence.
-func hasSourceCode(ctx *types.ContextWindow) bool {
+func hasSourceCode(ctx *utils.ContextWindow) bool {
 	for _, chunk := range ctx.Chunks {
 		if strings.Contains(chunk.Content, "```") {
 			return true
@@ -100,7 +99,7 @@ func firstSymbolOrExtracted(class *Classification, query string) string {
 	return extracted
 }
 
-func formatFileData(path string, fd *types.FileData) string {
+func formatFileData(path string, fd *utils.FileData) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "File: %s  [%s, %d LOC]\n", path, fd.Language, fd.LOC)
 
@@ -138,7 +137,7 @@ func formatFileData(path string, fd *types.FileData) string {
 }
 
 // Helper to handle the metric formatting
-func formatFunctionMetrics(fn types.KBFunction, path string) string {
+func formatFunctionMetrics(fn utils.KBFunction, path string) string {
 	return fmt.Sprintf(
 		"Metrics for %s (%s, lines %d–%d)\n  Cyclomatic complexity : %d\n  LOC                   : %d\n  Importance            : %.2f\n",
 		fn.Name, path, fn.LineStart, fn.LineEnd,
@@ -460,7 +459,7 @@ func stripCommandPrefix(query string, prefixes ...string) string {
 // resolveCallGraphEntity tries the bare name, then common prefixes,
 // then a linear scan matching on the short name suffix.
 // Returns the matched key, the function data, and whether it was found.
-func (r *Router) resolveCallGraphEntity(name string) (string, *types.CallGraphNode, bool, []string) {
+func (r *Router) resolveCallGraphEntity(name string) (string, *utils.CallGraphNode, bool, []string) {
 	if r.cgBuild == nil {
 		return "", nil, false, nil
 	}
@@ -483,7 +482,7 @@ func (r *Router) resolveCallGraphEntity(name string) (string, *types.CallGraphNo
 	lower := strings.ToLower(name)
 
 	var bestKey string
-	var bestNode *types.CallGraphNode
+	var bestNode *utils.CallGraphNode
 	bestScore := -1
 	var ambiguous []string // all keys whose short name starts with `name`
 
@@ -535,17 +534,17 @@ func (r *Router) resolveCallGraphEntity(name string) (string, *types.CallGraphNo
 	return "", nil, false, nil
 }
 
-func BuildCallGraphIndex(ref *types.CallGraphRef) *CallGraphIdx {
+func BuildCallGraphIndex(ref *utils.CallGraphRef) *CallGraphIdx {
 	if ref == nil {
 		return &CallGraphIdx{
-			Nodes:    make(map[string]*types.CallGraphNode),
+			Nodes:    make(map[string]*utils.CallGraphNode),
 			CalledBy: make(map[string][]string),
 			Calls:    make(map[string][]string),
 		}
 	}
 
 	idx := &CallGraphIdx{
-		Nodes:    make(map[string]*types.CallGraphNode, len(ref.Nodes)),
+		Nodes:    make(map[string]*utils.CallGraphNode, len(ref.Nodes)),
 		CalledBy: make(map[string][]string, len(ref.Nodes)),
 		Calls:    make(map[string][]string, len(ref.Nodes)),
 	}
@@ -601,7 +600,7 @@ func callGraphShortName(key string) string {
 type depIntent int
 
 type depEntry struct {
-	dep      *types.ExternalDependency
+	dep      *utils.ExternalDependency
 	nameLow  string
 	rootLow  string
 	segments []string
@@ -616,7 +615,7 @@ const (
 	depIntentCount                    // how many deps total
 )
 
-func (cb *ContextBuilder) GetExternalDeps() []types.ExternalDependency {
+func (cb *ContextBuilder) GetExternalDeps() []utils.ExternalDependency {
 	return cb.externalDeps
 }
 
@@ -660,14 +659,14 @@ func classifyDepIntent(queryLow, entityLow string) depIntent {
 
 type depIndex struct {
 	entries  []depEntry
-	byFile   map[string][]*types.ExternalDependency // lowercased exact path -> deps
+	byFile   map[string][]*utils.ExternalDependency // lowercased exact path -> deps
 	fileKeys []string                               // sorted keys, for substring fallback
 }
 
-func buildDepIndex(deps []types.ExternalDependency) *depIndex {
+func buildDepIndex(deps []utils.ExternalDependency) *depIndex {
 	idx := &depIndex{
 		entries: make([]depEntry, len(deps)),
-		byFile:  make(map[string][]*types.ExternalDependency),
+		byFile:  make(map[string][]*utils.ExternalDependency),
 	}
 	isTokenSep := func(r rune) bool {
 		return !unicode.IsLower(r) && !unicode.IsDigit(r)
@@ -706,8 +705,8 @@ func buildDepIndex(deps []types.ExternalDependency) *depIndex {
 	return idx
 }
 
-func (idx *depIndex) matchDeps(term string) []*types.ExternalDependency {
-	matched := make([]*types.ExternalDependency, 0, 4)
+func (idx *depIndex) matchDeps(term string) []*utils.ExternalDependency {
+	matched := make([]*utils.ExternalDependency, 0, 4)
 	for i := range idx.entries {
 		if idx.entries[i].matches(term) {
 			matched = append(matched, idx.entries[i].dep)
@@ -746,12 +745,12 @@ func (e *depEntry) matches(term string) bool {
 	return false
 }
 
-func (idx *depIndex) filesMatching(term string) []*types.ExternalDependency {
+func (idx *depIndex) filesMatching(term string) []*utils.ExternalDependency {
 	if deps, ok := idx.byFile[term]; ok {
 		return deps
 	}
 	seen := make(map[string]bool)
-	var matched []*types.ExternalDependency
+	var matched []*utils.ExternalDependency
 	for _, fk := range idx.fileKeys {
 		if !strings.Contains(fk, term) {
 			continue
@@ -766,7 +765,7 @@ func (idx *depIndex) filesMatching(term string) []*types.ExternalDependency {
 	return matched
 }
 
-func formatDepCount(deps []types.ExternalDependency) string {
+func formatDepCount(deps []utils.ExternalDependency) string {
 	bySource := make(map[string]int, 4)
 	for _, d := range deps {
 		src := d.Source
@@ -808,7 +807,7 @@ func formatFileImports(file string, idx *depIndex) string {
 	return b.String()
 }
 
-func formatMatchedDeps(query string, deps []*types.ExternalDependency) string {
+func formatMatchedDeps(query string, deps []*utils.ExternalDependency) string {
 	var b strings.Builder
 
 	if len(deps) == 1 {
@@ -852,9 +851,9 @@ func formatMatchedDeps(query string, deps []*types.ExternalDependency) string {
 	return b.String()
 }
 
-func formatAllExternalDeps(deps []types.ExternalDependency) string {
+func formatAllExternalDeps(deps []utils.ExternalDependency) string {
 	var b strings.Builder
-	bySource := make(map[string][]types.ExternalDependency)
+	bySource := make(map[string][]utils.ExternalDependency)
 	for _, d := range deps {
 		src := d.Source
 		if src == "" {

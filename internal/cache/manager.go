@@ -2,426 +2,197 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package cache provides the cache interface implementation for eulix.
+// Package cache provides the local history store implementation for eulix.
+
 /*
-This file is responsible for managing cache(database+redis)
-for eulix project Currently kinda buggy/un-tested
+This file no longer implements a "return the same answer for the same
+query" cache. It is a plain history log: every query the user asks, and
+the reasoning/answer the model produced for it, gets appended here so it
+can be listed and re-read later (e.g. the TUI's /history view and a
+'show-reason' command in app.go). There is no TTL, no checksum-based
+invalidation, and no cache-hit short-circuiting of the model call — that
+whole layer has been removed on purpose.
 */
 
 package cache
 
 import (
-	"context"
-	"crypto/sha256"
-	"database/sql"
-	"encoding/hex"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sort"
 	"time"
 
 	"eulix/internal/config"
 
-	_ "github.com/mattn/go-sqlite3"
-	"github.com/redis/go-redis/v9"
+	bolt "go.etcd.io/bbolt"
 )
 
+// entriesBucket is the single bucket every record lives in, keyed by an
+// 8-byte big-endian auto-increment ID so iteration comes back in
+// insertion order for free.
+var entriesBucket = []byte("entries")
+
+// Manager is a thin wrapper around a local BoltDB file. It only knows how
+// to append entries and read them back it is intentionally not a cache
+// in the "avoid recomputation" sense anymore.
 type Manager struct {
-	config      *config.Config
-	redisClient *redis.Client
-	sqlDB       *sql.DB
-	ctx         context.Context
+	db *bolt.DB
 }
 
 type CacheEntry struct {
-	QueryHash    string    `json:"query_hash"`
-	Query        string    `json:"query"`
-	Response     string    `json:"response"`
-	ChecksumHash string    `json:"checksum_hash"`
-	CreatedAt    time.Time `json:"created_at"`
-	ExpiresAt    time.Time `json:"expires_at"`
+	ID        uint64    `json:"id"`
+	Query     string    `json:"query"`
+	Reasoning string    `json:"reasoning"`
+	Answer    string    `json:"answer"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
+// CacheController opens/create the local BoltDB file
+// If history is disabled in config it returns (nil, nil) callers
+// already treat a nil *Manager as "history not enabled"
+// see the TUI's '/history' command
 func CacheController(cfg *config.Config) (*Manager, error) {
-	m := &Manager{
-		config: cfg,
-		ctx:    context.Background(),
+	if !cfg.Cache.Enable {
+		return nil, nil
 	}
 
-	if cfg.Cache.Redis.Enabled {
-		opt, err := redis.ParseURL(cfg.Cache.Redis.URL)
-		if err != nil {
-			return nil, fmt.Errorf("invalid redis URL: %w", err)
-		}
-
-		m.redisClient = redis.NewClient(opt)
-
-		if err := m.redisClient.Ping(m.ctx).Err(); err != nil {
-			return nil, fmt.Errorf("redis connection failed: %w", err)
-		}
+	path := cfg.Cache.Path
+	if path == "" {
+		path = ".eulix/history.db"
 	}
 
-	if cfg.Cache.SQL.Enabled {
-		dbPath := ".eulix/cache.db"
-		if cfg.Cache.SQL.DSN != "" {
-			dbPath = cfg.Cache.SQL.DSN
-		}
-
-		db, err := sql.Open("sqlite3", dbPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open SQL database: %w", err)
-		}
-
-		m.sqlDB = db
-
-		if err := m.initSQLSchema(); err != nil {
-			return nil, fmt.Errorf("failed to initialize SQL schema: %w", err)
-		}
-	}
-
-	return m, nil
-}
-
-func (m *Manager) initSQLSchema() error {
-	schema := `
-    CREATE TABLE IF NOT EXISTS cache_entries (
-        query_hash TEXT PRIMARY KEY,
-        query TEXT NOT NULL,
-        response TEXT NOT NULL,
-        checksum_hash TEXT NOT NULL,
-        created_at DATETIME NOT NULL,
-        expires_at DATETIME NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_checksum_hash ON cache_entries(checksum_hash);
-    CREATE INDEX IF NOT EXISTS idx_expires_at ON cache_entries(expires_at);
-    CREATE INDEX IF NOT EXISTS idx_created_at ON cache_entries(created_at);
-    `
-
-	_, err := m.sqlDB.Exec(schema)
-	return err
-}
-
-func (m *Manager) Get(query string, currentChecksumHash string) (string, bool, error) {
-	queryHash := m.hashQuery(query)
-
-	if m.config.Cache.Redis.Enabled && m.redisClient != nil {
-		if response, found, err := m.getFromRedis(queryHash, currentChecksumHash); err == nil && found {
-			return response, true, nil
-		}
-	}
-
-	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
-		if response, found, err := m.getFromSQL(queryHash, currentChecksumHash); err == nil && found {
-			return response, true, nil
-		}
-	}
-
-	return "", false, nil
-}
-
-func (m *Manager) getFromRedis(queryHash, currentChecksumHash string) (string, bool, error) {
-	key := fmt.Sprintf("eulix:query:%s", queryHash)
-
-	data, err := m.redisClient.Get(m.ctx, key).Result()
-	if err == redis.Nil {
-		return "", false, nil
-	}
+	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 2 * time.Second})
 	if err != nil {
-		return "", false, err
+		return nil, fmt.Errorf("failed to open history database: %w", err)
 	}
 
-	var entry CacheEntry
-	if err := json.Unmarshal([]byte(data), &entry); err != nil {
-		return "", false, err
-	}
-
-	if entry.ChecksumHash != currentChecksumHash {
-		_ = m.redisClient.Del(m.ctx, key).Err()
-		return "", false, nil
-	}
-
-	if time.Now().After(entry.ExpiresAt) {
-		_ = m.redisClient.Del(m.ctx, key).Err()
-		return "", false, nil
-	}
-
-	return entry.Response, true, nil
-}
-
-func (m *Manager) getFromSQL(queryHash, currentChecksumHash string) (string, bool, error) {
-	var entry CacheEntry
-
-	query := `
-        SELECT query_hash, query, response, checksum_hash, created_at, expires_at
-        FROM cache_entries
-        WHERE query_hash = ? AND checksum_hash = ?
-    `
-
-	err := m.sqlDB.QueryRow(query, queryHash, currentChecksumHash).Scan(
-		&entry.QueryHash,
-		&entry.Query,
-		&entry.Response,
-		&entry.ChecksumHash,
-		&entry.CreatedAt,
-		&entry.ExpiresAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, err
-	}
-
-	if time.Now().After(entry.ExpiresAt) {
-		if _, err := m.sqlDB.Exec("DELETE FROM cache_entries WHERE query_hash = ?", queryHash); err != nil {
-			log.Printf("warning: failed to delete expired cache entry for hash %s: %v", queryHash, err)
-		}
-		return "", false, nil
-	}
-
-	return entry.Response, true, nil
-}
-
-func (m *Manager) Set(query, response, checksumHash string) error {
-	queryHash := m.hashQuery(query)
-
-	entry := CacheEntry{
-		QueryHash:    queryHash,
-		Query:        query,
-		Response:     response,
-		ChecksumHash: checksumHash,
-		CreatedAt:    time.Now(),
-		ExpiresAt:    time.Now().Add(m.getTTL()),
-	}
-
-	if m.config.Cache.Redis.Enabled && m.redisClient != nil {
-		if err := m.saveToRedis(&entry); err != nil {
-			return fmt.Errorf("redis save failed: %w", err)
-		}
-	}
-
-	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
-		if err := m.saveToSQL(&entry); err != nil {
-			return fmt.Errorf("sql save failed: %w", err)
-		}
-	}
-
-	return nil
-}
-
-func (m *Manager) saveToRedis(entry *CacheEntry) error {
-	data, err := json.Marshal(entry)
-	if err != nil {
+	if err := db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists(entriesBucket)
 		return err
+	}); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to initialize history bucket: %w", err)
 	}
 
-	key := fmt.Sprintf("eulix:query:%s", entry.QueryHash)
-	ttl := time.Until(entry.ExpiresAt)
-
-	return m.redisClient.Set(m.ctx, key, data, ttl).Err()
+	return &Manager{db: db}, nil
 }
 
-func (m *Manager) saveToSQL(entry *CacheEntry) error {
-	query := `
-        INSERT OR REPLACE INTO cache_entries
-        (query_hash, query, response, checksum_hash, created_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    `
-
-	_, err := m.sqlDB.Exec(
-		query,
-		entry.QueryHash,
-		entry.Query,
-		entry.Response,
-		entry.ChecksumHash,
-		entry.CreatedAt,
-		entry.ExpiresAt,
-	)
-
-	return err
-}
-
-// Delete removes a specific cache entry from both backends
-func (m *Manager) Delete(queryHash string) error {
-	if m.config.Cache.Redis.Enabled && m.redisClient != nil {
-		key := fmt.Sprintf("eulix:query:%s", queryHash)
-		if err := m.redisClient.Del(m.ctx, key).Err(); err != nil {
-			return fmt.Errorf("redis delete failed: %w", err)
-		}
+// Save appends a new entry and returns it with its assigned ID and
+// timestamp filled in. Both reasoning and answer are stored as given
+// pass an empty string for reasoning when a response had none.
+func (m *Manager) Save(query, reasoning, answer string) (CacheEntry, error) {
+	entry := CacheEntry{
+		Query:     query,
+		Reasoning: reasoning,
+		Answer:    answer,
+		CreatedAt: time.Now(),
 	}
 
-	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
-		_, err := m.sqlDB.Exec("DELETE FROM cache_entries WHERE query_hash = ?", queryHash)
+	err := m.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(entriesBucket)
+
+		id, err := b.NextSequence()
 		if err != nil {
-			return fmt.Errorf("sql delete failed: %w", err)
+			return err
 		}
+		entry.ID = id
+
+		data, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+
+		return b.Put(idKey(id), data)
+	})
+	if err != nil {
+		return CacheEntry{}, fmt.Errorf("failed to save history entry: %w", err)
 	}
 
-	return nil
+	return entry, nil
 }
 
-// ListAll returns all cache entries sorted by creation time
+// Get returns a single entry by ID.
+func (m *Manager) Get(id uint64) (CacheEntry, bool, error) {
+	var entry CacheEntry
+	found := false
+
+	err := m.db.View(func(tx *bolt.Tx) error {
+		data := tx.Bucket(entriesBucket).Get(idKey(id))
+		if data == nil {
+			return nil
+		}
+		found = true
+		return json.Unmarshal(data, &entry)
+	})
+	if err != nil {
+		return CacheEntry{}, false, fmt.Errorf("failed to read history entry: %w", err)
+	}
+
+	return entry, found, nil
+}
+
+// ListAll returns every stored entry, newest first.
 func (m *Manager) ListAll() ([]CacheEntry, error) {
 	var entries []CacheEntry
 
-	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
-		rows, err := m.sqlDB.Query(`
-            SELECT query_hash, query, response, checksum_hash, created_at, expires_at
-            FROM cache_entries
-            ORDER BY created_at DESC
-        `)
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			_ = rows.Close()
-		}()
-
-		for rows.Next() {
+	err := m.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(entriesBucket).ForEach(func(_, data []byte) error {
 			var entry CacheEntry
-			err := rows.Scan(
-				&entry.QueryHash,
-				&entry.Query,
-				&entry.Response,
-				&entry.ChecksumHash,
-				&entry.CreatedAt,
-				&entry.ExpiresAt,
-			)
-			if err != nil {
-				return nil, err
+			if err := json.Unmarshal(data, &entry); err != nil {
+				return err
 			}
 			entries = append(entries, entry)
-		}
-
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-	}
-
-	if len(entries) == 0 && m.config.Cache.Redis.Enabled && m.redisClient != nil {
-		keys, err := m.redisClient.Keys(m.ctx, "eulix:query:*").Result()
-		if err != nil {
-			return nil, err
-		}
-
-		for _, key := range keys {
-			data, err := m.redisClient.Get(m.ctx, key).Result()
-			if err != nil {
-				continue
-			}
-
-			var entry CacheEntry
-			if err := json.Unmarshal([]byte(data), &entry); err != nil {
-				continue
-			}
-			entries = append(entries, entry)
-		}
-
-		sort.Slice(entries, func(i, j int) bool {
-			return entries[i].CreatedAt.After(entries[j].CreatedAt)
+			return nil
 		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list history entries: %w", err)
 	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].CreatedAt.After(entries[j].CreatedAt)
+	})
 
 	return entries, nil
 }
 
-// InvalidateByChecksum removes all cache entries with a different checksum
-func (m *Manager) InvalidateByChecksum(currentChecksumHash string) error {
-	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
-		_, err := m.sqlDB.Exec(
-			"DELETE FROM cache_entries WHERE checksum_hash != ?",
-			currentChecksumHash,
-		)
-		if err != nil {
-			return err
-		}
+// Delete removes a single entry by ID.
+func (m *Manager) Delete(id uint64) error {
+	err := m.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(entriesBucket).Delete(idKey(id))
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete history entry: %w", err)
 	}
-
-	// For Redis, we'd need to scan and delete, which is expensive
-	// Instead, we rely on checksum verification during Get()
-
 	return nil
 }
 
-// CleanExpired removes all expired cache entries
-func (m *Manager) CleanExpired() error {
-	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
-		_, err := m.sqlDB.Exec(
-			"DELETE FROM cache_entries WHERE expires_at < ?",
-			time.Now(),
-		)
+// Clear removes every stored entry.
+func (m *Manager) Clear() error {
+	err := m.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.DeleteBucket(entriesBucket); err != nil && err != bolt.ErrBucketNotFound {
+			return err
+		}
+		_, err := tx.CreateBucket(entriesBucket)
 		return err
+	})
+	if err != nil {
+		return fmt.Errorf("failed to clear history: %w", err)
 	}
 	return nil
 }
 
-// GetStats returns cache statistics
-func (m *Manager) GetStats() (map[string]interface{}, error) {
-	stats := make(map[string]interface{})
-
-	if m.config.Cache.SQL.Enabled && m.sqlDB != nil {
-		var totalEntries, validEntries int
-
-		if err := m.sqlDB.QueryRow("SELECT COUNT(*) FROM cache_entries").Scan(&totalEntries); err != nil {
-			return nil, fmt.Errorf("failed to count total entries: %w", err)
-		}
-
-		if err := m.sqlDB.QueryRow(
-			"SELECT COUNT(*) FROM cache_entries WHERE expires_at > ?",
-			time.Now(),
-		).Scan(&validEntries); err != nil {
-			return nil, fmt.Errorf("failed to count valid entries: %w", err)
-		}
-
-		stats["sql_total_entries"] = totalEntries
-		stats["sql_valid_entries"] = validEntries
-	}
-
-	if m.config.Cache.Redis.Enabled && m.redisClient != nil {
-		info, err := m.redisClient.Info(m.ctx, "stats").Result()
-		if err == nil {
-			stats["redis_connected"] = true
-			stats["redis_info"] = info
-		}
-	}
-
-	return stats, nil
-}
-
-// Close closes all connections
+// Close closes the underlying database file.
 func (m *Manager) Close() error {
-	if m.redisClient != nil {
-		if err := m.redisClient.Close(); err != nil {
-			return err
-		}
+	if m == nil || m.db == nil {
+		return nil
 	}
-
-	if m.sqlDB != nil {
-		if err := m.sqlDB.Close(); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return m.db.Close()
 }
 
-func (m *Manager) hashQuery(query string) string {
-	h := sha256.New()
-	h.Write([]byte(query))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-func (m *Manager) getTTL() time.Duration {
-	// Default 24 hours
-	ttl := 24 * time.Hour
-
-	// Use Redis TTL if enabled
-	if m.config.Cache.Redis.Enabled && m.config.Cache.Redis.TTLHours > 0 {
-		ttl = time.Duration(m.config.Cache.Redis.TTLHours) * time.Hour
-	}
-
-	return ttl
+func idKey(id uint64) []byte {
+	key := make([]byte, 8)
+	binary.BigEndian.PutUint64(key, id)
+	return key
 }

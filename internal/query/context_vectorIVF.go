@@ -13,7 +13,8 @@ Key Responsibilities:
 package query
 
 import (
-	"log"
+	"fmt"
+	"math"
 	"math/rand"
 	"runtime"
 	"sort"
@@ -48,7 +49,7 @@ func (cb *ContextBuilder) vectorSearchIVF(qEmb []float32, topK int, threshold fl
 	// with how centroids were built)
 	cd := make([]centDist, idx.NClusters)
 	for i, c := range idx.Centroids {
-		cd[i] = centDist{float32(cosineSimilarity(qEmb, c)), i}
+		cd[i] = centDist{float32(dotProduct(qEmb, c)), i}
 	}
 	// Sort descending by similarity (highest first)
 	sort.Slice(cd, func(i, j int) bool { return cd[i].d > cd[j].d })
@@ -71,7 +72,7 @@ func (cb *ContextBuilder) vectorSearchIVF(qEmb []float32, topK int, threshold fl
 			if int(embIdx) >= len(cb.chunks) || int(embIdx) >= len(cb.embeddings) {
 				continue
 			}
-			sim := float32(cosineSimilarity(qEmb, cb.embeddings[embIdx]))
+			sim := float32(dotProduct(qEmb, cb.embeddings[embIdx]))
 			if sim >= threshF {
 				scored = append(scored, ScoredChunk{
 					Chunk: cb.chunks[embIdx],
@@ -92,7 +93,7 @@ func (cb *ContextBuilder) vectorSearchIVF(qEmb []float32, topK int, threshold fl
 // Returns nil if embs is empty or k <= 0.
 // The index clusters embeddings into k groups and creates inverted lists
 // mapping each centroid to its assigned embedding indices.
-func buildIVFIndex(embs [][]float32, k, maxIter int) *IVFIndex {
+func (cb *ContextBuilder) buildIVFIndex(embs [][]float32, k, maxIter int) *IVFIndex {
 	n := len(embs)
 	if n == 0 || k <= 0 {
 		return nil
@@ -104,13 +105,7 @@ func buildIVFIndex(embs [][]float32, k, maxIter int) *IVFIndex {
 	nWorkers := runtime.NumCPU()
 
 	rng := rand.New(rand.NewSource(42))
-	perm := rng.Perm(n)
-	centroids := make([][]float32, k)
-	for i := range centroids {
-		c := make([]float32, dim)
-		copy(c, embs[perm[i]])
-		centroids[i] = c
-	}
+	centroids, _ := kmeansPlusPlusInit(embs, k, rng)
 
 	assignments := make([]int32, n)
 	sums := make([][]float64, k)
@@ -145,7 +140,7 @@ func buildIVFIndex(embs [][]float32, k, maxIter int) *IVFIndex {
 					bestSim := float32(-1e9)
 					for ci, c := range centroids {
 						// cosineSimilarity returns float64; cast once per call
-						s := float32(cosineSimilarity(emb, c))
+						s := dotProduct(emb, c)
 						if s > bestSim {
 							bestSim = s
 							best = int32(ci)
@@ -161,7 +156,7 @@ func buildIVFIndex(embs [][]float32, k, maxIter int) *IVFIndex {
 		}
 		wg.Wait()
 
-		log.Printf("[IVF] iter %d/%d: changed=%d elapsed=%v",
+		cb.debugLog.Log("[IVF] iter %d/%d: changed=%d elapsed=%v",
 			iter+1, maxIter, totalChanged, time.Since(iterStart))
 
 		if totalChanged == 0 {
@@ -190,6 +185,7 @@ func buildIVFIndex(embs [][]float32, k, maxIter int) *IVFIndex {
 			for j := range centroids[ci] {
 				centroids[ci][j] = float32(sums[ci][j] * inv)
 			}
+			Normalize(centroids[ci])
 		}
 	}
 
@@ -206,4 +202,122 @@ func buildIVFIndex(embs [][]float32, k, maxIter int) *IVFIndex {
 		NClusters: k,
 		Dim:       dim,
 	}
+}
+
+// kmeansPlusPlusInit selects k initial centroids from embs using k-means++
+// seeding in cosine-similarity space.
+//
+// embs MUST be L2-normalized. For unit vectors, ||a-b||^2 = 2*(1 - a·b),
+// so (1 - dot) is proportional to squared Euclidean distance -- exactly
+// the weight k-means++ requires. Un-normalized input silently breaks the
+// algorithm's guarantees rather than erroring.
+func kmeansPlusPlusInit(embs [][]float32, k int, rng *rand.Rand) ([][]float32, error) {
+	n := len(embs)
+	if n == 0 {
+		return nil, fmt.Errorf("kmeansPlusPlusInit: empty input")
+	}
+	if k <= 0 || k > n {
+		return nil, fmt.Errorf("kmeansPlusPlusInit: invalid k=%d for n=%d", k, n)
+	}
+	dim := len(embs[0])
+
+	centroids := make([][]float32, 0, k)
+	chosen := make([]bool, n)
+
+	first := rng.Intn(n)
+	c0 := make([]float32, dim)
+	copy(c0, embs[first])
+	centroids = append(centroids, c0)
+	chosen[first] = true
+
+	minWeight := make([]float64, n)
+	for i := range minWeight {
+		minWeight[i] = math.MaxFloat64
+	}
+
+	const parallelThreshold = 20_000 // tune to taste
+	nWorkers := 1
+	if n >= parallelThreshold {
+		nWorkers = runtime.NumCPU()
+	}
+	chunkSize := (n + nWorkers - 1) / nWorkers
+
+	for len(centroids) < k {
+		newCentroid := centroids[len(centroids)-1]
+		partialSums := make([]float64, nWorkers)
+
+		var wg sync.WaitGroup
+		for w := 0; w < nWorkers; w++ {
+			lo, hi := w*chunkSize, min((w+1)*chunkSize, n)
+			if lo >= hi {
+				continue
+			}
+			wg.Add(1)
+			go func(w, lo, hi int) {
+				defer wg.Done()
+				sum := 0.0
+				for i := lo; i < hi; i++ {
+					if chosen[i] {
+						minWeight[i] = 0
+						continue
+					}
+					wgt := 1.0 - float64(dotProduct(embs[i], newCentroid))
+					if wgt < 0 {
+						wgt = 0
+					}
+					if wgt < minWeight[i] {
+						minWeight[i] = wgt
+					}
+					sum += minWeight[i]
+				}
+				partialSums[w] = sum
+			}(w, lo, hi)
+		}
+		wg.Wait()
+
+		total := 0.0
+		for _, s := range partialSums {
+			total += s
+		}
+
+		var picked int
+		if total == 0 {
+			remaining := make([]int, 0, n-len(centroids))
+			for i := 0; i < n; i++ {
+				if !chosen[i] {
+					remaining = append(remaining, i)
+				}
+			}
+			picked = remaining[rng.Intn(len(remaining))]
+		} else {
+			target := rng.Float64() * total
+			acc := 0.0
+			picked = -1
+			for i := 0; i < n; i++ {
+				if chosen[i] {
+					continue
+				}
+				acc += minWeight[i]
+				if acc >= target {
+					picked = i
+					break
+				}
+			}
+			if picked == -1 {
+				for i := n - 1; i >= 0; i-- {
+					if !chosen[i] {
+						picked = i
+						break
+					}
+				}
+			}
+		}
+
+		c := make([]float32, dim)
+		copy(c, embs[picked])
+		centroids = append(centroids, c)
+		chosen[picked] = true
+	}
+
+	return centroids, nil
 }
