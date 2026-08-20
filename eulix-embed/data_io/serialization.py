@@ -7,7 +7,9 @@
 # vector sets on limited disk.
 
 import numpy as np
+
 # from utils.req import require_numpy
+
 
 def sq8_encode(vec: "np.ndarray") -> tuple["np.ndarray", float]:
     """
