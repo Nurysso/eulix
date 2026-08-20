@@ -11,6 +11,7 @@
 
 import argparse
 
+
 def parse_args() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="eulix_embed.py",
@@ -130,7 +131,8 @@ def parse_args() -> argparse.ArgumentParser:
         help="HuggingFace model name  [default: all-MiniLM-L6-v2]",
     )
     sp.add_argument(
-        "-e", "--engine",
+        "-e",
+        "--engine",
         default="torch",
         choices=["torch", "onnx"],
         metavar="ENGINE",

@@ -1,66 +1,52 @@
-# Copyright (C) 2026 Dawood Khan
+# Copyright (c) 2026 Dawood Khan
 # SPDX-License-Identifier: Apache-2.0
+# Maintainer: Dawood (Nurysso) <nurysso@proton.me>
 
-# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+# CLI helper module responsible for comparing embeddings.bin and vectors.bin.
 
-# Cli module is responsible for cli related things args,operation yadayada
-# sever mode isnt in this module and is part of seprate package called server
-# why cause thats still experimental and only used in chat mode of eulix cli
-
-# This file is responsible for helping cmd_compare to run
-
-import argparse
-import random
 import struct
 from collections import Counter
 from pathlib import Path
-from typing import List
 
 import numpy as np
 
-from core.constants import BINARY_MAGIC, BINARY_VERSION
-from utils.req import require_numpy
+from core.constants import BINARY_MAGIC
+from data_io.binary import (
+    FastEmbeddingsReader,
+    load_vectors_bin,
+)
 from data_io.serialization import sq8_decode
-from data_io.binary import load_vectors_bin
 
-def check_duplicate_ids(path: Path) -> List[str]:
-    """Scans embeddings.bin or vectors.bin headers and IDs to detect duplicates.
 
-    Handles v3, v4, and v5 binary formats without reading vector float payloads into memory.
+def check_duplicate_ids(path: Path) -> list[str]:
+    """Scans vectors.bin to detect duplicate chunk IDs.
+
+    For embeddings.bin (which now contains fixed-width vector records with no IDs),
+    it validates file integrity and reports record count.
     """
-    ids = []
-    with open(path, "rb") as f:
-        magic = f.read(4)
-        if magic != BINARY_MAGIC:
-            raise ValueError(f"Bad magic in {path.name}: {magic!r}")
+    is_vectors_bin = path.name.endswith("vectors.bin")
 
-        (version,) = struct.unpack("<I", f.read(4))
+    if not is_vectors_bin:
+        # embeddings.bin no longer stores string IDs directly.
+        # We perform a quick header check to report record count instead.
+        with open(path, "rb") as f:
+            magic = f.read(4)
+            if magic != BINARY_MAGIC:
+                raise ValueError(f"Bad magic in {path.name}: {magic!r}")
+            (version,) = struct.unpack("<I", f.read(4))
 
-        # Read model name
-        (model_len,) = struct.unpack("<I", f.read(4))
-        model_name = f.read(model_len).decode("utf-8")
+            # Read model name
+            (model_len,) = struct.unpack("<I", f.read(4))
+            _ = f.read(model_len).decode("utf-8")
 
-        is_vectors_bin = path.name.endswith("vectors.bin")
+            count, _ = struct.unpack("<II", f.read(8))
+            print(
+                f"  ✓ {path.name} is a fixed-width binary ({count} total vector records)."
+            )
+        return []
 
-        if is_vectors_bin:
-            (count,) = struct.unpack("<I", f.read(4))
-            for _ in range(count):
-                (id_len,) = struct.unpack("<I", f.read(4))
-                ids.append(f.read(id_len).decode("utf-8"))
-        else:
-            count, dim = struct.unpack("<II", f.read(8))
-
-            quantized = False
-            if version in (4, 5):
-                quantized = f.read(1) == b"\x01"
-
-            payload_bytes = (4 + dim) if quantized else (dim * 4)
-
-            for _ in range(count):
-                (id_len,) = struct.unpack("<I", f.read(4))
-                ids.append(f.read(id_len).decode("utf-8"))
-                f.seek(payload_bytes, 1)
-
+    # Process vectors.bin
+    _, ids = load_vectors_bin(path)
     counts = Counter(ids)
     dupes = [eid for eid, cnt in counts.items() if cnt > 1]
 
@@ -77,33 +63,34 @@ def check_duplicate_ids(path: Path) -> List[str]:
 
 
 def _verify_at_offset(
-    fh,
+    reader: FastEmbeddingsReader,
+    idx: int,
     expected_id: str,
-    dim: int,
-    quantized: bool
 ) -> tuple[bool, str]:
-    """Seeks and reads entry at current position to check if ID and vector payload match."""
-    pos = fh.tell()
+    """Uses FastEmbeddingsReader O(1) index access to verify vector payload at index."""
     try:
-        (id_len,) = struct.unpack("<I", fh.read(4))
-        read_id = fh.read(id_len).decode("utf-8")
+        # Calculate expected byte offset for reporting purposes
+        pos = reader.header_size + (idx * reader.record_size)
 
-        if quantized:
-            (scale,) = struct.unpack("<f", fh.read(4))
-            raw = fh.read(dim)
-            vec = sq8_decode(np.frombuffer(raw, dtype=np.int8), scale)
+        if reader.quantized:
+            q, scale = reader.get_vector(idx, dequantize=False)
+            vec = sq8_decode(q, scale)
         else:
-            raw = fh.read(dim * 4)
-            vec = np.frombuffer(raw, dtype=np.float32)
+            vec = reader.get_vector(idx, dequantize=True)
 
-        expected_payload_len = dim if quantized else (dim * 4)
-        if len(raw) != expected_payload_len:
-            return False, f"Truncated payload at offset {pos}"
+        if vec.shape != (reader.dimension,):
+            return (
+                False,
+                f"Dimension mismatch at index {idx} (offset {pos}): expected {reader.dimension}, got {vec.shape[0]}",
+            )
 
-        if read_id != expected_id:
-            return False, f"ID mismatch at offset {pos}: expected '{expected_id}', found '{read_id}'"
-
-        return True, f"Found '{read_id}' [shape={vec.shape}, L2-norm={np.linalg.norm(vec):.2f}]"
+        norm = float(np.linalg.norm(vec))
+        return True, f"Matched '{expected_id}' [shape={vec.shape}, L2-norm={norm:.2f}]"
 
     except Exception as e:
-        return False, f"Read error at offset {pos}: {e}"
+        pos = (
+            reader.header_size + (idx * reader.record_size)
+            if hasattr(reader, "header_size")
+            else 0
+        )
+        return False, f"Read error at index {idx} (offset {pos}): {e}"

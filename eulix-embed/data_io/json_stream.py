@@ -7,10 +7,13 @@
 # one at a time. This avoids loading the entire structure dict into memory,
 # enabling processing of repositories with millions of files.
 
-from typing import Set, Optional, Dict, List, Generator
+from collections.abc import Generator
 from pathlib import Path
-from utils.json_util import ObjectBuilder, HAS_ORJSON
+
 import ijson.common
+
+from utils.json_util import ObjectBuilder
+
 
 def stream_kb(path: Path) -> Generator:
     """
@@ -41,17 +44,17 @@ def stream_kb(path: Path) -> Generator:
     file_struct in memory.
     """
     # Keys whose entire value is small enough to buffer in RAM.
-    COLLECT_KEYS: Set[str] = {"metadata", "structure"}
+    COLLECT_KEYS: set[str] = {"metadata", "structure"}
 
-    top_key: Optional[str] = None
+    top_key: str | None = None
 
     # State for collecting small top-level values
-    col_builder: Optional[ObjectBuilder] = None
+    col_builder: ObjectBuilder | None = None
     col_depth: int = 0
 
     #  State for streaming structure entries
-    st_fp: Optional[str] = None
-    st_builder: Optional[ObjectBuilder] = None
+    st_fp: str | None = None
+    st_builder: ObjectBuilder | None = None
     st_depth: int = 0
 
     with open(path, "rb") as fh:
@@ -63,7 +66,7 @@ def stream_kb(path: Path) -> Generator:
                 # Reset all sub-key trackers
                 col_builder = None
                 if value == "metadata":
-                    col_builder =ObjectBuilder()
+                    col_builder = ObjectBuilder()
                     col_depth = 0
                 continue
 
