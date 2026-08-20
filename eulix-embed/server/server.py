@@ -5,13 +5,15 @@
 
 # Experimental server mode for eulix_embed
 
-import sys
-import json
 import argparse
-from embedders.torch_embed import EmbeddingGenerator
+import json
+import sys
+from typing import Any
+
 from embedders.onnx_embed import EmbeddingGeneratorOnnx
-from typing import Dict,Any
+from embedders.torch_embed import EmbeddingGenerator
 from utils.json_util import json_dumps
+
 
 def cmd_serve(args: argparse.Namespace) -> None:
     """
@@ -44,6 +46,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     """
     # All diagnostic output goes to stderr — stdout is the protocol channel.
     _err = sys.stderr
+    gen: EmbeddingGenerator | EmbeddingGeneratorOnnx
 
     print("  EULIX EMBED — SERVE MODE", file=_err)
     print(f"  Model:  {args.model}", file=_err)
@@ -68,7 +71,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     # Signal readiness to the parent process — one line on stdout.
-    _ready: Dict[str, Any] = {
+    _ready: dict[str, Any] = {
         "ready": True,
         "model": gen.model_name,
         "dim": gen.dimension,
@@ -86,9 +89,9 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
         # Parse request
         try:
-            req: Dict[str, Any] = json.loads(raw_line)
+            req: dict[str, Any] = json.loads(raw_line)
         except json.JSONDecodeError as exc:
-            _reply: Dict[str, Any] = {"error": f"invalid JSON: {exc}"}
+            _reply: dict[str, Any] = {"error": f"invalid JSON: {exc}"}
             print(json_dumps(_reply), flush=True)
             continue
 
@@ -96,7 +99,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         try:
             # Health-check
             if req.get("ping"):
-                resp: Dict[str, Any] = {
+                resp: dict[str, Any] = {
                     "pong": True,
                     "model": gen.model_name,
                     "dim": gen.dimension,
@@ -154,7 +157,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
             )
 
         except Exception as exc:
-            err_resp: Dict[str, Any] = {"error": str(exc)}
+            err_resp: dict[str, Any] = {"error": str(exc)}
             print(json_dumps(err_resp), flush=True)
             print(f"  [WARN] request error: {exc}", file=_err)
             continue

@@ -1,6 +1,14 @@
-from functools import partial
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# Utils module holds shared code like dynamic imports.
+
 import json
 import warnings
+from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 warnings.filterwarnings("ignore", message="optimum is not installed")
@@ -9,8 +17,12 @@ try:
     import orjson as _orjson
 
     if hasattr(_orjson, "OPT_INDENT_2"):
-        json_dumps_no_indent = partial(_orjson.dumps, option=0)
-        json_dumps_indent = partial(_orjson.dumps, option=_orjson.OPT_INDENT_2)
+        json_dumps_no_indent: Callable[[Any], str] = lambda obj: _orjson.dumps(
+            obj
+        ).decode()
+        json_dumps_indent: Callable[[Any], str] = lambda obj: _orjson.dumps(
+            obj, option=_orjson.OPT_INDENT_2
+        ).decode()
     else:  # fallback for older orjson versions
         json_dumps_no_indent = lambda obj: _orjson.dumps(obj).decode()
         json_dumps_indent = lambda obj: _orjson.dumps(
@@ -26,11 +38,12 @@ try:
     from ijson.common import ObjectBuilder
 except ImportError:
     try:
-        from ijson import ObjectBuilder  # type: ignore[no-redef]
+        from ijson import ObjectBuilder
     except ImportError:
         raise ImportError(
             'ijson ObjectBuilder not found — if using "uv" use uv pip install ijson'
         )
+
 
 def json_dumps(obj: Any, *, indent: bool = False) -> str:
     """Fast JSON dumps – uses orjson when available, falls back to json."""

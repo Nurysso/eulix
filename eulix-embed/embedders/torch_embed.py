@@ -6,19 +6,17 @@
 # embedder module is responsible for running torch based embedder to embed json files
 
 from __future__ import annotations
-from typing import Optional, List, Dict, Tuple, Any, TYPE_CHECKING
-from core.types import Chunk, ChunkType, ChunkMetadata
+
 import sys
 import time
 from collections import defaultdict
+from typing import Any
 
 from core.constants import BUCKETS_JINA, BUCKETS_STANDARD
+from core.types import Chunk
 from utils.buckets import snap_to_bucket
 from utils.req import require_ml
 
-if TYPE_CHECKING:
-    import numpy as np
-    import torch
 
 class EmbeddingGenerator:
     """
@@ -39,11 +37,11 @@ class EmbeddingGenerator:
     def __init__(
         self,
         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-        device: Optional[str] = None,  # type: ignore
-        batch_size: Optional[int] = None,
+        device: str | None = None,  # "cpu" | "cuda" | "rocm" | None (auto)
+        batch_size: int | None = None,
         normalize: bool = True,
         use_bucketing: bool = True,
-    ):
+    ) -> None:
         np, torch, F, AutoModel, AutoTokenizer, tqdm = require_ml()
         # stash on self so _embed_batch / generate_vectors can use them
         # without re-importing (Python caches in sys.modules; this is free)
@@ -54,6 +52,13 @@ class EmbeddingGenerator:
 
         self.model_name = model_name
         self.normalize = normalize
+        self._dimension: int = 0
+        self._use_st: bool = False
+        self.model: Any = None
+        self._st_model: Any = None
+        self.tokenizer: Any = None
+        self.device: Any = None
+
         try:
             if device is None:
                 if torch.cuda.is_available():
@@ -113,7 +118,9 @@ class EmbeddingGenerator:
             else:
                 self._use_st = False
                 try:
-                    self.tokenizer = AutoTokenizer.from_pretrained(model_name, clean_up_tokenization_spaces=True)
+                    self.tokenizer = AutoTokenizer.from_pretrained(
+                        model_name, clean_up_tokenization_spaces=True
+                    )
                 except Exception as e:
                     raise RuntimeError(
                         f"\033[1;31;40m Failed to load tokenizer for '{model_name}'.\n\033[0m"
@@ -129,7 +136,7 @@ class EmbeddingGenerator:
                     self.model.eval()
                 except Exception as e:
                     raise RuntimeError(
-                        f"\033[1;31;40m Failed to load model weights for \{model_name}.\n\033[0m"
+                        f"\033[1;31;40m Failed to load model weights for '{model_name}'.\n\033[0m"
                         f"Original error: {e}"
                     )
             # Probe the model's actual output dimension by running a single
@@ -155,7 +162,7 @@ class EmbeddingGenerator:
             print(f"     Dimension:  {self._dimension}", file=sys.stderr)
             print("  ✓ Embedding generator ready!", file=sys.stderr)
         except RuntimeError as e:
-            print("f\nError: {e}", file=sys.stderr)
+            print(f"\nError: {e}", file=sys.stderr)
             print("\nTips:", file=sys.stderr)
             print(
                 "  - Use a valid model name from Hugging Face (e.g., 'sentence-transformers/all-MiniLM-L6-v2')",
@@ -173,17 +180,13 @@ class EmbeddingGenerator:
         return self._dimension
 
     @staticmethod
-    def _mean_pool(
-        last_hidden: "torch.Tensor", attention_mask: "torch.Tensor"
-    ) -> "torch.Tensor":
+    def _mean_pool(last_hidden: Any, attention_mask: Any) -> Any:
         mask_exp = attention_mask.unsqueeze(-1).float()
         summed = (last_hidden * mask_exp).sum(dim=1)
         counts = mask_exp.sum(dim=1).clamp(min=1e-9)
         return summed / counts
 
-    def _embed_batch(
-        self, texts: List[str], fixed_len: Optional[int] = None
-    ) -> "np.ndarray":
+    def _embed_batch(self, texts: list[str], fixed_len: int | None = None) -> Any:
         """
         Embed a batch of texts in one forward pass.
 
@@ -202,7 +205,7 @@ class EmbeddingGenerator:
         np = self._np
 
         if self._use_st:
-            encode_kwargs: Dict[str, Any] = dict(
+            encode_kwargs: dict[str, Any] = dict(
                 convert_to_numpy=True,
                 normalize_embeddings=self.normalize,
                 show_progress_bar=False,
@@ -216,7 +219,7 @@ class EmbeddingGenerator:
                 result = self._st_model.encode(texts, **encode_kwargs)
             return result.astype(np.float32)
 
-        tok_kwargs: Dict[str, Any] = dict(
+        tok_kwargs: dict[str, Any] = dict(
             return_tensors="pt", padding=True, truncation=True
         )
         if fixed_len is not None:
@@ -231,7 +234,7 @@ class EmbeddingGenerator:
                 emb = F.normalize(emb, p=2, dim=-1)
             return emb.cpu().float().numpy()
 
-    def generate_vectors(self, chunks: List[Chunk]) -> Dict[str, "np.ndarray"]:
+    def generate_vectors(self, chunks: list[Chunk]) -> dict[str, Any]:
         """
         Embed all chunks and return {chunk_id: vector}.
 
@@ -264,11 +267,11 @@ class EmbeddingGenerator:
         is_jina = "jina" in self.model_name.lower()
         buckets = BUCKETS_JINA if is_jina else BUCKETS_STANDARD
 
-        indexed: List[Tuple[int, int, Chunk]] = [
+        indexed: list[tuple[int, int, Chunk]] = [
             (i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)
         ]
 
-        results: List[Tuple[int, "np.ndarray"]] = []
+        results: list[tuple[int, Any]] = []
 
         bar = tqdm(
             total=total,
@@ -279,7 +282,7 @@ class EmbeddingGenerator:
         )
 
         if self.use_bucketing:
-            bucket_map: Dict[int, List[Tuple[int, Chunk]]] = defaultdict(list)
+            bucket_map: dict[int, list[tuple[int, Chunk]]] = defaultdict(list)
             for orig_idx, est_tokens, chunk in indexed:
                 b = snap_to_bucket(est_tokens, buckets)
                 bucket_map[b].append((orig_idx, chunk))
@@ -295,21 +298,25 @@ class EmbeddingGenerator:
                 items = bucket_map[blen]
                 bar.set_postfix(bucket=blen, refresh=False)
                 for start in range(0, len(items), self.batch_size):
-                    batch = items[start : start + self.batch_size]
-                    texts = [c.content for _, c in batch]
+                    batch_items: list[tuple[int, Chunk]] = items[
+                        start : start + self.batch_size
+                    ]
+                    texts = [c.content for _, c in batch_items]
                     embs = self._embed_batch(texts, fixed_len=blen)
-                    for (orig_idx, _), emb in zip(batch, embs):
+                    for (orig_idx, _), emb in zip(batch_items, embs):
                         results.append((orig_idx, emb))
-                    bar.update(len(batch))
+                    bar.update(len(batch_items))
         else:
             indexed.sort(key=lambda x: x[1], reverse=True)
             for start in range(0, len(indexed), self.batch_size):
-                batch = indexed[start : start + self.batch_size]
-                texts = [c.content for _, _, c in batch]
+                batch_3tuple: list[tuple[int, int, Chunk]] = indexed[
+                    start : start + self.batch_size
+                ]
+                texts = [c.content for _, _, c in batch_3tuple]
                 embs = self._embed_batch(texts)
-                for (orig_idx, _, _), emb in zip(batch, embs):
+                for (orig_idx, _, _), emb in zip(batch_3tuple, embs):
                     results.append((orig_idx, emb))
-                bar.update(len(batch))
+                bar.update(len(batch_3tuple))
 
         bar.close()
 
@@ -320,8 +327,8 @@ class EmbeddingGenerator:
         results.sort(key=lambda x: x[0])
         indexed_sorted = sorted(indexed, key=lambda x: x[0])
 
-        store: Dict[str, "np.ndarray"] = {}
-        duplicates: List[str] = []  # track duplicates
+        store: dict[str, Any] = {}
+        duplicates: list[str] = []  # track duplicates
         for (orig_idx, emb), (i, _, chunk) in zip(results, indexed_sorted):
             if chunk.id in store:
                 duplicates.append(chunk.id)
@@ -338,5 +345,5 @@ class EmbeddingGenerator:
 
         return store
 
-    def embed_query(self, query: str) -> "np.ndarray":
+    def embed_query(self, query: str) -> Any:
         return self._embed_batch([query])[0]

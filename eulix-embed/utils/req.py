@@ -1,4 +1,11 @@
-from typing import Any
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# Utils module holds shared code like dynamic imports.
+
+
 
 def require_ml():
     """
@@ -9,12 +16,13 @@ def require_ml():
     import numpy as np
     import torch
     import torch.nn.functional as F
-    from transformers import AutoModel, AutoTokenizer
     from tqdm import tqdm
+    from transformers import AutoModel, AutoTokenizer
 
     torch.cuda.set_per_process_memory_fraction(0.85)
 
     return np, torch, F, AutoModel, AutoTokenizer, tqdm
+
 
 def require_ml_onnx():
     """
@@ -30,8 +38,8 @@ def require_ml_onnx():
     """
     import numpy as np
     import onnxruntime as ort
-    from transformers import AutoTokenizer
     from tqdm import tqdm
+    from transformers import AutoTokenizer
 
     return np, ort, AutoTokenizer, tqdm
 

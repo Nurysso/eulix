@@ -18,6 +18,7 @@
 
 import re
 
+
 def strip_comments(content: str, lang: str) -> str:
     """
     Best-effort comment stripper, per language family.
@@ -84,6 +85,7 @@ def clean_content(content: str, lang: str) -> str:
     content = strip_comments(content, lang)  # remove //, /* */, # comments
     content = clean_boilerplate(content)  # remove license, TODO, etc.
     return content
+
 
 def drop_docstrings(fs: dict) -> None:
     """
