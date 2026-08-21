@@ -6,7 +6,6 @@
 # Utils module holds shared code like dynamic imports.
 
 
-
 # Snap-to-bucket helper — identical to Rust
 def snap_to_bucket(seq_len: int, buckets: list[int]) -> int:
     """Return the smallest bucket size >= seq_len, or the largest bucket

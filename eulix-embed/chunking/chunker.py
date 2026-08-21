@@ -12,7 +12,7 @@
 
 from typing import Any
 
-from core.types import Chunk, ChunkMetadata, ChunkType
+from utils.types import Chunk, ChunkMetadata, ChunkType
 
 from .formatters import (
     fmt_class_overview,

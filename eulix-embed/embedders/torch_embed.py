@@ -12,13 +12,13 @@ import time
 from collections import defaultdict
 from typing import Any
 
-from core.constants import BUCKETS_JINA, BUCKETS_STANDARD
-from core.types import Chunk
 from utils.buckets import snap_to_bucket
+from utils.constants import BUCKETS_JINA, BUCKETS_STANDARD
 from utils.req import require_ml
+from utils.types import Chunk
 
 
-class EmbeddingGenerator:
+class EmbeddingGenerator:  # pylint: disable=too-many-instance-attributes
     """
     Thin wrapper around a HuggingFace encoder model for batched embedding
     generation. Auto-detects the best available accelerator (CUDA, ROCm/HIP
@@ -110,35 +110,32 @@ class EmbeddingGenerator:
                         "     Jina v2: loaded via sentence-transformers",
                         file=sys.stderr,
                     )
-                except ImportError:
+                except ImportError as e:
                     raise ImportError(
-                        "Jina v2 models require sentence-transformers.\n"
-                        "Install: pip install sentence-transformers"
-                    )
+                        "Jina v2 models require sentence-transformers.\n" "Install: pip install sentence-transformers"
+                    ) from e
             else:
                 self._use_st = False
                 try:
-                    self.tokenizer = AutoTokenizer.from_pretrained(
-                        model_name, clean_up_tokenization_spaces=True
-                    )
-                except Exception as e:
+                    self.tokenizer = AutoTokenizer.from_pretrained(model_name, clean_up_tokenization_spaces=True)
+                except (OSError, ValueError, RuntimeError, TypeError) as e:
                     raise RuntimeError(
                         f"\033[1;31;40m Failed to load tokenizer for '{model_name}'.\n\033[0m"
                         f"\033[1;31;40m Possible reasons:\n\033[0m"
-                        f"\033[1;31;40m  - Model ID is incorrect (check https://hugginface.co/models)\n\033[0m"
-                        f"\033[1;31;40m  - You need to login: `hugginface-cli login`\n\033[0m"
+                        f"\033[1;31;40m  - Model ID is incorrect (check https://huggingface.co/models)\n\033[0m"
+                        f"\033[1;31;40m  - You need to login: `huggingface-cli login`\n\033[0m"
                         f"\033[1;31;40m  - Model is gated and you lack permissions\n\033[0m"
-                        f"\033[1;31;40m  - Netowrk issue\n\033[0m"
-                        f"Original error:{e}"
-                    )
+                        f"\033[1;31;40m  - Network issue\n\033[0m"
+                        f"Original error: {e}"
+                    ) from e
                 try:
                     self.model = AutoModel.from_pretrained(model_name).to(self.device)
                     self.model.eval()
-                except Exception as e:
+                except (OSError, ValueError, RuntimeError, TypeError) as e:
                     raise RuntimeError(
                         f"\033[1;31;40m Failed to load model weights for '{model_name}'.\n\033[0m"
                         f"Original error: {e}"
-                    )
+                    ) from e
             # Probe the model's actual output dimension by running a single
             # dummy input through it. We can't trust a hardcoded dimension
             # per model name since users can pass in arbitrary HF model IDs.
@@ -148,15 +145,11 @@ class EmbeddingGenerator:
                     self._dimension = test_emb.shape[-1]
                 else:
                     with torch.no_grad():
-                        dummy = self.tokenizer(
-                            "hello", return_tensors="pt", padding=True
-                        ).to(self.device)
+                        dummy = self.tokenizer("hello", return_tensors="pt", padding=True).to(self.device)
                         out = self.model(**dummy)
-                        emb = self._mean_pool(
-                            out.last_hidden_state, dummy["attention_mask"]
-                        )
+                        emb = self._mean_pool(out.last_hidden_state, dummy["attention_mask"])
                         self._dimension = emb.shape[-1]
-            except Exception as e:
+            except (RuntimeError, ValueError, TypeError, AttributeError) as e:
                 raise RuntimeError(f"Failed to probe embedding dimension: {e}")
 
             print(f"     Dimension:  {self._dimension}", file=sys.stderr)
@@ -205,11 +198,11 @@ class EmbeddingGenerator:
         np = self._np
 
         if self._use_st:
-            encode_kwargs: dict[str, Any] = dict(
-                convert_to_numpy=True,
-                normalize_embeddings=self.normalize,
-                show_progress_bar=False,
-            )
+            encode_kwargs: dict[str, Any] = {
+                "convert_to_numpy": True,
+                "normalize_embeddings": self.normalize,
+                "show_progress_bar": False,
+            }
             if fixed_len is not None:
                 old_max = self._st_model.max_seq_length
                 self._st_model.max_seq_length = fixed_len
@@ -219,9 +212,11 @@ class EmbeddingGenerator:
                 result = self._st_model.encode(texts, **encode_kwargs)
             return result.astype(np.float32)
 
-        tok_kwargs: dict[str, Any] = dict(
-            return_tensors="pt", padding=True, truncation=True
-        )
+        tok_kwargs: dict[str, Any] = {
+            "return_tensors": "pt",
+            "padding": True,
+            "truncation": True,
+        }
         if fixed_len is not None:
             tok_kwargs["max_length"] = fixed_len
             tok_kwargs["padding"] = "max_length"
@@ -255,21 +250,16 @@ class EmbeddingGenerator:
         before building the returned dict, and duplicate chunk IDs are
         collapsed with a warning rather than silently overwritten.
         """
-        np = self._np
+        # np = self._np
         tqdm = self._tqdm
         total = len(chunks)
-        print(
-            f" Processing {total} chunks (batch={self.batch_size},"
-            f" bucketing={self.use_bucketing})..."
-        )
+        print(f" Processing {total} chunks (batch={self.batch_size}," f" bucketing={self.use_bucketing})...")
         t0 = time.time()
 
         is_jina = "jina" in self.model_name.lower()
         buckets = BUCKETS_JINA if is_jina else BUCKETS_STANDARD
 
-        indexed: list[tuple[int, int, Chunk]] = [
-            (i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)
-        ]
+        indexed: list[tuple[int, int, Chunk]] = [(i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)]
 
         results: list[tuple[int, Any]] = []
 
@@ -290,17 +280,13 @@ class EmbeddingGenerator:
             print(f"     Shape buckets active: {len(bucket_map)}")
             # blen is short for Bucket Length
             for blen in sorted(bucket_map):
-                print(
-                    f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks"
-                )
+                print(f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks")
 
             for blen in sorted(bucket_map):
                 items = bucket_map[blen]
                 bar.set_postfix(bucket=blen, refresh=False)
                 for start in range(0, len(items), self.batch_size):
-                    batch_items: list[tuple[int, Chunk]] = items[
-                        start : start + self.batch_size
-                    ]
+                    batch_items: list[tuple[int, Chunk]] = items[start : start + self.batch_size]
                     texts = [c.content for _, c in batch_items]
                     embs = self._embed_batch(texts, fixed_len=blen)
                     for (orig_idx, _), emb in zip(batch_items, embs):
@@ -309,9 +295,7 @@ class EmbeddingGenerator:
         else:
             indexed.sort(key=lambda x: x[1], reverse=True)
             for start in range(0, len(indexed), self.batch_size):
-                batch_3tuple: list[tuple[int, int, Chunk]] = indexed[
-                    start : start + self.batch_size
-                ]
+                batch_3tuple: list[tuple[int, int, Chunk]] = indexed[start : start + self.batch_size]
                 texts = [c.content for _, _, c in batch_3tuple]
                 embs = self._embed_batch(texts)
                 for (orig_idx, _, _), emb in zip(batch_3tuple, embs):
@@ -335,9 +319,7 @@ class EmbeddingGenerator:
             store[chunk.id] = emb
 
         if duplicates:  # surface them loudly
-            print(
-                f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:"
-            )
+            print(f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:")
             for did in duplicates[:10]:
                 print(f"         {did}")
             if len(duplicates) > 10:

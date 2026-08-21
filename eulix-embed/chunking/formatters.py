@@ -65,10 +65,7 @@ def fmt_function_with_context(func: dict, file_path: str) -> str:
 
     cf = func.get("control_flow", {})
     if cf.get("complexity", 0) > 0:
-        w(
-            f"Control flow: {len(cf.get('branches', []))} branches, "
-            f"{len(cf.get('loops', []))} loops"
-        )
+        w(f"Control flow: {len(cf.get('branches', []))} branches, " f"{len(cf.get('loops', []))} loops")
 
     exc = func.get("exceptions", {})
     if exc.get("raises") or exc.get("handles"):

@@ -44,7 +44,7 @@ def stream_kb(path: Path) -> Generator:
     file_struct in memory.
     """
     # Keys whose entire value is small enough to buffer in RAM.
-    COLLECT_KEYS: set[str] = {"metadata", "structure"}
+    # COLLECT_KEYS: set[str] = {"metadata", "structure"}
 
     top_key: str | None = None
 
