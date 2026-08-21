@@ -10,16 +10,24 @@
 # input. Truncation keeps chunk sizes bounded for embedding models. We use formatters to
 # generate human‑readable cards that include call context, which helps semantic search.
 
-from typing import List, Any, Dict, Set
-from core.types import Chunk, ChunkType, ChunkMetadata
-from .formatters import fmt_class_overview, fmt_file_summary, fmt_function_with_context, fmt_method_with_class_ctx
+from typing import Any
+
+from utils.types import Chunk, ChunkMetadata, ChunkType
+
+from .formatters import (
+    fmt_class_overview,
+    fmt_file_summary,
+    fmt_function_with_context,
+    fmt_method_with_class_ctx,
+)
+
 
 def chunk_one_file(
     file_path: str,
-    fs: Dict[str, Any],
+    fs: dict[str, Any],
     max_size: int,
-    seen_ids: Set[str],
-) -> List[Chunk]:
+    seen_ids: set[str],
+) -> list[Chunk]:
     """
     Turn one parsed file_struct into a flat list of Chunks: one per
     function, one per class (overview card) + one per method inside it,
@@ -34,7 +42,7 @@ def chunk_one_file(
     itself so it can be called from a worker thread without re-touching
     fields other threads might be reading.
     """
-    chunks: List[Chunk] = []
+    chunks: list[Chunk] = []
     lang = fs.get("language", "")
 
     # Functions
@@ -146,6 +154,7 @@ def chunk_one_file(
 
     return chunks
 
+
 def _truncate_content(content: str, max_size: int) -> str:
     safe_max = min(max_size, 2000)
     if len(content) <= safe_max:
@@ -156,7 +165,7 @@ def _truncate_content(content: str, max_size: int) -> str:
     return content[:cut] + "..."
 
 
-def _generate_tags(func: Dict[str, Any], base_tag: str) -> List[str]:
+def _generate_tags(func: dict[str, Any], base_tag: str) -> list[str]:
     tags = [base_tag]
     if func.get("is_async"):
         tags.append("async")

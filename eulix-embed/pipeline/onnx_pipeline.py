@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-# Pipline
+# Pipeline
 
 # Responsible for orchestrates the entire embedding pipeline using onnx with streaming to limit memory.
 # Step 1+2: one pass over the KB JSON using ijson (incremental parser) and chunk each
@@ -13,31 +13,31 @@
 
 from __future__ import annotations
 
-from typing import Any, Tuple, Set, Optional, List, Dict, TYPE_CHECKING
-from pathlib import Path
 import argparse
-from concurrent.futures import ThreadPoolExecutor, Future
-import time
 import gc
 import os
-from collections import defaultdict, deque
+import shutil
 import struct as _struct
 import sys
-import shutil
+import time
+from collections import defaultdict, deque
+from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
 import ijson
-from core.types import Chunk, ChunkType, ChunkMetadata
-from core.constants import DC_KW
-from utils.json_util import ObjectBuilder, HAS_ORJSON
-from data_io.json_stream import stream_kb
+
 from chunking.chunker import chunk_one_file
 from chunking.cleaners import drop_docstrings
-from embedders.onnx_embed import EmbeddingGeneratorOnnx
-from core.constants import BUCKETS_JINA, BUCKETS_STANDARD
 from data_io.binary import save_embeddings_bin, save_vectors_bin
+from data_io.json_stream import stream_kb
+from embedders.onnx_embed import EmbeddingGeneratorOnnx
 from utils.buckets import snap_to_bucket
+from utils.constants import BUCKETS_JINA, BUCKETS_STANDARD, DC_KW
+from utils.json_util import HAS_ORJSON
+from utils.types import Chunk
 
 if TYPE_CHECKING:
-    import torch
     import numpy as np
 
 
@@ -60,8 +60,8 @@ class EmbeddingPipelineOnnx:
         self,
         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
         max_chunk_size: int = 2000,
-        device: Optional[str] = None,
-        batch_size: Optional[int] = None,
+        device: str | None = None,
+        batch_size: int | None = None,
         save_json: bool = False,
         quantize: bool = False,
         debug: bool = False,
@@ -78,10 +78,9 @@ class EmbeddingPipelineOnnx:
 
     def generate_vectors_streaming(
         self,
-        gen: "EmbeddingGeneratorOnnx",
-        chunks: "List[Chunk]",
-    ):
-        import numpy as _np
+        gen: EmbeddingGeneratorOnnx,
+        chunks: list[Chunk],
+    ) -> Any:
         from tqdm import tqdm as _tqdm
 
         total = len(chunks)
@@ -94,7 +93,7 @@ class EmbeddingPipelineOnnx:
         # We need to yield in original order, but bucketing processes out-of-order.
         # Collect results[(orig_idx, vec)] then sort once — same as before but
         # we free them immediately after yielding.
-        results: "List[Tuple[int, np.ndarray]]" = []
+        results: list[tuple[int, np.ndarray]] = []
 
         bar = _tqdm(
             total=total,
@@ -154,18 +153,14 @@ class EmbeddingPipelineOnnx:
             yield chunk.id, vec
 
     # shit is kinda unnecessary dontknow why i wrote this
-    def _check_disk_space(
-        self, output_dir: Path, kb_path: Path, n_chunks: Optional[int] = None
-    ) -> None:
+    def _check_disk_space(self, output_dir: Path, kb_path: Path, n_chunks: int | None = None) -> None:
         """
         Estimate disk space requirements based on actual KB structure.
 
         For quantized: ~ (dimension + 4) bytes per vector + ID overhead
         For float32:   ~ dimension * 4 bytes per vector + ID overhead
         """
-        free = shutil.disk_usage(
-            output_dir.parent if not output_dir.exists() else output_dir
-        ).free
+        free = shutil.disk_usage(output_dir.parent if not output_dir.exists() else output_dir).free
 
         # Try to estimate from kb.json without full parse
         if n_chunks is None:
@@ -178,25 +173,23 @@ class EmbeddingPipelineOnnx:
                     parser = ijson.parse(fh)
                     for prefix, event, value in parser:
                         # Count function, class, method IDs
-                        if (
-                            prefix.endswith(".functions.item.id")
-                            or prefix.endswith(".classes.item.id")
-                            or prefix.endswith(".methods.item.id")
+                        if prefix.endswith(
+                            (
+                                ".functions.item.id",
+                                ".classes.item.id",
+                                ".methods.item.id",
+                            )
                         ):
                             chunk_count += 1
                         # Stop after reasonable sample or end
-                        if chunk_count > 0 and prefix and "item" in prefix:
-                            # Rough estimate: sample first 1000, then extrapolate
-                            if chunk_count >= 1000:
-                                # Estimate total file size ratio
-                                file_size_mb = kb_path.stat().st_size / 1_048_576
-                                # Rough heuristic: ~40KB per chunk in JSON
-                                estimated_total = int(
-                                    file_size_mb * 25
-                                )  # ~40KB per chunk
-                                chunk_count = max(chunk_count, estimated_total)
-                                break
-            except Exception:
+                        if chunk_count > 1000 and prefix and "item" in prefix:
+                            # Estimate total file size ratio
+                            file_size_mb = kb_path.stat().st_size / 1_048_576
+                            # Rough heuristic: ~40KB per chunk in JSON
+                            estimated_total = int(file_size_mb * 25)  # ~40KB per chunk
+                            chunk_count = max(chunk_count, estimated_total)
+                            break
+            except (OSError, ValueError):
                 # Fallback: assume 100 chunks per MB of JSON
                 chunk_count = n_chunks or (kb_path.stat().st_size // 10_000)
         else:
@@ -239,7 +232,7 @@ class EmbeddingPipelineOnnx:
         print(f"  Disk space available: {free_gb:.2f} GB")
 
         if free < required:
-            print(f"\n  [ERROR] Insufficient disk space!")
+            print("\n  [ERROR] Insufficient disk space!")
             print(f"          Need: ~{req_gb:.2f} GB")
             print(f"          Have:  {free_gb:.2f} GB")
             print(f"          Shortfall: {(required - free) / 1_073_741_824:.2f} GB")
@@ -249,7 +242,7 @@ class EmbeddingPipelineOnnx:
 
     def _process_step3_step4(
         self,
-        chunks: List[Chunk],
+        chunks: list[Chunk],
         output_dir: Path,
     ) -> int:
         """
@@ -270,30 +263,37 @@ class EmbeddingPipelineOnnx:
         emb_bin = output_dir / "embeddings.bin"
         vec_bin = output_dir / "vectors.bin"
 
-        ordered_ids: List[str] = []
+        ordered_ids: list[str] = []
         n_written = 0
 
-        def _entry_gen():
+        def _vector_gen():
             nonlocal n_written
-            for cid, vec in self.generate_vectors_streaming(self.generator, chunks):
+            for item in self.generate_vectors_streaming(self.generator, chunks):
+                # Safeguard against generate_vectors_streaming returning (cid, vec) tuples
+                if isinstance(item, tuple) and len(item) == 2:
+                    cid, vec = item
+                else:
+                    cid, vec = item.id, item.vector
+
                 ordered_ids.append(cid)
                 n_written += 1
-                yield cid, vec
+                yield vec  # Must be a 1D array/list of floats
 
         count = len(chunks)  # upper bound; dedup inside generator may reduce
 
+        # Stream vector data into embeddings.bin
         save_embeddings_bin(
-            emb_bin,
-            self.generator.model_name,
-            dim,
-            _entry_gen(),
+            path=emb_bin,
+            model_name=self.generator.model_name,
+            dimension=dim,
+            vectors=_vector_gen(),
             count=count,
             quantize=self.quantize,
         )
 
         # Patch count field in header if dedup reduced it
         if n_written != count:
-            model_bytes = self.generator.model_name.encode()
+            model_bytes = self.generator.model_name.encode("utf-8")
             count_offset = 4 + 4 + 4 + len(model_bytes)  # magic+ver+model_len+model
             with open(emb_bin, "r+b") as fh:
                 fh.seek(count_offset)
@@ -303,23 +303,22 @@ class EmbeddingPipelineOnnx:
         quant_str = " (SQ8 int8)" if self.quantize else " (float32)"
         print(f"  [OK] embeddings.bin  ({emb_size:.2f} MB){quant_str}")
 
+        # Save index file matching ordered_ids populated during _vector_gen execution
         save_vectors_bin(vec_bin, self.generator.model_name, ordered_ids)
         print(f"  [OK] vectors.bin     ({vec_bin.stat().st_size / 1_048_576:.2f} MB)")
         print(f"       Vectors written: {n_written}")
         print(f"       Time:            {time.time() - t:.2f}s\n")
 
-        return dim  # returned so process() summary block can use it
+        return dim
 
-    def process(
-        self, kb_path: Path, output_dir: Path, args: argparse.Namespace
-    ) -> None:
+    def process(self, kb_path: Path, output_dir: Path, args: argparse.Namespace) -> None:
         t_total = time.time()
         SEP = "=" * 70
         sep = "-" * 70
 
         print(f"\n{SEP}")
         print("  EULIX EMBED — EMBEDDING PIPELINE")
-        print(f"  Engine : ONNX Runtime")
+        print("  Engine : ONNX Runtime")
         print(f"  ijson backend : {ijson.backend}")
         print(f"  orjson        : {'yes' if HAS_ORJSON else 'no (stdlib json)'}")
         print(f"  Chunk slots   : {'yes' if DC_KW else 'no (Python <3.10)'}")
@@ -331,11 +330,11 @@ class EmbeddingPipelineOnnx:
         print(sep)
         t = time.time()
 
-        meta: Dict[str, Any] = {}
-        chunks: List[Chunk] = []
-        seen_ids: Set[str] = set()
+        meta: dict[str, Any] = {}
+        chunks: list[Chunk] = []
+        seen_ids: set[str] = set()
         n_files = n_funcs = n_classes = n_methods = 0
-        ct_counts: Dict[str, int] = defaultdict(int)
+        ct_counts: dict[str, int] = defaultdict(int)
 
         MAX_INFLIGHT = 32
         inflight: deque[Future] = deque()
@@ -352,15 +351,15 @@ class EmbeddingPipelineOnnx:
 
             def _work():
                 drop_docstrings(fs)
-                local_seen: Set[str] = set()
+                local_seen: set[str] = set()
                 return chunk_one_file(file_path, fs, max_size, local_seen)
 
             return executor.submit(_work)
 
         def _harvest(fut: Future) -> None:
             for chunk in fut.result():
-                if chunk.id not in seen_ids: # noqa: F821
-                    seen_ids.add(chunk.id)   # noqa: F821
+                if chunk.id not in seen_ids:  # noqa: F821
+                    seen_ids.add(chunk.id)  # noqa: F821
                     ct_counts[chunk.chunk_type.value] += 1
                     chunks.append(chunk)
 
@@ -380,9 +379,7 @@ class EmbeddingPipelineOnnx:
                     n_files += 1
                     n_funcs += len(fs.get("functions", []))
                     n_classes += len(fs.get("classes", []))
-                    n_methods += sum(
-                        len(c.get("methods", [])) for c in fs.get("classes", [])
-                    )
+                    n_methods += sum(len(c.get("methods", [])) for c in fs.get("classes", []))
                     inflight.append(_submit(file_path, fs))
                     if len(inflight) >= MAX_INFLIGHT:
                         _drain_inflight(max_remaining=MAX_INFLIGHT // 2)
@@ -392,13 +389,13 @@ class EmbeddingPipelineOnnx:
         step12_time = time.time() - t
         n_chunks = len(chunks)
 
-        print(f"  [OK] KB scanned + chunked in single pass")
+        print("  [OK] KB scanned + chunked in single pass")
         print(f"       Files:        {n_files}")
         print(f"       Functions:    {n_funcs}")
         print(f"       Classes:      {n_classes}")
         print(f"       Methods:      {n_methods}")
         print(f"       Total Chunks: {n_chunks}")
-        print(f"       Chunk Breakdown:")
+        print("       Chunk Breakdown:")
         for ct, cnt in sorted(ct_counts.items()):
             print(f"         {ct + ':':<22} {cnt}")
         print(f"       Time:         {step12_time:.2f}s\n")
@@ -413,7 +410,7 @@ class EmbeddingPipelineOnnx:
         print(SEP)
         print("  PIPELINE SUMMARY")
         print(SEP)
-        print(f"  Engine: ONNX")
+        print("  Engine: ONNX")
         print(f"  Model:          {self.generator.model_name}")
         print(f"  Quantization:   {'SQ8 int8' if self.quantize else 'float32'}")
         print(f"  Dimension:      {dim}")
