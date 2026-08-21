@@ -4,11 +4,12 @@
 # Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 # Types for eulix_embed
 
-from enum import Enum
 from dataclasses import dataclass
-from typing import Optional, List
+from enum import Enum
 
-from core.constants import DC_KW
+from .constants import DC_KW
+
+
 # The unit of retrieval: one Chunk == one embeddable "thing" extracted from
 # source code (a function body, a class overview, a method, or a whole-file
 # summary). ChunkType.entry_point exists in the enum for parity with the
@@ -18,17 +19,18 @@ class ChunkType(str, Enum):
     class_ = "class"
     method = "method"
     file = "file"
-    entry_point = "entrypoint"
-    other = "other"
+    # entry_point = "entrypoint"
+    # other = "other"
+
 
 @dataclass(**DC_KW)
 class ChunkMetadata:
-    file_path: Optional[str] = None
-    language: Optional[str] = None
-    line_start: Optional[int] = None
-    line_end: Optional[int] = None
+    file_path: str | None = None
     name: str = ""
-    complexity: Optional[int] = None
+    language: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    complexity: int | None = None
 
 
 # __slots__ (via DC_KW) matters here: a large codebase can produce hundreds
@@ -39,6 +41,6 @@ class Chunk:
     id: str
     chunk_type: ChunkType
     content: str
+    tags: list[str]
     metadata: ChunkMetadata
-    tags: List[str]
     importance_score: float

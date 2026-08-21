@@ -1,12 +1,21 @@
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# Utils module holds shared code like dynamic imports.
+
 import io
-import os
 import struct as _struct
+from collections.abc import Iterable
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, cast
 
 import numpy as np
-from core.constants import BINARY_MAGIC, BINARY_VERSION
+
+from utils.constants import BINARY_MAGIC, BINARY_VERSION
 from utils.req import require_numpy
+
 from .serialization import sq8_decode, sq8_encode
 
 
@@ -14,8 +23,8 @@ def save_embeddings_bin_fixed(
     path: Path,
     model_name: str,
     dimension: int,
-    entries,  # Iterable[Tuple[str, np.ndarray]] or Iterable[np.ndarray]
-    count: Optional[int] = None,
+    entries: Iterable[tuple[str, Any] | Any],  # Iterable of (id, vector) or just vectors
+    count: int | None = None,
     quantize: bool = False,
 ) -> None:
     """Stream-writes a STRICTLY FIXED-WIDTH embeddings.bin file.
@@ -63,9 +72,9 @@ def save_embeddings_bin_fixed(
             if quantize:
                 q, scale = sq8_encode(arr)
                 fh.write(_struct.pack("<f", scale))  # 4 bytes
-                fh.write(q.tobytes())                # dim bytes
+                fh.write(q.tobytes())  # dim bytes
             else:
-                fh.write(arr.tobytes())              # dim * 4 bytes
+                fh.write(arr.tobytes())  # dim * 4 bytes
 
         fh.flush()
 
@@ -98,7 +107,7 @@ def get_embedding_header_info(path: Path) -> dict:
     }
 
 
-def seek_vector_o1(path: Path, index: int, header_info: dict) -> np.ndarray:
+def seek_vector_o1(path: Path, index: int, header_info: dict) -> Any:
     """O(1) Instant Vector Lookup via pure byte arithmetic (No scanning required)."""
     np = require_numpy()
     header_bytes = header_info["header_bytes"]
@@ -114,10 +123,10 @@ def seek_vector_o1(path: Path, index: int, header_info: dict) -> np.ndarray:
         if quantized:
             (scale,) = _struct.unpack("<f", fh.read(4))
             raw = fh.read(dim)
-            return sq8_decode(np.frombuffer(raw, dtype=np.int8), scale)
+            return sq8_decode(cast(Any, np.frombuffer(raw, dtype=np.int8)), scale)
         else:
             raw = fh.read(dim * 4)
-            return np.frombuffer(raw, dtype=np.float32).copy()
+            return cast(Any, np.frombuffer(raw, dtype=np.float32).copy())
 
 
 def mmap_embeddings_float32(path: Path, header_info: dict) -> np.ndarray:

@@ -4,32 +4,34 @@
 # Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 # Cli module is responsible for cli related things args,operation yadayada
-# sever mode isnt in this module and is part of seprate package called server
-# why cause thats still experimental and only used in chat mode of eulix cli
+# sever mode isn't in this module and is part of separate package called server
+# why cause that's still experimental and only used in chat mode of eulix cli
 
 # This file is responsible for managing what args do
 
 import argparse
-import io
+import random
 import struct as _struct
 import sys
-from collections import Counter
 from pathlib import Path
-from typing import List
-import random
 
-from data_io.binary import load_embeddings_bin, load_vectors_bin
+from data_io.binary import (
+    FastEmbeddingsReader,
+    load_vectors_bin,
+)
 from embedders.onnx_embed import EmbeddingGeneratorOnnx
 from embedders.torch_embed import EmbeddingGenerator
 from pipeline.onnx_pipeline import EmbeddingPipelineOnnx
 from pipeline.torch_pipeline import EmbeddingPipeline
 from utils.json_util import json_dumps
-from utils.req import require_numpy
-from .comapre import _verify_at_offset, check_duplicate_ids
-from core.constants import BINARY_MAGIC, BINARY_VERSION
+
+from .compare import _verify_at_offset, check_duplicate_ids
+
 
 # cmd_embed handles embed arg and switching of engine
 def cmd_embed(args: argparse.Namespace) -> None:
+    PipelineClass: type[EmbeddingPipeline | EmbeddingPipelineOnnx]
+
     if args.engine == "onnx":
         PipelineClass = EmbeddingPipelineOnnx
     else:
@@ -50,8 +52,10 @@ def cmd_embed(args: argparse.Namespace) -> None:
         sys.exit(1)
     pipeline.process(kb_path, Path(args.output), args)
 
+
 # cmd_query handles query arg and engine
 def cmd_query(args: argparse.Namespace) -> None:
+    GeneratorClass: type[EmbeddingGenerator | EmbeddingGeneratorOnnx]
     if not args.query:
         print("[ERROR] --query is required", file=sys.stderr)
         sys.exit(1)
@@ -80,8 +84,9 @@ def cmd_query(args: argparse.Namespace) -> None:
         print(f"[ERROR] Unknown format '{args.format}'", file=sys.stderr)
         sys.exit(1)
 
-# cmd_compare handles comparission of embeddings.bin and vectors.bin,
-# it is used to check wether generated files are correct or not
+
+# cmd_compare handles comparison of embeddings.bin and vectors.bin,
+# it is used to check whether generated files are correct or not
 def cmd_compare(args: argparse.Namespace) -> None:
     print("==================================================================")
     print("          COMPARING embeddings.bin ↔ vectors.bin                  ")
@@ -90,58 +95,48 @@ def cmd_compare(args: argparse.Namespace) -> None:
     vec_path = Path(args.vec)
 
     print("[1/3] CHECKING FOR DUPLICATE IDs")
-    emb_dupes = check_duplicate_ids(emb_path)
+    print("  • Checking vectors.bin...")
     vec_dupes = check_duplicate_ids(vec_path)
+    print("  • Checking embeddings.bin...")
+    check_duplicate_ids(emb_path)
 
     print("\n[2/3] LOADING INDEX & METADATA")
     vec_model, vec_ids = load_vectors_bin(vec_path)
     total_entries = len(vec_ids)
 
-    with open(emb_path, "rb") as fh:
-        magic = fh.read(4)
-        if magic != BINARY_MAGIC:
-            raise ValueError(f"Bad magic: {magic!r}")
-
-        (version,) = _struct.unpack("<I", fh.read(4))
-        (name_len,) = _struct.unpack("<I", fh.read(4))
-        emb_model = fh.read(name_len).decode("utf-8")
-
-        count, dim = _struct.unpack("<II", fh.read(8))
-        quantized = fh.read(1) == b"\x01" if version in (4, 5) else False
-
+    with FastEmbeddingsReader(emb_path) as reader:
+        print("uses FastEmbeddingsReader")
         print(f"  • vectors.bin    : {total_entries} IDs (model: '{vec_model}')")
-        print(f"  • embeddings.bin : {count} entries, dim={dim}, quantized={quantized} (model: '{emb_model}')")
+        print(
+            f"  • embeddings.bin : {reader.count} entries, dim={reader.dimension}, "
+            f"quantized={reader.quantized} (model: '{reader.model_name}')"
+        )
 
         # Alignment Checks
-        if vec_model != emb_model:
-            print(f"  ⚠️  [MISMATCH] Model names differ!")
+        if vec_model != reader.model_name:
+            print("  ⚠️  [MISMATCH] Model names differ!")
         else:
-            print(f"  ✓ Model names match.")
+            print("  ✓ Model names match.")
 
-        if count != total_entries:
-            print(f"  ⚠️  [MISMATCH] Count mismatch: vectors.bin has {total_entries}, embeddings.bin has {count}")
+        if reader.count != total_entries:
+            print(
+                f"  ⚠️  [MISMATCH] Count mismatch: vectors.bin has {total_entries}, "
+                f"embeddings.bin has {reader.count}"
+            )
         else:
-            print(f"  ✓ Total entry counts match.")
+            print("  ✓ Total entry counts match.")
 
         if total_entries < 9:
             print("\n[WARNING] At least 9 entries required for spot check sampling. Skipping step 3.")
             return
 
         print("\n[3/3] MAPPING FILE OFFSETS & SPOT CHECKING")
-        byte_offsets = []
-        vec_bytes = (4 + dim) if quantized else (dim * 4)
-
-        for _ in range(count):
-            pos = fh.tell()
-            byte_offsets.append(pos)
-            (id_len,) = _struct.unpack("<I", fh.read(4))
-            fh.seek(id_len + vec_bytes, 1)
 
         # Pick 3 head, 3 random mid, 3 tail indices
+        rng = random.SystemRandom()
         head_indices = [0, 1, 2]
         tail_indices = [total_entries - 3, total_entries - 2, total_entries - 1]
-        mid_indices = sorted(random.sample(range(3, total_entries - 3), 3))
-
+        mid_indices = sorted(rng.sample(range(3, total_entries - 3), 3))
         sample_targets = [
             ("FIRST 3", head_indices),
             ("RANDOM MID 3", mid_indices),
@@ -156,10 +151,11 @@ def cmd_compare(args: argparse.Namespace) -> None:
             for idx in indices:
                 total_checks += 1
                 expected_id = vec_ids[idx]
-                target_offset = byte_offsets[idx]
 
-                fh.seek(target_offset)
-                ok, msg = _verify_at_offset(fh, expected_id, dim, quantized)
+                # Compute exact byte offset mathematically (O(1))
+                target_offset = reader.header_size + (idx * reader.record_size)
+
+                ok, msg = _verify_at_offset(reader, idx, expected_id)
 
                 status = "[OK]" if ok else "[FAIL]"
                 print(f"  Index {idx:5d} @ Offset {target_offset:8d} | {status} {msg}")
@@ -167,10 +163,11 @@ def cmd_compare(args: argparse.Namespace) -> None:
                     passed += 1
 
         print("\n==================================================================")
-        print(f"SUMMARY: Spot Checks Passed: {passed}/{total_checks} | Duplicates: emb={len(emb_dupes)}, vec={len(vec_dupes)}")
+        print(f"SUMMARY: Spot Checks Passed: {passed}/{total_checks} | " f"Duplicates in vectors.bin: {len(vec_dupes)}")
         print("==================================================================")
 
-# checks current py version locked between 3.10-3.11 as some libs used arent supported
+
+# checks current py version locked between 3.10-3.11 as some libs used aren't supported
 # by other py versions
 def check_python_version():
     """
@@ -193,13 +190,12 @@ def check_python_version():
         )
         print("=" * 60)
         print("\nPlease switch your virtual environment or Python installation.")
-        print(
-            "If using 'uv', you can recreate the environment with the correct version:"
-        )
+        print("If using 'uv', you can recreate the environment with the correct version:")
         print(f"  uv venv --python {MIN_VERSION[0]}.{MIN_VERSION[1]}")
         print("=" * 60)
 
         sys.exit(1)
+
 
 # Checks ijson backend
 def ijson_check():
@@ -213,9 +209,7 @@ def ijson_check():
         elif ijson.backend == "yajl2_cffi":
             print("  ✓ C backend via CFFI - good performance")
         else:
-            print(
-                "  ⚠ Pure Python backend - slower, consider: pip install 'ijson[yajl2_cffi]'"
-            )
+            print("  ⚠ Pure Python backend - slower, consider: pip install 'ijson[yajl2_cffi]'")
     except ImportError:
         print("❌ ijson not installed")
         print("   Install with: uv pip install ijson")
