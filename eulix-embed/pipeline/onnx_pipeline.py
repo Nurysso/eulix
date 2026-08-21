@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-# Pipline
+# Pipeline
 
 # Responsible for orchestrates the entire embedding pipeline using onnx with streaming to limit memory.
 # Step 1+2: one pass over the KB JSON using ijson (incremental parser) and chunk each
@@ -29,13 +29,13 @@ import ijson
 
 from chunking.chunker import chunk_one_file
 from chunking.cleaners import drop_docstrings
-from core.constants import BUCKETS_JINA, BUCKETS_STANDARD, DC_KW
-from core.types import Chunk
 from data_io.binary import save_embeddings_bin, save_vectors_bin
 from data_io.json_stream import stream_kb
 from embedders.onnx_embed import EmbeddingGeneratorOnnx
 from utils.buckets import snap_to_bucket
+from utils.constants import BUCKETS_JINA, BUCKETS_STANDARD, DC_KW
 from utils.json_util import HAS_ORJSON
+from utils.types import Chunk
 
 if TYPE_CHECKING:
     import numpy as np
@@ -153,18 +153,14 @@ class EmbeddingPipelineOnnx:
             yield chunk.id, vec
 
     # shit is kinda unnecessary dontknow why i wrote this
-    def _check_disk_space(
-        self, output_dir: Path, kb_path: Path, n_chunks: int | None = None
-    ) -> None:
+    def _check_disk_space(self, output_dir: Path, kb_path: Path, n_chunks: int | None = None) -> None:
         """
         Estimate disk space requirements based on actual KB structure.
 
         For quantized: ~ (dimension + 4) bytes per vector + ID overhead
         For float32:   ~ dimension * 4 bytes per vector + ID overhead
         """
-        free = shutil.disk_usage(
-            output_dir.parent if not output_dir.exists() else output_dir
-        ).free
+        free = shutil.disk_usage(output_dir.parent if not output_dir.exists() else output_dir).free
 
         # Try to estimate from kb.json without full parse
         if n_chunks is None:
@@ -177,25 +173,23 @@ class EmbeddingPipelineOnnx:
                     parser = ijson.parse(fh)
                     for prefix, event, value in parser:
                         # Count function, class, method IDs
-                        if (
-                            prefix.endswith(".functions.item.id")
-                            or prefix.endswith(".classes.item.id")
-                            or prefix.endswith(".methods.item.id")
+                        if prefix.endswith(
+                            (
+                                ".functions.item.id",
+                                ".classes.item.id",
+                                ".methods.item.id",
+                            )
                         ):
                             chunk_count += 1
                         # Stop after reasonable sample or end
-                        if chunk_count > 0 and prefix and "item" in prefix:
-                            # Rough estimate: sample first 1000, then extrapolate
-                            if chunk_count >= 1000:
-                                # Estimate total file size ratio
-                                file_size_mb = kb_path.stat().st_size / 1_048_576
-                                # Rough heuristic: ~40KB per chunk in JSON
-                                estimated_total = int(
-                                    file_size_mb * 25
-                                )  # ~40KB per chunk
-                                chunk_count = max(chunk_count, estimated_total)
-                                break
-            except Exception:
+                        if chunk_count > 1000 and prefix and "item" in prefix:
+                            # Estimate total file size ratio
+                            file_size_mb = kb_path.stat().st_size / 1_048_576
+                            # Rough heuristic: ~40KB per chunk in JSON
+                            estimated_total = int(file_size_mb * 25)  # ~40KB per chunk
+                            chunk_count = max(chunk_count, estimated_total)
+                            break
+            except (OSError, ValueError):
                 # Fallback: assume 100 chunks per MB of JSON
                 chunk_count = n_chunks or (kb_path.stat().st_size // 10_000)
         else:
@@ -317,9 +311,7 @@ class EmbeddingPipelineOnnx:
 
         return dim
 
-    def process(
-        self, kb_path: Path, output_dir: Path, args: argparse.Namespace
-    ) -> None:
+    def process(self, kb_path: Path, output_dir: Path, args: argparse.Namespace) -> None:
         t_total = time.time()
         SEP = "=" * 70
         sep = "-" * 70
@@ -387,9 +379,7 @@ class EmbeddingPipelineOnnx:
                     n_files += 1
                     n_funcs += len(fs.get("functions", []))
                     n_classes += len(fs.get("classes", []))
-                    n_methods += sum(
-                        len(c.get("methods", [])) for c in fs.get("classes", [])
-                    )
+                    n_methods += sum(len(c.get("methods", [])) for c in fs.get("classes", []))
                     inflight.append(_submit(file_path, fs))
                     if len(inflight) >= MAX_INFLIGHT:
                         _drain_inflight(max_remaining=MAX_INFLIGHT // 2)

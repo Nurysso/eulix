@@ -6,7 +6,6 @@
 # Utils module holds shared code like dynamic imports.
 
 
-
 def require_ml():
     """
     Import and return (np, torch, F, AutoModel, AutoTokenizer, tqdm).

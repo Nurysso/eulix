@@ -30,8 +30,8 @@ from cli.commands import (
     ijson_check,
 )
 from cli.parser import parse_args
-from core.constants import Version, ijson_backend
 from server.server import cmd_serve
+from utils.constants import Version, ijson_backend
 
 warnings.filterwarnings("ignore", message="optimum is not installed")
 
@@ -42,9 +42,7 @@ def print_help() -> None:
     _PARSER.print_help()
     # print()
     DETAIL_COMMANDS = ("embed", "query", "serve", "compare")
-    sub_action = next(
-        a for a in _PARSER._actions if isinstance(a, argparse._SubParsersAction)
-    )
+    sub_action = next(a for a in _PARSER._actions if isinstance(a, argparse._SubParsersAction))
 
     for name, subparser in sub_action.choices.items():
         if name not in DETAIL_COMMANDS:
@@ -73,9 +71,7 @@ def check_engine_dependencies(engine: str) -> None:
         install_cmd = "pip install torch transformers sentence-transformers tqdm numpy"
 
         if importlib.util.find_spec("uv") is not None:
-            install_cmd = (
-                "uv pip install torch transformers sentence-transformers tqdm numpy"
-            )
+            install_cmd = "uv pip install torch transformers sentence-transformers tqdm numpy"
 
     elif engine == "onnx":
         required_packages = {
@@ -134,9 +130,7 @@ def main() -> None:
     if args.command is None:
         # bare `eulix_embed.py` with no subcommand → default to embed
         embed_parser = next(
-            a
-            for a in _PARSER._subparsers._actions  # type: ignore[union-attr]
-            if hasattr(a, "_name_parser_map")
+            a for a in _PARSER._subparsers._actions if hasattr(a, "_name_parser_map")  # type: ignore[union-attr]
         )._name_parser_map["embed"]
         args = embed_parser.parse_args(sys.argv[1:])
         args.command = "embed"
@@ -148,9 +142,7 @@ def main() -> None:
         # This only runs for commands that actually need the ML stack
         if args.command in ("embed", "query", "serve"):
             # Determine which engine to check
-            engine = getattr(
-                args, "engine", "torch"
-            )  # Default to torch if not specified
+            engine = getattr(args, "engine", "torch")  # Default to torch if not specified
             check_engine_dependencies(engine)
 
             # Now it's safe to import the engine-specific code

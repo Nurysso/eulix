@@ -6,12 +6,15 @@
 # Uses a streaming writer to avoid holding all vectors in memory; SQ8 support
 # reduces storage by 4x with negligible retrieval loss.
 
+from __future__ import annotations
+
 import io
 import struct as _struct
 from pathlib import Path
+from types import TracebackType
 from typing import Any, cast
 
-from core.constants import BINARY_MAGIC, BINARY_VERSION
+from utils.constants import BINARY_MAGIC, BINARY_VERSION
 from utils.req import require_numpy
 
 from .serialization import sq8_decode, sq8_encode
@@ -110,9 +113,7 @@ def save_vectors_bin(
         for eid in ids:
             eid_bytes = eid.encode("utf-8")
             if len(eid_bytes) > 0xFFFF:
-                raise ValueError(
-                    f"Chunk ID too long ({len(eid_bytes)} bytes): {eid[:80]}..."
-                )
+                raise ValueError(f"Chunk ID too long ({len(eid_bytes)} bytes): {eid[:80]}...")
             fh.write(_struct.pack("<I", len(eid_bytes)))
             fh.write(eid_bytes)
         fh.flush()
@@ -140,13 +141,13 @@ def load_vectors_bin(path: Path) -> tuple[str, list[str]]:
     return model_name, ids
 
 
-class FastEmbeddingsReader:
+class FastEmbeddingsReader:  # pylint: disable=too-many-instance-attributes
     """Provides O(1) random access reads for fixed-length embeddings.bin files."""
 
     def __init__(self, path: Path):
         self.np = require_numpy()
         self.path = path
-        self.fh = open(path, "rb")
+        self.fh = open(path, "rb")  # noqa: SIM115
 
         # Parse Header
         magic = self.fh.read(4)
@@ -188,10 +189,15 @@ class FastEmbeddingsReader:
     def close(self) -> None:
         self.fh.close()
 
-    def __enter__(self) -> "FastEmbeddingsReader":
+    def __enter__(self) -> Any:
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         self.close()
 
 
@@ -202,16 +208,14 @@ def load_vector_mmap(path: Path) -> tuple[str, Any]:
         magic = fh.read(4)
         if magic != BINARY_MAGIC:
             raise ValueError(f"Bad magic: {magic!r}")
-        (version,) = _struct.unpack("<I", fh.read(4))
+        (_version,) = _struct.unpack("<I", fh.read(4))
         model_name = _read_str(fh)
         count, dim = _struct.unpack("<II", fh.read(8))
         quantized = fh.read(1) == b"\x01"
         header_size = fh.tell()
 
     if quantized:
-        raise ValueError(
-            "mmap helper is for raw float32 files; use FastEmbeddingsReader for SQ8 files."
-        )
+        raise ValueError("mmap helper is for raw float32 files; use FastEmbeddingsReader for SQ8 files.")
 
     # Memory-map file from header offset onward
     matrix = np.memmap(
