@@ -4,8 +4,8 @@
 # Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 # Cli module is responsible for cli related things args,operation yadayada
-# sever mode isnt in this module and is part of seprate package called server
-# why cause thats still experimental and only used in chat mode of eulix cli
+# sever mode isn't in this module and is part of separate package called server
+# why cause that's still experimental and only used in chat mode of eulix cli
 
 # This file is responsible for parsing args
 
@@ -89,15 +89,9 @@ def parse_args() -> argparse.ArgumentParser:
         action="store_true",
         help="Also write embeddings.json (enables graph edge streaming)",
     )
-    ep.add_argument(
-        "--debug", action="store_true", help="Print debug info during pipeline"
-    )
-    qp = sub.add_parser(
-        "query", help="Generate embedding for a query string (one-shot)"
-    )
-    qp.add_argument(
-        "-q", "--query", default="", metavar="TEXT", help="Query text to embed"
-    )
+    ep.add_argument("--debug", action="store_true", help="Print debug info during pipeline")
+    qp = sub.add_parser("query", help="Generate embedding for a query string (one-shot)")
+    qp.add_argument("-q", "--query", default="", metavar="TEXT", help="Query text to embed")
     qp.add_argument(
         "-m",
         "--model",
@@ -120,9 +114,7 @@ def parse_args() -> argparse.ArgumentParser:
         metavar="FMT",
         help="json | binary  [default: json]",
     )
-    sp = sub.add_parser(
-        "serve", help="Long-lived stdin/stdout embedding server (avoids model reload)"
-    )
+    sp = sub.add_parser("serve", help="Long-lived stdin/stdout embedding server (avoids model reload)")
     sp.add_argument(
         "-m",
         "--model",

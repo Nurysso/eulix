@@ -10,12 +10,12 @@ from pathlib import Path
 
 import numpy as np
 
-from core.constants import BINARY_MAGIC
 from data_io.binary import (
     FastEmbeddingsReader,
     load_vectors_bin,
 )
 from data_io.serialization import sq8_decode
+from utils.constants import BINARY_MAGIC
 
 
 def check_duplicate_ids(path: Path) -> list[str]:
@@ -33,16 +33,17 @@ def check_duplicate_ids(path: Path) -> list[str]:
             magic = f.read(4)
             if magic != BINARY_MAGIC:
                 raise ValueError(f"Bad magic in {path.name}: {magic!r}")
-            (version,) = struct.unpack("<I", f.read(4))
-
-            # Read model name
-            (model_len,) = struct.unpack("<I", f.read(4))
-            _ = f.read(model_len).decode("utf-8")
+            try:
+                (version,) = struct.unpack("<I", f.read(4))
+                print("  ✓ Binary Version Matched" if version == 5 else "⚠️ Binary version mismatch")
+                # Read model name
+                (model_len,) = struct.unpack("<I", f.read(4))
+                _ = f.read(model_len).decode("utf-8")
+            except (UnicodeDecodeError, ValueError):
+                print("decoding error")
 
             count, _ = struct.unpack("<II", f.read(8))
-            print(
-                f"  ✓ {path.name} is a fixed-width binary ({count} total vector records)."
-            )
+            print(f"  ✓ {path.name} is a fixed-width binary ({count} total vector records).")
         return []
 
     # Process vectors.bin
@@ -87,10 +88,6 @@ def _verify_at_offset(
         norm = float(np.linalg.norm(vec))
         return True, f"Matched '{expected_id}' [shape={vec.shape}, L2-norm={norm:.2f}]"
 
-    except Exception as e:
-        pos = (
-            reader.header_size + (idx * reader.record_size)
-            if hasattr(reader, "header_size")
-            else 0
-        )
+    except Exception as e:  # noqa: BLE001
+        pos = reader.header_size + (idx * reader.record_size) if hasattr(reader, "header_size") else 0
         return False, f"Read error at index {idx} (offset {pos}): {e}"

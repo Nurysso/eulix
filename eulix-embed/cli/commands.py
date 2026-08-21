@@ -4,8 +4,8 @@
 # Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 # Cli module is responsible for cli related things args,operation yadayada
-# sever mode isnt in this module and is part of seprate package called server
-# why cause thats still experimental and only used in chat mode of eulix cli
+# sever mode isn't in this module and is part of separate package called server
+# why cause that's still experimental and only used in chat mode of eulix cli
 
 # This file is responsible for managing what args do
 
@@ -25,7 +25,7 @@ from pipeline.onnx_pipeline import EmbeddingPipelineOnnx
 from pipeline.torch_pipeline import EmbeddingPipeline
 from utils.json_util import json_dumps
 
-from .comapre import _verify_at_offset, check_duplicate_ids
+from .compare import _verify_at_offset, check_duplicate_ids
 
 
 # cmd_embed handles embed arg and switching of engine
@@ -85,8 +85,8 @@ def cmd_query(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-# cmd_compare handles comparission of embeddings.bin and vectors.bin,
-# it is used to check wether generated files are correct or not
+# cmd_compare handles comparison of embeddings.bin and vectors.bin,
+# it is used to check whether generated files are correct or not
 def cmd_compare(args: argparse.Namespace) -> None:
     print("==================================================================")
     print("          COMPARING embeddings.bin ↔ vectors.bin                  ")
@@ -98,7 +98,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
     print("  • Checking vectors.bin...")
     vec_dupes = check_duplicate_ids(vec_path)
     print("  • Checking embeddings.bin...")
-    emb_dupes = check_duplicate_ids(emb_path)
+    check_duplicate_ids(emb_path)
 
     print("\n[2/3] LOADING INDEX & METADATA")
     vec_model, vec_ids = load_vectors_bin(vec_path)
@@ -127,18 +127,16 @@ def cmd_compare(args: argparse.Namespace) -> None:
             print("  ✓ Total entry counts match.")
 
         if total_entries < 9:
-            print(
-                "\n[WARNING] At least 9 entries required for spot check sampling. Skipping step 3."
-            )
+            print("\n[WARNING] At least 9 entries required for spot check sampling. Skipping step 3.")
             return
 
         print("\n[3/3] MAPPING FILE OFFSETS & SPOT CHECKING")
 
         # Pick 3 head, 3 random mid, 3 tail indices
+        rng = random.SystemRandom()
         head_indices = [0, 1, 2]
         tail_indices = [total_entries - 3, total_entries - 2, total_entries - 1]
-        mid_indices = sorted(random.sample(range(3, total_entries - 3), 3))
-
+        mid_indices = sorted(rng.sample(range(3, total_entries - 3), 3))
         sample_targets = [
             ("FIRST 3", head_indices),
             ("RANDOM MID 3", mid_indices),
@@ -165,14 +163,11 @@ def cmd_compare(args: argparse.Namespace) -> None:
                     passed += 1
 
         print("\n==================================================================")
-        print(
-            f"SUMMARY: Spot Checks Passed: {passed}/{total_checks} | "
-            f"Duplicates in vectors.bin: {len(vec_dupes)}"
-        )
+        print(f"SUMMARY: Spot Checks Passed: {passed}/{total_checks} | " f"Duplicates in vectors.bin: {len(vec_dupes)}")
         print("==================================================================")
 
 
-# checks current py version locked between 3.10-3.11 as some libs used arent supported
+# checks current py version locked between 3.10-3.11 as some libs used aren't supported
 # by other py versions
 def check_python_version():
     """
@@ -195,9 +190,7 @@ def check_python_version():
         )
         print("=" * 60)
         print("\nPlease switch your virtual environment or Python installation.")
-        print(
-            "If using 'uv', you can recreate the environment with the correct version:"
-        )
+        print("If using 'uv', you can recreate the environment with the correct version:")
         print(f"  uv venv --python {MIN_VERSION[0]}.{MIN_VERSION[1]}")
         print("=" * 60)
 
@@ -216,9 +209,7 @@ def ijson_check():
         elif ijson.backend == "yajl2_cffi":
             print("  ✓ C backend via CFFI - good performance")
         else:
-            print(
-                "  ⚠ Pure Python backend - slower, consider: pip install 'ijson[yajl2_cffi]'"
-            )
+            print("  ⚠ Pure Python backend - slower, consider: pip install 'ijson[yajl2_cffi]'")
     except ImportError:
         print("❌ ijson not installed")
         print("   Install with: uv pip install ijson")

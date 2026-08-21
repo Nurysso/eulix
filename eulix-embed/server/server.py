@@ -117,9 +117,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
             # Batch embed: {"queries": ["text1", "text2", ...]}
             if "queries" in req:
                 queries = req["queries"]
-                if not isinstance(queries, list) or not all(
-                    isinstance(q, str) for q in queries
-                ):
+                if not isinstance(queries, list) or not all(isinstance(q, str) for q in queries):
                     raise ValueError('"queries" must be a JSON array of strings')
                 if not queries:
                     raise ValueError('"queries" array is empty')
@@ -152,11 +150,9 @@ def cmd_serve(args: argparse.Namespace) -> None:
                 continue
 
             # Unknown request shape
-            raise ValueError(
-                'request must contain "query", "queries", "ping", or "shutdown"'
-            )
+            raise ValueError('request must contain "query", "queries", "ping", or "shutdown"')
 
-        except Exception as exc:
+        except (ValueError, TypeError, RuntimeError) as exc:
             err_resp: dict[str, Any] = {"error": str(exc)}
             print(json_dumps(err_resp), flush=True)
             print(f"  [WARN] request error: {exc}", file=_err)

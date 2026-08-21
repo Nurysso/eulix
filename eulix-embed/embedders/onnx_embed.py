@@ -15,10 +15,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from core.constants import BUCKETS_JINA, BUCKETS_STANDARD
-from core.types import Chunk
 from utils.buckets import snap_to_bucket
+from utils.constants import BUCKETS_JINA, BUCKETS_STANDARD
 from utils.req import require_ml_onnx, require_numpy
+from utils.types import Chunk
 
 # ONNX RUNTIME EMBEDDER
 # No PyTorch anywhere in this section — model inference runs entirely
@@ -41,11 +41,7 @@ _PROVIDER_ALIASES: dict[str, list[str]] = {
 
 # Where locally-exported ONNX models get cached (used only when a model
 # has no pre-exported ONNX weights on the Hub — see _resolve_onnx_model).
-_ONNX_CACHE_DIR = Path(
-    os.environ.get(
-        "EULIX_ONNX_CACHE", str(Path.home() / ".cache" / "eulix-embed" / "onnx")
-    )
-)
+_ONNX_CACHE_DIR = Path(os.environ.get("EULIX_ONNX_CACHE", str(Path.home() / ".cache" / "eulix-embed" / "onnx")))
 
 # Preference order for locating pre-exported ONNX weights inside a model
 # repo / local directory. Many sentence-transformers / feature-extraction
@@ -72,9 +68,7 @@ def _resolve_providers(ort: Any, device: str | None) -> tuple[list[str], str]:
     if device is not None:
         key = device.lower()
         if key not in _PROVIDER_ALIASES:
-            raise ValueError(
-                f"Unknown device '{device}'. Expected one of: cpu, cuda, rocm"
-            )
+            raise ValueError(f"Unknown device '{device}'. Expected one of: cpu, cuda, rocm")
         wanted = _PROVIDER_ALIASES[key][0]
         if wanted not in available and wanted != "CPUExecutionProvider":
             print(
@@ -84,9 +78,7 @@ def _resolve_providers(ort: Any, device: str | None) -> tuple[list[str], str]:
                 file=sys.stderr,
             )
             return ["CPUExecutionProvider"], "cpu"
-        label = {"CUDAExecutionProvider": "cuda", "ROCMExecutionProvider": "rocm"}.get(
-            wanted, "cpu"
-        )
+        label = {"CUDAExecutionProvider": "cuda", "ROCMExecutionProvider": "rocm"}.get(wanted, "cpu")
         if label != "cpu":
             print(f"  ✓ Using {wanted}", file=sys.stderr)
         return _PROVIDER_ALIASES[key], label
@@ -140,9 +132,7 @@ def _pick_embedding_output(
     return None, None
 
 
-def _resolve_onnx_model(
-    model_name: str, trust_remote_code: bool = False, force_export: bool = False
-) -> Path:
+def _resolve_onnx_model(model_name: str, trust_remote_code: bool = False, force_export: bool = False) -> Path:
     """
     Resolve `model_name` to a local .onnx file path, trying in order:
 
@@ -189,12 +179,12 @@ def _resolve_onnx_model(
             repo_files = set(list_repo_files(model_name))
             for pat in _ONNX_CANDIDATE_FILES:
                 if pat in repo_files:
-                    onnx_path = Path(hf_hub_download(model_name, pat))
+                    onnx_path = Path(hf_hub_download(model_name, pat))  # nosec B615
                     data_pat = f"{pat}_data"
                     if data_pat in repo_files:
-                        hf_hub_download(model_name, data_pat)
+                        hf_hub_download(model_name, data_pat)  # nosec B615
                     return onnx_path
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(
                 f"     [i] No pre-exported ONNX weights found on the Hub for "
                 f"'{model_name}' ({e}); will export locally.",
@@ -232,7 +222,7 @@ def _resolve_onnx_model(
     return exported
 
 
-class EmbeddingGeneratorOnnx:
+class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
     """
     Thin wrapper around an ONNX Runtime InferenceSession for batched
     embedding generation. There is no PyTorch dependency at inference
@@ -291,7 +281,7 @@ class EmbeddingGeneratorOnnx:
                     trust_remote_code=trust_remote_code,
                     clean_up_tokenization_spaces=True,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 raise RuntimeError(
                     f"\033[1;31;40m Failed to load tokenizer for '{model_name}'.\n\033[0m"
                     f"\033[1;31;40m Possible reasons:\n\033[0m"
@@ -341,11 +331,9 @@ class EmbeddingGeneratorOnnx:
                 )
 
             try:
-                onnx_path = _resolve_onnx_model(
-                    model_name, trust_remote_code=trust_remote_code
-                )
+                onnx_path = _resolve_onnx_model(model_name, trust_remote_code=trust_remote_code)
                 self.session = _load_session(onnx_path)
-            except Exception as e:
+            except (OSError, RuntimeError, ValueError) as e:
                 raise RuntimeError(
                     f"\033[1;31;40m Failed to load ONNX model weights for '{model_name}'.\n\033[0m"
                     f"Original error: {e}"
@@ -370,9 +358,7 @@ class EmbeddingGeneratorOnnx:
                     f"feature-extraction export instead...",
                     file=sys.stderr,
                 )
-                onnx_path = _resolve_onnx_model(
-                    model_name, trust_remote_code=trust_remote_code, force_export=True
-                )
+                onnx_path = _resolve_onnx_model(model_name, trust_remote_code=trust_remote_code, force_export=True)
                 self.session = _load_session(onnx_path)
                 self._input_names = {i.name for i in self.session.get_inputs()}
                 all_output_names = [o.name for o in self.session.get_outputs()]
@@ -405,7 +391,7 @@ class EmbeddingGeneratorOnnx:
             try:
                 dummy_emb = self._embed_batch(["hello"])
                 self._dimension = dummy_emb.shape[-1]
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 raise RuntimeError(f"Failed to probe embedding dimension: {e}")
 
             print(f"     Dimension:  {self._dimension}", file=sys.stderr)
@@ -477,9 +463,11 @@ class EmbeddingGeneratorOnnx:
         """
         np = self._np
 
-        tok_kwargs: dict[str, Any] = dict(
-            return_tensors="np", padding=True, truncation=True
-        )
+        tok_kwargs: dict[str, Any] = {
+            "return_tensors": "np",
+            "padding": True,
+            "truncation": True,
+        }
         if fixed_len is not None:
             tok_kwargs["max_length"] = fixed_len
             tok_kwargs["padding"] = "max_length"
@@ -522,22 +510,17 @@ class EmbeddingGeneratorOnnx:
         before building the returned dict, and duplicate chunk IDs are
         collapsed with a warning rather than silently overwritten.
         """
-        np = self._np
+        # np = self._np
         tqdm = self._tqdm
         total = len(chunks)
-        print(
-            f" Processing {total} chunks (batch={self.batch_size},"
-            f" bucketing={self.use_bucketing})..."
-        )
+        print(f" Processing {total} chunks (batch={self.batch_size}," f" bucketing={self.use_bucketing})...")
         t0 = time.time()
 
         is_jina = "jina" in self.model_name.lower()
         buckets = BUCKETS_JINA if is_jina else BUCKETS_STANDARD
 
         # Keep a clean 3-tuple structure everywhere: (original_index, token_estimate, chunk)
-        indexed: list[tuple[int, int, Chunk]] = [
-            (i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)
-        ]
+        indexed: list[tuple[int, int, Chunk]] = [(i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)]
 
         results: list[tuple[int, Any]] = []
 
@@ -557,9 +540,7 @@ class EmbeddingGeneratorOnnx:
 
             print(f"     Shape buckets active: {len(bucket_map)}")
             for blen in sorted(bucket_map):
-                print(
-                    f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks"
-                )
+                print(f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks")
 
             for blen in sorted(bucket_map):
                 items = bucket_map[blen]
@@ -576,9 +557,7 @@ class EmbeddingGeneratorOnnx:
             # Sort by token length descending
             indexed.sort(key=lambda x: x[1], reverse=True)
             for start in range(0, len(indexed), self.batch_size):
-                batch_3tuple: list[tuple[int, int, Chunk]] = indexed[
-                    start : start + self.batch_size
-                ]
+                batch_3tuple: list[tuple[int, int, Chunk]] = indexed[start : start + self.batch_size]
                 # Unpack all 3 elements correctly here:
                 texts = [c.content for _, _, c in batch_3tuple]
                 embs = self._embed_batch(texts)
@@ -603,9 +582,7 @@ class EmbeddingGeneratorOnnx:
             store[chunk.id] = emb
 
         if duplicates:  # surface them loudly
-            print(
-                f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:"
-            )
+            print(f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:")
             for did in duplicates[:10]:
                 print(f"         {did}")
             if len(duplicates) > 10:

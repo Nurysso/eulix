@@ -7,7 +7,7 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from core.constants import DC_KW
+from .constants import DC_KW
 
 
 # The unit of retrieval: one Chunk == one embeddable "thing" extracted from
@@ -19,17 +19,17 @@ class ChunkType(str, Enum):
     class_ = "class"
     method = "method"
     file = "file"
-    entry_point = "entrypoint"
-    other = "other"
+    # entry_point = "entrypoint"
+    # other = "other"
 
 
 @dataclass(**DC_KW)
 class ChunkMetadata:
     file_path: str | None = None
+    name: str = ""
     language: str | None = None
     line_start: int | None = None
     line_end: int | None = None
-    name: str = ""
     complexity: int | None = None
 
 
@@ -41,6 +41,6 @@ class Chunk:
     id: str
     chunk_type: ChunkType
     content: str
-    metadata: ChunkMetadata
     tags: list[str]
+    metadata: ChunkMetadata
     importance_score: float

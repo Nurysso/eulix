@@ -13,7 +13,7 @@ from typing import Any, cast
 
 import numpy as np
 
-from core.constants import BINARY_MAGIC, BINARY_VERSION
+from utils.constants import BINARY_MAGIC, BINARY_VERSION
 from utils.req import require_numpy
 
 from .serialization import sq8_decode, sq8_encode
@@ -23,9 +23,7 @@ def save_embeddings_bin_fixed(
     path: Path,
     model_name: str,
     dimension: int,
-    entries: Iterable[
-        tuple[str, Any] | Any
-    ],  # Iterable of (id, vector) or just vectors
+    entries: Iterable[tuple[str, Any] | Any],  # Iterable of (id, vector) or just vectors
     count: int | None = None,
     quantize: bool = False,
 ) -> None:
@@ -137,9 +135,7 @@ def mmap_embeddings_float32(path: Path, header_info: dict) -> np.ndarray:
     Allows treating a multi-GB binary file on disk as a live 2D NumPy array.
     """
     if header_info["quantized"]:
-        raise ValueError(
-            "mmap direct array access requires unquantized float32 binary format."
-        )
+        raise ValueError("mmap direct array access requires unquantized float32 binary format.")
 
     return np.memmap(
         path,
