@@ -4,6 +4,8 @@
 
 When evaluated under **identical conditions** (same dataset, model, batch size, and dimension), the **ONNX Runtime engine** outperforms native **PyTorch** on AMD ROCm/HIP hardware, delivering a **~7.1% increase in embedding throughput** and reducing total run time by **~6.5%**.
 
+> Onnx is set as default engine for eulix show that eulix-cli can embed the bin for easier installation.
+
 ---
 
 ## Direct Performance Comparison

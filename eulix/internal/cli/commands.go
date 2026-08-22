@@ -28,7 +28,7 @@ import (
 
 const (
 	AppName    = "eulix"
-	AppVersion = "v0.7.5"
+	AppVersion = "v0.8.0"
 )
 
 var (
@@ -38,7 +38,7 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "eulix",
-	Short: "eulix [Beta] - Turn your codebase into a searchable book",
+	Short: "eulix - Turn your codebase into a searchable book",
 	Long: `eulix is an intelligent CLI tool for understanding and querying your codebase.
 
 Turn your codebase into a searchable book. Ask questions about your code,

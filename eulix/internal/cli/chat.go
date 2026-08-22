@@ -134,7 +134,7 @@ func startChat() error {
 	if err != nil {
 		fmt.Printf("Warning: History database unavailable: %v\n", err)
 	} else if cacheManager != nil {
-		defer cacheManager.Close()
+		defer func() { _ = cacheManager.Close() }()
 	}
 	llmClient, err := llm.MouthClient(cfg)
 	if err != nil {

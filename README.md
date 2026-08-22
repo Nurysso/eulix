@@ -18,7 +18,7 @@
 
 ---
 
-> **Beta.** Core features are stable and the API is settling — no breaking changes planned for the next few releases. First stable release targeted for late July / early August 2026. [Known issues](docs/known-issues.md) are documented up front; contributions (especially docs) are welcome.
+<!-- > **Beta.** Core features are stable and the API is settling — no breaking changes planned for the next few releases. First stable release targeted for late July / early August 2026. [Known issues](docs/known-issues.md) are documented up front; contributions (especially docs) are welcome. -->
 
 ---
 

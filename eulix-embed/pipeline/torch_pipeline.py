@@ -30,7 +30,7 @@ from chunking.chunker import chunk_one_file
 from chunking.cleaners import drop_docstrings
 from data_io.binary import save_embeddings_bin, save_vectors_bin
 from data_io.json_stream import stream_kb
-from embedders.torch_embed import EmbeddingGenerator
+from embedders.torch_embed import EmbeddingGeneratorTorch
 from utils.buckets import snap_to_bucket
 from utils.constants import BUCKETS_JINA, BUCKETS_STANDARD, DC_KW
 from utils.json_util import HAS_ORJSON
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     import numpy as np
 
 
-class EmbeddingPipeline:
+class EmbeddingPipelineTorch:
     """
     End-to-end driver: KB JSON -> chunks -> embeddings.bin + vectors.bin.
 
@@ -70,7 +70,7 @@ class EmbeddingPipeline:
         self.save_json = save_json
         self.quantize = quantize  # stored on self
         self.debug = debug
-        self.generator = EmbeddingGenerator(
+        self.generator = EmbeddingGeneratorTorch(
             model_name=model_name,
             device=device,
             batch_size=batch_size,
@@ -79,7 +79,7 @@ class EmbeddingPipeline:
 
     def generate_vectors_streaming(
         self,
-        gen: "EmbeddingGenerator",
+        gen: "EmbeddingGeneratorTorch",
         chunks: "list[Chunk]",
     ) -> Any:
 

@@ -3,7 +3,8 @@
 // Package embeddings provides the command-line interface implementation for EULIX.
 
 /*
-This file is responsible for finding and executing python venv.
+This file is responsible for finding and executing the Python venv.
+It is used only when config.Project.Embedis == "script".
 */
 package embeddings
 
@@ -82,9 +83,9 @@ func GetVenvPython(venvPath string) (string, []string, error) {
 	return pythonPath, newEnv, nil
 }
 
-// FindEulixEmbed locates eulix_embed.py and resolves a usable Python interpreter
-// from the canonical venv at ~/.Eulix/.venv.
-// Exported so the cli package can reuse it if needed.
+// FindEulixEmbed locates eulix_embed/main.py and resolves a usable Python
+// interpreter from the canonical venv at ~/.Eulix/.venv.
+// Used only when config.Project.Embedis == "script".
 func FindEulixEmbed() (scriptPath, pythonPath string, venvEnv []string, err error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -93,7 +94,7 @@ func FindEulixEmbed() (scriptPath, pythonPath string, venvEnv []string, err erro
 
 	script := filepath.Join(homeDir, ".Eulix", "eulix_embed", "main.py")
 	if _, err := os.Stat(script); err != nil {
-		return "", "", nil, fmt.Errorf("eulix_embed.py not found (expected at %s)", script)
+		return "", "", nil, fmt.Errorf("eulix_embed script not found (expected at %s)", script)
 	}
 
 	venvPath := filepath.Join(homeDir, ".Eulix", ".venv")

@@ -90,8 +90,8 @@ var (
 	strikeRe       = regexp.MustCompile(`~~([^~]+)~~`)
 	linkRe         = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	isNumberedRe   = regexp.MustCompile(`^\d+\.\s`)
-	reasoningTagRe = regexp.MustCompile(`(?is)<\s*(?:reasoning|thinking)\s*>(.*?)<\s*/\s*(?:reasoning|thinking)\s*>`)
-	answerTagRe    = regexp.MustCompile(`(?is)<\s*answer\s*>(.*?)<\s*/\s*answer\s*>`)
+	// reasoningTagRe = regexp.MustCompile(`(?is)<\s*(?:reasoning|thinking)\s*>(.*?)<\s*/\s*(?:reasoning|thinking)\s*>`)
+	// answerTagRe    = regexp.MustCompile(`(?is)<\s*answer\s*>(.*?)<\s*/\s*answer\s*>`)
 )
 
 var (
@@ -189,7 +189,7 @@ func MainModel(router *query.Router, cfg *config.Config, cacheManager *cache.Man
 			// TODO make these dynamic
 			{
 				Role: "system",
-				Content: "Eulix [Beta] initialized.\n\n" +
+				Content: "Eulix initialized.\n\n" +
 					"Your codebase is now a searchable book. I am your AI assistant dedicated to helping you navigate, understand, and query your code.\n\n" +
 					"Try asking:\n" +
 					"  - 'What does this function do?'\n" +
@@ -445,7 +445,7 @@ func (m Model) View() string {
 	var b strings.Builder
 
 	// Header: title bar + live status subtitle
-	title := titleBarStyle.Copy().Width(m.width).Render("◆ EULIX  —  AI CODEBASE ASSISTANT")
+	title := titleBarStyle.Width(m.width).Render("◆ EULIX  —  AI CODEBASE ASSISTANT")
 	cacheStatus := "cache off"
 	if m.cacheManager != nil {
 		cacheStatus = "cache on"
@@ -454,7 +454,7 @@ func (m Model) View() string {
 	if m.showReasoning {
 		reasoningStatus = "reasoning shown"
 	}
-	subtitle := subtitleStyle.Copy().Width(m.width).Render(
+	subtitle := subtitleStyle.Width(m.width).Render(
 		fmt.Sprintf("state: %s  •  messages: %d  •  %s  •  %s", m.getStateName(), len(m.messages), cacheStatus, reasoningStatus))
 	b.WriteString(title)
 	b.WriteString("\n")
@@ -477,7 +477,7 @@ func (m Model) View() string {
 	b.WriteString(viewportStyle.Render(m.viewport.View()))
 	if scrollHint != "" {
 		b.WriteString("\n")
-		b.WriteString(scrollHintStyle.Copy().Padding(0, 2).Render(scrollHint))
+		b.WriteString(scrollHintStyle.Padding(0, 2).Render(scrollHint))
 	}
 	b.WriteString("\n")
 

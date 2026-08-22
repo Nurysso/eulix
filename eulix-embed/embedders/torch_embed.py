@@ -18,7 +18,7 @@ from utils.req import require_ml
 from utils.types import Chunk
 
 
-class EmbeddingGenerator:  # pylint: disable=too-many-instance-attributes
+class EmbeddingGeneratorTorch:  # pylint: disable=too-many-instance-attributes
     """
     Thin wrapper around a HuggingFace encoder model for batched embedding
     generation. Auto-detects the best available accelerator (CUDA, ROCm/HIP

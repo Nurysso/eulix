@@ -20,9 +20,9 @@ from data_io.binary import (
     load_vectors_bin,
 )
 from embedders.onnx_embed import EmbeddingGeneratorOnnx
-from embedders.torch_embed import EmbeddingGenerator
+from embedders.torch_embed import EmbeddingGeneratorTorch
 from pipeline.onnx_pipeline import EmbeddingPipelineOnnx
-from pipeline.torch_pipeline import EmbeddingPipeline
+from pipeline.torch_pipeline import EmbeddingPipelineTorch
 from utils.json_util import json_dumps
 
 from .compare import _verify_at_offset, check_duplicate_ids
@@ -30,12 +30,12 @@ from .compare import _verify_at_offset, check_duplicate_ids
 
 # cmd_embed handles embed arg and switching of engine
 def cmd_embed(args: argparse.Namespace) -> None:
-    PipelineClass: type[EmbeddingPipeline | EmbeddingPipelineOnnx]
+    PipelineClass: type[EmbeddingPipelineTorch | EmbeddingPipelineOnnx]
 
-    if args.engine == "onnx":
-        PipelineClass = EmbeddingPipelineOnnx
+    if args.engine == "torch":
+        PipelineClass = EmbeddingPipelineTorch
     else:
-        PipelineClass = EmbeddingPipeline
+        PipelineClass = EmbeddingPipelineOnnx
 
     pipeline = PipelineClass(
         model_name=args.model,
@@ -55,15 +55,15 @@ def cmd_embed(args: argparse.Namespace) -> None:
 
 # cmd_query handles query arg and engine
 def cmd_query(args: argparse.Namespace) -> None:
-    GeneratorClass: type[EmbeddingGenerator | EmbeddingGeneratorOnnx]
+    GeneratorClass: type[EmbeddingGeneratorTorch | EmbeddingGeneratorOnnx]
     if not args.query:
         print("[ERROR] --query is required", file=sys.stderr)
         sys.exit(1)
 
-    if args.engine == "onnx":
-        GeneratorClass = EmbeddingGeneratorOnnx
+    if args.engine == "torch":
+        GeneratorClass = EmbeddingGeneratorTorch
     else:
-        GeneratorClass = EmbeddingGenerator
+        GeneratorClass = EmbeddingGeneratorOnnx
 
     gen = GeneratorClass(model_name=args.model)
     emb = gen.embed_query(args.query)

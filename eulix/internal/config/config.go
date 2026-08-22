@@ -34,6 +34,7 @@ type ProjectConfig struct {
 	Path        string `toml:"path"`
 	MaxLines    int    `toml:"Max_Lines"`
 	DebugConfig bool   `toml:"DebugConfig"`
+	EmbedIs     string `toml:"embedIs"`
 }
 
 type ParserConfig struct {
@@ -152,6 +153,7 @@ func DefaultConfig() *Config {
 			Path:        cwd,
 			MaxLines:    100,
 			DebugConfig: false,
+			EmbedIs:     "binary",
 		},
 		Parser: ParserConfig{
 			Threads: 4,
