@@ -47,7 +47,7 @@ def parse_args() -> argparse.ArgumentParser:
     ep.add_argument(
         "-e",
         "--engine",
-        default="torch",
+        default="onnx",
         choices=["torch", "onnx"],
         metavar="ENGINE",
         help="Inference engine: torch or onnx  [default: torch]",
@@ -125,7 +125,7 @@ def parse_args() -> argparse.ArgumentParser:
     sp.add_argument(
         "-e",
         "--engine",
-        default="torch",
+        default="onnx",
         choices=["torch", "onnx"],
         metavar="ENGINE",
         help="Inference engine: torch or onnx  [default: torch]",

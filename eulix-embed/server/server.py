@@ -11,7 +11,7 @@ import sys
 from typing import Any
 
 from embedders.onnx_embed import EmbeddingGeneratorOnnx
-from embedders.torch_embed import EmbeddingGenerator
+from embedders.torch_embed import EmbeddingGeneratorTorch
 from utils.json_util import json_dumps
 
 
@@ -46,7 +46,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     """
     # All diagnostic output goes to stderr — stdout is the protocol channel.
     _err = sys.stderr
-    gen: EmbeddingGenerator | EmbeddingGeneratorOnnx
+    gen: EmbeddingGeneratorTorch | EmbeddingGeneratorOnnx
 
     print("  EULIX EMBED — SERVE MODE", file=_err)
     print(f"  Model:  {args.model}", file=_err)
@@ -55,14 +55,14 @@ def cmd_serve(args: argparse.Namespace) -> None:
     print("  Loading model…", file=_err)
 
     try:
-        if args.engine == "onnx":
-            gen = EmbeddingGeneratorOnnx(
+        if args.engine == "torch":
+            gen = EmbeddingGeneratorTorch(
                 model_name=args.model,
                 device=args.device,
                 batch_size=args.batch_size,
             )
         else:
-            gen = EmbeddingGenerator(
+            gen = EmbeddingGeneratorOnnx(
                 model_name=args.model,
                 device=args.device,
                 batch_size=args.batch_size,

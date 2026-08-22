@@ -68,17 +68,17 @@ func (i cacheItem) FilterValue() string {
 func themedDelegate() list.DefaultDelegate {
 	d := list.NewDefaultDelegate()
 
-	d.Styles.SelectedTitle = d.Styles.SelectedTitle.Copy().
+	d.Styles.SelectedTitle = d.Styles.SelectedTitle.
 		Foreground(primaryColor).
 		BorderForeground(primaryColor).
 		Bold(true)
-	d.Styles.SelectedDesc = d.Styles.SelectedDesc.Copy().
+	d.Styles.SelectedDesc = d.Styles.SelectedDesc.
 		Foreground(highlightColor).
 		BorderForeground(primaryColor)
-	d.Styles.NormalTitle = d.Styles.NormalTitle.Copy().Foreground(textColor)
-	d.Styles.NormalDesc = d.Styles.NormalDesc.Copy().Foreground(mutedColor)
-	d.Styles.DimmedTitle = d.Styles.DimmedTitle.Copy().Foreground(mutedColor)
-	d.Styles.DimmedDesc = d.Styles.DimmedDesc.Copy().Foreground(mutedColor)
+	d.Styles.NormalTitle = d.Styles.NormalTitle.Foreground(textColor)
+	d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(mutedColor)
+	d.Styles.DimmedTitle = d.Styles.DimmedTitle.Foreground(mutedColor)
+	d.Styles.DimmedDesc = d.Styles.DimmedDesc.Foreground(mutedColor)
 
 	return d
 }

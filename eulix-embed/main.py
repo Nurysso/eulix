@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import multiprocessing
 import sys
 import warnings
 
@@ -42,7 +43,9 @@ def print_help() -> None:
     _PARSER.print_help()
     # print()
     DETAIL_COMMANDS = ("embed", "query", "serve", "compare")
-    sub_action = next(a for a in _PARSER._actions if isinstance(a, argparse._SubParsersAction))
+    sub_action = next(
+        a for a in _PARSER._actions if isinstance(a, argparse._SubParsersAction)
+    )
 
     for name, subparser in sub_action.choices.items():
         if name not in DETAIL_COMMANDS:
@@ -71,12 +74,15 @@ def check_engine_dependencies(engine: str) -> None:
         install_cmd = "pip install torch transformers sentence-transformers tqdm numpy"
 
         if importlib.util.find_spec("uv") is not None:
-            install_cmd = "uv pip install torch transformers sentence-transformers tqdm numpy"
+            install_cmd = (
+                "uv pip install torch transformers sentence-transformers tqdm numpy"
+            )
 
     elif engine == "onnx":
         required_packages = {
             "onnxruntime": "onnxruntime",
-            "transformers": "transformers",
+            "tokenizers": "tokenizers",
+            "huggingface_hub": "huggingface_hub",
             "tqdm": "tqdm",
             "numpy": "numpy",
         }
@@ -142,7 +148,9 @@ def main() -> None:
         # This only runs for commands that actually need the ML stack
         if args.command in ("embed", "query", "serve"):
             # Determine which engine to check
-            engine = getattr(args, "engine", "torch")  # Default to torch if not specified
+            engine = getattr(
+                args, "engine", "torch"
+            )  # Default to torch if not specified
             check_engine_dependencies(engine)
 
             # Now it's safe to import the engine-specific code
@@ -171,4 +179,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()

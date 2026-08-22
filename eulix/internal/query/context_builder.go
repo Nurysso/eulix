@@ -96,7 +96,10 @@ func (cb *ContextBuilder) BuildContext(query string) (*utils.ContextWindow, erro
 
 func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int) (*utils.ContextWindow, *DebugTrace, error) {
 	start := time.Now()
-	trace := &DebugTrace{Query: query}
+	var trace *DebugTrace
+	if cb.config.Project.DebugConfig {
+		trace = &DebugTrace{Query: query}
+	}
 	explicitAnchor := extractExplicitAnchors(query)
 	gate := buildPathGate(explicitAnchor)
 

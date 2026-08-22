@@ -7,6 +7,11 @@
 /*
 This file is responsible for the eulix_embed related operations
 except the analyze command.
+
+VectorWeaver starts eulix_embed in "serve" mode.  The mode is Set by
+config.Project.EmbedIs:
+  - "script" → venv Python + $HOME/.Eulix/eulix_embed/main.py  (default)
+  - "bin"    → embedded eulix_embed binary extracted from the eulix executable
 */
 
 package embeddings
@@ -20,12 +25,15 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"eulix/internal/config"
+	"eulix/internal/embedded"
 )
 
-// Embedder holds a long-lived eulix_embed.py serve subprocess.
-// The Python process keeps the model loaded between calls, so each
+// Embedder holds a long-lived eulix_embed serve subprocess.
+// The process keeps the model loaded between calls, so each
 // EmbedQueryBinary call costs only the encode() time (~5-50ms) rather
-// than a full Python+torch startup (~3-5s).
+// than a full startup (~3-5s).
 //
 // Protocol: newline-delimited JSON on stdin/stdout.
 //
@@ -42,23 +50,20 @@ type Embedder struct {
 	dim    int
 }
 
-// QueryEmbedder is an alias for Embedder to maintain compatibility.
-type QueryEmbedder = Embedder
-
-// serveReadyMsg is what the Python serve command writes to stdout
-// as its first line when the model is loaded and ready.
+// serveReadyMsg is what the serve command writes to stdout as its first line
+// when the model is loaded and ready.
 type serveReadyMsg struct {
 	Ready bool   `json:"ready"`
 	Model string `json:"model"`
 	Dim   int    `json:"dim"`
 }
 
-// serveRequest is what we send to the Python process on stdin.
+// serveRequest is what we send to the process on stdin.
 type serveRequest struct {
 	Query string `json:"query"`
 }
 
-// serveResponse is what the Python process writes to stdout per request.
+// serveResponse is what the process writes to stdout per request.
 type serveResponse struct {
 	Embedding []float32 `json:"embedding"`
 	Dimension int       `json:"dimension"`
@@ -66,17 +71,41 @@ type serveResponse struct {
 	Error     string    `json:"error"`
 }
 
-// VectorWeaver starts eulix_embed.py in serve mode and waits for the model
-// to finish loading. The subprocess stays alive for the lifetime of the
-// returned Embedder; call Close() when done.
+// VectorWeaver starts eulix_embed in serve mode and waits for the model to
+// finish loading.  Which backend is launched depends on cfg.Project.Embedis:
+//   - "script" → Python venv interpreter running eulix_embed/main.py
+//   - "bin"    → embedded eulix_embed binary extracted from the executable
+//
+// The subprocess stays alive for the lifetime of the returned Embedder;
+// call Close() when done.
 func VectorWeaver(model string) (*Embedder, error) {
-	scriptPath, pythonPath, venvEnv, err := FindEulixEmbed()
+	cfg, err := config.Load()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("VectorWeaver: failed to load config: %w", err)
 	}
 
-	cmd := exec.Command(pythonPath, scriptPath, "serve", "-m", model)
-	cmd.Env = venvEnv
+	var cmd *exec.Cmd
+
+	switch cfg.Project.EmbedIs {
+
+	case "script":
+		scriptPath, pythonPath, venvEnv, err := FindEulixEmbed()
+		if err != nil {
+			return nil, err
+		}
+		cmd = exec.Command(pythonPath, scriptPath, "serve", "-m", model)
+		cmd.Env = venvEnv
+
+	case "binary":
+		binPath, err := embedded.EmbedBinPath()
+		if err != nil {
+			return nil, fmt.Errorf("VectorWeaver: could not extract embedded eulix_embed: %w", err)
+		}
+		cmd = exec.Command(binPath, "serve", "-m", model)
+
+	default:
+		return nil, fmt.Errorf("VectorWeaver: unknown embedIs mode %q: want \"script\" or \"bin\"", cfg.Project.EmbedIs)
+	}
 
 	// Pipe stdin so we can send JSON requests.
 	stdin, err := cmd.StdinPipe()
@@ -90,7 +119,7 @@ func VectorWeaver(model string) (*Embedder, error) {
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 
-	cmd.Stderr = nil // inherits /dev/null; swap to os.Stderr to debug
+	cmd.Stderr = nil // swap to os.Stderr to debug
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start eulix_embed serve: %w", err)
@@ -109,11 +138,10 @@ func VectorWeaver(model string) (*Embedder, error) {
 		model:  model,
 	}
 
-	// The Python serve command writes its ready JSON as the FIRST line on
-	// stdout (not stderr). Block here until we see it or timeout.
+	// Block until the ready signal arrives or we time out.
 	if err := e.waitReady(); err != nil {
 		if killErr := cmd.Process.Kill(); killErr != nil {
-			return nil, fmt.Errorf("embed process failed to start: %w (failed to kill process: %v)", err, killErr)
+			return nil, fmt.Errorf("embed process failed to start: %w (also failed to kill process: %v)", err, killErr)
 		}
 		return nil, fmt.Errorf("embed process failed to start: %w", err)
 	}
@@ -122,59 +150,58 @@ func VectorWeaver(model string) (*Embedder, error) {
 }
 
 // waitReady reads the first JSON line from the subprocess stdout and checks
-// that it is the ready signal. Returns an error if it times out or the
-// response is not the expected ready message.
+// that it is the ready signal.
 func (e *Embedder) waitReady() error {
 	done := make(chan error, 1)
 
 	go func() {
-		if !e.stdout.Scan() {
-			err := e.stdout.Err()
-			if err == nil {
-				err = fmt.Errorf("subprocess stdout closed before ready signal")
+		for e.stdout.Scan() {
+			line := e.stdout.Bytes()
+			if len(line) == 0 || line[0] != '{' {
+				// Skip human-readable startup banners (e.g. "Using ONNX-RUNTIME")
+				continue
 			}
-			done <- err
+
+			var msg serveReadyMsg
+			if err := json.Unmarshal(line, &msg); err != nil {
+				// It starts with '{' but isn't the ready message — skip it too.
+				continue
+			}
+			if !msg.Ready {
+				done <- fmt.Errorf("embed process sent non-ready first message: %s", line)
+				return
+			}
+			e.dim = msg.Dim
+			done <- nil
 			return
 		}
 
-		line := e.stdout.Bytes()
-		var msg serveReadyMsg
-		if err := json.Unmarshal(line, &msg); err != nil {
-			done <- fmt.Errorf("unexpected first line from embed process: %s", line)
-			return
+		err := e.stdout.Err()
+		if err == nil {
+			err = fmt.Errorf("subprocess stdout closed before ready signal")
 		}
-		if !msg.Ready {
-			done <- fmt.Errorf("embed process sent non-ready first message: %s", line)
-			return
-		}
-		e.dim = msg.Dim
-		done <- nil
+		done <- err
 	}()
 
 	select {
 	case err := <-done:
 		return err
 	case <-time.After(60 * time.Second):
-		// 60s is generous: large models (bge-m3, nomic) can take 20-30s on
-		// first load from disk on a cold page cache.
 		return fmt.Errorf("timed out after 60s waiting for embed process ready signal")
 	}
 }
 
 // EmbedQueryBinary embeds a single query string and returns the float32 vector.
-// Sends {"query": "..."} on stdin and reads {"embedding": [...]} from stdout.
 // Thread-safe via mutex; only one request in flight at a time.
 func (e *Embedder) EmbedQueryBinary(query string) ([]float32, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Send the request as a single JSON line.
 	req := serveRequest{Query: query}
 	if err := e.enc.Encode(req); err != nil {
 		return nil, fmt.Errorf("write to embed process: %w", err)
 	}
 
-	// Read exactly one JSON line back.
 	if !e.stdout.Scan() {
 		err := e.stdout.Err()
 		if err == nil {
@@ -198,9 +225,8 @@ func (e *Embedder) EmbedQueryBinary(query string) ([]float32, error) {
 	return resp.Embedding, nil
 }
 
-// Close sends a clean shutdown to the Python process and waits for it to exit.
+// Close sends a clean shutdown to the subprocess and waits for it to exit.
 func (e *Embedder) Close() error {
-	// Ask the server to shut down gracefully first.
 	_ = e.enc.Encode(map[string]bool{"shutdown": true})
 	_ = e.stdin.Close()
 	return e.cmd.Wait()
@@ -218,8 +244,6 @@ func (e *Embedder) GetDimension() int { return e.dim }
 func (e *Embedder) GetModel() string { return e.model }
 
 // BatchEmbed embeds multiple texts sequentially.
-// For large batches, consider using BatchEmbedBatch to send a single
-// {"queries": [...]} request to the Python server instead.
 func (e *Embedder) BatchEmbed(texts []string) ([][]float32, error) {
 	result := make([][]float32, len(texts))
 	for i, text := range texts {
@@ -232,7 +256,7 @@ func (e *Embedder) BatchEmbed(texts []string) ([][]float32, error) {
 	return result, nil
 }
 
-// BatchEmbedBatch sends all texts in a single request to the Python server,
+// BatchEmbedBatch sends all texts in a single request to the subprocess,
 // which is more efficient than calling Embed in a loop for large batches.
 func (e *Embedder) BatchEmbedBatch(texts []string) ([][]float32, error) {
 	if len(texts) == 0 {

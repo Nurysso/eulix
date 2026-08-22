@@ -201,6 +201,7 @@ func (d *DebugLogger) Close() {
 	d.closed = true
 }
 
+//nolint:unused
 func (cb *ContextBuilder) safeExecute(fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -229,6 +230,7 @@ func (d *DebugLogger) StartAutoFlush(interval time.Duration) {
 	}()
 }
 
+//nolint:unused
 func (cb *ContextBuilder) setupSignalHandler() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -243,6 +245,8 @@ func (cb *ContextBuilder) setupSignalHandler() {
 
 // cosineSimilarity computes normalized dot product of two vectors.
 // Returns cosine distance in [0, 1] for normalized vectors, or 0 if either is zero.
+//
+//nolint:unused
 func cosineSimilarity(a, b []float32) float64 {
 	n := len(a)
 	if n != len(b) || n == 0 {

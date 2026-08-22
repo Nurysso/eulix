@@ -222,20 +222,22 @@ def _resolve_onnx_model(model_name: str, trust_remote_code: bool = False, force_
     return exported
 
 
-class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
+class EmbeddingGeneratorOnnx:
     """
     Thin wrapper around an ONNX Runtime InferenceSession for batched
-    embedding generation. There is no PyTorch dependency at inference
-    time — the forward pass runs entirely inside onnxruntime, on whichever
-    Execution Provider is selected: CPUExecutionProvider, CUDAExecutionProvider
-    (NVIDIA), or ROCMExecutionProvider (AMD ROCm/HIP). The provider is
-    auto-detected from the installed onnxruntime build unless pinned via
+    embedding generation. No PyTorch or transformers dependency at
+    inference time tokenization is handled directly by the `tokenizers`
+    Rust library (same backend transformers wraps), and the forward pass
+    runs entirely inside onnxruntime on whichever Execution Provider is
+    selected: CPUExecutionProvider, CUDAExecutionProvider (NVIDIA), or
+    ROCMExecutionProvider (AMD ROCm/HIP). The provider is auto-detected
+    from the installed onnxruntime build unless pinned via
     `device="cpu" | "cuda" | "rocm"`.
 
-    All heavy imports (onnxruntime, transformers, tqdm) are deferred to
-    require_ml_onnx() and called exactly once here, so importing this module
-    doesn't pull in the ML stack for callers that only need the binary
-    I/O helpers (save/load embeddings.bin).
+    All heavy imports (onnxruntime, tokenizers, tqdm) are deferred to
+    require_ml_onnx() and called exactly once here, so importing this
+    module doesn't pull in the ML stack for callers that only need the
+    binary I/O helpers (save/load embeddings.bin).
     """
 
     def __init__(
@@ -247,16 +249,14 @@ class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
         use_bucketing: bool = True,
         trust_remote_code: bool = False,
     ) -> None:
-        np, ort, AutoTokenizer, tqdm = require_ml_onnx()
-        # stash on self so _embed_batch / generate_vectors can use them
-        # without re-importing (Python caches in sys.modules; this is free)
+        np, ort, tklib, tqdm = require_ml_onnx()
         self._np = np
         self._ort = ort
         self._tqdm = tqdm
 
         self.model_name = model_name
         self.normalize = normalize
-        self._dimension: int = 0  # Will be set during initialization probe
+        self._dimension: int = 0
 
         try:
             self.providers, self.device = _resolve_providers(ort, device)
@@ -275,36 +275,58 @@ class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
                 file=sys.stderr,
             )
 
+            # Tokenizer — load directly from the HuggingFace Hub using the
+            # `tokenizers` Rust library, bypassing transformers entirely.
+            #
+            # Hub layout for most sentence-transformers / BERT-family models:
+            #   tokenizer.json          — fast tokenizer spec (always present
+            #                             for any model with a fast tokenizer)
+            #   tokenizer_config.json   — metadata (add_prefix_space, etc.)
+            #
+            # huggingface_hub.hf_hub_download handles caching, auth tokens,
+            # and gated-model access identically to AutoTokenizer.from_pretrained,
+            # with zero dependency on transformers.
             try:
-                self.tokenizer = AutoTokenizer.from_pretrained(
-                    model_name,
-                    trust_remote_code=trust_remote_code,
-                    clean_up_tokenization_spaces=True,
+                from huggingface_hub import hf_hub_download
+
+                tokenizer_json_path = hf_hub_download(
+                    repo_id=model_name,
+                    filename="tokenizer.json",
                 )
+                self.tokenizer: tklib.Tokenizer = tklib.Tokenizer.from_file(
+                    tokenizer_json_path
+                )
+                # Match transformers' default padding/truncation behaviour:
+                #   - pad to the longest sequence in the batch (overridden per
+                #     call when fixed_len is set for bucketed inference)
+                #   - truncate at the model's declared max length (usually 512)
+                self.tokenizer.enable_padding(
+                    direction="right",
+                    pad_id=self.tokenizer.token_to_id("[PAD]") or 0,
+                    pad_token="[PAD]",
+                )
+                self.tokenizer.enable_truncation(max_length=512)
             except Exception as e:  # noqa: BLE001
                 raise RuntimeError(
                     f"\033[1;31;40m Failed to load tokenizer for '{model_name}'.\n\033[0m"
                     f"\033[1;31;40m Possible reasons:\n\033[0m"
                     f"\033[1;31;40m  - Model ID is incorrect (check https://huggingface.co/models)\n\033[0m"
+                    f"\033[1;31;40m  - The model has no tokenizer.json (no fast tokenizer)\n\033[0m"
                     f"\033[1;31;40m  - You need to login: `huggingface-cli login`\n\033[0m"
                     f"\033[1;31;40m  - Model is gated and you lack permissions\n\033[0m"
                     f"\033[1;31;40m  - Network issue\n\033[0m"
-                    f"Original error:{e}"
+                    f"Original error: {e}"
                 )
 
             def _load_session(path: Path) -> Any:
                 so = ort.SessionOptions()
                 so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                # We deliberately run many distinct input shapes through this
-                # one session (sequence-length bucketing, see
-                # generate_vectors). ORT's memory-pattern optimizer caches a
-                # separate allocation plan per shape it sees and never frees
-                # them for the life of the session — with 7-12 buckets that
-                # shows up as GPU memory that keeps climbing and never comes
-                # back down (unlike PyTorch's allocator, which reuses/splits
-                # blocks across shapes). It's meant for single-shape models;
-                # turning it off trades a small per-call planning cost for
-                # bounded, shape-independent memory usage.
+                # Disable memory-pattern optimizer: it caches a separate
+                # allocation plan per input shape and never frees them for the
+                # life of the session. With 7-12 sequence-length buckets this
+                # causes GPU memory to climb indefinitely. Turning it off
+                # trades a small per-call planning cost for bounded,
+                # shape-independent memory usage.
                 so.enable_mem_pattern = False
 
                 provider_options: list[dict[str, str]] = []
@@ -312,11 +334,11 @@ class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
                     if p in ("CUDAExecutionProvider", "ROCMExecutionProvider"):
                         provider_options.append(
                             {
-                                # Default is kNextPowerOfTwo, which rounds
-                                # every new allocation up and keeps growing
-                                # the arena instead of tightly reusing freed
-                                # blocks — the other half of the "ORT doesn't
-                                # give memory back" behavior.
+                                # kSameAsRequested prevents the arena from
+                                # rounding allocations up to the next power of
+                                # two and holding that memory forever — the
+                                # other half of the "ORT never gives GPU memory
+                                # back" behaviour.
                                 "arena_extend_strategy": "kSameAsRequested",
                             }
                         )
@@ -331,7 +353,9 @@ class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
                 )
 
             try:
-                onnx_path = _resolve_onnx_model(model_name, trust_remote_code=trust_remote_code)
+                onnx_path = _resolve_onnx_model(
+                    model_name, trust_remote_code=trust_remote_code
+                )
                 self.session = _load_session(onnx_path)
             except (OSError, RuntimeError, ValueError) as e:
                 raise RuntimeError(
@@ -344,21 +368,17 @@ class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
             target, kind = _pick_embedding_output(all_output_names)
 
             if target is None:
-                # The resolved ONNX graph has no last_hidden_state / pooled
-                # embedding output at all — e.g. it's a full fill-mask or
-                # pretraining export whose only outputs are vocab-size
-                # logits (a giant [batch, seq_len, vocab] tensor from an
-                # MLM decoder head). Requesting *any* of those forces ORT to
-                # materialize that tensor, which is what was OOMing. There's
-                # no usable embedding to extract from this graph, so force a
-                # fresh feature-extraction-task export instead of guessing.
                 print(
                     f"     ⚠ Resolved ONNX graph has no usable embedding output "
                     f"(only found: {all_output_names}); forcing a fresh "
                     f"feature-extraction export instead...",
                     file=sys.stderr,
                 )
-                onnx_path = _resolve_onnx_model(model_name, trust_remote_code=trust_remote_code, force_export=True)
+                onnx_path = _resolve_onnx_model(
+                    model_name,
+                    trust_remote_code=trust_remote_code,
+                    force_export=True,
+                )
                 self.session = _load_session(onnx_path)
                 self._input_names = {i.name for i in self.session.get_inputs()}
                 all_output_names = [o.name for o in self.session.get_outputs()]
@@ -377,17 +397,12 @@ class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
                     f"'{target}' ({kind}) instead (available: {all_output_names})",
                     file=sys.stderr,
                 )
-            # IMPORTANT: only ever request this single output. Some graphs
-            # bundle extra task heads (e.g. an MLM decoder) alongside the
-            # embedding output; passing session.run() *all* output names
-            # forces ONNX Runtime to compute those heads too. Requesting
-            # exactly the one output we use lets ORT prune the rest.
+
+            # Only ever request this single output — avoids forcing ORT to
+            # compute bundled task heads (e.g. MLM decoder) that we don't need.
             self._target_output_name = target
             self._output_kind = kind  # "token" (needs mean-pool) or "pooled"
 
-            # Probe the model's actual output dimension by running a single
-            # dummy input through it. We can't trust a hardcoded dimension
-            # per model name since users can pass in arbitrary HF model IDs.
             try:
                 dummy_emb = self._embed_batch(["hello"])
                 self._dimension = dummy_emb.shape[-1]
@@ -396,6 +411,7 @@ class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
 
             print(f"     Dimension:  {self._dimension}", file=sys.stderr)
             print("  ✓ Embedding generator ready!", file=sys.stderr)
+
         except RuntimeError as e:
             print(f"\nError: {e}", file=sys.stderr)
             print("\nTips:", file=sys.stderr)
@@ -421,11 +437,9 @@ class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
 
     def batch_size_for(self, seq_len: int) -> int:
         """
-        Bucket-aware batch size. self.batch_size is tuned for a "reference"
-        sequence length (512 tokens); using it flat for every bucket means a
-        512-token batch and an 8192-token batch (Jina buckets go up to
-        8192) get the same batch size even though attention memory scales
-        with sequence length. Scale down for longer buckets, floor at 1.
+        Bucket-aware batch size. self.batch_size is tuned for a reference
+        sequence length of 512 tokens; scale down linearly for longer
+        buckets (attention memory scales with sequence length), floor at 1.
         """
         ref_len = 512
         if seq_len <= ref_len:
@@ -434,9 +448,11 @@ class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
 
     @staticmethod
     def _mean_pool(last_hidden: Any, attention_mask: Any) -> Any:
-        """Masked average over token embeddings (numpy), matching the
-        sentence-transformers pooling convention these models were
-        trained with (as opposed to taking the [CLS] token)."""
+        """
+        Masked average over token embeddings (numpy), matching the
+        sentence-transformers mean-pooling convention these models were
+        trained with (as opposed to taking the [CLS] token).
+        """
         np = require_numpy()
         mask_exp = attention_mask[:, :, None].astype(np.float32)
         summed = (last_hidden * mask_exp).sum(axis=1)
@@ -449,78 +465,119 @@ class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
         norm = np.linalg.norm(vec, axis=axis, keepdims=True)
         return vec / np.clip(norm, eps, None)
 
+    def _encode_batch(
+        self, texts: list[str], fixed_len: int | None = None
+    ) -> dict[str, Any]:
+        """
+        Tokenize a list of texts with the `tokenizers` Rust library and
+        return a dict of numpy arrays keyed by the standard HF input names
+        (input_ids, attention_mask, token_type_ids when present).
+
+        fixed_len forces padding to that exact length (for bucketed
+        inference); otherwise the tokenizer pads to the longest sequence
+        in the batch.
+        """
+        np = self._np
+
+        # Temporarily override padding/truncation length for this batch.
+        if fixed_len is not None:
+            self.tokenizer.enable_padding(
+                direction="right",
+                pad_id=self.tokenizer.token_to_id("[PAD]") or 0,
+                pad_token="[PAD]",
+                length=fixed_len,
+            )
+            self.tokenizer.enable_truncation(max_length=fixed_len)
+        else:
+            # Restore batch-longest padding (no fixed length).
+            self.tokenizer.enable_padding(
+                direction="right",
+                pad_id=self.tokenizer.token_to_id("[PAD]") or 0,
+                pad_token="[PAD]",
+            )
+            self.tokenizer.enable_truncation(max_length=512)
+
+        encodings = self.tokenizer.encode_batch(texts)
+
+        input_ids = np.array(
+            [enc.ids for enc in encodings], dtype=np.int64
+        )
+        attention_mask = np.array(
+            [enc.attention_mask for enc in encodings], dtype=np.int64
+        )
+
+        result: dict[str, Any] = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        # token_type_ids are present for BERT-family models; sentence-
+        # transformers exports may omit them from the ONNX graph entirely.
+        # Only include them when the graph actually declares that input.
+        if "token_type_ids" in self._input_names:
+            result["token_type_ids"] = np.array(
+                [enc.type_ids for enc in encodings], dtype=np.int64
+            )
+
+        return result
+
     def _embed_batch(self, texts: list[str], fixed_len: int | None = None) -> Any:
         """
         Embed a batch of texts in one ONNX Runtime forward pass.
 
         fixed_len, when given, forces tokenization/padding to that exact
         length instead of padding to the batch's longest sequence — this is
-        what makes the sequence-length bucketing in generate_vectors()
-        effective, since it guarantees every batch within a bucket shares
-        the same tensor shape (important for onnxruntime's kernel/graph
-        caching on GPU, same rationale as CUDA graph capture in the old
-        PyTorch version).
+        what makes sequence-length bucketing in generate_vectors() effective,
+        since it guarantees every batch within a bucket shares the same
+        tensor shape (important for onnxruntime's kernel/graph caching on
+        GPU).
         """
         np = self._np
 
-        tok_kwargs: dict[str, Any] = {
-            "return_tensors": "np",
-            "padding": True,
-            "truncation": True,
-        }
-        if fixed_len is not None:
-            tok_kwargs["max_length"] = fixed_len
-            tok_kwargs["padding"] = "max_length"
-
-        enc = self.tokenizer(texts, **tok_kwargs)
-        # Only feed inputs the ONNX graph actually declares — some exports
-        # omit token_type_ids, for instance.
+        enc = self._encode_batch(texts, fixed_len=fixed_len)
+        # Only feed inputs the ONNX graph actually declares.
         ort_inputs = {k: v for k, v in enc.items() if k in self._input_names}
 
         outputs = self.session.run([self._target_output_name], ort_inputs)
         raw = outputs[0]
+
         if self._output_kind == "pooled":
-            # Already a [batch, hidden] sentence vector (pooler_output /
-            # sentence_embedding) — nothing to pool over.
             emb = raw
         else:
             emb = self._mean_pool(raw, enc["attention_mask"])
+
         if self.normalize:
             emb = self._l2_normalize(emb)
+
         return emb.astype(np.float32)
 
     def generate_vectors(self, chunks: list[Chunk]) -> dict[str, Any]:
         """
         Embed all chunks and return {chunk_id: vector}.
 
-        When bucketing is enabled (CUDA/ROCm only — see use_bucketing),
-        chunks are grouped by estimated token length into buckets, and each
-        bucket is embedded with a fixed padding length. This trades a small
-        amount of wasted padding for far fewer distinct tensor shapes, which
-        speeds up GPU inference in onnxruntime (avoids shape-triggered
-        kernel re-selection on every batch).
+        When bucketing is enabled (CUDA/ROCm only), chunks are grouped by
+        estimated token length into fixed buckets and each bucket is
+        embedded with a fixed padding length. This trades a small amount of
+        wasted padding for far fewer distinct tensor shapes, speeding up GPU
+        inference in onnxruntime.
 
-        Token length is estimated as len(content) // 4 (a rough
-        chars-per-token heuristic) purely for bucket assignment — the real
-        tokenizer still runs during _embed_batch and will truncate if the
-        estimate was wrong.
-
-        Original chunk order is restored at the end (results are processed
-        out-of-order across buckets, then re-sorted by original index)
-        before building the returned dict, and duplicate chunk IDs are
-        collapsed with a warning rather than silently overwritten.
+        Original chunk order is restored after cross-bucket processing, and
+        duplicate chunk IDs are collapsed with a warning.
         """
-        # np = self._np
         tqdm = self._tqdm
         total = len(chunks)
-        print(f" Processing {total} chunks (batch={self.batch_size}," f" bucketing={self.use_bucketing})...")
+        print(
+            f" Processing {total} chunks "
+            f"(batch={self.batch_size}, bucketing={self.use_bucketing})..."
+        )
         t0 = time.time()
 
         is_jina = "jina" in self.model_name.lower()
         buckets = BUCKETS_JINA if is_jina else BUCKETS_STANDARD
 
-        # Keep a clean 3-tuple structure everywhere: (original_index, token_estimate, chunk)
-        indexed: list[tuple[int, int, Chunk]] = [(i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)]
+        indexed: list[tuple[int, int, Chunk]] = [
+            (i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)
+        ]
 
         results: list[tuple[int, Any]] = []
 
@@ -540,25 +597,25 @@ class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
 
             print(f"     Shape buckets active: {len(bucket_map)}")
             for blen in sorted(bucket_map):
-                print(f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks")
+                print(
+                    f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks"
+                )
 
             for blen in sorted(bucket_map):
                 items = bucket_map[blen]
                 bsz = self.batch_size_for(blen)
                 bar.set_postfix(bucket=blen, batch=bsz, refresh=False)
                 for start in range(0, len(items), bsz):
-                    batch_items: list[tuple[int, Chunk]] = items[start : start + bsz]
+                    batch_items = items[start : start + bsz]
                     texts = [c.content for _, c in batch_items]
                     embs = self._embed_batch(texts, fixed_len=blen)
                     for (orig_idx, _), emb in zip(batch_items, embs):
                         results.append((orig_idx, emb))
                     bar.update(len(batch_items))
         else:
-            # Sort by token length descending
             indexed.sort(key=lambda x: x[1], reverse=True)
             for start in range(0, len(indexed), self.batch_size):
-                batch_3tuple: list[tuple[int, int, Chunk]] = indexed[start : start + self.batch_size]
-                # Unpack all 3 elements correctly here:
+                batch_3tuple = indexed[start : start + self.batch_size]
                 texts = [c.content for _, _, c in batch_3tuple]
                 embs = self._embed_batch(texts)
                 for (orig_idx, _, _), emb in zip(batch_3tuple, embs):
@@ -575,14 +632,16 @@ class EmbeddingGeneratorOnnx:  # pylint: disable=too-many-instance-attributes
         indexed_sorted = sorted(indexed, key=lambda x: x[0])
 
         store: dict[str, Any] = {}
-        duplicates: list[str] = []  # track duplicates
+        duplicates: list[str] = []
         for (orig_idx, emb), (i, _, chunk) in zip(results, indexed_sorted):
             if chunk.id in store:
                 duplicates.append(chunk.id)
             store[chunk.id] = emb
 
-        if duplicates:  # surface them loudly
-            print(f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:")
+        if duplicates:
+            print(
+                f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:"
+            )
             for did in duplicates[:10]:
                 print(f"         {did}")
             if len(duplicates) > 10:

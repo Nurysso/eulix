@@ -8,8 +8,24 @@
 import sys
 from typing import Any
 
-import ijson.common
+try:
+    import ijson.backends.python  # noqa: F401  (always available, pure Python)
+except ImportError:
+    pass
+try:
+    import ijson.backends.yajl2_c  # noqa: F401  (fast C backend, if compiled)
+except ImportError:
+    pass
+try:
+    import ijson.backends.yajl2_cffi  # noqa: F401
+except ImportError:
+    pass
+try:
+    import ijson.backends.yajl2  # noqa: F401
+except ImportError:
+    pass
 
+import ijson.common
 # Sequence-length "buckets" for embedding inference. Instead of padding every
 # batch to the longest sequence (wasteful) or padding to one global max
 # (also wasteful), we snap each chunk's estimated token length up to the

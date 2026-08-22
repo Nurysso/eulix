@@ -67,6 +67,7 @@ func mmapAdvisePlatform(data []byte) {
 	_ = unix.Madvise(data, unix.MADV_HUGEPAGE)
 }
 
+//nolint:unused
 func allocHugepageAligned(n int) []float32 {
 	const hugepage = 2 << 20 // 2MB
 	size := n * 4            // Allocate raw bytes, aligned to hugepage boundary

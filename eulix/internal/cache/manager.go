@@ -26,6 +26,7 @@ import (
 	"eulix/internal/config"
 
 	bolt "go.etcd.io/bbolt"
+	ErrorBolt "go.etcd.io/bbolt/errors"
 )
 
 // entriesBucket is the single bucket every record lives in, keyed by an
@@ -171,7 +172,7 @@ func (m *Manager) Delete(id uint64) error {
 // Clear removes every stored entry.
 func (m *Manager) Clear() error {
 	err := m.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.DeleteBucket(entriesBucket); err != nil && err != bolt.ErrBucketNotFound {
+		if err := tx.DeleteBucket(entriesBucket); err != nil && err != ErrorBolt.ErrBucketNotFound {
 			return err
 		}
 		_, err := tx.CreateBucket(entriesBucket)
