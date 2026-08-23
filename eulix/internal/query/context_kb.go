@@ -278,8 +278,14 @@ func (cb *ContextBuilder) buildChunkFromKBFunction(fn utils.KBFunction, filePath
 			content += fmt.Sprintf("  - %s (line %d)\n", c.Callee, c.Line)
 		}
 	}
+	// Note to self fn.ID (e.g. "func_Name::path" / "method_Class_Name::path") is the
+	// single source of truth for chunk identity this is what eulix_embed's
+	// embedding pipeline uses for chunk.id (chunk_one_file: id=func["id"]),
+	// so it's what vectors.bin/embeddings.bin are keyed by. cb.vectorMap
+	// lookups in mmrSelect/vectorSearch depend on this matching exactly.
+	// Same goes for buildChunkFromKBClass
 	return Chunk{
-		ID:        fmt.Sprintf("%s:%d-%d", filePath, fn.LineStart, fn.LineEnd),
+		ID:        fn.ID,
 		ChunkType: "function", File: filePath,
 		StartLine: fn.LineStart, EndLine: fn.LineEnd,
 		Content: content, Tokens: len(content) / 4,
@@ -305,8 +311,10 @@ func (cb *ContextBuilder) buildChunkFromKBClass(class utils.KBClass, filePath st
 	for _, m := range class.Methods {
 		syms = append(syms, m.Name)
 	}
+	// Note to self fn.ID (e.g. "func_Name::path" / "method_Class_Name::path") is the
+	// single source of truth for chunk identity
 	return Chunk{
-		ID:        fmt.Sprintf("%s:%d-%d", filePath, class.LineStart, class.LineEnd),
+		ID:        class.ID,
 		ChunkType: "class", File: filePath,
 		StartLine: class.LineStart, EndLine: class.LineEnd,
 		Content: content, Tokens: len(content) / 4,

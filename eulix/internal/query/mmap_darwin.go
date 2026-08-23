@@ -8,6 +8,7 @@
 
 /*
 mmap_darwin.go macOS mmap flags and madvise hints.
+
 	macOS doesn't have Linux's MAP_POPULATE or MADV_HUGEPAGE, but the
 	unified buffer cache (UBC) treats MAP_SHARED and MAP_PRIVATE
 	identically for read-only access. We use MAP_PRIVATE to keep the
@@ -47,4 +48,13 @@ func mmapPlatform(f *os.File, size int) ([]byte, error) {
 // and exposed by golang.org/x/sys/unix.
 func mmapAdvisePlatform(data []byte) {
 	_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
+}
+
+func allocEmbeddingMatrix(n, dim int) [][]float32 {
+	flat := make([]float32, n*dim)
+	rows := make([][]float32, n)
+	for i := range rows {
+		rows[i] = flat[i*dim : (i+1)*dim]
+	}
+	return rows
 }

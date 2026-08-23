@@ -79,16 +79,14 @@ func (cb *ContextBuilder) prefetchFiles(chunks []Chunk, cache *fileCache) {
 	wg.Wait()
 }
 
-// RealCodeBudgetRatio defines the target proportion of the total context budget allocated for real source code.
-const RealCodeBudgetRatio = 0.65
-
 func (cb *ContextBuilder) hydrateSourceCode(chunks []Chunk, sourceBudget int, maxLinesDefault int) []Chunk {
 	if cb.sourceRoot == "" {
 		cb.debugLog.Log("Source hydration skipped: no source root configured")
 		return chunks
 	}
-
-	realCodeBudget := int(float64(sourceBudget) * RealCodeBudgetRatio)
+	realCodeBudgetRatio := cb.config.RetrievalConfig.CodeToAstRatio
+	cb.debugLog.Log("Code budget is %f", realCodeBudgetRatio)
+	realCodeBudget := int(float64(sourceBudget) * realCodeBudgetRatio)
 	cb.debugLog.Log("=== SOURCE HYDRATION START ===")
 	cb.debugLog.Log("Budget: %d tokens (Real code budget: %d tokens) | Max lines: %d | Chunks: %d", sourceBudget, realCodeBudget, maxLinesDefault, len(chunks))
 

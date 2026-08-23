@@ -32,3 +32,12 @@ func openForSequentialRead(path string) (io.Reader, func(), error) {
 	}
 	return bufio.NewReaderSize(f, jsonBufSize), func() { f.Close() }, nil
 }
+
+func allocEmbeddingMatrix(n, dim int) [][]float32 {
+	flat := make([]float32, n*dim)
+	rows := make([][]float32, n)
+	for i := range rows {
+		rows[i] = flat[i*dim : (i+1)*dim]
+	}
+	return rows
+}

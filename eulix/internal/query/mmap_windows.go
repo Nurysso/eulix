@@ -198,3 +198,12 @@ func mmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
 		_ = windows.CloseHandle(h)
 	}, nil
 }
+
+func allocEmbeddingMatrix(n, dim int) [][]float32 {
+	flat := make([]float32, n*dim)
+	rows := make([][]float32, n)
+	for i := range rows {
+		rows[i] = flat[i*dim : (i+1)*dim]
+	}
+	return rows
+}

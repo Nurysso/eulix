@@ -39,6 +39,11 @@ const (
 	PreAllocate        = 320_000
 )
 
+const (
+	BinaryVersion = uint32(5)
+	MagicBytes    = "EULX"
+)
+
 // logFileLoad wraps a file load with timing + RSS delta logging.
 func (cb *ContextBuilder) logFileLoad(name string) func(error) {
 	var memBefore runtime.MemStats
@@ -366,18 +371,20 @@ func (cb *ContextBuilder) loadAndIndexCallGraph() {
 		len(cb.callGraph), len(cb.callSites))
 }
 
-// loadEmbeddings reads embeddings.bin (EULX magic, version 2/3/4).
-// Supports legacy (v3, with IDs), and current quantized (v4, SQ8 int8) formats.
+// loadEmbeddings reads embeddings.bin (version 5) into cb.embeddings and starts
+// an async IVF index build if the embedding count exceeds ivfBuildThreshold.
 func (cb *ContextBuilder) loadEmbeddings() error {
 	done := cb.logFileLoad("embeddings.bin")
 	path := filepath.Join(cb.eulixDir, "embeddings.bin")
+
 	f, err := os.Open(path)
 	done(err)
 	if err != nil {
 		return fmt.Errorf("embeddings.bin not found: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	br := bufio.NewReaderSize(f, 4<<20) // 4MB read buffer
+
+	br := bufio.NewReaderSize(f, 4<<20)
 
 	magic := make([]byte, 4)
 	if _, err := io.ReadFull(br, magic); err != nil {
@@ -389,59 +396,64 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 
 	var hdr [4]byte
 	if _, err := io.ReadFull(br, hdr[:4]); err != nil {
-		return err
+		return fmt.Errorf("reading version: %w", err)
 	}
-	version := binary.LittleEndian.Uint32(hdr[:4])
-	if version != 3 && version != 4 {
-		return fmt.Errorf("unsupported version: %d", version)
+	if version := binary.LittleEndian.Uint32(hdr[:4]); version != BinaryVersion {
+		return fmt.Errorf("unsupported embeddings.bin version %d (expected %d)", version, BinaryVersion)
 	}
+
+	// model name: uint32 len + UTF-8
 	if _, err := io.ReadFull(br, hdr[:4]); err != nil {
-		return err
+		return fmt.Errorf("reading model name length: %w", err)
 	}
 	modelLen := int(binary.LittleEndian.Uint32(hdr[:4]))
-	modelBuf := make([]byte, modelLen)
-	if _, err := io.ReadFull(br, modelBuf); err != nil {
-		return err
+	if modelLen > 512 {
+		return fmt.Errorf("implausible model name length %d", modelLen)
 	}
+	if _, err := io.ReadFull(br, make([]byte, modelLen)); err != nil {
+		return fmt.Errorf("reading model name: %w", err)
+	}
+
+	// count + dimension
 	var meta [8]byte
 	if _, err := io.ReadFull(br, meta[:]); err != nil {
-		return err
+		return fmt.Errorf("reading count/dim: %w", err)
 	}
 	numEmb := int(binary.LittleEndian.Uint32(meta[:4]))
 	dim := int(binary.LittleEndian.Uint32(meta[4:8]))
-	quantized := false
-	if version == 4 {
-		var flag [1]byte
-		if _, err := io.ReadFull(br, flag[:]); err != nil {
-			return err
-		}
-		quantized = flag[0] == 1
-	}
 	if dim == 0 {
 		return fmt.Errorf("embeddings.bin dim=0: regenerate with eulix-embed")
 	}
 
-	cb.embeddings = make([][]float32, numEmb)
-	idLenBuf := make([]byte, 4)
-	scaleBuf := make([]byte, 4)
-	int8Buf := make([]byte, dim)
-	f32Buf := make([]byte, dim*4)
+	// quantized flag
+	var flag [1]byte
+	if _, err := io.ReadFull(br, flag[:]); err != nil {
+		return fmt.Errorf("reading quantized flag: %w", err)
+	}
+	quantized := flag[0] == 1
 
-	for i := 0; i < numEmb; i++ {
-		// id length + id bytes (skip id, we use positional index)
-		if _, err := io.ReadFull(br, idLenBuf); err != nil {
-			return fmt.Errorf("reading id length at %d: %w", i, err)
-		}
-		idLen := int(binary.LittleEndian.Uint32(idLenBuf))
-		if idLen > 1024 {
-			return fmt.Errorf("implausible id length %d at %d", idLen, i)
-		}
-		if _, err := io.ReadFull(br, make([]byte, idLen)); err != nil { // discard id
-			return fmt.Errorf("reading id at %d: %w", i, err)
-		}
+	// allocate matrix (hugepage-aligned on Linux, flat elsewhere)
+	cb.embeddings = allocEmbeddingMatrix(numEmb, dim)
 
-		emb := make([]float32, dim)
-		if quantized {
+	if !quantized {
+		cb.debugLog.Log("Non Quantize embeddings")
+		// Fixed-width float32 records: read entire payload into the
+		// contiguous backing buffer in one shot.
+		// allocEmbeddingMatrix lays out all rows in a single flat allocation,
+		// so embeddings[0][:numEmb*dim] covers the whole thing.
+		flat := cb.embeddings[0][:numEmb*dim]
+		if err := binary.Read(br, binary.LittleEndian, flat); err != nil {
+			return fmt.Errorf("reading float32 vectors: %w", err)
+		}
+		for i := 0; i < numEmb; i++ {
+			Normalize(cb.embeddings[i])
+		}
+	} else {
+		// SQ8: 4-byte scale + dim int8 bytes per embedding
+		cb.debugLog.Log("Quantize embeddings")
+		scaleBuf := make([]byte, 4)
+		int8Buf := make([]byte, dim)
+		for i := 0; i < numEmb; i++ {
 			if _, err := io.ReadFull(br, scaleBuf); err != nil {
 				return fmt.Errorf("reading scale at %d: %w", i, err)
 			}
@@ -449,37 +461,30 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 			if _, err := io.ReadFull(br, int8Buf); err != nil {
 				return fmt.Errorf("reading quantized vector at %d: %w", i, err)
 			}
+			row := cb.embeddings[i]
 			for j := 0; j < dim; j++ {
-				emb[j] = float32(int8(int8Buf[j])) * scale
+				row[j] = float32(int8(int8Buf[j])) * scale
 			}
-		} else {
-			if _, err := io.ReadFull(br, f32Buf); err != nil {
-				return fmt.Errorf("reading vector at %d: %w", i, err)
-			}
-			for j := 0; j < dim; j++ {
-				emb[j] = math.Float32frombits(binary.LittleEndian.Uint32(f32Buf[j*4:]))
-			}
+			Normalize(row)
 		}
-		cb.embeddings[i] = emb
 	}
-
+	cb.debugLog.Log("numEmb: %d ivfBuildThreshold: %d", numEmb, ivfBuildThreshold)
 	if numEmb > ivfBuildThreshold {
+		cb.debugLog.Log("IVF condition met: numEmb (%d) > threshold (%d)", numEmb, ivfBuildThreshold) // <-- Log added
 		go func() {
 			idx := cb.buildIVFIndex(cb.embeddings, ivfNClusters, ivfKMeansIter)
 			cb.mu.Lock()
 			cb.ivfIndex = idx
 			cb.mu.Unlock()
-			cb.debugLog.Log("IVF index BUILT completed: %d clusters", ivfNClusters)
+			cb.debugLog.Log("IVF index built: %d clusters", ivfNClusters)
 		}()
 		cb.debugLog.Log("IVF build started in background (%d embeddings)", numEmb)
 	}
 	return nil
 }
 
-// loadVectorMap reads vectors.bin to build the id→embedding-index
-// map. Maps embedding IDs (from kb_index.json or manually assigned)
-// to their positions in the embeddings slice for fast lookup during
-// scoring.
+// loadVectorMap reads vectors.bin (version 5) and populates cb.vectorMap with
+// chunk ID → embedding index mappings for fast lookup during scoring.
 func (cb *ContextBuilder) loadVectorMap() error {
 	done := cb.logFileLoad("vectors.bin")
 	data, err := os.ReadFile(filepath.Join(cb.eulixDir, "vectors.bin"))
@@ -488,71 +493,71 @@ func (cb *ContextBuilder) loadVectorMap() error {
 		return fmt.Errorf("vectors.bin not found: %w", err)
 	}
 
-	const minHeader = 4 + 4 + 4 + 1 + 4 // magic+version+model_len_prefix+1char+count
+	const minHeader = 4 + 4 + 4 + 1 + 4 // magic + version + model_len_prefix + 1char + count
 	if len(data) < minHeader {
 		return fmt.Errorf("vectors.bin too short: %d bytes", len(data))
 	}
 
 	off := 0
 
+	// magic
 	if string(data[off:off+4]) != MagicBytes {
 		return fmt.Errorf("wrong magic in vectors.bin: %q", data[off:off+4])
 	}
 	off += 4
 
+	// version
 	version := binary.LittleEndian.Uint32(data[off : off+4])
 	off += 4
-	cb.debugLog.Log("vectors.bin: version=%d (expected=%d)", version, BinaryVersion)
-	if version != BinaryVersion {
-		return fmt.Errorf("vectors.bin version mismatch: expected %d, got %d", BinaryVersion, version)
+	if version != 5 {
+		return fmt.Errorf("unsupported vectors.bin version %d (expected %d)", version, BinaryVersion)
 	}
 
+	// model name
 	if off+4 > len(data) {
 		return fmt.Errorf("vectors.bin: truncated before model name length")
 	}
 	modelNameLen := int(binary.LittleEndian.Uint32(data[off : off+4]))
 	cb.debugLog.Log("vectors.bin: model name length=%d", modelNameLen)
-	if modelNameLen > 512 {
-		return fmt.Errorf("vectors.bin: model name length=%d is implausible, file may be corrupt (off=%d)", modelNameLen, off)
-	}
 	off += 4
-	if off+modelNameLen > len(data) {
-		return fmt.Errorf("vectors.bin: truncated reading model name (need %d bytes at off=%d, have %d)", modelNameLen, off, len(data)-off)
+	if modelNameLen > 512 {
+		return fmt.Errorf("vectors.bin: implausible model name length %d", modelNameLen)
 	}
-	modelName := string(data[off : off+modelNameLen])
+	if off+modelNameLen > len(data) {
+		return fmt.Errorf("vectors.bin: truncated reading model name")
+	}
 	off += modelNameLen
-	cb.debugLog.Log("vectors.bin: model=%q", modelName)
 
+	// count
 	if off+4 > len(data) {
-		return fmt.Errorf("vectors.bin: truncated before count field")
+		return fmt.Errorf("vectors.bin: truncated before count")
 	}
 	count := int(binary.LittleEndian.Uint32(data[off : off+4]))
 	off += 4
-	cb.debugLog.Log("vectors.bin: count=%d, bytes remaining=%d", count, len(data)-off)
 
-	if count > (len(data)-off)/5 {
-		return fmt.Errorf("vectors.bin: count=%d impossible given %d bytes remaining, file is corrupt", count, len(data)-off)
-	}
 	if count > 10_000_000 {
 		return fmt.Errorf("vectors.bin: count=%d exceeds sanity limit", count)
 	}
+	if count > (len(data)-off)/5 {
+		return fmt.Errorf("vectors.bin: count=%d impossible given %d bytes remaining", count, len(data)-off)
+	}
 
+	// id entries
 	cb.vectorMap = make(map[string]int, count)
 	for i := 0; i < count; i++ {
 		if off+4 > len(data) {
-			return fmt.Errorf("vectors.bin: truncated reading id length at index %d (off=%d)", i, off)
+			return fmt.Errorf("vectors.bin: truncated reading id length at index %d", i)
 		}
 		idLen := int(binary.LittleEndian.Uint32(data[off : off+4]))
 		off += 4
 		if idLen == 0 || idLen > 1024 {
-			return fmt.Errorf("vectors.bin: implausible id length=%d at index %d (off=%d)", idLen, i, off)
+			return fmt.Errorf("vectors.bin: implausible id length %d at index %d", idLen, i)
 		}
 		if off+idLen > len(data) {
-			return fmt.Errorf("vectors.bin: truncated reading id at index %d (need %d bytes, have %d)", i, idLen, len(data)-off)
+			return fmt.Errorf("vectors.bin: truncated reading id at index %d", i)
 		}
-		id := string(data[off : off+idLen])
+		cb.vectorMap[string(data[off:off+idLen])] = i
 		off += idLen
-		cb.vectorMap[id] = i
 	}
 
 	return nil

@@ -34,8 +34,10 @@ const ivfNProbe = 32
 func (cb *ContextBuilder) vectorSearchIVF(qEmb []float32, topK int, threshold float64) []ScoredChunk {
 	// IVF may still be building in background — fall back to linear scan
 	cb.mu.Lock()
+	isNil := cb.ivfIndex == nil
 	idx := cb.ivfIndex
 	cb.mu.Unlock()
+	cb.debugLog.Log("vectorSearchIVF called: cb.ivfIndex == nil -> %t", isNil)
 	if idx == nil {
 		return cb.vectorSearch(qEmb, topK, threshold)
 	}

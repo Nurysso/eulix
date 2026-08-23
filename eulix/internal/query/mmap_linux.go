@@ -67,7 +67,15 @@ func mmapAdvisePlatform(data []byte) {
 	_ = unix.Madvise(data, unix.MADV_HUGEPAGE)
 }
 
-//nolint:unused
+func allocEmbeddingMatrix(n, dim int) [][]float32 {
+	flat := allocHugepageAligned(n * dim)
+	rows := make([][]float32, n)
+	for i := range rows {
+		rows[i] = flat[i*dim : (i+1)*dim]
+	}
+	return rows
+}
+
 func allocHugepageAligned(n int) []float32 {
 	const hugepage = 2 << 20 // 2MB
 	size := n * 4            // Allocate raw bytes, aligned to hugepage boundary
