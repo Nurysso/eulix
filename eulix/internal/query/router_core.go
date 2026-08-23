@@ -90,10 +90,10 @@ func (r *Router) PromptOrAnswer(query string) (string, error) {
 
 	src := hasSourceCode(ctx)
 	taskBody := getTaskBody(r, query, classification)
-
+	realCodeBudgetRatio := r.config.RetrievalConfig.CodeToAstRatio
 	// Build the complete prompt with context and CoT
 	contextPrompt := r.llmClient.BuildFullPrompt(ctx, query)
-	cotPrompt := BuildPromptString(query, classification, src, taskBody)
+	cotPrompt := BuildPromptString(query, classification, src, taskBody, realCodeBudgetRatio)
 
 	// Combine context inventory + CoT prompt
 	fullPrompt := contextPrompt + "\n\n" + cotPrompt

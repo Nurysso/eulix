@@ -36,10 +36,6 @@ func (cb *ContextBuilder) mmrSelect(
 	gate PathGate,
 ) []Chunk {
 	// Pre-filter candidates through the gate before the MMR loop.
-	// This is a second line of defence: multiStrategySearch already
-	// ran applyGate per strategy, but multiBoost accumulation across
-	// strategies can resurrect off-path chunks that each individually
-	// slipped through. Filtering here is cheap (one pass, pre-loop).
 	if gate.active {
 		filtered := make([]ScoredChunk, 0, len(candidates))
 		for _, c := range candidates {
@@ -68,21 +64,30 @@ func (cb *ContextBuilder) mmrSelect(
 		maxSc = 1
 	}
 
+	// Debug counters: how often embOf misses (ID mismatch between
+	// vectorMap and chunk IDs from multiStrategySearch would show up
+	// here as a spike in misses).
+	var embHits, embMisses int64
+
 	embOf := func(id string) []float32 {
 		if idx, ok := cb.vectorMap[id]; ok && idx < len(cb.embeddings) {
+			embHits++
 			return cb.embeddings[idx]
 		}
+		embMisses++
 		return nil
 	}
 
 	simToQuery := func(c ScoredChunk) float64 {
 		base := 0.0
+		found := false
 		if qEmb != nil {
 			if e := embOf(c.ID); e != nil {
 				base = float64(dotProduct(qEmb, e))
+				found = true
 			}
 		}
-		if base == 0 {
+		if !found {
 			base = c.Score / maxSc
 		}
 		if anchorFiles[c.File] {
@@ -94,7 +99,6 @@ func (cb *ContextBuilder) mmrSelect(
 	simBetween := func(a, b ScoredChunk) float64 {
 		if ea, eb := embOf(a.ID), embOf(b.ID); ea != nil && eb != nil {
 			sim := float64(dotProduct(ea, eb))
-
 			if a.File == b.File && sim > 0.4 {
 				dist := a.StartLine - b.StartLine
 				if dist < 0 {
@@ -210,6 +214,9 @@ func (cb *ContextBuilder) mmrSelect(
 			tokenSum -= headerOverhead
 		}
 	}
+
+	cb.debugLog.Log("mmrSelect: embOf hits=%d misses=%d (misses>0 with hasEmbeddings=true may indicate chunk ID / vectorMap ID mismatch)",
+		embHits, embMisses)
 
 	if trace != nil {
 		trace.ChunkTraces = chunkTraces

@@ -20,8 +20,8 @@ import (
 )
 
 // BuildPromptString composes header + task-specific body + footer.
-func BuildPromptString(query string, class *Classification, sourceAvailable bool, taskBody string) string {
-	return cotHeader(query, class, sourceAvailable) +
+func BuildPromptString(query string, class *Classification, sourceAvailable bool, taskBody string, codeBudgetRatio float64) string {
+	return cotHeader(query, class, sourceAvailable, codeBudgetRatio) +
 		" TASK \n" +
 		taskBody +
 		cotFooter()
@@ -34,9 +34,9 @@ func BuildPromptString(query string, class *Classification, sourceAvailable bool
 func (r *Router) buildFullPromptWithContext(ctx *utils.ContextWindow, query string, class *Classification) string {
 	src := hasSourceCode(ctx)
 	taskBody := getTaskBody(r, query, class)
-
+	realCodeBudgetRatio := r.config.RetrievalConfig.CodeToAstRatio
 	contextPrompt := r.llmClient.BuildFullPrompt(ctx, query)
-	cotPrompt := BuildPromptString(query, class, src, taskBody)
+	cotPrompt := BuildPromptString(query, class, src, taskBody, realCodeBudgetRatio)
 
 	return contextPrompt + "\n\n" + cotPrompt
 }
@@ -44,10 +44,10 @@ func (r *Router) buildFullPromptWithContext(ctx *utils.ContextWindow, query stri
 // cotHeader builds the universal reasoning preamble injected into every prompt.
 // It instructs the model to separate "what I can see" from "what I infer",
 // and to distinguish source code chunks from metadata-only chunks.
-func cotHeader(query string, class *Classification, sourceAvailable bool) string {
+func cotHeader(query string, class *Classification, sourceAvailable bool, codeBudgetRatio float64) string {
 	var b strings.Builder
 	if sourceAvailable {
-		fmt.Fprintf(&b, "You have been given a mix of REAL SOURCE CODE (≈%d%%) and AST metadata\n", int(RealCodeBudgetRatio*100))
+		fmt.Fprintf(&b, "You have been given a mix of REAL SOURCE CODE (≈%d%%) and AST metadata\n", int(codeBudgetRatio*100))
 		b.WriteString("(file paths, line ranges, signatures, call edges) for the remaining symbols.\n")
 		b.WriteString("Treat source blocks as ground truth. Treat metadata as structural hints only.\n")
 	} else {

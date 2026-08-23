@@ -17,11 +17,6 @@ import (
 	"eulix/internal/utils"
 )
 
-const (
-	BinaryVersion = uint32(4)
-	MagicBytes    = "EULX"
-)
-
 // ContextWindowCreator initializes ContextBuilder, loads index artifacts, and sets up search resources.
 func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Client, sourceRoot string) (*ContextBuilder, error) {
 	cb := &ContextBuilder{
@@ -96,10 +91,8 @@ func (cb *ContextBuilder) BuildContext(query string) (*utils.ContextWindow, erro
 
 func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int) (*utils.ContextWindow, *DebugTrace, error) {
 	start := time.Now()
-	var trace *DebugTrace
-	if cb.config.Project.DebugConfig {
-		trace = &DebugTrace{Query: query}
-	}
+	// var trace *DebugTrace
+	trace := &DebugTrace{Query: query}
 	explicitAnchor := extractExplicitAnchors(query)
 	gate := buildPathGate(explicitAnchor)
 
@@ -117,10 +110,14 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 		intent.Type == IntentCallees ||
 		intent.Specificity > 0.85
 	if cb.hasEmbeddings && !skipSemantic {
+		cb.debugLog.Log("hasEmbeddings: %t, skipSemantic: %t", cb.hasEmbeddings, skipSemantic)
 		if emb, err := cb.queryEmbedder.EmbedQueryBinary(query); err == nil {
+			//Normalize(emb)
 			qEmb = emb
 		} else {
-			trace.Warnings = append(trace.Warnings, "query embedding failed: "+err.Error())
+			errMsg := "query embedding failed: " + err.Error()
+			trace.Warnings = append(trace.Warnings, errMsg)
+			cb.debugLog.Log("ERROR: %s", errMsg)
 		}
 	}
 	elapsed := time.Since(etime)
@@ -172,10 +169,8 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	if preFloorCount != len(candidates) {
 		cb.debugLog.Log("Pre-MMR floor: %d → %d candidates (ratio=%.2f)",
 			preFloorCount, len(candidates), cb.config.RetrievalConfig.PreMMRScoreFloorRatio)
-		if trace != nil {
-			trace.Warnings = append(trace.Warnings,
-				fmt.Sprintf("pre-MMR floor filtered %d → %d candidates", preFloorCount, len(candidates)))
-		}
+		trace.Warnings = append(trace.Warnings,
+			fmt.Sprintf("pre-MMR floor filtered %d → %d candidates", preFloorCount, len(candidates)))
 	}
 
 	candidates = mergeWithPriority(anchors, callSiteResults, candidates)
@@ -194,9 +189,11 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	var selected []Chunk
 	if cb.hasEmbeddings {
 		trace.SelectionMethod = "mmr"
+		cb.debugLog.Log("hasEmbeddings: %t going for mmrSelect search", cb.hasEmbeddings)
 		selected = cb.mmrSelect(expanded, budget.ContextBudget, qEmb, anchorFiles, trace, gate)
 	} else {
 		trace.SelectionMethod = "greedy"
+		cb.debugLog.Log("hasEmbeddings: %t going for greedy search", cb.hasEmbeddings)
 		if gate.active {
 			filtered := make([]ScoredChunk, 0, len(expanded))
 			for _, sc := range expanded {

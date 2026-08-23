@@ -63,11 +63,23 @@ func (cb *ContextBuilder) multiStrategySearch(
 	trace *DebugTrace,
 	qEmb []float32,
 ) []ScoredChunk {
+	tTotal := time.Now()
+	cb.debugLog.Log("=== multiStrategySearch START: topK=%d, intent=%v ===", topK, intent.Type)
+
 	all := make(map[string]ScoredChunk, topK*2)
 	anchors := extractExplicitAnchors(query)
 	gate := buildPathGate(anchors)
 	hc := newHydrationCache(cb)
 
+	// Track detailed results per strategy
+	strategyResults := make(map[string]struct {
+		count    int
+		topScore float64
+		avgScore float64
+		topFiles []string
+	})
+
+	tAnchors := time.Now()
 	if len(anchors) > 0 {
 		cb.debugLog.Log("Explicit anchors: %d, gate active: %v (required: %v)",
 			len(anchors), gate.active, gate.required)
@@ -78,9 +90,31 @@ func (cb *ContextBuilder) multiStrategySearch(
 		anchorsHits := cb.explicitAnchorSearch(anchors)
 		anchorsHits = gate.applyGate(anchorsHits)
 		cb.debugLog.Log("Anchors search: %d hits", len(anchorsHits))
-		for _, sc := range anchorsHits {
-			all[sc.ID] = sc
+
+		// Log anchor details
+		if len(anchorsHits) > 0 {
+			topFiles := make([]string, 0, 5)
+			for i, sc := range anchorsHits {
+				if i < 5 {
+					topFiles = append(topFiles, fmt.Sprintf("%s (%.1f)", sc.File, sc.Score))
+				}
+				all[sc.ID] = sc
+			}
+			strategyResults["anchors"] = struct {
+				count    int
+				topScore float64
+				avgScore float64
+				topFiles []string
+			}{
+				count:    len(anchorsHits),
+				topScore: anchorsHits[0].Score,
+				avgScore: avgScore(anchorsHits),
+				topFiles: topFiles,
+			}
+			cb.debugLog.Log("[Anchor Results] Found %d hits, top=%.1f, avg=%.1f, samples: %v",
+				len(anchorsHits), anchorsHits[0].Score, avgScore(anchorsHits), topFiles)
 		}
+
 		highConfidence := 0
 		for _, sc := range anchorsHits {
 			if sc.Score >= 250.0 {
@@ -91,32 +125,68 @@ func (cb *ContextBuilder) multiStrategySearch(
 			topK = highConfidence + 20
 		}
 	}
+	cb.debugLog.Log("[Timing] Anchors extraction & search took %v", time.Since(tAnchors))
 
 	run := func(name string, fn func() []ScoredChunk, multiBoost float64) {
 		t0 := time.Now()
 		results := fn()
 		results = gate.applyGate(results)
 		st := StrategyTrace{Name: name, Found: len(results), Duration: time.Since(t0)}
-		sum := 0.0
-		for _, m := range results {
-			m.MatchType = name
-			isExactStrategy := name == "exact" || name == "kb_exact" || name == "grep"
-			if ex, ok := all[m.ID]; ok {
-				m.Score = math.Max(ex.Score, m.Score) + multiBoost
-				m.MatchDetails = ex.MatchDetails + "; " + m.MatchDetails
-				m.IsExact = ex.IsExact || name == "exact" || name == "kb_exact"
-			} else {
-				m.IsExact = isExactStrategy
-			}
-			all[m.ID] = m
-			if m.Score > st.TopScore {
-				st.TopScore = m.Score
-			}
-			sum += m.Score
-		}
+
+		cb.debugLog.Log("[Timing] Strategy %q took %v (Found: %d hits)", name, st.Duration, st.Found)
+
+		// Log what this strategy found
 		if len(results) > 0 {
-			st.AvgScore = sum / float64(len(results))
+			topFiles := make([]string, 0, 5)
+			scores := make([]float64, 0, len(results))
+			for i, m := range results {
+				scores = append(scores, m.Score)
+				if i < 5 {
+					topFiles = append(topFiles, fmt.Sprintf("%s (%.1f)", m.File, m.Score))
+				}
+				m.MatchType = name
+				isExactStrategy := name == "exact" || name == "kb_exact" || name == "grep"
+				if ex, ok := all[m.ID]; ok {
+					m.Score = math.Max(ex.Score, m.Score) + multiBoost
+					m.MatchDetails = ex.MatchDetails + "; " + m.MatchDetails
+					m.IsExact = ex.IsExact || name == "exact" || name == "kb_exact"
+				} else {
+					m.IsExact = isExactStrategy
+				}
+				all[m.ID] = m
+				if m.Score > st.TopScore {
+					st.TopScore = m.Score
+				}
+			}
+			if len(results) > 0 {
+				st.AvgScore = sum(scores) / float64(len(results))
+			}
+
+			// Store strategy results for summary
+			strategyResults[name] = struct {
+				count    int
+				topScore float64
+				avgScore float64
+				topFiles []string
+			}{
+				count:    len(results),
+				topScore: st.TopScore,
+				avgScore: st.AvgScore,
+				topFiles: topFiles,
+			}
+
+			cb.debugLog.Log("[Strategy %q] Found %d hits, top=%.1f, avg=%.1f, samples: %v",
+				name, len(results), st.TopScore, st.AvgScore, topFiles)
+		} else {
+			cb.debugLog.Log("[Strategy %q] Found 0 hits", name)
+			strategyResults[name] = struct {
+				count    int
+				topScore float64
+				avgScore float64
+				topFiles []string
+			}{count: 0, topScore: 0, avgScore: 0, topFiles: []string{}}
 		}
+
 		if trace != nil {
 			trace.Strategies = append(trace.Strategies, st)
 		}
@@ -178,13 +248,24 @@ func (cb *ContextBuilder) multiStrategySearch(
 		}, 1.5)
 	}
 
+	// Log summary of all strategies
+	cb.debugLog.Log("=== STRATEGY RESULTS SUMMARY ===")
+	totalFound := 0
+	for name, res := range strategyResults {
+		totalFound += res.count
+		cb.debugLog.Log("  %-12s: %3d hits, top=%.1f, avg=%.1f",
+			name, res.count, res.topScore, res.avgScore)
+	}
+	cb.debugLog.Log("  Total unique chunks found: %d", len(all))
+	cb.debugLog.Log("=== END STRATEGY SUMMARY ===")
+
+	tSubsys := time.Now()
 	result := make([]ScoredChunk, 0, len(all))
 	for _, sc := range all {
 		result = append(result, sc)
 	}
+
 	// Subsystem-aware boosting replaces old boostBySubSystemPath call.
-	// we drive query tokens the same way B<25 does so the subsystem
-	// detector sees the same vocabulary the keyword search used.
 	queryTokens := extractQueryKeywords(strings.ToLower(query))
 	detected := detectQuerySubsystems(cb.subsystemTree, queryTokens)
 	detected = filterNoiseSubsystems(detected, cb.noisePaths)
@@ -193,18 +274,20 @@ func (cb *ContextBuilder) multiStrategySearch(
 	}
 	if len(detected) > 0 {
 		cb.debugLog.Log("Detected subsystem (%d): top=%q score=%.2f",
-			len(detected), detected[0].node.Path, detected[0].score)
+			len(detected), detected[0].node.Path, detected[0].score) // Use detected[0].score, not node.score
 		if trace != nil {
 			for _, ds := range detected {
 				trace.Warnings = append(trace.Warnings,
 					fmt.Sprintf("subsystem: %s (score=%.2f chunks=%d)",
-						ds.node.Path, ds.score, ds.node.TotalChunks))
+						ds.node.Path, ds.score, ds.node.TotalChunks)) // ds.score, not ds.node.score
 			}
 		}
 	}
 	boostByDetectedSubsystems(result, detected, cb.noisePaths, &cb.config.RetrievalConfig)
 	result = filterTestDocChunks(result)
+	cb.debugLog.Log("[Timing] Subsystem detection & boosting took %v", time.Since(tSubsys))
 
+	tDemote := time.Now()
 	qLow := strings.ToLower(query)
 	isTestQuery := strings.Contains(qLow, "test") || strings.Contains(qLow, "mock") || strings.Contains(qLow, "spec")
 
@@ -223,45 +306,99 @@ func (cb *ContextBuilder) multiStrategySearch(
 			strings.Contains(f, "_test.go")
 	}
 
+	demotionCount := 0
 	for i := range result {
 		if result[i].IsExact {
 			continue // verified exact/grep hits are protected from scope demotion
 		}
 		f := result[i].File
+		demoted := false
 
 		switch {
 		case isTestFile(f) && !isTestQuery:
 			result[i].Score *= 0.3
+			demoted = true
 		case isTestFile(f) && (intent.Type == IntentConcept || intent.Type == IntentFlow):
 			// still demote lightly even on a testing query, if intent is conceptual
 			result[i].Score *= 0.7
+			demoted = true
 		}
 
 		if primaryRepo != "" {
 			if fParts := strings.SplitN(f, "/", 2); len(fParts) > 0 && fParts[0] != primaryRepo {
 				if strings.HasPrefix(fParts[0], "charm-") || fParts[0] == "requirements" {
 					result[i].Score *= 0.3
+					demoted = true
 				}
 			}
 		}
+		if demoted {
+			demotionCount++
+		}
 	}
+	cb.debugLog.Log("[Timing] Scope demotion took %v (demoted %d chunks)", time.Since(tDemote), demotionCount)
 
+	tSort := time.Now()
 	sort.SliceStable(result, func(i, j int) bool {
 		if result[i].IsExact != result[j].IsExact {
 			return result[i].IsExact
 		}
 		return result[i].Score > result[j].Score
 	})
+	cb.debugLog.Log("[Timing] Sorting took %v", time.Since(tSort))
 
 	if len(result) > topK {
+		cb.debugLog.Log("Truncating results: %d → %d (topK=%d)", len(result), topK, topK)
 		result = result[:topK]
 	}
+
+	// Log final results breakdown
+	cb.debugLog.Log("=== FINAL RESULTS ===")
+	cb.debugLog.Log("  Total unique before truncation: %d", len(all))
+	cb.debugLog.Log("  Final returned chunks: %d", len(result))
+	if len(result) > 0 {
+		topFiles := make([]string, 0, 10)
+		topScores := make([]float64, 0, 10)
+		for i, sc := range result {
+			if i < 10 {
+				topFiles = append(topFiles, fmt.Sprintf("%s (%.1f)", sc.File, sc.Score))
+				topScores = append(topScores, sc.Score)
+			}
+		}
+		cb.debugLog.Log("  Top files: %v", topFiles)
+		cb.debugLog.Log("  Score range: %.1f - %.1f", result[0].Score, result[len(result)-1].Score)
+	}
+
+	cb.debugLog.Log("=== multiStrategySearch COMPLETE: Total Time %v, Returning %d chunks ===", time.Since(tTotal), len(result))
 	return result
 }
 
-// grepSymbolSearch scans symbol tables, file paths, and chunk content for literal code tokens
-// extracted from the user query. Ensures structural identifiers (e.g., class PciPassthroughFilter)
-// are retrieved with high priority even when BM25 or vector search miss them.
+// Helper functions
+func avgScore(chunks []ScoredChunk) float64 {
+	if len(chunks) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, c := range chunks {
+		sum += c.Score
+	}
+	return sum / float64(len(chunks))
+}
+
+func sum(scores []float64) float64 {
+	total := 0.0
+	for _, s := range scores {
+		total += s
+	}
+	return total
+}
+
+// grepSymbolSearch performs targeted exact-token matching against code chunks.
+//
+// It extracts structural identifiers (e.g., classes, functions) from the query
+// and matches them against file paths, chunk names, symbol tables, and raw code content.
+// Direct language definition matches (e.g., "func foo", "class Bar") receive the
+// highest relevance score. Content fallbacks are rate-limited by hydrationBudget.
 func (cb *ContextBuilder) grepSymbolSearch(query string, hc *hydrationCache) []ScoredChunk {
 	symbols := extractPotentialSymbols(query)
 	if len(symbols) == 0 {
@@ -779,11 +916,14 @@ func buildCallSiteIndex(cg *utils.CallGraphRef, chunks []Chunk, log *DebugLogger
 // Mirrors what eulix-parser writes: "method_ClassName_funcName" or "func_funcName"
 func normalizeToCallGraphID(c Chunk) string {
 	name := strings.ToLower(strings.ReplaceAll(c.Name, " ", "_"))
-	if c.ClassName != "" {
-		class := strings.ToLower(strings.ReplaceAll(c.ClassName, " ", "_"))
-		return "method_" + class + "_" + name
+	// c.ID is now "func_name::path" or "method_class_name::path"
+	// Strip the ::path qualifier to get the raw call-graph node key
+	id := c.ID
+	if i := strings.Index(id, "::"); i != -1 {
+		id = id[:i]
 	}
-	return "func_" + name
+	_ = name // id already encodes method_/func_ prefix
+	return id
 }
 
 func (cb *ContextBuilder) vectorSearch(qEmb []float32, topK int, threshold float64) []ScoredChunk {
