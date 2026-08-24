@@ -92,11 +92,15 @@ static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
 
 pub struct TypeScriptParser {
     source_code: String,
+    file_path: String,
 }
 
 impl TypeScriptParser {
-    pub fn new(source_code: String) -> Self {
-        Self { source_code }
+    pub fn new(source_code: String, file_path: String) -> Self {
+        Self {
+            source_code,
+        file_path,
+     }
     }
 
     pub fn parse(&self) -> Result<FileData, String> {
@@ -121,6 +125,20 @@ impl TypeScriptParser {
             todos: self.extract_todos(),
             security_notes: self.detect_security_patterns(),
         })
+    }
+    /// Builds a file-qualified ID for a top-level function or method.
+    /// e.g. func_rewriteHeader::internal/query/context_utils.go
+    ///      method_ContextBuilder_expandFromKBFunction::internal/query/mmr.go
+    fn make_function_id(&self, name: &str, struct_context: &str) -> String {
+        if struct_context.is_empty() {
+            format!("func_{}::{}", name, self.file_path)
+        } else {
+            format!("method_{}_{}::{}", struct_context, name, self.file_path)
+        }
+    }
+
+    fn make_class_id(&self, name: &str) -> String {
+        format!("class_{}::{}", name, self.file_path)
     }
 
     fn count_lines(&self) -> usize {
@@ -287,12 +305,7 @@ impl TypeScriptParser {
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
         let signature = self.build_signature(name, &params, &return_type, is_async);
-
-        let id = if struct_context.is_empty() {
-            format!("func_{}", name)
-        } else {
-            format!("method_{}_{}", struct_context, name)
-        };
+        let id = self.make_function_id(&name, struct_context);
 
         let (calls, variables, control_flow, complexity) =
             if let Some(body) = node.child_by_field_name("body") {
@@ -498,7 +511,7 @@ impl TypeScriptParser {
             .unwrap_or((vec![], vec![]));
 
         Some(Class {
-            id: format!("class_{}", name),
+            id: self.make_class_id(&name),
             name,
             bases,
             docstring,
@@ -1158,12 +1171,15 @@ impl TypeScriptParser {
     }
 }
 
-pub fn parse_file(path: &Path) -> Result<(String, FileData), Box<dyn std::error::Error>> {
-    let source = std::fs::read_to_string(path)?;
-    let parser = TypeScriptParser::new(source);
-    let file_data = parser
-        .parse()
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    let name = path.to_string_lossy().to_string();
-    Ok((name, file_data))
+pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
+    let source_code = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
+
+    let clean_path = path.strip_prefix("./").unwrap_or(path);
+    let path_str = clean_path.to_string_lossy().to_string();
+
+    let parser = TypeScriptParser::new(source_code, path_str.clone());
+    let file_data = parser.parse()?;
+
+    Ok((path_str, file_data))
 }

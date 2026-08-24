@@ -88,11 +88,27 @@ static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
 
 pub struct PythonParser {
     source_code: String,
+    file_path: String,
 }
 
 impl PythonParser {
-    pub fn new(source_code: String) -> Self {
-        Self { source_code }
+    pub fn new(source_code: String, file_path: String) -> Self {
+        Self {
+            source_code,
+            file_path,
+         }
+    }
+
+    fn make_function_id(&self, name: &str, struct_context: &str) -> String {
+        if struct_context.is_empty() {
+            format!("func_{}::{}", name, self.file_path)
+        } else {
+            format!("method_{}_{}::{}", struct_context, name, self.file_path)
+        }
+    }
+
+    fn make_class_id(&self, name: &str) -> String {
+        format!("class_{}::{}", name, self.file_path)
     }
 
     pub fn parse(&self) -> Result<FileData, String> {
@@ -286,11 +302,7 @@ impl PythonParser {
 
         let complexity = self.calculate_complexity(node);
 
-        let id = if class_context.is_empty() {
-            format!("func_{}", name)
-        } else {
-            format!("method_{}_{}", class_context, name)
-        };
+        let id = self.make_function_id(&name, class_context);
 
         let tags = self.auto_tag_function(&name, &docstring, &calls);
 
@@ -916,7 +928,7 @@ impl PythonParser {
         let docstring = self.extract_docstring(node);
 
         Some(Class {
-            id: format!("class_{}", name),
+            id: self.make_class_id(&name),
             name,
             bases,
             docstring,
@@ -1477,8 +1489,12 @@ impl PythonParser {
 pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
-    let parser = PythonParser::new(source_code);
+
+    let clean_path = path.strip_prefix("./").unwrap_or(path);
+    let path_str = clean_path.to_string_lossy().to_string();
+
+    let parser = PythonParser::new(source_code, path_str.clone());
     let file_data = parser.parse()?;
-    let relative_path = path.to_string_lossy().to_string();
-    Ok((relative_path, file_data))
+
+    Ok((path_str, file_data))
 }

@@ -13,7 +13,7 @@ pub struct KnowledgeBaseSimplifiedRef<'a> {
     pub structure: &'a HashMap<String, FileData>,
 }
 
-// kb_index.json(*_indesx.json) structure
+// kb_index.json(*_index.json) structure
 #[derive(Serialize)]
 pub struct IndexDataRef<'a> {
     pub indices: &'a Indices,
@@ -25,7 +25,7 @@ pub struct CallGraphRef<'a> {
     pub nodes: &'a [CallGraphNode],
     pub edges: &'a [CallGraphEdge],
 }
-
+//kb_call_graph.json
 #[derive(Serialize)]
 pub struct EntryPointsRef<'a> {
     pub entry_points: &'a [EntryPoint],
@@ -386,20 +386,52 @@ pub struct LanguageSpecificInfo {
     pub cpp: Option<CppInfo>,
 }
 
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RustInfo {
     pub is_unsafe: bool,
     pub is_pub: bool,
     pub is_pub_crate: bool,
     pub is_const_fn: bool,
-    pub is_async: bool,             // async fn
-    pub is_extern: bool,            // extern "C" fn
-    pub lifetimes: Vec<String>,     // e.g. ["'a", "'b"]
-    pub derives: Vec<String>,       // #[derive(Debug, Clone, ...)]
-    pub is_test: bool,              // #[test]
-    pub is_bench: bool,             // #[bench]
-    pub cfg_attrs: Vec<String>,     // #[cfg(target_os = "linux")] etc.
-    pub unknown_attrs: Vec<String>, // catch-all for unrecognized #[...]
+    pub is_async: bool,               // async fn
+    pub is_extern: bool,              // extern "C" fn / extern fn
+    pub abi: Option<String>,          // e.g. "C" in `extern "C" fn`
+
+    pub lifetimes: Vec<String>,       // e.g. ["'a", "'b"]
+    pub generics: Vec<String>,        // non-lifetime type params, e.g. ["T", "K: Clone"]
+    pub where_clause: Option<String>, // raw text of a `where ...` clause, if present
+    pub is_generic: bool,             // true if lifetimes or generics is non-empty
+
+    pub derives: Vec<String>,         // #[derive(Debug, Clone, ...)]
+    pub is_test: bool,                // #[test]
+    pub is_bench: bool,               // #[bench]
+    pub cfg_attrs: Vec<String>,       // #[cfg(target_os = "linux")] etc.
+    pub unknown_attrs: Vec<String>,   // catch-all for unrecognized #[...] (incl. proc-macro attrs)
+
+    // Trait / impl relationships (populated on functions & methods)
+    /// The trait this method belongs to: `Some("Display")` for a method inside
+    /// `impl Display for Foo`, or for a method declared inside `trait Display { .. }` itself.
+    pub trait_name: Option<String>,
+    /// True when this method lives inside an `impl Trait for Type` block.
+    pub is_trait_impl_method: bool,
+    /// True when this method is declared *inside a trait definition* and has a
+    /// default body (as opposed to a required/abstract method signature).
+    pub is_trait_default_method: bool,
+
+    // Operator overloading, derived from trait_name
+    pub is_operator_overload: bool,
+    pub overloaded_operator: Option<String>, // e.g. "+", "==", "[]"
+
+    // Item classification (populated on struct/enum/union/trait entries)
+    /// "struct" | "tuple_struct" | "unit_struct" | "enum" | "union" | "trait"
+    pub item_kind: Option<String>,
+    pub supertraits: Vec<String>, // `trait Foo: Bar + Baz`
+    pub is_marker_trait: bool,    // trait with no methods (marker/auto-trait-like)
+
+    // Function-body signals
+    pub uses_try_operator: bool,  // `?` propagation present somewhere in the body
+    pub macro_calls: Vec<String>, // vec!, println!, format!, custom_macro!, etc. invoked in body
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -408,13 +440,13 @@ pub struct GoInfo {
     pub receiver_type: Option<String>, // e.g. "*MyStruct" for pointer receivers
     pub receiver_name: Option<String>, // e.g. "s" in `func (s *Server) Serve()`
     pub is_interface_method: bool,
-    pub spawns_goroutines: bool, // contains `go` statements
-    pub uses_channels: bool,     // sends/receives on a chan
-    pub uses_select: bool,       // contains a select statement
-    pub uses_mutex: bool,        // sync.Mutex / sync.RWMutex usage
-    pub uses_waitgroup: bool,    // sync.WaitGroup usage
-    pub uses_atomic: bool,       // sync/atomic usage
-    pub returns_error: bool,     // last return type is `error`
+    pub spawns_goroutines: bool,       // contains `go` statements
+    pub uses_channels: bool,           // sends/receives on a chan
+    pub uses_select: bool,             // contains a select statement
+    pub uses_mutex: bool,              // sync.Mutex / sync.RWMutex usage
+    pub uses_waitgroup: bool,          // sync.WaitGroup usage
+    pub uses_atomic: bool,             // sync/atomic usage
+    pub returns_error: bool,           // last return type is `error`
     pub uses_panic: bool,
     pub uses_recover: bool,
     pub defer_count: usize,            // number of `defer` statements
@@ -425,6 +457,19 @@ pub struct GoInfo {
     pub uses_cgo: bool,                // import "C" present in file
     pub embed_patterns: Vec<String>,   // //go:embed *.html → ["*.html"]
     pub is_variadic: bool,             // last param is `...T`
+    pub type_kind: Option<GoTypeKind>,
+    pub is_pointer_receiver: bool,     // for method entries: with receiver *T ?
+    pub has_embedded_types: bool,      // struct embeds another type
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum GoTypeKind {
+    #[default]
+    Struct,
+    Interface,
+    Function,
+    Method,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -435,16 +480,16 @@ pub struct TypeScriptInfo {
     pub is_abstract: bool,
     pub access_modifier: Option<String>, // "public" | "private" | "protected"
     pub is_readonly: bool,
-    pub is_optional: bool,           // optional method/property (?)
-    pub decorators: Vec<String>,     // @Component, @Injectable etc.
-    pub generic_params: Vec<String>, // e.g. ["T", "K extends string"]
-    pub is_arrow_fn: bool,           // const foo = () => ...
-    pub is_overload: bool,           // TS function overloads
+    pub is_optional: bool,               // optional method/property (?)
+    pub decorators: Vec<String>,         // @Component, @Injectable etc.
+    pub generic_params: Vec<String>,     // e.g. ["T", "K extends string"]
+    pub is_arrow_fn: bool,               // const foo = () => ...
+    pub is_overload: bool,               // TS function overloads
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CInfo {
-    pub is_static: bool, // file-scoped linkage
+    pub is_static: bool,                    // file-scoped linkage
     pub is_inline: bool,
     pub is_extern: bool,
     pub is_variadic: bool,                  // printf-style ...
@@ -456,17 +501,59 @@ pub struct CppInfo {
     pub is_static: bool,
     pub is_inline: bool,
     pub is_virtual: bool,
-    pub is_pure_virtual: bool, // = 0
-    pub is_override: bool,     // override keyword
-    pub is_final: bool,        // final keyword
-    pub is_const_method: bool, // void foo() const
+    pub is_pure_virtual: bool,
+    pub is_override: bool,
+    pub is_final: bool,
+    pub is_const_method: bool,
     pub is_noexcept: bool,
-    pub is_explicit: bool, // explicit constructors
+    pub is_explicit: bool,
     pub is_constexpr: bool,
     pub is_constructor: bool,
     pub is_destructor: bool,
-    pub access_specifier: Option<String>, // "public" | "private" | "protected"
-    pub template_params: Vec<String>,     // e.g. ["typename T", "int N"]
+    pub access_specifier: Option<String>,
+    pub template_params: Vec<String>,
+
+    pub type_kind: CppTypeKind, // for Class entries
+    // Struct/Union specific
+    pub is_pod: bool,           // no user-defined ctor/dtor/virtual → plain-old-data
+    pub is_packed: bool,        // __attribute__((packed)) or #pragma pack
+    pub has_vtable: bool,       // has at least one virtual method
+
+    // Enum specific
+    pub is_scoped_enum: bool,            // enum class / enum struct
+    pub is_flags_enum: bool,             // bit-flag pattern detected
+    pub underlying_type: Option<String>, // enum Foo : uint8_t → "uint8_t"
+
+    // Template / generic
+    pub is_template: bool,
+    pub is_partial_specialization: bool,
+    pub is_explicit_specialization: bool,
+    pub concept_constraints: Vec<String>, // requires clauses / concept names
+
+    // Linkage / storage
+    pub is_extern_c: bool,                // extern "C" linkage
+    pub is_thread_local: bool,            // thread_local storage
+    pub is_consteval: bool,
+    pub is_constinit: bool,
+
+    // Operator overload
+    pub is_operator_overload: bool,
+    pub overloaded_operator: Option<String>, // e.g. "+", "[]", "()"
+
+    // Inheritance (populated for Class entries)
+    pub is_abstract: bool,                // has at least one pure virtual
+    pub inheritance_type: Option<String>, // "public" | "protected" | "private"
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CppTypeKind {
+    #[default]
+    Function,
+    Struct,
+    Union,
+    Enum,
+    Class,
 }
 
 /// Python-specific metadata for a function or class.

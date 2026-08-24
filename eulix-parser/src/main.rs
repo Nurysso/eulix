@@ -67,6 +67,7 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use libc as _;
 mod parser;
 mod struc;
 mod utils;

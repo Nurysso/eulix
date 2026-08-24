@@ -2,11 +2,10 @@
 name = "eulix-parser"
 version = "0.7.4"
 edition = "2021"
-authors = ["dawood Nurysso@proton.me"]
 description = "Fast, secure code parser for multiple languages using tree-sitter"
-license = "GPLV3"
-repository = "https://github.com/Nurysso/eulix"
 readme = "README.md"
+repository = "https://github.com/Nurysso/eulix"
+license = "GPLV3"
 keywords = ["code-analysis", "parser", "static-analysis", "tree-sitter"]
 categories = ["development-tools", "parsing"]
 

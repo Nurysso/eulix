@@ -75,13 +75,54 @@ static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
     ]
 });
 
+/// Traits from std::ops whose impl signals operator overloading.
+/// Maps trait name → the operator symbol it overloads.
+static OPERATOR_TRAIT_MAP: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert("Add", "+");
+    m.insert("Sub", "-");
+    m.insert("Mul", "*");
+    m.insert("Div", "/");
+    m.insert("Rem", "%");
+    m.insert("BitAnd", "&");
+    m.insert("BitOr", "|");
+    m.insert("BitXor", "^");
+    m.insert("Shl", "<<");
+    m.insert("Shr", ">>");
+    m.insert("Neg", "-");
+    m.insert("Not", "!");
+    m.insert("Index", "[]");
+    m.insert("IndexMut", "[]");
+    m.insert("Deref", "*");
+    m.insert("DerefMut", "*");
+    m.insert("PartialEq", "==");
+    m.insert("Eq", "==");
+    m.insert("PartialOrd", "<");
+    m.insert("Ord", "<");
+    m.insert("AddAssign", "+=");
+    m.insert("SubAssign", "-=");
+    m.insert("MulAssign", "*=");
+    m.insert("DivAssign", "/=");
+    m.insert("RemAssign", "%=");
+    m.insert("BitAndAssign", "&=");
+    m.insert("BitOrAssign", "|=");
+    m.insert("BitXorAssign", "^=");
+    m.insert("ShlAssign", "<<=");
+    m.insert("ShrAssign", ">>=");
+    m
+});
+
 pub struct RustParser {
     source_code: String,
+    file_path: String,
 }
 
 impl RustParser {
-    pub fn new(source_code: String) -> Self {
-        Self { source_code }
+    pub fn new(source_code: String, file_path: String) -> Self {
+        Self {
+            source_code,
+            file_path,
+        }
     }
 
     pub fn parse(&self) -> Result<FileData, String> {
@@ -106,6 +147,21 @@ impl RustParser {
             todos: self.extract_todos(),
             security_notes: self.detect_security_patterns(),
         })
+    }
+
+    /// Builds a file-qualified ID for a top-level function or method.
+    /// e.g. func_rewriteHeader::internal/query/context_utils.go
+    ///      method_ContextBuilder_expandFromKBFunction::internal/query/mmr.go
+    fn make_function_id(&self, name: &str, struct_context: &str) -> String {
+        if struct_context.is_empty() {
+            format!("func_{}::{}", name, self.file_path)
+        } else {
+            format!("method_{}_{}::{}", struct_context, name, self.file_path)
+        }
+    }
+
+    fn make_struct_id(&self, name: &str) -> String {
+        format!("struct_{}::{}", name, self.file_path)
     }
 
     fn count_lines(&self) -> usize {
@@ -155,19 +211,34 @@ impl RustParser {
         }
     }
 
-    fn extract_rust_info(&self, node: &Node, is_async: bool) -> RustInfo {
+    /// Extracts all `RustInfo` fields from a function, struct, enum, or trait node.
+    ///
+    /// `is_async`      – caller supplies this since async can appear as a function modifier
+    ///                   parsed one level above (e.g. from `parse_function`).
+    /// `trait_context` – `Some(trait_name)` when the node lives inside a trait/impl block;
+    ///                   `None` for free items.
+    fn extract_rust_info(
+        &self,
+        node: &Node,
+        is_async: bool,
+        trait_context: Option<&TraitContext>,
+    ) -> RustInfo {
         let mut is_pub = false;
         let mut is_pub_crate = false;
         let mut is_unsafe = false;
         let mut is_const_fn = false;
         let mut is_extern = false;
+        let mut abi: Option<String> = None;
         let mut lifetimes = Vec::new();
+        let mut generics: Vec<String> = Vec::new();
+        let mut where_clause: Option<String> = None;
         let mut derives = Vec::new();
         let mut is_test = false;
         let mut is_bench = false;
         let mut cfg_attrs = Vec::new();
         let mut unknown_attrs = Vec::new();
 
+        // Walk direct children for modifiers, visibility, type params, where
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             match child.kind() {
@@ -189,20 +260,27 @@ impl RustParser {
                     }
                     if text.contains("extern") {
                         is_extern = true;
+                        // Try to extract the ABI string, e.g. extern "C"
+                        abi = self.extract_abi(&child);
                     }
                 }
+                // extern "C" fn the ABI string sits directly as a string_literal child
+                // of function_modifiers; handled above via extract_abi.
                 "type_parameters" => {
-                    let mut lc = child.walk();
-                    for lp in child.children(&mut lc) {
-                        if lp.kind() == "lifetime" {
-                            lifetimes.push(self.get_node_text(&lp));
-                        }
-                    }
+                    let (lts, gens) = self.extract_type_params(&child);
+                    lifetimes = lts;
+                    generics = gens;
+                }
+                "where_clause" => {
+                    where_clause = Some(self.get_node_text(&child));
                 }
                 _ => {}
             }
         }
 
+        let is_generic = !lifetimes.is_empty() || !generics.is_empty();
+
+        // Scan preceding attribute_items
         let mut prev = node.prev_sibling();
         while let Some(sib) = prev {
             match sib.kind() {
@@ -243,6 +321,28 @@ impl RustParser {
             }
         }
 
+        // Trait / impl context
+        let (trait_name, is_trait_impl_method, is_trait_default_method) =
+            match trait_context {
+                Some(ctx) => (
+                    Some(ctx.trait_name.clone()),
+                    ctx.is_impl,
+                    // A method inside a trait definition with a body is a default method.
+                    !ctx.is_impl && node.child_by_field_name("body").is_some(),
+                ),
+                None => (None, false, false),
+            };
+
+        // Operator overloading (derived from trait_name)
+        let (is_operator_overload, overloaded_operator) = trait_name
+            .as_deref()
+            .and_then(|t| {
+                // Strip generic args: "Add<Rhs>" → "Add"
+                let bare = t.split('<').next().unwrap_or(t).trim();
+                OPERATOR_TRAIT_MAP.get(bare).map(|op| (true, Some(op.to_string())))
+            })
+            .unwrap_or((false, None));
+
         RustInfo {
             is_unsafe,
             is_pub,
@@ -250,13 +350,66 @@ impl RustParser {
             is_const_fn,
             is_async,
             is_extern,
+            abi,
             lifetimes,
+            generics,
+            where_clause,
+            is_generic,
             derives,
             is_test,
             is_bench,
             cfg_attrs,
             unknown_attrs,
+            trait_name,
+            is_trait_impl_method,
+            is_trait_default_method,
+            is_operator_overload,
+            overloaded_operator,
+            // item_kind, supertraits, is_marker_trait filled by callers
+            item_kind: None,
+            supertraits: vec![],
+            is_marker_trait: false,
+            // body signals filled by callers that have access to the body node
+            uses_try_operator: false,
+            macro_calls: vec![],
         }
+    }
+
+    /// Returns `(lifetimes, generic_type_params)` from a `type_parameters` node.
+    fn extract_type_params(&self, node: &Node) -> (Vec<String>, Vec<String>) {
+        let mut lifetimes = Vec::new();
+        let mut generics = Vec::new();
+        let mut cursor = node.walk();
+
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "lifetime" => lifetimes.push(self.get_node_text(&child)),
+                // type_identifier, constrained_type_parameter, optional_type_parameter …
+                "type_identifier"
+                | "constrained_type_parameter"
+                | "optional_type_parameter"
+                | "const_parameter" => {
+                    generics.push(self.get_node_text(&child));
+                }
+                _ => {}
+            }
+        }
+
+        (lifetimes, generics)
+    }
+
+    /// Extracts the ABI string from a `function_modifiers` node.
+    /// e.g. `extern "C"` → `Some("C".to_string())`
+    fn extract_abi(&self, modifiers_node: &Node) -> Option<String> {
+        let mut cursor = modifiers_node.walk();
+        for child in modifiers_node.children(&mut cursor) {
+            if child.kind() == "string_literal" {
+                let raw = self.get_node_text(&child);
+                // Strip surrounding quotes
+                return Some(raw.trim_matches('"').to_string());
+            }
+        }
+        None
     }
 
     fn extract_functions(&self, root: &Node) -> Vec<Function> {
@@ -264,20 +417,22 @@ impl RustParser {
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {
-            match child.kind() {
-                "function_item" => {
-                    if let Some(func) = self.parse_function(&child, "") {
-                        functions.push(func);
-                    }
+            if child.kind() == "function_item" {
+                if let Some(func) = self.parse_function(&child, "", None) {
+                    functions.push(func);
                 }
-                _ => {}
             }
         }
 
         functions
     }
 
-    fn parse_function(&self, node: &Node, struct_context: &str) -> Option<Function> {
+    fn parse_function(
+        &self,
+        node: &Node,
+        struct_context: &str,
+        trait_context: Option<&TraitContext>,
+    ) -> Option<Function> {
         let name_node = node.child_by_field_name("name")?;
         let name = self.get_node_text(&name_node);
 
@@ -296,26 +451,27 @@ impl RustParser {
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
         let signature = self.build_signature(&name, &params, &return_type, is_async);
+        let id = self.make_function_id(&name, struct_context);
 
-        let id = if struct_context.is_empty() {
-            format!("func_{}", name)
-        } else {
-            format!("method_{}_{}", struct_context, name)
-        };
-
-        let (calls, variables, control_flow, complexity) =
+        let (calls, variables, control_flow, complexity, uses_try_operator, macro_calls) =
             if let Some(body) = node.child_by_field_name("body") {
                 (
                     self.extract_function_calls_detailed(&body),
                     self.extract_variables(&body, &params),
                     self.build_control_flow(&body),
                     self.calculate_complexity(&body),
+                    self.detect_try_operator(&body),
+                    self.extract_macro_calls(&body),
                 )
             } else {
-                (vec![], vec![], ControlFlow::default(), 1)
+                (vec![], vec![], ControlFlow::default(), 1, false, vec![])
             };
 
-        let rust_info = self.extract_rust_info(node, is_async);
+        let mut rust_info = self.extract_rust_info(node, is_async, trait_context);
+        // Populate body signals now that we have them
+        rust_info.uses_try_operator = uses_try_operator;
+        rust_info.macro_calls = macro_calls;
+
         let mut tags = self.auto_tag_function(&name, &docstring, &calls);
         if rust_info.is_test {
             tags.push("test".to_string());
@@ -323,7 +479,12 @@ impl RustParser {
         if rust_info.is_unsafe {
             tags.push("unsafe".to_string());
         }
+        if rust_info.is_operator_overload {
+            tags.push("operator-overload".to_string());
+        }
+
         let importance_score = self.estimate_importance(&name, !struct_context.is_empty());
+
         Some(Function {
             id,
             name,
@@ -438,22 +599,47 @@ impl RustParser {
                         items.push(class);
                     }
                 }
+                "union_item" => {
+                    if let Some(class) = self.parse_union(&child) {
+                        items.push(class);
+                    }
+                }
+                "trait_item" => {
+                    if let Some(class) = self.parse_trait(&child) {
+                        items.push(class);
+                    }
+                }
                 "impl_item" => {
-                    let type_name = child
+                    // Resolve impl context: `impl Trait for Type` vs `impl Type`
+                    let trait_type = child.child_by_field_name("trait");
+                    let self_type = child
                         .child_by_field_name("type")
                         .map(|t| self.get_node_text(&t))
                         .unwrap_or_default();
 
-                    if !type_name.is_empty() {
+                    let (impl_trait_name, key) = match &trait_type {
+                        Some(t) => {
+                            let trait_str = self.get_node_text(t);
+                            // key on the implementing type so methods land on the right Class
+                            (Some(trait_str.clone()), self_type.clone())
+                        }
+                        None => (None, self_type.clone()),
+                    };
+
+                    if !key.is_empty() {
                         if let Some(body) = child.child_by_field_name("body") {
+                            let ctx = impl_trait_name.as_deref().map(|t| TraitContext {
+                                trait_name: t.to_string(),
+                                is_impl: true,
+                            });
+
                             let mut body_cursor = body.walk();
                             for item in body.children(&mut body_cursor) {
                                 if item.kind() == "function_item" {
-                                    if let Some(method) = self.parse_function(&item, &type_name) {
-                                        methods_map
-                                            .entry(type_name.clone())
-                                            .or_default()
-                                            .push(method);
+                                    if let Some(method) =
+                                        self.parse_function(&item, &key, ctx.as_ref())
+                                    {
+                                        methods_map.entry(key.clone()).or_default().push(method);
                                     }
                                 }
                             }
@@ -482,14 +668,22 @@ impl RustParser {
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
 
-        let attributes = node
-            .child_by_field_name("body")
-            .map(|body| self.extract_struct_fields(&body))
-            .unwrap_or_default();
-        let rust_info = self.extract_rust_info(node, false);
+        let (attributes, item_kind) = match node.child_by_field_name("body") {
+            Some(body) if body.kind() == "field_declaration_list" => {
+                (self.extract_struct_fields(&body), "struct")
+            }
+            Some(body) if body.kind() == "ordered_field_declaration_list" => {
+                (self.extract_tuple_fields(&body), "tuple_struct")
+            }
+            // unit struct: no body at all
+            _ => (vec![], "unit_struct"),
+        };
+
+        let mut rust_info = self.extract_rust_info(node, false, None);
+        rust_info.item_kind = Some(item_kind.to_string());
 
         Some(Class {
-            id: format!("struct_{}", name),
+            id: self.make_struct_id(&name),
             name,
             bases: vec![],
             docstring,
@@ -533,9 +727,12 @@ impl RustParser {
                 fields
             })
             .unwrap_or_default();
-        let rust_info = self.extract_rust_info(node, false);
+
+        let mut rust_info = self.extract_rust_info(node, false, None);
+        rust_info.item_kind = Some("enum".to_string());
+
         Some(Class {
-            id: format!("enum_{}", name),
+            id: format!("enum_{}::{}", name, self.file_path),
             name,
             bases: vec![],
             docstring,
@@ -543,6 +740,111 @@ impl RustParser {
             line_end,
             methods: vec![],
             attributes,
+            decorators: vec![],
+            lang_info: LanguageSpecificInfo {
+                rust: Some(rust_info),
+                ..Default::default()
+            },
+        })
+    }
+
+    fn parse_union(&self, node: &Node) -> Option<Class> {
+        let name = node
+            .child_by_field_name("name")
+            .map(|n| self.get_node_text(&n))?;
+
+        let line_start = node.start_position().row + 1;
+        let line_end = node.end_position().row + 1;
+        let docstring = self.extract_docstring(node);
+
+        let attributes = node
+            .child_by_field_name("body")
+            .map(|body| self.extract_struct_fields(&body))
+            .unwrap_or_default();
+
+        let mut rust_info = self.extract_rust_info(node, false, None);
+        rust_info.item_kind = Some("union".to_string());
+        // Unions are always implicitly unsafe to read
+        rust_info.is_unsafe = true;
+
+        Some(Class {
+            id: format!("union_{}::{}", name, self.file_path),
+            name,
+            bases: vec![],
+            docstring,
+            line_start,
+            line_end,
+            methods: vec![],
+            attributes,
+            decorators: vec![],
+            lang_info: LanguageSpecificInfo {
+                rust: Some(rust_info),
+                ..Default::default()
+            },
+        })
+    }
+
+    fn parse_trait(&self, node: &Node) -> Option<Class> {
+        let name = node
+            .child_by_field_name("name")
+            .map(|n| self.get_node_text(&n))?;
+
+        let line_start = node.start_position().row + 1;
+        let line_end = node.end_position().row + 1;
+        let docstring = self.extract_docstring(node);
+
+        // Collect supertraits from the `bounds` field: `trait Foo: Bar + Baz`
+        let supertraits = node
+            .child_by_field_name("bounds")
+            .map(|b| self.extract_supertraits(&b))
+            .unwrap_or_default();
+
+        // Collect methods declared in the trait body
+        let methods = node
+            .child_by_field_name("body")
+            .map(|body| {
+                let ctx = TraitContext {
+                    trait_name: name.clone(),
+                    is_impl: false,
+                };
+                let mut ms = Vec::new();
+                let mut cursor = body.walk();
+                for child in body.children(&mut cursor) {
+                    if child.kind() == "function_item" || child.kind() == "function_signature_item"
+                    {
+                        if let Some(method) = self.parse_function(&child, &name, Some(&ctx)) {
+                            ms.push(method);
+                        }
+                    }
+                }
+                ms
+            })
+            .unwrap_or_default();
+
+        let is_marker_trait = methods.iter().all(|m| {
+            // A required method has no body; a default method does.
+            // A marker trait has no required methods at all.
+            m.lang_info
+                .rust
+                .as_ref()
+                .map(|r| r.is_trait_default_method)
+                .unwrap_or(true)
+        }) && methods.is_empty();
+
+        let mut rust_info = self.extract_rust_info(node, false, None);
+        rust_info.item_kind = Some("trait".to_string());
+        rust_info.supertraits = supertraits.clone();
+        rust_info.is_marker_trait = is_marker_trait;
+
+        Some(Class {
+            id: format!("trait_{}::{}", name, self.file_path),
+            name,
+            bases: supertraits,
+            docstring,
+            line_start,
+            line_end,
+            methods,
+            attributes: vec![],
             decorators: vec![],
             lang_info: LanguageSpecificInfo {
                 rust: Some(rust_info),
@@ -577,6 +879,49 @@ impl RustParser {
         }
 
         fields
+    }
+
+    /// Extracts positional fields from a tuple struct, naming them by index.
+    fn extract_tuple_fields(&self, body: &Node) -> Vec<Attribute> {
+        let mut fields = Vec::new();
+        let mut idx = 0usize;
+        let mut cursor = body.walk();
+
+        for child in body.children(&mut cursor) {
+            if child.kind() == "field_declaration" {
+                let type_annotation = child
+                    .child_by_field_name("type")
+                    .map(|t| self.get_node_text(&t))
+                    .unwrap_or_default();
+                fields.push(Attribute {
+                    name: idx.to_string(),
+                    type_annotation,
+                    value: None,
+                });
+                idx += 1;
+            }
+        }
+
+        fields
+    }
+
+    fn extract_supertraits(&self, bounds_node: &Node) -> Vec<String> {
+        let mut traits = Vec::new();
+        let mut cursor = bounds_node.walk();
+
+        for child in bounds_node.children(&mut cursor) {
+            match child.kind() {
+                // type_identifier, scoped_type_identifier, generic_type …
+                "type_identifier" | "scoped_type_identifier" | "generic_type" => {
+                    traits.push(self.get_node_text(&child));
+                }
+                // lifetime bounds like `'a` are not supertraits
+                "lifetime" => {}
+                _ => {}
+            }
+        }
+
+        traits
     }
 
     fn extract_global_vars(&self, root: &Node) -> Vec<GlobalVar> {
@@ -691,6 +1036,49 @@ impl RustParser {
         }
 
         args
+    }
+
+    /// Returns `true` if the `?` try operator appears anywhere in `node`.
+    fn detect_try_operator(&self, node: &Node) -> bool {
+        if node.kind() == "try_expression" {
+            return true;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if self.detect_try_operator(&child) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Collects unique macro invocation names from `node` (e.g. `vec!`, `println!`).
+    fn extract_macro_calls(&self, node: &Node) -> Vec<String> {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut result: Vec<String> = Vec::new();
+        self.collect_macro_calls(node, &mut seen, &mut result);
+        result
+    }
+
+    fn collect_macro_calls(
+        &self,
+        node: &Node,
+        seen: &mut HashSet<String>,
+        result: &mut Vec<String>,
+    ) {
+        // tree-sitter-rust names macro invocations "macro_invocation"
+        if node.kind() == "macro_invocation" {
+            if let Some(macro_name_node) = node.child_by_field_name("macro") {
+                let name = self.get_node_text(&macro_name_node);
+                if seen.insert(name.clone()) {
+                    result.push(name);
+                }
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_macro_calls(&child, seen, result);
+        }
     }
 
     fn extract_variables(&self, node: &Node, params: &[Parameter]) -> Vec<Variable> {
@@ -1049,13 +1437,30 @@ impl RustParser {
     }
 }
 
+
+// Internal context carrier never surfaces in FileData
+
+/// Carries trait/impl context down into `parse_function` so `RustInfo` fields
+/// like `trait_name`, `is_trait_impl_method`, and `is_trait_default_method`
+/// can be populated without threading extra parameters through every helper.
+struct TraitContext {
+    /// Name of the trait (e.g. `"Display"`, `"Iterator"`).
+    trait_name: String,
+    /// `true`  → we are inside `impl Trait for Type { … }`
+    /// `false` → we are inside `trait Trait { … }` itself
+    is_impl: bool,
+}
+
 /// Entry point called from main.rs
-pub fn parse_file(path: &Path) -> Result<(String, FileData), Box<dyn std::error::Error>> {
-    let source = std::fs::read_to_string(path)?;
-    let parser = RustParser::new(source);
-    let file_data = parser
-        .parse()
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    let name = path.to_string_lossy().to_string();
-    Ok((name, file_data))
+pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
+    let source_code = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
+
+    let clean_path = path.strip_prefix("./").unwrap_or(path);
+    let path_str = clean_path.to_string_lossy().to_string();
+
+    let parser = RustParser::new(source_code, path_str.clone());
+    let file_data = parser.parse()?;
+
+    Ok((path_str, file_data))
 }
