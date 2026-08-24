@@ -11,12 +11,60 @@ use tree_sitter::{Node, Parser};
 
 pub struct GoParser {
     source_code: String,
+    file_path: String,
+    build_tags: Vec<String>,
+    go_directives: Vec<String>,
+    uses_cgo: bool,
+    embed_patterns: Vec<String>,
 }
 
 impl GoParser {
-    pub fn new(source_code: String) -> Self {
-        // let lines: Vec<String> = source_code.lines().map(|s| s.to_string()).collect();
-        Self { source_code }
+    pub fn new(source_code: String, file_path: String) -> Self {
+        let (build_tags, go_directives, uses_cgo, embed_patterns) =
+            Self::pre_scan_file_directives(&source_code);
+        Self {
+            source_code,
+            file_path,
+            build_tags,
+            go_directives,
+            uses_cgo,
+            embed_patterns,
+        }
+    }
+    fn pre_scan_file_directives(src: &str) -> (Vec<String>, Vec<String>, bool, Vec<String>) {
+        let mut build_tags = Vec::new();
+        let mut go_directives = Vec::new();
+        let mut uses_cgo = false;
+        let mut embed_patterns = Vec::new();
+
+        for line in src.lines() {
+            let trimmed = line.trim();
+
+            // //go:build constraints (new style)
+            if let Some(rest) = trimmed.strip_prefix("//go:build ") {
+                build_tags.push(rest.trim().to_string());
+            }
+            // Old-style: // +build
+            else if let Some(rest) = trimmed.strip_prefix("// +build ") {
+                build_tags.push(rest.trim().to_string());
+            }
+            // //go:embed
+            else if let Some(rest) = trimmed.strip_prefix("//go:embed ") {
+                embed_patterns.push(rest.trim().to_string());
+            }
+            // Other //go: directives
+            else if trimmed.starts_with("//go:") {
+                go_directives.push(trimmed.to_string());
+            }
+            // CGo
+            if trimmed == r#"import "C""#
+                || trimmed.contains("\"C\"") && trimmed.starts_with("import")
+            {
+                uses_cgo = true;
+            }
+        }
+
+        (build_tags, go_directives, uses_cgo, embed_patterns)
     }
 
     pub fn parse(&self) -> Result<FileData, String> {
@@ -41,6 +89,32 @@ impl GoParser {
             todos: self.extract_todos(),
             security_notes: self.detect_security_patterns(),
         })
+    }
+
+    /// Builds a file-qualified ID for a top-level function or method.
+    /// e.g. func_rewriteHeader::internal/query/context_utils.go
+    ///      method_ContextBuilder_expandFromKBFunction::internal/query/mmr.go
+    fn make_function_id(&self, name: &str, struct_context: &str) -> String {
+        if struct_context.is_empty() {
+            format!("func_{}::{}", name, self.file_path)
+        } else {
+            format!("method_{}_{}::{}", struct_context, name, self.file_path)
+        }
+    }
+
+    /// e.g. struct_PathGate::internal/query/gate.go
+    fn make_struct_id(&self, name: &str) -> String {
+        format!("struct_{}::{}", name, self.file_path)
+    }
+
+    /// e.g. interface_QueryEmbedder::internal/query/types.go
+    fn make_interface_id(&self, name: &str) -> String {
+        format!("interface_{}::{}", name, self.file_path)
+    }
+
+    /// e.g. ifacemethod_EmbedQueryBinary::internal/query/types.go
+    fn make_ifacemethod_id(&self, name: &str) -> String {
+        format!("ifacemethod_{}::{}", name, self.file_path)
     }
 
     fn count_lines(&self) -> usize {
@@ -182,48 +256,58 @@ impl GoParser {
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {
-            match child.kind() {
-                "function_declaration" => {
-                    // Regular function
-                    // eprintln!("  Found function_declaration");
-                    if let Some(func) = self.parse_function(&child, "") {
-                        functions.push(func);
-                    }
+            if child.kind() == "function_declaration" {
+                if let Some(func) = self.parse_function(&child, "") {
+                    functions.push(func);
                 }
-                "method_declaration" => {
-                    // Method - has receiver
-                    // eprintln!("  Found method_declaration");
-                    let (receiver_type, _receiver_name) = self.parse_receiver(&child);
-                    let struct_context = receiver_type.as_deref().unwrap_or("");
-
-                    if let Some(func) = self.parse_function(&child, struct_context) {
-                        functions.push(func);
-                    }
-                }
-                _ => {}
             }
+            // method_declaration intentionally NOT handled here methods are
+            // parsed once, in extract_structs()'s methods_map, and attached to
+            // their owning struct. Parsing them here too was producing a second
+            // Function with the same ID.
         }
 
-        // eprintln!("Total functions found: {}", functions.len());
         functions
     }
 
+    /// Extracts constraint text from type parameters: [T any, K comparable] → ["any", "comparable"]
+    fn extract_type_constraints(&self, node: &Node) -> Vec<String> {
+        let mut constraints = Vec::new();
+        if let Some(tp_node) = node.child_by_field_name("type_parameters") {
+            let mut cursor = tp_node.walk();
+            for child in tp_node.children(&mut cursor) {
+                if child.kind() == "type_parameter_declaration" {
+                    // constraint is the type field of the parameter decl
+                    if let Some(constraint) = child.child_by_field_name("type") {
+                        constraints.push(self.get_node_text(&constraint).trim().to_string());
+                    }
+                }
+            }
+        }
+        constraints
+    }
+
+    /// Extracts //go: directives that appear in comments immediately above the function.
+    fn extract_func_directives(&self, node: &Node) -> Vec<String> {
+        let mut directives = Vec::new();
+        let mut sib = node.prev_sibling();
+        while let Some(s) = sib {
+            if s.kind() == "comment" {
+                let text = self.get_node_text(&s);
+                if text.trim().starts_with("//go:") {
+                    directives.push(text.trim().to_string());
+                }
+                sib = s.prev_sibling();
+            } else {
+                break;
+            }
+        }
+        directives.reverse();
+        directives
+    }
+
     fn parse_function(&self, node: &Node, struct_context: &str) -> Option<Function> {
-        // eprintln!(
-        //     "    Parsing function with struct_context: '{}'",
-        //     struct_context
-        // );
         let name_node = node.child_by_field_name("name")?;
-        //     Some(n) => {
-        //         let name = self.get_node_text(&n);
-        //         eprintln!("    Function name: {}", name);
-        //         n
-        //     }
-        //     None => {
-        //         eprintln!("    NO NAME NODE FOUND");
-        //         return None;
-        //     }
-        // };
         let name = self.get_node_text(&name_node);
 
         // Check if it's a method (has receiver)
@@ -249,11 +333,7 @@ impl GoParser {
             None => {
                 // Interface methods don't have bodies
                 // Return a minimal Function struct
-                let id = if struct_context.is_empty() {
-                    format!("func_{}", name)
-                } else {
-                    format!("method_{}_{}", struct_context, name)
-                };
+                let id = self.make_function_id(&name, struct_context);
 
                 return Some(Function {
                     id,
@@ -284,19 +364,30 @@ impl GoParser {
         let exceptions = self.extract_exception_info(&body);
         let complexity = self.calculate_complexity(&body);
 
-        let id = if struct_context.is_empty() {
-            format!("func_{}", name)
-        } else {
-            format!("method_{}_{}", struct_context, name)
-        };
+        let id = self.make_function_id(&name, struct_context);
 
         let tags = self.auto_tag_function(&name, &docstring, &calls);
         let importance_score = self.estimate_importance(&name, receiver.is_some());
 
         let (recv_type, recv_name) = self.parse_receiver(node);
+        let is_pointer_receiver = node
+            .child_by_field_name("receiver")
+            .map(|r| self.get_node_text(&r).contains('*'))
+            .unwrap_or(false);
+
+        let type_params = self.extract_type_params(node);
+        let type_constraints = self.extract_type_constraints(node);
+
         let go_info = GoInfo {
             is_exported: name.chars().next().map_or(false, |c| c.is_uppercase()),
-            receiver_type: recv_type,
+            receiver_type: recv_type.map(|t| {
+                // Preserve pointer indicator for caller
+                if is_pointer_receiver {
+                    format!("*{}", t)
+                } else {
+                    t
+                }
+            }),
             receiver_name: recv_name,
             is_interface_method: false,
             spawns_goroutines: self.body_contains_kind(&body, "go_statement"),
@@ -311,15 +402,19 @@ impl GoParser {
             uses_panic: calls.iter().any(|c| c.callee == "panic"),
             uses_recover: calls.iter().any(|c| c.callee == "recover"),
             defer_count: self.count_kind_in_body(&body, "defer_statement"),
-            type_params: self.extract_type_params(node),
-            type_constraints: vec![],
-            build_tags: vec![],
-            go_directives: vec![],
-            uses_cgo: false,
-            embed_patterns: vec![],
+            type_params,
+            type_constraints,
+            build_tags: self.build_tags.clone(),
+            go_directives: self.extract_func_directives(node),
+            uses_cgo: self.uses_cgo,
+            embed_patterns: self.embed_patterns.clone(),
             is_variadic: params
                 .last()
                 .map_or(false, |p| p.type_annotation.starts_with("...")),
+            // Add the missing fields:
+            has_embedded_types: false,
+            is_pointer_receiver,
+            type_kind: None,
         };
 
         // eprintln!(
@@ -992,9 +1087,13 @@ impl GoParser {
             vec![]
         };
 
+        let has_embedded = attributes
+            .iter()
+            .any(|a| a.name.is_empty() || a.name == "_");
+
         Some(Class {
-            id: format!("struct_{}", name),
-            name,
+            id: self.make_struct_id(&name),
+            name: name.clone(),
             bases: vec![],
             docstring,
             line_start,
@@ -1002,7 +1101,17 @@ impl GoParser {
             methods: vec![],
             attributes,
             decorators: vec![],
-            lang_info: LanguageSpecificInfo::default(),
+            lang_info: LanguageSpecificInfo {
+                go: Some(GoInfo {
+                    is_exported: name.chars().next().map_or(false, |c| c.is_uppercase()),
+                    type_kind: Some(GoTypeKind::Struct),
+                    has_embedded_types: has_embedded,
+                    build_tags: self.build_tags.clone(),
+                    uses_cgo: self.uses_cgo,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
         })
     }
 
@@ -1014,15 +1123,29 @@ impl GoParser {
             for child in body.children(&mut cursor) {
                 if child.kind() == "field_declaration" {
                     if let Some(name_node) = child.child_by_field_name("name") {
+                        // Normal named field
                         let name = self.get_node_text(&name_node);
                         let type_annotation = child
                             .child_by_field_name("type")
                             .map(|t| self.get_node_text(&t))
                             .unwrap_or_default();
-
+                        let tag = child
+                            .child_by_field_name("tag")
+                            .map(|t| self.get_node_text(&t));
                         fields.push(Attribute {
                             name,
                             type_annotation,
+                            value: tag,
+                        });
+                    } else if let Some(type_node) = child.child_by_field_name("type") {
+                        // Embedded type: struct { io.Reader } — no name node
+                        let type_text = self
+                            .get_node_text(&type_node)
+                            .trim_start_matches('*')
+                            .to_string();
+                        fields.push(Attribute {
+                            name: String::new(), // signals embedded to has_embedded check
+                            type_annotation: type_text,
                             value: None,
                         });
                     }
@@ -1111,8 +1234,8 @@ impl GoParser {
         };
 
         Some(Class {
-            id: format!("interface_{}", name),
-            name,
+            id: self.make_interface_id(&name),
+            name: name.clone(),
             bases: vec![],
             docstring,
             line_start,
@@ -1120,7 +1243,16 @@ impl GoParser {
             methods,
             attributes: vec![],
             decorators: vec!["interface".to_string()], // reuse decorators to signal kind
-            lang_info: LanguageSpecificInfo::default(),
+            lang_info: LanguageSpecificInfo {
+                go: Some(GoInfo {
+                    is_exported: name.chars().next().map_or(false, |c| c.is_uppercase()),
+                    type_kind: Some(GoTypeKind::Interface),
+                    build_tags: self.build_tags.clone(),
+                    uses_cgo: self.uses_cgo,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
         })
     }
 
@@ -1139,11 +1271,11 @@ impl GoParser {
                         let line_start = child.start_position().row + 1;
 
                         methods.push(Function {
-                            id: format!("ifacemethod_{}", name),
+                            id: self.make_ifacemethod_id(&name),
                             name: name.clone(),
                             signature,
-                            params,
-                            return_type,
+                            params: params.clone(),
+                            return_type: return_type.clone(),
                             docstring: String::new(),
                             line_start,
                             line_end: line_start,
@@ -1164,6 +1296,12 @@ impl GoParser {
                                         .next()
                                         .map_or(false, |c| c.is_uppercase()),
                                     is_interface_method: true,
+                                    returns_error: return_type.contains("error"),
+                                    is_variadic: params
+                                        .last()
+                                        .map_or(false, |p| p.type_annotation.starts_with("...")),
+                                    build_tags: self.build_tags.clone(),
+                                    uses_cgo: self.uses_cgo,
                                     ..Default::default()
                                 }),
                                 ..Default::default()
@@ -1536,10 +1674,12 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
 
-    let parser = GoParser::new(source_code);
+    // Strips leading "./" or ".\" if present, otherwise leaves path as is
+    let clean_path = path.strip_prefix("./").unwrap_or(path);
+    let path_str = clean_path.to_string_lossy().to_string();
+
+    let parser = GoParser::new(source_code, path_str.clone());
     let file_data = parser.parse()?;
 
-    let relative_path = path.to_string_lossy().to_string();
-
-    Ok((relative_path, file_data))
+    Ok((path_str, file_data))
 }
