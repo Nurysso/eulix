@@ -34,10 +34,11 @@ def require_ml_onnx():
     """
     import numpy as np
     import onnxruntime as ort
-    import tokenizers as tklib
+    import tokenizers as tklib  # type: ignore[import-untyped, unused-ignore]
     from tqdm import tqdm
 
     return np, ort, tklib, tqdm
+
 
 def require_numpy():
     """Lightweight path: only numpy (used by save_*/load_* bin helpers)."""

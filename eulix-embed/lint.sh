@@ -84,9 +84,10 @@ echo ""
 print_header "📐  Formatting"
 
 if command_exists black; then
-    run_linter "black" "black --check --diff \
+    run_linter "black" "black \
         --line-length=${MAX_LINE_LENGTH} \
         --target-version=py${PYTHON_VERSION//./} \
+        --exclude='(\.venv|venv)' \
         ${DIRS}"
 else
     skip_linter "black" "pip install black"
@@ -97,6 +98,7 @@ if command_exists isort; then
     run_linter "isort" "isort --check-only --diff \
         --profile black \
         --line-length=${MAX_LINE_LENGTH} \
+        --skip .venv --skip venv \
         --color \
         ${DIRS}"
 else
@@ -110,6 +112,7 @@ if command_exists flake8; then
     run_linter "flake8" "flake8 ${DIRS} \
         --max-line-length=${MAX_LINE_LENGTH} \
         --max-complexity=15 \
+        --exclude=.venv,venv \
         --select=E,W,F,C90 \
         --extend-ignore=W503,E203,E266,E402,E721,E741,C901 \
         --count \
@@ -124,8 +127,9 @@ if command_exists radon; then
     run_linter "radon" "radon cc ${DIRS} \
         --total-average \
         --show-complexity \
+        --ignore .venv,venv \
         --min=C \
-        && radon mi ${DIRS} --min=B"
+        && radon mi ${DIRS} --ignore .venv,venv --min=B"
 else
     skip_linter "radon" "pip install radon"
 fi
@@ -136,6 +140,7 @@ print_header "📝  Type Checking"
 if command_exists mypy; then
     run_linter "mypy" "mypy ${DIRS} \
         --python-version=${PYTHON_VERSION} \
+        --exclude '(\.venv|venv)' \
         --warn-return-any \
         --warn-unused-configs \
         --warn-redundant-casts \
@@ -158,7 +163,7 @@ if command_exists bandit; then
         --format=screen \
         --severity-level=low \
         --confidence-level=medium \
-        --exclude='**/*test*.py,**/*_test.py,**/test_*.py' \
+        --exclude='.venv,venv,**/*test*.py,**/*_test.py,**/test_*.py' \
         --skip=B104,B204"
 else
     skip_linter "bandit" "pip install bandit"
@@ -172,7 +177,7 @@ if command_exists codespell; then
     [ -f ".codespell-ignore" ] && CODESPELL_IGNORE_FILE="--ignore-words=.codespell-ignore"
 
     run_linter "codespell" "codespell ${DIRS} \
-        --skip='*.pyc,*.pyo,*.pyd,__pycache__,*.so,*.o,*.a,*.egg-info,*.dist-info,.git,lint.sh' \
+        --skip='*.pyc,*.pyo,*.pyd,__pycache__,*.so,*.o,*.a,*.egg-info,*.dist-info,.git,lint.sh,.venv,venv,bin*' \
         ${CODESPELL_IGNORE_FILE} \
         --quiet-level=2 \
         --check-filenames \

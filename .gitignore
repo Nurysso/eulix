@@ -2,6 +2,7 @@ example_project/
 examples/
 scripts/
 *.idea/
+.venv/
 .mypy_cache/
 test_project/
 .ruff_cache/

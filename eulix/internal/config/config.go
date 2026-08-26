@@ -11,7 +11,7 @@ when init is ran
 package config
 
 import (
-	"fmt"
+	"cmp"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +46,6 @@ type ParserConfig struct {
 type EmbeddingsConfig struct {
 	Model     string `toml:"model"`
 	Dimension int    `toml:"dimension"`
-	// VenvPath  string `toml:"venvPath"`
 }
 
 type LLMConfig struct {
@@ -62,29 +61,18 @@ type LLMConfig struct {
 
 // --- General RAG / Graph Tuning (Additions will be made here A MASSIVE TODO) ---
 type RetrievalConfig struct {
-	ApplyCrossRootIsolation bool    `json:"apply_cross_root_isolation"` // Toggles whether we care about crossing project boundaries at all.
-	CrossRootPenalty        float32 `json:"cross_root_penalty"`         // Multiplier applied to candidates outside the primary root (e.g., 0.3 = soft penalty, 0.01 = strict).
-	PreMMRScoreFloorRatio   float32 `json:"pre_mmr_score_floor_ratio"`  // Minimum relative score required to survive pre-MMR pruning (e.g., 0.05 = drops candidates < 5% of max score).
-	TopKCandidates          int     `json:"top_k_candidates"`           // How many raw vector hits to pull before applying graph expansion and MMR pruning.
-	MMRDiversityFactor      float32 `json:"mmr_diversity_factor"`       // Balances MMR relevance vs. diversity (0.0 = max diversity, 1.0 = max relevance).
-	MaxGraphExpansionDepth  int     `json:"max_graph_expansion_depth"`  // How many hops to traverse in your Rust call-graph (1 = direct deps, 2 = transitive deps).
+	CodeToAstRatio          float64 `toml:"code_to_ast_ratio"`
+	ApplyCrossRootIsolation bool    `toml:"apply_cross_root_isolation"` // Toggles whether we care about crossing project boundaries at all.
+	CrossRootPenalty        float32 `toml:"cross_root_penalty"`         // Multiplier applied to candidates outside the primary root (e.g., 0.3 = soft penalty, 0.01 = strict).
+	PreMMRScoreFloorRatio   float32 `toml:"pre_mmr_score_floor_ratio"`  // Minimum relative score required to survive pre-MMR pruning (e.g., 0.05 = drops candidates < 5% of max score).
+	TopKCandidates          int     `toml:"top_k_candidates"`           // How many raw vector hits to pull before applying graph expansion and MMR pruning.
+	MMRDiversityFactor      float32 `toml:"mmr_diversity_factor"`       // Balances MMR relevance vs. diversity (0.0 = max diversity, 1.0 = max relevance).
+	MaxGraphExpansionDepth  int     `toml:"max_graph_expansion_depth"`  // How many hops to traverse in your Rust call-graph (1 = direct deps, 2 = transitive deps).
 }
 
 type CacheConfig struct {
 	Enable bool   `toml:"enable"`
 	Path   string `toml:"path"`
-}
-
-type RedisConfig struct {
-	Enabled  bool   `toml:"enabled"`
-	URL      string `toml:"url"`
-	TTLHours int    `toml:"ttl_hours"`
-}
-
-type SQLConfig struct {
-	Enabled bool   `toml:"enabled"`
-	Driver  string `toml:"driver"`
-	DSN     string `toml:"dsn"`
 }
 
 type ChecksumConfig struct {
@@ -104,8 +92,6 @@ var providerEnvVar = map[string]string{
 	"fireworks":  "FIREWORKS_API_KEY",
 }
 
-// resolveAPIKeyFromEnv checks the provider-specific var first, then falls
-// back to a generic LLM_API_KEY so custom/self-hosted setups still work.
 func resolveAPIKeyFromEnv(provider string) string {
 	p := strings.ToLower(strings.TrimSpace(provider))
 	if envVar, ok := providerEnvVar[p]; ok {
@@ -116,16 +102,82 @@ func resolveAPIKeyFromEnv(provider string) string {
 	return os.Getenv("LLM_API_KEY")
 }
 
+// clamp restricts v to the inclusive range [min, max].
+func clamp[T cmp.Ordered](v, min, max T) T {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
+// max returns the larger of a or b.
+func max[T cmp.Ordered](a, b T) T {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// validateAndClampConfig ensures all configuration settings fall within valid boundaries.
+// Modifies and returns cfg in place, returning nil if cfg is nil.
+func validateAndClampConfig(cfg *Config) *Config {
+	if cfg == nil {
+		return nil
+	}
+
+	// Retrieval Configuration
+	rc := &cfg.RetrievalConfig
+	rc.CodeToAstRatio = clamp(rc.CodeToAstRatio, 0.0, 1.0)
+	rc.CrossRootPenalty = clamp(rc.CrossRootPenalty, 0.0, 1.0)
+	rc.PreMMRScoreFloorRatio = clamp(rc.PreMMRScoreFloorRatio, 0.0, 1.0)
+	rc.MMRDiversityFactor = clamp(rc.MMRDiversityFactor, 0.0, 1.0)
+	rc.TopKCandidates = max(rc.TopKCandidates, 1)
+	rc.MaxGraphExpansionDepth = max(rc.MaxGraphExpansionDepth, 0)
+
+	// Checksum Configuration
+	cs := &cfg.Checksum
+	cs.ChangeThreshold = clamp(cs.ChangeThreshold, 0.0, 1.0)
+	cs.ForceReanalyzeThreshold = clamp(cs.ForceReanalyzeThreshold, 0.0, 1.0)
+	// Guarantee ForceReanalyzeThreshold >= ChangeThreshold
+	cs.ForceReanalyzeThreshold = max(cs.ForceReanalyzeThreshold, cs.ChangeThreshold)
+
+	// Project Configuration
+	cfg.Project.MaxLines = max(cfg.Project.MaxLines, 1)
+	switch strings.ToLower(cfg.Project.EmbedIs) {
+	case "binary", "script":
+		// valid
+	default:
+		cfg.Project.EmbedIs = "binary"
+	}
+	// Parser & Embeddings Configuration
+	cfg.Parser.Threads = max(cfg.Parser.Threads, 1)
+	cfg.Embeddings.Dimension = max(cfg.Embeddings.Dimension, 1)
+
+	// LLM Configuration
+	cfg.LLM.MaxTokens = max(cfg.LLM.MaxTokens, 1)
+	cfg.LLM.Temperature = clamp(cfg.LLM.Temperature, 0.0, 2.0)
+
+	return cfg
+}
+
+// Load loads and validates the configuration
 func Load() (*Config, error) {
 	// Load .env into process env if present. Missing file is fine not an error.
 	_ = godotenv.Load()
-
 	var cfg Config
 
+	// Try to load from file, fallback to defaults
 	if _, err := toml.DecodeFile("eulix.toml", &cfg); err != nil {
 		cfg = *DefaultConfig()
 	}
 
+	// Validate and clamp configuration values
+	cfg = *validateAndClampConfig(&cfg)
+
+	// Resolve project path
 	if cfg.Project.Path != "" {
 		absPath, err := filepath.Abs(cfg.Project.Path)
 		if err != nil {
@@ -134,7 +186,7 @@ func Load() (*Config, error) {
 		cfg.Project.Path = absPath
 	}
 
-	// toml api_key wins if set; otherwise pull from env, keyed by provider.
+	// Resolve API key if not set
 	if cfg.LLM.APIKey == "" {
 		cfg.LLM.APIKey = resolveAPIKeyFromEnv(cfg.LLM.Provider)
 	}
@@ -147,7 +199,6 @@ func DefaultConfig() *Config {
 	if err != nil {
 		cwd = "."
 	}
-
 	return &Config{
 		Project: ProjectConfig{
 			Path:        cwd,
@@ -163,7 +214,6 @@ func DefaultConfig() *Config {
 		Embeddings: EmbeddingsConfig{
 			Model:     "BAAI/bge-base-en-v1.5",
 			Dimension: 768,
-			// VenvPath:  PathVenv,
 		},
 		LLM: LLMConfig{
 			Local:       true,
@@ -175,6 +225,7 @@ func DefaultConfig() *Config {
 			Endpoint:    "",
 		},
 		RetrievalConfig: RetrievalConfig{
+			CodeToAstRatio:          0.85,
 			ApplyCrossRootIsolation: true,
 			CrossRootPenalty:        0.32,
 			PreMMRScoreFloorRatio:   0.05,
@@ -190,22 +241,5 @@ func DefaultConfig() *Config {
 			ChangeThreshold:         0.10,
 			ForceReanalyzeThreshold: 0.30,
 		},
-	}
-}
-
-func TestSourcePaths() {
-	eulixDir := "/path/to/.eulix"
-	sourceRoot := filepath.Dir(eulixDir)
-	testFile := "testproject/django/shortcuts.py"
-	fullPath := filepath.Join(sourceRoot, testFile)
-
-	fmt.Printf("Eulix dir: %s\n", eulixDir)
-	fmt.Printf("Source root: %s\n", sourceRoot)
-	fmt.Printf("Test file: %s\n", fullPath)
-
-	if _, err := os.Stat(fullPath); err == nil {
-		fmt.Println("✓ Source file exists")
-	} else {
-		fmt.Println("✗ Source file not found")
 	}
 }
