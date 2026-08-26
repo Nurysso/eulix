@@ -18,10 +18,10 @@ try:
 
     # orjson returns bytes, so wrapper functions handle decoding to str
     def _orjson_dumps_no_indent(obj: Any) -> str:
-        return _orjson.dumps(obj).decode()
+        return _orjson.dumps(obj).decode()  # type: ignore[no-any-return]
 
     def _orjson_dumps_indent(obj: Any) -> str:
-        return _orjson.dumps(obj, option=_orjson.OPT_INDENT_2).decode()
+        return _orjson.dumps(obj, option=_orjson.OPT_INDENT_2).decode()  # type: ignore[no-any-return]
 
     json_dumps_no_indent: Callable[[Any], str] = _orjson_dumps_no_indent
     json_dumps_indent: Callable[[Any], str] = _orjson_dumps_indent

@@ -13,12 +13,15 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from utils.buckets import snap_to_bucket
 from utils.constants import BUCKETS_JINA, BUCKETS_STANDARD
 from utils.req import require_ml_onnx, require_numpy
 from utils.types import Chunk
+
+if TYPE_CHECKING:
+    import tokenizers  # type: ignore[import-untyped, unused-ignore]
 
 # ONNX RUNTIME EMBEDDER
 # No PyTorch anywhere in this section — model inference runs entirely
@@ -34,9 +37,23 @@ from utils.types import Chunk
 _PROVIDER_ALIASES: dict[str, list[str]] = {
     "cpu": ["CPUExecutionProvider"],
     "cuda": ["CUDAExecutionProvider", "CPUExecutionProvider"],
-    "gpu": ["CUDAExecutionProvider", "CPUExecutionProvider"],
-    "rocm": ["ROCMExecutionProvider", "CPUExecutionProvider"],
-    "hip": ["ROCMExecutionProvider", "CPUExecutionProvider"],
+    "gpu": [
+        "CUDAExecutionProvider",
+        "ROCMExecutionProvider",
+        "MIGraphXExecutionProvider",
+        "CPUExecutionProvider",
+    ],
+    "rocm": [
+        "ROCMExecutionProvider",
+        "MIGraphXExecutionProvider",
+        "CPUExecutionProvider",
+    ],
+    "hip": [
+        "ROCMExecutionProvider",
+        "MIGraphXExecutionProvider",
+        "CPUExecutionProvider",
+    ],
+    "migraphx": ["MIGraphXExecutionProvider", "CPUExecutionProvider"],
 }
 
 # Where locally-exported ONNX models get cached (used only when a model
@@ -61,39 +78,66 @@ def _resolve_providers(ort: Any, device: str | None) -> tuple[list[str], str]:
     for batch-size / bucketing heuristics.
 
     When `device` is None, auto-detects the best provider actually present
-    in `ort.get_available_providers()` — CUDA, then ROCm, then CPU.
+    in `ort.get_available_providers()` — CUDA, then ROCm/MIGraphX, then CPU.
     """
     available = set(ort.get_available_providers())
 
     if device is not None:
         key = device.lower()
         if key not in _PROVIDER_ALIASES:
-            raise ValueError(f"Unknown device '{device}'. Expected one of: cpu, cuda, rocm")
-        wanted = _PROVIDER_ALIASES[key][0]
-        if wanted not in available and wanted != "CPUExecutionProvider":
+            raise ValueError(f"Unknown device '{device}'. Expected one of: {', '.join(_PROVIDER_ALIASES.keys())}")
+
+        # Find the first requested provider that is actually available on the system
+        wanted_providers = [p for p in _PROVIDER_ALIASES[key] if p in available]
+
+        if not wanted_providers or (
+            len(wanted_providers) == 1 and wanted_providers[0] == "CPUExecutionProvider" and key != "cpu"
+        ):
             print(
-                f"  ⚠ Requested provider '{wanted}' is not available in this "
+                f"  ⚠ Requested provider for '{device}' is not available in this "
                 f"onnxruntime build (available: {sorted(available)}); "
                 f"falling back to CPUExecutionProvider.",
                 file=sys.stderr,
             )
             return ["CPUExecutionProvider"], "cpu"
-        label = {"CUDAExecutionProvider": "cuda", "ROCMExecutionProvider": "rocm"}.get(wanted, "cpu")
-        if label != "cpu":
-            print(f"  ✓ Using {wanted}", file=sys.stderr)
-        return _PROVIDER_ALIASES[key], label
 
+        active_provider = wanted_providers[0]
+        label = {
+            "CUDAExecutionProvider": "cuda",
+            "ROCMExecutionProvider": "rocm",
+            "MIGraphXExecutionProvider": "rocm",
+        }.get(active_provider, "cpu")
+
+        if label != "cpu":
+            print(f"  ✓ Using {active_provider}", file=sys.stderr)
+
+        # Ensure CPU fallback is always attached at the end of the provider list
+        if "CPUExecutionProvider" not in wanted_providers:
+            wanted_providers.append("CPUExecutionProvider")
+
+        return wanted_providers, label
+
+    # --- Auto-detection Order ---
     if "CUDAExecutionProvider" in available:
         print("  ✓ NVIDIA GPU detected — using CUDAExecutionProvider", file=sys.stderr)
         return ["CUDAExecutionProvider", "CPUExecutionProvider"], "cuda"
+
     if "ROCMExecutionProvider" in available:
         print(
             "  ✓ AMD GPU detected — using ROCMExecutionProvider (ROCm/HIP)",
             file=sys.stderr,
         )
         return ["ROCMExecutionProvider", "CPUExecutionProvider"], "rocm"
+
+    if "MIGraphXExecutionProvider" in available:
+        print(
+            "  ✓ AMD GPU detected — using MIGraphXExecutionProvider (ROCm)",
+            file=sys.stderr,
+        )
+        return ["MIGraphXExecutionProvider", "CPUExecutionProvider"], "rocm"
+
     print(
-        "  ℹ No GPU execution provider available — using CPUExecutionProvider",
+        "ℹ No GPU execution provider available — using CPUExecutionProvider",
         file=sys.stderr,
     )
     return ["CPUExecutionProvider"], "cpu"
@@ -292,10 +336,8 @@ class EmbeddingGeneratorOnnx:
                 tokenizer_json_path = hf_hub_download(
                     repo_id=model_name,
                     filename="tokenizer.json",
-                )
-                self.tokenizer: tklib.Tokenizer = tklib.Tokenizer.from_file(
-                    tokenizer_json_path
-                )
+                )  # nosec B615
+                self.tokenizer: "tokenizers.Tokenizer" = tklib.Tokenizer.from_file(tokenizer_json_path)
                 # Match transformers' default padding/truncation behaviour:
                 #   - pad to the longest sequence in the batch (overridden per
                 #     call when fixed_len is set for bucketed inference)
@@ -304,7 +346,7 @@ class EmbeddingGeneratorOnnx:
                     direction="right",
                     pad_id=self.tokenizer.token_to_id("[PAD]") or 0,
                     pad_token="[PAD]",
-                )
+                )  # nosec B106
                 self.tokenizer.enable_truncation(max_length=512)
             except Exception as e:  # noqa: BLE001
                 raise RuntimeError(
@@ -353,9 +395,7 @@ class EmbeddingGeneratorOnnx:
                 )
 
             try:
-                onnx_path = _resolve_onnx_model(
-                    model_name, trust_remote_code=trust_remote_code
-                )
+                onnx_path = _resolve_onnx_model(model_name, trust_remote_code=trust_remote_code)
                 self.session = _load_session(onnx_path)
             except (OSError, RuntimeError, ValueError) as e:
                 raise RuntimeError(
@@ -465,9 +505,7 @@ class EmbeddingGeneratorOnnx:
         norm = np.linalg.norm(vec, axis=axis, keepdims=True)
         return vec / np.clip(norm, eps, None)
 
-    def _encode_batch(
-        self, texts: list[str], fixed_len: int | None = None
-    ) -> dict[str, Any]:
+    def _encode_batch(self, texts: list[str], fixed_len: int | None = None) -> dict[str, Any]:
         """
         Tokenize a list of texts with the `tokenizers` Rust library and
         return a dict of numpy arrays keyed by the standard HF input names
@@ -486,7 +524,7 @@ class EmbeddingGeneratorOnnx:
                 pad_id=self.tokenizer.token_to_id("[PAD]") or 0,
                 pad_token="[PAD]",
                 length=fixed_len,
-            )
+            )  # nosec B106
             self.tokenizer.enable_truncation(max_length=fixed_len)
         else:
             # Restore batch-longest padding (no fixed length).
@@ -494,17 +532,13 @@ class EmbeddingGeneratorOnnx:
                 direction="right",
                 pad_id=self.tokenizer.token_to_id("[PAD]") or 0,
                 pad_token="[PAD]",
-            )
+            )  # nosec B106
             self.tokenizer.enable_truncation(max_length=512)
 
         encodings = self.tokenizer.encode_batch(texts)
 
-        input_ids = np.array(
-            [enc.ids for enc in encodings], dtype=np.int64
-        )
-        attention_mask = np.array(
-            [enc.attention_mask for enc in encodings], dtype=np.int64
-        )
+        input_ids = np.array([enc.ids for enc in encodings], dtype=np.int64)
+        attention_mask = np.array([enc.attention_mask for enc in encodings], dtype=np.int64)
 
         result: dict[str, Any] = {
             "input_ids": input_ids,
@@ -515,9 +549,7 @@ class EmbeddingGeneratorOnnx:
         # transformers exports may omit them from the ONNX graph entirely.
         # Only include them when the graph actually declares that input.
         if "token_type_ids" in self._input_names:
-            result["token_type_ids"] = np.array(
-                [enc.type_ids for enc in encodings], dtype=np.int64
-            )
+            result["token_type_ids"] = np.array([enc.type_ids for enc in encodings], dtype=np.int64)
 
         return result
 
@@ -566,18 +598,13 @@ class EmbeddingGeneratorOnnx:
         """
         tqdm = self._tqdm
         total = len(chunks)
-        print(
-            f" Processing {total} chunks "
-            f"(batch={self.batch_size}, bucketing={self.use_bucketing})..."
-        )
+        print(f" Processing {total} chunks " f"(batch={self.batch_size}, bucketing={self.use_bucketing})...")
         t0 = time.time()
 
         is_jina = "jina" in self.model_name.lower()
         buckets = BUCKETS_JINA if is_jina else BUCKETS_STANDARD
 
-        indexed: list[tuple[int, int, Chunk]] = [
-            (i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)
-        ]
+        indexed: list[tuple[int, int, Chunk]] = [(i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)]
 
         results: list[tuple[int, Any]] = []
 
@@ -597,9 +624,7 @@ class EmbeddingGeneratorOnnx:
 
             print(f"     Shape buckets active: {len(bucket_map)}")
             for blen in sorted(bucket_map):
-                print(
-                    f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks"
-                )
+                print(f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks")
 
             for blen in sorted(bucket_map):
                 items = bucket_map[blen]
@@ -639,9 +664,7 @@ class EmbeddingGeneratorOnnx:
             store[chunk.id] = emb
 
         if duplicates:
-            print(
-                f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:"
-            )
+            print(f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:")
             for did in duplicates[:10]:
                 print(f"         {did}")
             if len(duplicates) > 10:
