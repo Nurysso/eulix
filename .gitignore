@@ -2,6 +2,8 @@ example_project/
 examples/
 scripts/
 *.idea/
+.venv/
+.mypy_cache/
 test_project/
 .ruff_cache/
 __pycache__/
@@ -12,7 +14,6 @@ build/
 **/target/
 *-bug.*
 .eulix/
-eulix
 eulix.toml
 callgraph-viz/
 context_debug_*.txt
@@ -21,3 +22,8 @@ deb*
 diff*
 profile_*
 .env
+eulix/internal/assets/bins/eulix-embed.zip
+eulix/internal/assets/bins/eulix_embed
+eulix/internal/assets/bins/eulix_parser_darwin
+eulix/internal/assets/bins/eulix_parser_linux
+eulix/internal/assets/bins/eulix_parser_windows.exe

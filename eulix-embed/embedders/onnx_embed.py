@@ -6,23 +6,22 @@
 # embedder module is responsible for running onnx based embedder to embed json files
 
 from __future__ import annotations
+
 import os
-import time
+import re
 import sys
 import time
 from collections import defaultdict
-from typing import Any, Dict, Generator, List, Optional, Set, Tuple, TYPE_CHECKING
 from pathlib import Path
-import re
+from typing import TYPE_CHECKING, Any
 
-from core.types import Chunk, ChunkType, ChunkMetadata
 from utils.buckets import snap_to_bucket
-from core.constants import BUCKETS_JINA, BUCKETS_STANDARD
+from utils.constants import BUCKETS_JINA, BUCKETS_STANDARD
 from utils.req import require_ml_onnx, require_numpy
+from utils.types import Chunk
 
 if TYPE_CHECKING:
-    import numpy as np
-    import torch
+    import tokenizers  # type: ignore[import-untyped, unused-ignore]
 
 # ONNX RUNTIME EMBEDDER
 # No PyTorch anywhere in this section — model inference runs entirely
@@ -35,79 +34,118 @@ if TYPE_CHECKING:
 # (only one of onnxruntime / onnxruntime-gpu / onnxruntime-rocm should be
 # installed at a time — they conflict on the same import name).
 
-_PROVIDER_ALIASES: Dict[str, List[str]] = {
+_PROVIDER_ALIASES: dict[str, list[str]] = {
     "cpu": ["CPUExecutionProvider"],
     "cuda": ["CUDAExecutionProvider", "CPUExecutionProvider"],
-    "gpu": ["CUDAExecutionProvider", "CPUExecutionProvider"],
-    "rocm": ["ROCMExecutionProvider", "CPUExecutionProvider"],
-    "hip": ["ROCMExecutionProvider", "CPUExecutionProvider"],
+    "gpu": [
+        "CUDAExecutionProvider",
+        "ROCMExecutionProvider",
+        "MIGraphXExecutionProvider",
+        "CPUExecutionProvider",
+    ],
+    "rocm": [
+        "ROCMExecutionProvider",
+        "MIGraphXExecutionProvider",
+        "CPUExecutionProvider",
+    ],
+    "hip": [
+        "ROCMExecutionProvider",
+        "MIGraphXExecutionProvider",
+        "CPUExecutionProvider",
+    ],
+    "migraphx": ["MIGraphXExecutionProvider", "CPUExecutionProvider"],
 }
 
 # Where locally-exported ONNX models get cached (used only when a model
 # has no pre-exported ONNX weights on the Hub — see _resolve_onnx_model).
-_ONNX_CACHE_DIR = Path(
-    os.environ.get("EULIX_ONNX_CACHE", str(Path.home() / ".cache" / "eulix-embed" / "onnx"))
-)
+_ONNX_CACHE_DIR = Path(os.environ.get("EULIX_ONNX_CACHE", str(Path.home() / ".cache" / "eulix-embed" / "onnx")))
 
 # Preference order for locating pre-exported ONNX weights inside a model
 # repo / local directory. Many sentence-transformers / feature-extraction
 # repos on the Hub already ship one of these.
-_ONNX_CANDIDATE_FILES: List[str] = [
+_ONNX_CANDIDATE_FILES: list[str] = [
     "onnx/model.onnx",
     "model.onnx",
     "onnx/model_fp16.onnx",
     "onnx/model_quantized.onnx",
 ]
 
-def _resolve_providers(
-    ort: Any, device: Optional[str]
-) -> Tuple[List[str], str]:
+
+def _resolve_providers(ort: Any, device: str | None) -> tuple[list[str], str]:
     """
     Turn a user-requested device ("cpu" / "cuda" / "rocm" / None) into an
     ordered list of onnxruntime Execution Providers plus a short label used
     for batch-size / bucketing heuristics.
 
     When `device` is None, auto-detects the best provider actually present
-    in `ort.get_available_providers()` — CUDA, then ROCm, then CPU.
+    in `ort.get_available_providers()` — CUDA, then ROCm/MIGraphX, then CPU.
     """
     available = set(ort.get_available_providers())
 
     if device is not None:
         key = device.lower()
         if key not in _PROVIDER_ALIASES:
-            raise ValueError(
-                f"Unknown device '{device}'. Expected one of: cpu, cuda, rocm"
-            )
-        wanted = _PROVIDER_ALIASES[key][0]
-        if wanted not in available and wanted != "CPUExecutionProvider":
+            raise ValueError(f"Unknown device '{device}'. Expected one of: {', '.join(_PROVIDER_ALIASES.keys())}")
+
+        # Find the first requested provider that is actually available on the system
+        wanted_providers = [p for p in _PROVIDER_ALIASES[key] if p in available]
+
+        if not wanted_providers or (
+            len(wanted_providers) == 1 and wanted_providers[0] == "CPUExecutionProvider" and key != "cpu"
+        ):
             print(
-                f"  ⚠ Requested provider '{wanted}' is not available in this "
+                f"  ⚠ Requested provider for '{device}' is not available in this "
                 f"onnxruntime build (available: {sorted(available)}); "
                 f"falling back to CPUExecutionProvider.",
                 file=sys.stderr,
             )
             return ["CPUExecutionProvider"], "cpu"
-        label = {"CUDAExecutionProvider": "cuda", "ROCMExecutionProvider": "rocm"}.get(
-            wanted, "cpu"
-        )
-        if label != "cpu":
-            print(f"  ✓ Using {wanted}", file=sys.stderr)
-        return _PROVIDER_ALIASES[key], label
 
+        active_provider = wanted_providers[0]
+        label = {
+            "CUDAExecutionProvider": "cuda",
+            "ROCMExecutionProvider": "rocm",
+            "MIGraphXExecutionProvider": "rocm",
+        }.get(active_provider, "cpu")
+
+        if label != "cpu":
+            print(f"  ✓ Using {active_provider}", file=sys.stderr)
+
+        # Ensure CPU fallback is always attached at the end of the provider list
+        if "CPUExecutionProvider" not in wanted_providers:
+            wanted_providers.append("CPUExecutionProvider")
+
+        return wanted_providers, label
+
+    # --- Auto-detection Order ---
     if "CUDAExecutionProvider" in available:
         print("  ✓ NVIDIA GPU detected — using CUDAExecutionProvider", file=sys.stderr)
         return ["CUDAExecutionProvider", "CPUExecutionProvider"], "cuda"
+
     if "ROCMExecutionProvider" in available:
         print(
             "  ✓ AMD GPU detected — using ROCMExecutionProvider (ROCm/HIP)",
             file=sys.stderr,
         )
         return ["ROCMExecutionProvider", "CPUExecutionProvider"], "rocm"
-    print("  ℹ No GPU execution provider available — using CPUExecutionProvider", file=sys.stderr)
+
+    if "MIGraphXExecutionProvider" in available:
+        print(
+            "  ✓ AMD GPU detected — using MIGraphXExecutionProvider (ROCm)",
+            file=sys.stderr,
+        )
+        return ["MIGraphXExecutionProvider", "CPUExecutionProvider"], "rocm"
+
+    print(
+        "ℹ No GPU execution provider available — using CPUExecutionProvider",
+        file=sys.stderr,
+    )
     return ["CPUExecutionProvider"], "cpu"
 
 
-def _pick_embedding_output(output_names: List[str]) -> Tuple[Optional[str], Optional[str]]:
+def _pick_embedding_output(
+    output_names: list[str],
+) -> tuple[str | None, str | None]:
     """
     Given the ONNX graph's output names, pick which one to actually use for
     embeddings, and how.
@@ -138,9 +176,7 @@ def _pick_embedding_output(output_names: List[str]) -> Tuple[Optional[str], Opti
     return None, None
 
 
-def _resolve_onnx_model(
-    model_name: str, trust_remote_code: bool = False, force_export: bool = False
-) -> Path:
+def _resolve_onnx_model(model_name: str, trust_remote_code: bool = False, force_export: bool = False) -> Path:
     """
     Resolve `model_name` to a local .onnx file path, trying in order:
 
@@ -187,12 +223,12 @@ def _resolve_onnx_model(
             repo_files = set(list_repo_files(model_name))
             for pat in _ONNX_CANDIDATE_FILES:
                 if pat in repo_files:
-                    onnx_path = Path(hf_hub_download(model_name, pat))
+                    onnx_path = Path(hf_hub_download(model_name, pat))  # nosec B615
                     data_pat = f"{pat}_data"
                     if data_pat in repo_files:
-                        hf_hub_download(model_name, data_pat)
+                        hf_hub_download(model_name, data_pat)  # nosec B615
                     return onnx_path
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(
                 f"     [i] No pre-exported ONNX weights found on the Hub for "
                 f"'{model_name}' ({e}); will export locally.",
@@ -229,40 +265,42 @@ def _resolve_onnx_model(
     print(f"     ✓ Exported ONNX model cached at {cache_dir}", file=sys.stderr)
     return exported
 
+
 class EmbeddingGeneratorOnnx:
     """
     Thin wrapper around an ONNX Runtime InferenceSession for batched
-    embedding generation. There is no PyTorch dependency at inference
-    time — the forward pass runs entirely inside onnxruntime, on whichever
-    Execution Provider is selected: CPUExecutionProvider, CUDAExecutionProvider
-    (NVIDIA), or ROCMExecutionProvider (AMD ROCm/HIP). The provider is
-    auto-detected from the installed onnxruntime build unless pinned via
+    embedding generation. No PyTorch or transformers dependency at
+    inference time tokenization is handled directly by the `tokenizers`
+    Rust library (same backend transformers wraps), and the forward pass
+    runs entirely inside onnxruntime on whichever Execution Provider is
+    selected: CPUExecutionProvider, CUDAExecutionProvider (NVIDIA), or
+    ROCMExecutionProvider (AMD ROCm/HIP). The provider is auto-detected
+    from the installed onnxruntime build unless pinned via
     `device="cpu" | "cuda" | "rocm"`.
 
-    All heavy imports (onnxruntime, transformers, tqdm) are deferred to
-    require_ml_onnx() and called exactly once here, so importing this module
-    doesn't pull in the ML stack for callers that only need the binary
-    I/O helpers (save/load embeddings.bin).
+    All heavy imports (onnxruntime, tokenizers, tqdm) are deferred to
+    require_ml_onnx() and called exactly once here, so importing this
+    module doesn't pull in the ML stack for callers that only need the
+    binary I/O helpers (save/load embeddings.bin).
     """
 
     def __init__(
         self,
         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-        device: Optional[str] = None,  # "cpu" | "cuda" | "rocm" | None (auto)
-        batch_size: Optional[int] = None,
+        device: str | None = None,  # "cpu" | "cuda" | "rocm" | None (auto)
+        batch_size: int | None = None,
         normalize: bool = True,
         use_bucketing: bool = True,
         trust_remote_code: bool = False,
-    ):
-        np, ort, AutoTokenizer, tqdm = require_ml_onnx()
-        # stash on self so _embed_batch / generate_vectors can use them
-        # without re-importing (Python caches in sys.modules; this is free)
+    ) -> None:
+        np, ort, tklib, tqdm = require_ml_onnx()
         self._np = np
         self._ort = ort
         self._tqdm = tqdm
 
         self.model_name = model_name
         self.normalize = normalize
+        self._dimension: int = 0
 
         try:
             self.providers, self.device = _resolve_providers(ort, device)
@@ -272,7 +310,7 @@ class EmbeddingGeneratorOnnx:
             self.batch_size = batch_size
 
             self.use_bucketing = use_bucketing and self.device in ("cuda", "rocm")
-
+            print("Using ONNX-RUNTIME")
             print(f"     Model:      {model_name}", file=sys.stderr)
             print(f"     Provider:   {self.providers[0]}", file=sys.stderr)
             print(f"     Batch size: {self.batch_size}", file=sys.stderr)
@@ -281,46 +319,68 @@ class EmbeddingGeneratorOnnx:
                 file=sys.stderr,
             )
 
+            # Tokenizer — load directly from the HuggingFace Hub using the
+            # `tokenizers` Rust library, bypassing transformers entirely.
+            #
+            # Hub layout for most sentence-transformers / BERT-family models:
+            #   tokenizer.json          — fast tokenizer spec (always present
+            #                             for any model with a fast tokenizer)
+            #   tokenizer_config.json   — metadata (add_prefix_space, etc.)
+            #
+            # huggingface_hub.hf_hub_download handles caching, auth tokens,
+            # and gated-model access identically to AutoTokenizer.from_pretrained,
+            # with zero dependency on transformers.
             try:
-                self.tokenizer = AutoTokenizer.from_pretrained(
-                    model_name, trust_remote_code=trust_remote_code, clean_up_tokenization_spaces=True
-                )
-            except Exception as e:
+                from huggingface_hub import hf_hub_download
+
+                tokenizer_json_path = hf_hub_download(
+                    repo_id=model_name,
+                    filename="tokenizer.json",
+                )  # nosec B615
+                self.tokenizer: "tokenizers.Tokenizer" = tklib.Tokenizer.from_file(tokenizer_json_path)
+                # Match transformers' default padding/truncation behaviour:
+                #   - pad to the longest sequence in the batch (overridden per
+                #     call when fixed_len is set for bucketed inference)
+                #   - truncate at the model's declared max length (usually 512)
+                self.tokenizer.enable_padding(
+                    direction="right",
+                    pad_id=self.tokenizer.token_to_id("[PAD]") or 0,
+                    pad_token="[PAD]",
+                )  # nosec B106
+                self.tokenizer.enable_truncation(max_length=512)
+            except Exception as e:  # noqa: BLE001
                 raise RuntimeError(
                     f"\033[1;31;40m Failed to load tokenizer for '{model_name}'.\n\033[0m"
                     f"\033[1;31;40m Possible reasons:\n\033[0m"
                     f"\033[1;31;40m  - Model ID is incorrect (check https://huggingface.co/models)\n\033[0m"
+                    f"\033[1;31;40m  - The model has no tokenizer.json (no fast tokenizer)\n\033[0m"
                     f"\033[1;31;40m  - You need to login: `huggingface-cli login`\n\033[0m"
                     f"\033[1;31;40m  - Model is gated and you lack permissions\n\033[0m"
                     f"\033[1;31;40m  - Network issue\n\033[0m"
-                    f"Original error:{e}"
+                    f"Original error: {e}"
                 )
 
-            def _load_session(path: Path):
+            def _load_session(path: Path) -> Any:
                 so = ort.SessionOptions()
                 so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                # We deliberately run many distinct input shapes through this
-                # one session (sequence-length bucketing, see
-                # generate_vectors). ORT's memory-pattern optimizer caches a
-                # separate allocation plan per shape it sees and never frees
-                # them for the life of the session — with 7-12 buckets that
-                # shows up as GPU memory that keeps climbing and never comes
-                # back down (unlike PyTorch's allocator, which reuses/splits
-                # blocks across shapes). It's meant for single-shape models;
-                # turning it off trades a small per-call planning cost for
-                # bounded, shape-independent memory usage.
+                # Disable memory-pattern optimizer: it caches a separate
+                # allocation plan per input shape and never frees them for the
+                # life of the session. With 7-12 sequence-length buckets this
+                # causes GPU memory to climb indefinitely. Turning it off
+                # trades a small per-call planning cost for bounded,
+                # shape-independent memory usage.
                 so.enable_mem_pattern = False
 
-                provider_options: List[Dict[str, str]] = []
+                provider_options: list[dict[str, str]] = []
                 for p in self.providers:
                     if p in ("CUDAExecutionProvider", "ROCMExecutionProvider"):
                         provider_options.append(
                             {
-                                # Default is kNextPowerOfTwo, which rounds
-                                # every new allocation up and keeps growing
-                                # the arena instead of tightly reusing freed
-                                # blocks — the other half of the "ORT doesn't
-                                # give memory back" behavior.
+                                # kSameAsRequested prevents the arena from
+                                # rounding allocations up to the next power of
+                                # two and holding that memory forever — the
+                                # other half of the "ORT never gives GPU memory
+                                # back" behaviour.
                                 "arena_extend_strategy": "kSameAsRequested",
                             }
                         )
@@ -335,11 +395,9 @@ class EmbeddingGeneratorOnnx:
                 )
 
             try:
-                onnx_path = _resolve_onnx_model(
-                    model_name, trust_remote_code=trust_remote_code
-                )
+                onnx_path = _resolve_onnx_model(model_name, trust_remote_code=trust_remote_code)
                 self.session = _load_session(onnx_path)
-            except Exception as e:
+            except (OSError, RuntimeError, ValueError) as e:
                 raise RuntimeError(
                     f"\033[1;31;40m Failed to load ONNX model weights for '{model_name}'.\n\033[0m"
                     f"Original error: {e}"
@@ -350,14 +408,6 @@ class EmbeddingGeneratorOnnx:
             target, kind = _pick_embedding_output(all_output_names)
 
             if target is None:
-                # The resolved ONNX graph has no last_hidden_state / pooled
-                # embedding output at all — e.g. it's a full fill-mask or
-                # pretraining export whose only outputs are vocab-size
-                # logits (a giant [batch, seq_len, vocab] tensor from an
-                # MLM decoder head). Requesting *any* of those forces ORT to
-                # materialize that tensor, which is what was OOMing. There's
-                # no usable embedding to extract from this graph, so force a
-                # fresh feature-extraction-task export instead of guessing.
                 print(
                     f"     ⚠ Resolved ONNX graph has no usable embedding output "
                     f"(only found: {all_output_names}); forcing a fresh "
@@ -365,7 +415,9 @@ class EmbeddingGeneratorOnnx:
                     file=sys.stderr,
                 )
                 onnx_path = _resolve_onnx_model(
-                    model_name, trust_remote_code=trust_remote_code, force_export=True
+                    model_name,
+                    trust_remote_code=trust_remote_code,
+                    force_export=True,
                 )
                 self.session = _load_session(onnx_path)
                 self._input_names = {i.name for i in self.session.get_inputs()}
@@ -385,25 +437,21 @@ class EmbeddingGeneratorOnnx:
                     f"'{target}' ({kind}) instead (available: {all_output_names})",
                     file=sys.stderr,
                 )
-            # IMPORTANT: only ever request this single output. Some graphs
-            # bundle extra task heads (e.g. an MLM decoder) alongside the
-            # embedding output; passing session.run() *all* output names
-            # forces ONNX Runtime to compute those heads too. Requesting
-            # exactly the one output we use lets ORT prune the rest.
+
+            # Only ever request this single output — avoids forcing ORT to
+            # compute bundled task heads (e.g. MLM decoder) that we don't need.
             self._target_output_name = target
             self._output_kind = kind  # "token" (needs mean-pool) or "pooled"
 
-            # Probe the model's actual output dimension by running a single
-            # dummy input through it. We can't trust a hardcoded dimension
-            # per model name since users can pass in arbitrary HF model IDs.
             try:
                 dummy_emb = self._embed_batch(["hello"])
                 self._dimension = dummy_emb.shape[-1]
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 raise RuntimeError(f"Failed to probe embedding dimension: {e}")
 
             print(f"     Dimension:  {self._dimension}", file=sys.stderr)
             print("  ✓ Embedding generator ready!", file=sys.stderr)
+
         except RuntimeError as e:
             print(f"\nError: {e}", file=sys.stderr)
             print("\nTips:", file=sys.stderr)
@@ -429,11 +477,9 @@ class EmbeddingGeneratorOnnx:
 
     def batch_size_for(self, seq_len: int) -> int:
         """
-        Bucket-aware batch size. self.batch_size is tuned for a "reference"
-        sequence length (512 tokens); using it flat for every bucket means a
-        512-token batch and an 8192-token batch (Jina buckets go up to
-        8192) get the same batch size even though attention memory scales
-        with sequence length. Scale down for longer buckets, floor at 1.
+        Bucket-aware batch size. self.batch_size is tuned for a reference
+        sequence length of 512 tokens; scale down linearly for longer
+        buckets (attention memory scales with sequence length), floor at 1.
         """
         ref_len = 512
         if seq_len <= ref_len:
@@ -441,10 +487,12 @@ class EmbeddingGeneratorOnnx:
         return max(1, (self.batch_size * ref_len) // seq_len)
 
     @staticmethod
-    def _mean_pool(last_hidden: "np.ndarray", attention_mask: "np.ndarray") -> "np.ndarray":
-        """Masked average over token embeddings (numpy), matching the
-        sentence-transformers pooling convention these models were
-        trained with (as opposed to taking the [CLS] token)."""
+    def _mean_pool(last_hidden: Any, attention_mask: Any) -> Any:
+        """
+        Masked average over token embeddings (numpy), matching the
+        sentence-transformers mean-pooling convention these models were
+        trained with (as opposed to taking the [CLS] token).
+        """
         np = require_numpy()
         mask_exp = attention_mask[:, :, None].astype(np.float32)
         summed = (last_hidden * mask_exp).sum(axis=1)
@@ -452,89 +500,113 @@ class EmbeddingGeneratorOnnx:
         return summed / counts
 
     @staticmethod
-    def _l2_normalize(vec: "np.ndarray", axis: int = -1, eps: float = 1e-12) -> "np.ndarray":
+    def _l2_normalize(vec: Any, axis: int = -1, eps: float = 1e-12) -> Any:
         np = require_numpy()
         norm = np.linalg.norm(vec, axis=axis, keepdims=True)
         return vec / np.clip(norm, eps, None)
 
-    def _embed_batch(
-        self, texts: List[str], fixed_len: Optional[int] = None
-    ) -> "np.ndarray":
+    def _encode_batch(self, texts: list[str], fixed_len: int | None = None) -> dict[str, Any]:
+        """
+        Tokenize a list of texts with the `tokenizers` Rust library and
+        return a dict of numpy arrays keyed by the standard HF input names
+        (input_ids, attention_mask, token_type_ids when present).
+
+        fixed_len forces padding to that exact length (for bucketed
+        inference); otherwise the tokenizer pads to the longest sequence
+        in the batch.
+        """
+        np = self._np
+
+        # Temporarily override padding/truncation length for this batch.
+        if fixed_len is not None:
+            self.tokenizer.enable_padding(
+                direction="right",
+                pad_id=self.tokenizer.token_to_id("[PAD]") or 0,
+                pad_token="[PAD]",
+                length=fixed_len,
+            )  # nosec B106
+            self.tokenizer.enable_truncation(max_length=fixed_len)
+        else:
+            # Restore batch-longest padding (no fixed length).
+            self.tokenizer.enable_padding(
+                direction="right",
+                pad_id=self.tokenizer.token_to_id("[PAD]") or 0,
+                pad_token="[PAD]",
+            )  # nosec B106
+            self.tokenizer.enable_truncation(max_length=512)
+
+        encodings = self.tokenizer.encode_batch(texts)
+
+        input_ids = np.array([enc.ids for enc in encodings], dtype=np.int64)
+        attention_mask = np.array([enc.attention_mask for enc in encodings], dtype=np.int64)
+
+        result: dict[str, Any] = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        # token_type_ids are present for BERT-family models; sentence-
+        # transformers exports may omit them from the ONNX graph entirely.
+        # Only include them when the graph actually declares that input.
+        if "token_type_ids" in self._input_names:
+            result["token_type_ids"] = np.array([enc.type_ids for enc in encodings], dtype=np.int64)
+
+        return result
+
+    def _embed_batch(self, texts: list[str], fixed_len: int | None = None) -> Any:
         """
         Embed a batch of texts in one ONNX Runtime forward pass.
 
         fixed_len, when given, forces tokenization/padding to that exact
         length instead of padding to the batch's longest sequence — this is
-        what makes the sequence-length bucketing in generate_vectors()
-        effective, since it guarantees every batch within a bucket shares
-        the same tensor shape (important for onnxruntime's kernel/graph
-        caching on GPU, same rationale as CUDA graph capture in the old
-        PyTorch version).
+        what makes sequence-length bucketing in generate_vectors() effective,
+        since it guarantees every batch within a bucket shares the same
+        tensor shape (important for onnxruntime's kernel/graph caching on
+        GPU).
         """
         np = self._np
 
-        tok_kwargs: Dict[str, Any] = dict(
-            return_tensors="np", padding=True, truncation=True
-        )
-        if fixed_len is not None:
-            tok_kwargs["max_length"] = fixed_len
-            tok_kwargs["padding"] = "max_length"
-
-        enc = self.tokenizer(texts, **tok_kwargs)
-        # Only feed inputs the ONNX graph actually declares — some exports
-        # omit token_type_ids, for instance.
+        enc = self._encode_batch(texts, fixed_len=fixed_len)
+        # Only feed inputs the ONNX graph actually declares.
         ort_inputs = {k: v for k, v in enc.items() if k in self._input_names}
 
         outputs = self.session.run([self._target_output_name], ort_inputs)
         raw = outputs[0]
+
         if self._output_kind == "pooled":
-            # Already a [batch, hidden] sentence vector (pooler_output /
-            # sentence_embedding) — nothing to pool over.
             emb = raw
         else:
             emb = self._mean_pool(raw, enc["attention_mask"])
+
         if self.normalize:
             emb = self._l2_normalize(emb)
+
         return emb.astype(np.float32)
 
-    def generate_vectors(self, chunks: List[Chunk]) -> Dict[str, "np.ndarray"]:
+    def generate_vectors(self, chunks: list[Chunk]) -> dict[str, Any]:
         """
         Embed all chunks and return {chunk_id: vector}.
 
-        When bucketing is enabled (CUDA/ROCm only — see use_bucketing),
-        chunks are grouped by estimated token length into buckets, and each
-        bucket is embedded with a fixed padding length. This trades a small
-        amount of wasted padding for far fewer distinct tensor shapes, which
-        speeds up GPU inference in onnxruntime (avoids shape-triggered
-        kernel re-selection on every batch).
+        When bucketing is enabled (CUDA/ROCm only), chunks are grouped by
+        estimated token length into fixed buckets and each bucket is
+        embedded with a fixed padding length. This trades a small amount of
+        wasted padding for far fewer distinct tensor shapes, speeding up GPU
+        inference in onnxruntime.
 
-        Token length is estimated as len(content) // 4 (a rough
-        chars-per-token heuristic) purely for bucket assignment — the real
-        tokenizer still runs during _embed_batch and will truncate if the
-        estimate was wrong.
-
-        Original chunk order is restored at the end (results are processed
-        out-of-order across buckets, then re-sorted by original index)
-        before building the returned dict, and duplicate chunk IDs are
-        collapsed with a warning rather than silently overwritten.
+        Original chunk order is restored after cross-bucket processing, and
+        duplicate chunk IDs are collapsed with a warning.
         """
-        np = self._np
         tqdm = self._tqdm
         total = len(chunks)
-        print(
-            f" Processing {total} chunks (batch={self.batch_size},"
-            f" bucketing={self.use_bucketing})..."
-        )
+        print(f" Processing {total} chunks " f"(batch={self.batch_size}, bucketing={self.use_bucketing})...")
         t0 = time.time()
 
         is_jina = "jina" in self.model_name.lower()
         buckets = BUCKETS_JINA if is_jina else BUCKETS_STANDARD
 
-        indexed: List[Tuple[int, int, Chunk]] = [
-            (i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)
-        ]
+        indexed: list[tuple[int, int, Chunk]] = [(i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)]
 
-        results: List[Tuple[int, "np.ndarray"]] = []
+        results: list[tuple[int, Any]] = []
 
         bar = tqdm(
             total=total,
@@ -545,38 +617,35 @@ class EmbeddingGeneratorOnnx:
         )
 
         if self.use_bucketing:
-            bucket_map: Dict[int, List[Tuple[int, Chunk]]] = defaultdict(list)
+            bucket_map: dict[int, list[tuple[int, Chunk]]] = defaultdict(list)
             for orig_idx, est_tokens, chunk in indexed:
                 b = snap_to_bucket(est_tokens, buckets)
                 bucket_map[b].append((orig_idx, chunk))
 
             print(f"     Shape buckets active: {len(bucket_map)}")
-            # blen is short for Bucket Length
             for blen in sorted(bucket_map):
-                print(
-                    f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks"
-                )
+                print(f"       bucket {blen:>5} tokens → {len(bucket_map[blen])} chunks")
 
             for blen in sorted(bucket_map):
                 items = bucket_map[blen]
                 bsz = self.batch_size_for(blen)
                 bar.set_postfix(bucket=blen, batch=bsz, refresh=False)
                 for start in range(0, len(items), bsz):
-                    batch = items[start : start + bsz]
-                    texts = [c.content for _, c in batch]
+                    batch_items = items[start : start + bsz]
+                    texts = [c.content for _, c in batch_items]
                     embs = self._embed_batch(texts, fixed_len=blen)
-                    for (orig_idx, _), emb in zip(batch, embs):
+                    for (orig_idx, _), emb in zip(batch_items, embs):
                         results.append((orig_idx, emb))
-                    bar.update(len(batch))
+                    bar.update(len(batch_items))
         else:
             indexed.sort(key=lambda x: x[1], reverse=True)
             for start in range(0, len(indexed), self.batch_size):
-                batch = indexed[start : start + self.batch_size]
-                texts = [c.content for _, _, c in batch]
+                batch_3tuple = indexed[start : start + self.batch_size]
+                texts = [c.content for _, _, c in batch_3tuple]
                 embs = self._embed_batch(texts)
-                for (orig_idx, _, _), emb in zip(batch, embs):
+                for (orig_idx, _, _), emb in zip(batch_3tuple, embs):
                     results.append((orig_idx, emb))
-                bar.update(len(batch))
+                bar.update(len(batch_3tuple))
 
         bar.close()
 
@@ -587,17 +656,15 @@ class EmbeddingGeneratorOnnx:
         results.sort(key=lambda x: x[0])
         indexed_sorted = sorted(indexed, key=lambda x: x[0])
 
-        store: Dict[str, "np.ndarray"] = {}
-        duplicates: List[str] = []  # track duplicates
+        store: dict[str, Any] = {}
+        duplicates: list[str] = []
         for (orig_idx, emb), (i, _, chunk) in zip(results, indexed_sorted):
             if chunk.id in store:
                 duplicates.append(chunk.id)
             store[chunk.id] = emb
 
-        if duplicates:  # surface them loudly
-            print(
-                f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:"
-            )
+        if duplicates:
+            print(f"  [WARN] {len(duplicates)} duplicate chunk IDs collapsed in vectors.bin:")
             for did in duplicates[:10]:
                 print(f"         {did}")
             if len(duplicates) > 10:
@@ -605,5 +672,5 @@ class EmbeddingGeneratorOnnx:
 
         return store
 
-    def embed_query(self, query: str) -> "np.ndarray":
+    def embed_query(self, query: str) -> Any:
         return self._embed_batch([query])[0]
