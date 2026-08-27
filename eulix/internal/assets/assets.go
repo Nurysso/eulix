@@ -73,7 +73,7 @@ const (
 	hashNameEmbedDir    = "eulix_embed"
 )
 
-var initializedFile = filepath.Join(eulixDirName, ".initialized")
+// var initializedFile = filepath.Join(eulixDirName, ".initialized")
 
 // extractMu guards the per-process extraction so we only unpack once even
 // when multiple goroutines race to use these helpers.
@@ -149,15 +149,28 @@ func Hashes() ([]FileHash, error) {
 		if strip != "" {
 			relName = strings.TrimPrefix(relName, strip+"/")
 		}
-		rc, err := zf.Open()
+
+		content, err := func() ([]byte, error) {
+			rc, err := zf.Open()
+			if err != nil {
+				return nil, fmt.Errorf("open zip entry %q: %w", zf.Name, err)
+			}
+			defer func() {
+				if cErr := rc.Close(); cErr != nil && err == nil {
+					err = fmt.Errorf("close zip entry %q: %w", zf.Name, cErr)
+				}
+			}()
+
+			data, err := io.ReadAll(rc)
+			if err != nil {
+				return nil, fmt.Errorf("read zip entry %q: %w", zf.Name, err)
+			}
+			return data, nil
+		}()
 		if err != nil {
-			return nil, fmt.Errorf("open zip entry %q: %w", zf.Name, err)
+			return nil, err
 		}
-		content, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			return nil, fmt.Errorf("read zip entry %q: %w", zf.Name, err)
-		}
+
 		fileHashes = append(fileHashes, hashOf(relName, content))
 	}
 	sort.Slice(fileHashes, func(i, j int) bool { return fileHashes[i].Name < fileHashes[j].Name })
@@ -362,14 +375,25 @@ func extractEmbedZip(dir string) error {
 			continue // already extracted, skip
 		}
 
-		rc, err := zf.Open()
+		content, err := func() ([]byte, error) {
+			rc, err := zf.Open()
+			if err != nil {
+				return nil, fmt.Errorf("open zip entry %q: %w", zf.Name, err)
+			}
+			defer func() {
+				if cErr := rc.Close(); cErr != nil && err == nil {
+					err = fmt.Errorf("close zip entry %q: %w", zf.Name, cErr)
+				}
+			}()
+
+			data, err := io.ReadAll(rc)
+			if err != nil {
+				return nil, fmt.Errorf("read zip entry %q: %w", zf.Name, err)
+			}
+			return data, nil
+		}()
 		if err != nil {
-			return fmt.Errorf("open zip entry %q: %w", zf.Name, err)
-		}
-		content, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			return fmt.Errorf("read zip entry %q: %w", zf.Name, err)
+			return err
 		}
 
 		mode := os.FileMode(0644)
@@ -493,7 +517,7 @@ func sha256File(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {

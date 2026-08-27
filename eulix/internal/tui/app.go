@@ -65,20 +65,21 @@ type switchToCacheViewerMsg struct{}
 // Theme
 
 var (
-	primaryColor   = lipgloss.Color("#5EEAD4") // teal    — accents, user, links
-	secondaryColor = lipgloss.Color("#A78BFA") // violet  — chrome / titles
-	successColor   = lipgloss.Color("#34D399") // emerald — assistant badge
-	errorColor     = lipgloss.Color("#F87171") // coral   — errors
-	warningColor   = lipgloss.Color("#FBBF24") // amber   — warnings
-	mutedColor     = lipgloss.Color("#7C8798") // slate   — secondary text
-	textColor      = lipgloss.Color("#E7E9EE") // off-white — body text
-	borderColor    = lipgloss.Color("#2A3142") // deep slate — borders
-	codeColor      = lipgloss.Color("#F9E2AF") // warm gold — code
+	primaryColor   = lipgloss.Color("#5EEAD4") // teal                —     accents, user, links
+	secondaryColor = lipgloss.Color("#A78BFA") // violet              — chrome / titles
+	successColor   = lipgloss.Color("#34D399") // emerald             — assistant badge
+	errorColor     = lipgloss.Color("#F87171") // coral               — errors
+	warningColor   = lipgloss.Color("#FBBF24") // amber               — warnings
+	mutedColor     = lipgloss.Color("#7C8798") // slate               — secondary text
+	textColor      = lipgloss.Color("#E7E9EE") // off-white           — body text
+	borderColor    = lipgloss.Color("#2A3142") // deep slate          — borders
+	codeColor      = lipgloss.Color("#F9E2AF") // warm gold           — code
 	codeBgColor    = lipgloss.Color("#1A2030") // code block background
-	highlightColor = lipgloss.Color("#C4B5FD") // light violet — list bullets
-	reasoningColor = lipgloss.Color("#5B6478") // dim slate-blue — reasoning
+	highlightColor = lipgloss.Color("#C4B5FD") // light violet        — list bullets
+	reasoningColor = lipgloss.Color("#5B6478") // dim slate-blue      — reasoning
 	quoteColor     = lipgloss.Color("#8B95A8") // blockquote text
-	titleBarBg     = lipgloss.Color("#1E1B4B") // deep indigo — title bar bg
+	titleBarBg     = lipgloss.Color("#1E1B4B") // deep indigo         — title bar bg
+	tableHeaderBg  = lipgloss.Color("#232A3D") // header row background
 )
 
 var headingRe = regexp.MustCompile(`^(#{1,6})\s+(.+)$`)
@@ -90,8 +91,9 @@ var (
 	strikeRe       = regexp.MustCompile(`~~([^~]+)~~`)
 	linkRe         = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	isNumberedRe   = regexp.MustCompile(`^\d+\.\s`)
-	// reasoningTagRe = regexp.MustCompile(`(?is)<\s*(?:reasoning|thinking)\s*>(.*?)<\s*/\s*(?:reasoning|thinking)\s*>`)
-	// answerTagRe    = regexp.MustCompile(`(?is)<\s*answer\s*>(.*?)<\s*/\s*answer\s*>`)
+	taskListRe     = regexp.MustCompile(`^[-*+]\s+\[([ xX])\]\s+(.+)$`)
+	// tableRowRe     = regexp.MustCompile(`^\s*\|?.*\|.*\|?\s*$`)
+	tableSepCellRe = regexp.MustCompile(`^:?-{1,}:?$`)
 )
 
 var (
@@ -109,6 +111,10 @@ var (
 
 	listStyle = lipgloss.NewStyle().Foreground(highlightColor)
 
+	checkedBoxStyle   = lipgloss.NewStyle().Foreground(successColor).Bold(true)
+	uncheckedBoxStyle = lipgloss.NewStyle().Foreground(mutedColor).Bold(true)
+	taskDoneStyle     = lipgloss.NewStyle().Strikethrough(true).Foreground(mutedColor)
+
 	h1Style = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(primaryColor)
 	h2Style = lipgloss.NewStyle().Bold(true).Foreground(secondaryColor)
 	h3Style = lipgloss.NewStyle().Bold(true).Foreground(highlightColor)
@@ -120,6 +126,10 @@ var (
 	reasoningLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(reasoningColor)
 	reasoningTextStyle  = lipgloss.NewStyle().Italic(true).Foreground(reasoningColor)
 	reasoningBarStyle   = lipgloss.NewStyle().Foreground(borderColor)
+
+	tableBorderStyle = lipgloss.NewStyle().Foreground(borderColor)
+	tableHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(secondaryColor).Background(tableHeaderBg)
+	tableCellStyle   = lipgloss.NewStyle().Foreground(textColor)
 
 	titleBarStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -591,8 +601,8 @@ func renderReasoningBlock(reasoning string, width int, expanded bool) string {
 }
 
 // renderMarkdownBody formats markdown-ish text (headings, lists, code
-// blocks, blockquotes, rules, links, bold/strikethrough/inline code) for
-// terminal display.
+// blocks, blockquotes, rules, links, tables, task lists, and
+// bold/strikethrough/inline code) for terminal display.
 func renderMarkdownBody(text string, width int) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(text, "\n")
@@ -605,8 +615,8 @@ func renderMarkdownBody(text string, width int) string {
 	inQuote := false
 	prevWasParagraph := false
 
-	for _, line := range lines {
-		line = strings.TrimRight(line, " \t")
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], " \t")
 
 		if line == "" {
 			b.WriteByte('\n')
@@ -632,6 +642,28 @@ func renderMarkdownBody(text string, width int) string {
 
 		if inCodeBlock {
 			fmt.Fprintf(&b, "%s\n", codeBlockStyle.Render(line))
+			continue
+		}
+
+		// Table: a line containing a pipe, immediately followed by a
+		// valid separator row (e.g. |---|:--:|---|), starts a GFM table.
+		// Consume every subsequent row line as part of the table.
+		if isTableRow(line) && i+1 < len(lines) && isTableSeparator(lines[i+1]) {
+			tableLines := []string{line, lines[i+1]}
+			j := i + 2
+			for j < len(lines) {
+				candidate := strings.TrimRight(lines[j], " \t")
+				if candidate == "" || !isTableRow(candidate) {
+					break
+				}
+				tableLines = append(tableLines, candidate)
+				j++
+			}
+			fmt.Fprintf(&b, "%s\n", renderTable(tableLines, width))
+			i = j - 1
+			inList = false
+			inQuote = false
+			prevWasParagraph = false
 			continue
 		}
 
@@ -662,6 +694,14 @@ func renderMarkdownBody(text string, width int) string {
 			}
 			inList = false
 			inQuote = true
+			prevWasParagraph = false
+			continue
+		}
+
+		if m := taskListRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			fmt.Fprintf(&b, "  %s\n", formatTaskItem(m[1], m[2], width-4))
+			inList = true
+			inQuote = false
 			prevWasParagraph = false
 			continue
 		}
@@ -767,6 +807,288 @@ func formatListItem(line string, width int) string {
 	}
 
 	return listStyle.Render(bullet) + " " + processInlineMarkdown(content, width-4)
+}
+
+// formatTaskItem renders a GFM task-list item: "- [ ] foo" / "- [x] bar".
+// Checked items get a filled box and strikethrough text; unchecked get an
+// empty box in muted styling.
+func formatTaskItem(mark, content string, width int) string {
+	checked := mark == "x" || mark == "X"
+
+	box := uncheckedBoxStyle.Render("☐")
+	text := processInlineMarkdown(content, width-4)
+	if checked {
+		box = checkedBoxStyle.Render("☑")
+		text = taskDoneStyle.Render(text)
+	}
+
+	return box + " " + text
+}
+
+// isTableRow reports whether line looks like a GFM table row: it must
+// contain at least one unescaped pipe that isn't just inline code/text
+// with a stray "|" in it. We require at least one "|" outside of a code
+// span, and at least one non-empty cell.
+func isTableRow(line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" || !strings.Contains(t, "|") {
+		return false
+	}
+	cells := splitTableRow(t)
+	return len(cells) >= 2
+}
+
+// isTableSeparator reports whether line is a GFM header separator row,
+// e.g. "|---|:---:|---:|" or "--- | ---".
+func isTableSeparator(line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" {
+		return false
+	}
+	cells := splitTableRow(t)
+	if len(cells) == 0 {
+		return false
+	}
+	for _, c := range cells {
+		c = strings.TrimSpace(c)
+		if c == "" || !tableSepCellRe.MatchString(c) {
+			return false
+		}
+	}
+	return true
+}
+
+// splitTableRow splits a table row on unescaped "|" characters, trimming
+// a leading/trailing empty cell produced by outer pipes (e.g. "| a | b |").
+func splitTableRow(line string) []string {
+	t := strings.TrimSpace(line)
+	t = strings.TrimPrefix(t, "|")
+	t = strings.TrimSuffix(t, "|")
+
+	// Split on "|" that isn't escaped with a backslash.
+	var cells []string
+	var cur strings.Builder
+	escaped := false
+	for _, r := range t {
+		switch {
+		case escaped:
+			cur.WriteRune(r)
+			escaped = false
+		case r == '\\':
+			escaped = true
+			cur.WriteRune(r)
+		case r == '|':
+			cells = append(cells, cur.String())
+			cur.Reset()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	cells = append(cells, cur.String())
+
+	for i, c := range cells {
+		cells[i] = strings.TrimSpace(strings.ReplaceAll(c, `\|`, "|"))
+	}
+	return cells
+}
+
+type tableAlign int
+
+const (
+	alignLeft tableAlign = iota
+	alignCenter
+	alignRight
+)
+
+// parseTableAlignment reads a separator cell like ":---", "---:", ":--:",
+// or "---" and returns the column alignment.
+func parseTableAlignment(cell string) tableAlign {
+	cell = strings.TrimSpace(cell)
+	left := strings.HasPrefix(cell, ":")
+	right := strings.HasSuffix(cell, ":")
+	switch {
+	case left && right:
+		return alignCenter
+	case right:
+		return alignRight
+	default:
+		return alignLeft
+	}
+}
+
+// renderTable renders a GFM table (header + separator + body rows) as a
+// bordered, column-aligned block using box-drawing characters, wrapping
+// cell content and the whole table to fit within width.
+func renderTable(tableLines []string, width int) string {
+	header := splitTableRow(tableLines[0])
+	aligns := make([]tableAlign, len(header))
+	if len(tableLines) > 1 {
+		sepCells := splitTableRow(tableLines[1])
+		for i := range header {
+			if i < len(sepCells) {
+				aligns[i] = parseTableAlignment(sepCells[i])
+			}
+		}
+	}
+
+	var bodyRows [][]string
+	for _, l := range tableLines[2:] {
+		row := splitTableRow(l)
+		// Normalize row length to header length.
+		for len(row) < len(header) {
+			row = append(row, "")
+		}
+		if len(row) > len(header) {
+			row = row[:len(header)]
+		}
+		bodyRows = append(bodyRows, row)
+	}
+
+	numCols := len(header)
+	if numCols == 0 {
+		return ""
+	}
+
+	// Compute natural column widths from content (rendered, inline-formatted
+	// so bold/code markers don't inflate width incorrectly — we measure the
+	// raw text width, which is a good-enough proxy since ANSI codes are
+	// added after wrapping).
+	colWidth := make([]int, numCols)
+	for i, h := range header {
+		colWidth[i] = lipgloss.Width(strings.TrimSpace(stripInlineMarkers(h)))
+	}
+	for _, row := range bodyRows {
+		for i, c := range row {
+			w := lipgloss.Width(strings.TrimSpace(stripInlineMarkers(c)))
+			if w > colWidth[i] {
+				colWidth[i] = w
+			}
+		}
+	}
+
+	const minColWidth = 3
+	const maxColWidth = 40
+	for i := range colWidth {
+		if colWidth[i] < minColWidth {
+			colWidth[i] = minColWidth
+		}
+		if colWidth[i] > maxColWidth {
+			colWidth[i] = maxColWidth
+		}
+	}
+
+	// Shrink columns proportionally if the table is wider than the
+	// available width (accounting for borders: 1 + numCols*3 + sum(widths)).
+	overhead := 1 + numCols*3
+	total := overhead
+	for _, w := range colWidth {
+		total += w
+	}
+	if total > width && width > overhead+numCols*minColWidth {
+		budget := width - overhead
+		sum := 0
+		for _, w := range colWidth {
+			sum += w
+		}
+		remaining := budget
+		for i := range colWidth {
+			share := colWidth[i] * budget / sum
+			if share < minColWidth {
+				share = minColWidth
+			}
+			colWidth[i] = share
+			remaining -= share
+		}
+		// Dump any leftover budget into the widest column.
+		if remaining > 0 {
+			widest := 0
+			for i := range colWidth {
+				if colWidth[i] > colWidth[widest] {
+					widest = i
+				}
+			}
+			colWidth[widest] += remaining
+		}
+	}
+
+	var b strings.Builder
+
+	writeBorder := func(left, mid, right string) {
+		b.WriteString(tableBorderStyle.Render(left))
+		for i, w := range colWidth {
+			b.WriteString(tableBorderStyle.Render(strings.Repeat("─", w+2)))
+			if i < numCols-1 {
+				b.WriteString(tableBorderStyle.Render(mid))
+			}
+		}
+		b.WriteString(tableBorderStyle.Render(right))
+		b.WriteByte('\n')
+	}
+
+	writeRow := func(cells []string, style lipgloss.Style) {
+		// Wrap each cell to its column width, then render row-by-row so
+		// multi-line cells stay aligned across the row.
+		wrapped := make([][]string, numCols)
+		maxLines := 1
+		for i, c := range cells {
+			c = processInlineMarkdown(c, colWidth[i])
+			ls := strings.Split(c, "\n")
+			wrapped[i] = ls
+			if len(ls) > maxLines {
+				maxLines = len(ls)
+			}
+		}
+		for line := 0; line < maxLines; line++ {
+			b.WriteString(tableBorderStyle.Render("│"))
+			for i := 0; i < numCols; i++ {
+				var cellLine string
+				if line < len(wrapped[i]) {
+					cellLine = wrapped[i][line]
+				}
+				pad := colWidth[i] - lipgloss.Width(cellLine)
+				if pad < 0 {
+					pad = 0
+				}
+				var padded string
+				switch aligns[i] {
+				case alignRight:
+					padded = strings.Repeat(" ", pad) + cellLine
+				case alignCenter:
+					l := pad / 2
+					r := pad - l
+					padded = strings.Repeat(" ", l) + cellLine + strings.Repeat(" ", r)
+				default:
+					padded = cellLine + strings.Repeat(" ", pad)
+				}
+				b.WriteString(" ")
+				b.WriteString(style.Render(padded))
+				b.WriteString(" ")
+				b.WriteString(tableBorderStyle.Render("│"))
+			}
+			b.WriteByte('\n')
+		}
+	}
+
+	writeBorder("┌", "┬", "┐")
+	writeRow(header, tableHeaderStyle)
+	writeBorder("├", "┼", "┤")
+	for _, row := range bodyRows {
+		writeRow(row, tableCellStyle)
+	}
+	writeBorder("└", "┴", "┘")
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// stripInlineMarkers gives a rough plain-text width estimate for a markdown
+// cell by removing syntax markers, without doing full styled rendering.
+// Used only for column-width sizing, not final output.
+func stripInlineMarkers(s string) string {
+	s = linkRe.ReplaceAllString(s, "$1")
+	s = inlineCodeRe.ReplaceAllString(s, "$1")
+	s = boldRe.ReplaceAllString(s, "$2")
+	s = strikeRe.ReplaceAllString(s, "$1")
+	return s
 }
 
 // processInlineMarkdown handles [links](url), `code`, **bold**, and
