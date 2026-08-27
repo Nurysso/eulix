@@ -98,21 +98,25 @@ func startChat() error {
 		return fmt.Errorf("missing required files")
 	}
 
-	detector := checksum.HashHound(".")
-	stored, err := detector.Load()
+	// Run checksum - handles loading, calculating, comparing, and saving in one call
+	result, err := checksum.Run()
 	if err != nil {
+		printStatusMessage("Failed to run checksum.",
+			"Run 'eulix analyze' to generate one.",
+		)
+		return fmt.Errorf("checksum required: %w", err)
+	}
+
+	// Check if this is the first run (no existing checksum)
+	if result.FirstRun {
 		printStatusMessage("No checksum found.",
 			"Run 'eulix analyze' to generate one.",
 		)
-		return fmt.Errorf("checksum required")
+		return fmt.Errorf("checksum required - first run analysis needed")
 	}
 
-	current, err := detector.Calculate()
-	if err != nil {
-		return fmt.Errorf("failed to calculate checksum: %w", err)
-	}
-
-	changePercent := detector.CompareChecksums(stored, current)
+	// Now we have a comparison result from the previous vs current checksum
+	changePercent := result.ChangedRatio
 
 	if changePercent > 0.30 {
 		printStatusMessage(fmt.Sprintf("Codebase changed %.1f%%", changePercent*100),
@@ -129,6 +133,9 @@ func startChat() error {
 		}
 		fmt.Println()
 	}
+
+	// If we get here, changePercent <= 0.10, so we can continue
+	// The checksum is already saved by checksum.Run(), so no need to call Save()
 
 	cacheManager, err := cache.CacheController(cfg)
 	if err != nil {
@@ -150,7 +157,7 @@ func startChat() error {
 	}
 	defer func() { _ = router.Close() }() // Clean up embeddings if they were initialized
 
-	router.SetCurrentChecksum(current.Hash)
+	router.SetCurrentChecksum(result.Checksum.Hash)
 
 	printSystemDiagnostics(eulixDir)
 

@@ -67,7 +67,7 @@ var analyzeCmd = &cobra.Command{
 
 var checksumCmd = &cobra.Command{
 	Use:   "checksum",
-	Short: "Creates checksum without running analyze",
+	Short: "Creates or updates checksum without running analyze",
 	Args:  cobra.NoArgs,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		if _, err := requireProjectRoot(); err != nil {
@@ -76,18 +76,34 @@ var checksumCmd = &cobra.Command{
 		return checkInitialized()
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		detector := checksum.HashHound(".")
-
-		currentChecksum, err := detector.Calculate()
+		result, err := checksum.Run()
 		if err != nil {
-			return fmt.Errorf("checksum calculation failed: %w", err)
+			return fmt.Errorf("checksum operation failed: %w", err)
 		}
 
-		fmt.Printf("   Found: %d files\n", currentChecksum.TotalFiles)
+		// Show detailed information
+		fmt.Printf("Project: %s\n", result.Checksum.ProjectPath)
+		fmt.Printf("Total files: %d\n", result.Checksum.TotalFiles)
+		fmt.Printf("Total lines: %d\n", result.Checksum.TotalLines)
+		fmt.Printf("Checksum: %s\n", result.Checksum.Hash)
+		fmt.Printf("Last analyzed: %s\n", result.Checksum.LastAnalyzed.Format("2006-01-02 15:04:05"))
+		fmt.Printf("Analysis version: %s\n", result.Checksum.AnalysisVersion)
 
-		if err := detector.Save(currentChecksum); err != nil {
-			return fmt.Errorf("failed to save checksum: %w", err)
+		if result.FirstRun {
+			fmt.Println("\n✓ New checksum created")
+		} else {
+			fmt.Printf("\nChanges from previous run:\n")
+			fmt.Printf("  • Added: %d files\n", result.FilesAdded)
+			fmt.Printf("  • Deleted: %d files\n", result.FilesDeleted)
+			fmt.Printf("  • Modified: %d files\n", result.FilesModified)
+			fmt.Printf("  • Change ratio: %.1f%%\n", result.ChangedRatio*100)
+
+			if result.ChangedRatio == 0 {
+				fmt.Println("✓ No changes detected")
+			}
 		}
+
+		fmt.Printf("\n     ✓ Checksum saved to .eulix/checksum.json\n")
 
 		return nil
 	},

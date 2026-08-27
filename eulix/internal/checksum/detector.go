@@ -4,116 +4,229 @@
 // Maintainer mnae (Nurysso) contact - nurysso [at] proton.me
 /*
 Package checksum handles project-level source file hashing and change detection.
-It walks a project directory, hashes each source file, and produces a combined
-project hash used by eulix to detect whether re-analysis is needed.
+It walks the configured project directory, hashes each source file with xxh3,
+and produces a combined project hash used by eulix to detect whether
+re-analysis is needed.
+
 Ignore rules are read from a .euignore file in the project root (same syntax
 as .gitignore). The .eulix/ output directory is always excluded automatically.
+
+Checksum state is persisted at <config.Project.Path>/.eulix/checksum.json.
+Run() is the single entry point: it loads config itself, creates the
+checksum file on first run, or compares against the stored checksum on
+subsequent runs and reports the percentage of the codebase that changed.
 */
 
 package checksum
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
+	"github.com/zeebo/xxh3"
+
+	"eulix/internal/config"
 )
 
-type Checksum struct {
-	ProjectPath     string            `json:"project_path"`
-	TotalFiles      int               `json:"total_files"`
-	TotalLines      int               `json:"total_lines"`
-	Hash            string            `json:"hash"`
-	FileHashes      map[string]string `json:"file_hashes"`
-	LastAnalyzed    time.Time         `json:"last_analyzed"`
-	AnalysisVersion string            `json:"analysis_version"`
+// FileEntry stores enough metadata per file to allow cheap "did this file
+// possibly change" checks (mtime/size) before paying for a full xxh3 hash.
+type FileEntry struct {
+	Hash    string `json:"hash"`
+	Size    int64  `json:"size"`
+	ModTime int64  `json:"mod_time"` // unix nanos
 }
+
+type Checksum struct {
+	ProjectPath     string               `json:"project_path"`
+	TotalFiles      int                  `json:"total_files"`
+	TotalLines      int                  `json:"total_lines"`
+	Hash            string               `json:"hash"`
+	Files           map[string]FileEntry `json:"files"`
+	LastAnalyzed    time.Time            `json:"last_analyzed"`
+	AnalysisVersion string               `json:"analysis_version"`
+}
+
+// Result is what Run() returns: the fresh checksum plus a summary of how it
+// compares to whatever was previously stored (if anything).
+type Result struct {
+	Checksum      *Checksum
+	FirstRun      bool    // true if there was no existing checksum.json
+	ChangedRatio  float64 // fraction (0.0-1.0) of files added/removed/modified
+	FilesAdded    int
+	FilesDeleted  int
+	FilesModified int
+}
+
+const analysisVersion = "0.5.3"
+const eulixDirName = ".eulix"
+const checksumFileName = "checksum.json.zst"
+const ignoreFileName = ".euignore"
 
 type Detector struct {
 	projectPath    string
 	ignorePatterns []string
 }
 
-func HashHound(projectPath string) *Detector {
+// newDetector builds a Detector for the given project root and loads its
+// .euignore patterns. Unexported: callers should go through Run().
+func hashHound(projectPath string) *Detector {
 	d := &Detector{projectPath: projectPath}
 	d.loadIgnorePatterns()
 	return d
 }
 
-// loadIgnorePatterns reads .euignore file and loads patterns
-func (d *Detector) loadIgnorePatterns() {
-	ignorePath := filepath.Join(d.projectPath, ".euignore")
-	file, err := os.Open(ignorePath)
+// Run is the high-level entry point. It loads config itself, so callers
+// don't pass a directory. If no checksum.json exists yet, it creates one.
+// If one exists, it recalculates and compares against the stored version,
+// reporting what percentage of the codebase changed.
+func Run() (*Result, error) {
+	cfg, _ := config.Load()
+
+	projectPath := &cfg.Project.Path
+	d := hashHound(*projectPath)
+
+	stored, loadErr := d.Load()
+	firstRun := loadErr != nil
+
+	current, err := d.calculate()
 	if err != nil {
-		// .euignore doesn't exist, that's okay
-		return
-	}
-	defer func() {
-		_ = file.Close()
-	}()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		d.ignorePatterns = append(d.ignorePatterns, line)
+		return nil, fmt.Errorf("checksum: failed to calculate checksum: %w", err)
 	}
 
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("warning: error reading %s: %v\n", ignorePath, err)
+	if err := d.Save(current); err != nil {
+		return nil, fmt.Errorf("checksum: failed to save checksum file: %w", err)
 	}
+
+	if firstRun {
+		return &Result{
+			Checksum:      current,
+			FirstRun:      true,
+			ChangedRatio:  1.0,
+			FilesAdded:    current.TotalFiles,
+			FilesDeleted:  0,
+			FilesModified: 0,
+		}, nil
+	}
+
+	added, deleted, modified, ratio := compare(stored, current)
+
+	return &Result{
+		Checksum:      current,
+		FirstRun:      false,
+		ChangedRatio:  ratio,
+		FilesAdded:    added,
+		FilesDeleted:  deleted,
+		FilesModified: modified,
+	}, nil
 }
 
-// shouldIgnore checks if a path should be ignored
+// loadIgnorePatterns reads .euignore file and loads patterns
+func (d *Detector) loadIgnorePatterns() {
+	// Default patterns that are always applied (can't be overridden)
+	defaultPatterns := []string{
+		"node_modules/",
+		".eulix/",
+		"target/",
+		"dist/",
+		"build/",
+		"out/",
+		"bin/",
+		"obj/",
+		"__pycache__/",
+		".venv/",
+		"venv/",
+		".git/",
+		".idea/",
+		".vscode/",
+		".DS_Store",
+		"Thumbs.db",
+	}
+
+	// Load user patterns from .euignore
+	userPatterns := []string{}
+	ignorePath := filepath.Join(d.projectPath, ignoreFileName)
+	file, err := os.Open(ignorePath)
+	if err == nil {
+		defer func() {
+			_ = file.Close()
+		}()
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			userPatterns = append(userPatterns, line)
+		}
+
+		if err := scanner.Err(); err != nil {
+			fmt.Printf("warning: error reading %s: %v\n", ignorePath, err)
+		}
+	}
+
+	// Combine: user patterns first (they take priority), then defaults
+	d.ignorePatterns = append(userPatterns, defaultPatterns...)
+}
+
 func (d *Detector) shouldIgnore(path string) bool {
 	relPath, err := filepath.Rel(d.projectPath, path)
 	if err != nil {
 		return false
 	}
 
-	if strings.HasPrefix(relPath, ".eulix") || strings.Contains(relPath, string(filepath.Separator)+".eulix") {
-		return true
-	}
+	// Normalize to forward slashes for consistent matching
+	relPath = filepath.ToSlash(relPath)
+	pathParts := strings.Split(relPath, "/")
 
 	for _, pattern := range d.ignorePatterns {
-		matched, err := filepath.Match(pattern, relPath)
-		if err == nil && matched {
-			return true
-		}
+		pattern = filepath.ToSlash(pattern)
 
-		pathParts := strings.Split(relPath, string(filepath.Separator))
-		for _, part := range pathParts {
-			matched, err := filepath.Match(pattern, part)
-			if err == nil && matched {
-				return true
-			}
-		}
-
+		// Handle directory patterns
 		if strings.HasSuffix(pattern, "/") {
-			if strings.HasPrefix(relPath, strings.TrimSuffix(pattern, "/")) {
+			dirPattern := strings.TrimSuffix(pattern, "/")
+
+			// Check if any path component matches
+			for _, part := range pathParts {
+				if matched, _ := filepath.Match(dirPattern, part); matched {
+					return true
+				}
+			}
+
+			// Check if path starts with this directory
+			if relPath == dirPattern || strings.HasPrefix(relPath, dirPattern+"/") {
 				return true
 			}
-		}
+		} else {
+			// File pattern - check full path and each component
+			if matched, _ := filepath.Match(pattern, relPath); matched {
+				return true
+			}
 
-		if strings.HasPrefix(relPath, pattern) {
-			return true
+			for _, part := range pathParts {
+				if matched, _ := filepath.Match(pattern, part); matched {
+					return true
+				}
+			}
 		}
 	}
 
 	return false
 }
 
-func (d *Detector) Calculate() (*Checksum, error) {
-	fileHashes := make(map[string]string)
+// calculate walks the project and hashes every source file. It's a full
+// recompute — used both for first-run creation and for producing the
+// "current" snapshot to diff against a stored checksum.
+func (d *Detector) calculate() (*Checksum, error) {
+	files := make(map[string]FileEntry)
 	totalLines := 0
 	totalFiles := 0
 
@@ -129,7 +242,10 @@ func (d *Detector) Calculate() (*Checksum, error) {
 			return nil
 		}
 
-		if info.IsDir() || filepath.Base(path)[0] == '.' {
+		if info.IsDir() {
+			return nil
+		}
+		if base := filepath.Base(path); len(base) > 0 && base[0] == '.' {
 			return nil
 		}
 
@@ -144,7 +260,11 @@ func (d *Detector) Calculate() (*Checksum, error) {
 		}
 
 		relPath, _ := filepath.Rel(d.projectPath, path)
-		fileHashes[relPath] = hash
+		files[relPath] = FileEntry{
+			Hash:    hash,
+			Size:    info.Size(),
+			ModTime: info.ModTime().UnixNano(),
+		}
 		totalLines += lines
 		totalFiles++
 
@@ -155,43 +275,72 @@ func (d *Detector) Calculate() (*Checksum, error) {
 		return nil, err
 	}
 
-	h := sha256.New()
-	for _, hash := range fileHashes {
-		h.Write([]byte(hash))
-	}
-	projectHash := hex.EncodeToString(h.Sum(nil))
+	projectHash := combinedHash(files)
 
 	return &Checksum{
 		ProjectPath:     d.projectPath,
 		TotalFiles:      totalFiles,
 		TotalLines:      totalLines,
 		Hash:            projectHash,
-		FileHashes:      fileHashes,
+		Files:           files,
 		LastAnalyzed:    time.Now(),
-		AnalysisVersion: "0.5.3",
+		AnalysisVersion: analysisVersion,
 	}, nil
 }
 
+// combinedHash folds all per-file hashes into a single deterministic
+// project-level hash. Paths are sorted first since map iteration order in
+// Go is randomized — without sorting, the same file contents could produce
+// a different combined hash from run to run.
+func combinedHash(files map[string]FileEntry) string {
+	relPaths := make([]string, 0, len(files))
+	for p := range files {
+		relPaths = append(relPaths, p)
+	}
+	sort.Strings(relPaths)
+
+	hasher := xxh3.New()
+	for _, p := range relPaths {
+		hasher.WriteString(p)
+		hasher.WriteString(files[p].Hash)
+	}
+	return fmt.Sprintf("%016x", hasher.Sum64())
+}
+
+func (d *Detector) eulixDir() string {
+	return filepath.Join(d.projectPath, eulixDirName)
+}
+
 func (d *Detector) Save(checksum *Checksum) error {
-	eulixDir := filepath.Join(d.projectPath, ".eulix")
-	if err := os.MkdirAll(eulixDir, 0755); err != nil {
+	dir := d.eulixDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
-	checksumPath := filepath.Join(eulixDir, "checksum.json")
-	data, err := json.MarshalIndent(checksum, "", "  ")
+	checksumPath := filepath.Join(dir, checksumFileName)
+	data, err := json.Marshal(checksum)
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(checksumPath, data, 0644)
+	compressed, err := compressZstd(data)
+	if err != nil {
+		return fmt.Errorf("checksum: failed to compress checksum data: %w", err)
+	}
+
+	return os.WriteFile(checksumPath, compressed, 0644)
 }
 
 func (d *Detector) Load() (*Checksum, error) {
-	checksumPath := filepath.Join(d.projectPath, ".eulix", "checksum.json")
-	data, err := os.ReadFile(checksumPath)
+	checksumPath := filepath.Join(d.eulixDir(), checksumFileName)
+	raw, err := os.ReadFile(checksumPath)
 	if err != nil {
 		return nil, err
+	}
+
+	data, err := decompressZstd(raw)
+	if err != nil {
+		return nil, fmt.Errorf("checksum: failed to decompress checksum data: %w", err)
 	}
 
 	var checksum Checksum
@@ -202,35 +351,78 @@ func (d *Detector) Load() (*Checksum, error) {
 	return &checksum, nil
 }
 
-func (d *Detector) CompareChecksums(stored, current *Checksum) float64 {
+// compressZstd compresses data using zstd at the default compression level.
+// The checksum file is written and read frequently on every Run(), so we
+// favor default speed over the slower "best compression" levels.
+func compressZstd(data []byte) ([]byte, error) {
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = encoder.Close()
+	}()
+
+	return encoder.EncodeAll(data, make([]byte, 0, len(data))), nil
+}
+
+// decompressZstd reverses compressZstd.
+func decompressZstd(data []byte) ([]byte, error) {
+	decoder, err := zstd.NewReader(nil)
+	if err != nil {
+		return nil, err
+	}
+	defer decoder.Close()
+
+	return decoder.DecodeAll(data, nil)
+}
+
+// compare diffs stored vs current checksums and returns counts plus the
+// changed ratio (added+deleted+modified over the larger of the two file
+// counts, so both wholesale deletions and wholesale additions register
+// correctly instead of being able to exceed 1.0 or hide against a stale
+// denominator).
+func compare(stored, current *Checksum) (added, deleted, modified int, ratio float64) {
 	if stored == nil || current == nil {
-		return 1.0
+		return 0, 0, 0, 1.0
 	}
 
-	added := 0
-	deleted := 0
-	modified := 0
-
-	for file := range current.FileHashes {
-		if storedHash, exists := stored.FileHashes[file]; !exists {
+	for file, entry := range current.Files {
+		storedEntry, exists := stored.Files[file]
+		if !exists {
 			added++
-		} else if storedHash != current.FileHashes[file] {
+			continue
+		}
+		// Fast path: identical size+mtime means almost certainly unchanged,
+		// skip trusting the hash comparison to a cheap metadata check first.
+		if storedEntry.Size == entry.Size && storedEntry.ModTime == entry.ModTime {
+			continue
+		}
+		if storedEntry.Hash != entry.Hash {
 			modified++
 		}
 	}
 
-	for file := range stored.FileHashes {
-		if _, exists := current.FileHashes[file]; !exists {
+	for file := range stored.Files {
+		if _, exists := current.Files[file]; !exists {
 			deleted++
 		}
 	}
 
-	totalChanges := added + deleted + modified
-	if stored.TotalFiles == 0 {
-		return 1.0
+	denom := stored.TotalFiles
+	if current.TotalFiles > denom {
+		denom = current.TotalFiles
+	}
+	if denom == 0 {
+		return added, deleted, modified, 0.0
 	}
 
-	return float64(totalChanges) / float64(stored.TotalFiles)
+	totalChanges := added + deleted + modified
+	ratio = float64(totalChanges) / float64(denom)
+	if ratio > 1.0 {
+		ratio = 1.0
+	}
+	return added, deleted, modified, ratio
 }
 
 func hashFile(path string) (string, int, error) {
@@ -242,30 +434,29 @@ func hashFile(path string) (string, int, error) {
 		_ = f.Close()
 	}()
 
-	h := sha256.New()
+	hasher := xxh3.New()
 	lines := 0
-	buf := make([]byte, 4096)
+	buf := make([]byte, 64*1024) // larger buffer = fewer syscalls, faster
 
 	for {
 		n, err := f.Read(buf)
-		if err != nil && err != io.EOF {
-			return "", 0, err
+		if n > 0 {
+			hasher.Write(buf[:n])
+			for i := 0; i < n; i++ {
+				if buf[i] == '\n' {
+					lines++
+				}
+			}
 		}
-		if n == 0 {
+		if err == io.EOF {
 			break
 		}
-
-		h.Write(buf[:n])
-
-		// Count newlines
-		for i := 0; i < n; i++ {
-			if buf[i] == '\n' {
-				lines++
-			}
+		if err != nil {
+			return "", 0, err
 		}
 	}
 
-	return hex.EncodeToString(h.Sum(nil)), lines, nil
+	return fmt.Sprintf("%016x", hasher.Sum64()), lines, nil
 }
 
 func isSourceFile(ext string) bool {

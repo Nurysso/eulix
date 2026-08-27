@@ -32,27 +32,35 @@ import (
 func analyzeProject(projectPath string) error {
 	startTime := time.Now()
 
+	// Load config (used for parser and embedding settings)
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Run checksum – loads config internally, calculates, compares, and saves
+	result, err := checksum.Run()
+	if err != nil {
+		return fmt.Errorf("checksum failed: %w", err)
+	}
+
+	// Decide whether to run the full analysis pipeline
+	if result.FirstRun {
+		fmt.Println("First time analyzing project – running full analysis...")
+	} else if result.ChangedRatio > 0 {
+		fmt.Printf("Codebase changed: %.1f%% files modified – running analysis...\n", result.ChangedRatio*100)
+	} else {
+		fmt.Println("No changes detected – skipping analysis.")
+		return nil
 	}
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-
 	eulixDir := filepath.Join(projectPath, ".eulix")
 
-	detector := checksum.HashHound(projectPath)
-	currentChecksum, err := detector.Calculate()
-	if err != nil {
-		return fmt.Errorf("checksum calculation failed: %w", err)
-	}
-
-	// Eulix Parser (always uses embedded binary)
 	fmt.Println("Parsing codebase...")
-
 	parserBin, err := a.ParserPath()
 	if err != nil {
 		return fmt.Errorf("could not extract embedded parser: %w", err)
@@ -79,11 +87,8 @@ func analyzeProject(projectPath string) error {
 		return fmt.Errorf("parser failed: %w", err)
 	}
 	fmt.Println("✓ Parser completed")
-	fmt.Println()
 
 	fmt.Println("Generating embeddings...")
-	embeddingsPath := eulixDir
-	// Original behaviour: use venv Python + eulix_embed/main.py script.
 	venvPath := filepath.Join(homeDir, ".Eulix", ".venv")
 	pythonPath, venvEnv, err := embeddings.GetVenvPython(venvPath)
 	if err != nil {
@@ -101,7 +106,7 @@ func analyzeProject(projectPath string) error {
 	embedCmd := exec.Command(pythonPath, embedScriptPath,
 		"embed",
 		"-k", kbPath,
-		"-o", embeddingsPath,
+		"-o", eulixDir,
 		"-m", cfg.Embeddings.Model,
 		"--quantize",
 	)
@@ -111,21 +116,13 @@ func analyzeProject(projectPath string) error {
 	if err := embedCmd.Run(); err != nil {
 		return fmt.Errorf("embedding generation failed (script mode): %w", err)
 	}
+	fmt.Println("✓ Embeddings completed")
 
-	fmt.Println("   ✓ Embeddings completed")
-	fmt.Println()
-
-	// Checksum save
-	fmt.Println("Saving checksum...")
-	if err := detector.Save(currentChecksum); err != nil {
-		return fmt.Errorf("failed to save checksum: %w", err)
-	}
-	fmt.Println("   ✓ Checksum saved")
-	fmt.Println()
+	// No explicit checksum save needed – checksum.Run() already persisted it.
+	// The checksum is based on source files and is unaffected by parser/embedding outputs.
 
 	duration := time.Since(startTime)
 	fmt.Printf("Took %s\n", duration.Round(time.Second))
-	fmt.Println()
-	fmt.Println("Run 'eulix chat' to start querying your codebase!")
+	fmt.Println(" Run 'eulix chat' to start querying your codebase!")
 	return nil
 }
