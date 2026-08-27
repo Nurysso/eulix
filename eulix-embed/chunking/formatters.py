@@ -11,15 +11,14 @@
 # Truncation of callers (e.g., "… and N more") keeps card sizes bounded and prevents
 # excessive token usage.
 
-import os
 import io
-from typing import Dict
+
 
 # These _fmt_* functions render a parsed function/class/file dict back into
 # a plain-text "card" that gets embedded and shown to the retriever. They're
 # deliberately comment-like (// File:, // Function:) rather than JSON, since
 # that reads naturally to both humans and the embedding model.
-def fmt_function_with_context(func: Dict, file_path: str) -> str:
+def fmt_function_with_context(func: dict, file_path: str) -> str:
     """Render one function as a text card: signature, params, return type,
     up to 10 outgoing calls and 5 incoming callers (truncated with a "...
     and N more" line to keep card size bounded), control-flow complexity,
@@ -66,10 +65,7 @@ def fmt_function_with_context(func: Dict, file_path: str) -> str:
 
     cf = func.get("control_flow", {})
     if cf.get("complexity", 0) > 0:
-        w(
-            f"Control flow: {len(cf.get('branches', []))} branches, "
-            f"{len(cf.get('loops', []))} loops"
-        )
+        w(f"Control flow: {len(cf.get('branches', []))} branches, " f"{len(cf.get('loops', []))} loops")
 
     exc = func.get("exceptions", {})
     if exc.get("raises") or exc.get("handles"):
@@ -82,7 +78,8 @@ def fmt_function_with_context(func: Dict, file_path: str) -> str:
 
     return buf.getvalue()
 
-def fmt_method_with_class_ctx(method: Dict, cls: Dict, file_path: str) -> str:
+
+def fmt_method_with_class_ctx(method: dict, cls: dict, file_path: str) -> str:
     buf = io.StringIO()
     w = buf.write
     w(f"// File: {file_path}")
@@ -95,7 +92,8 @@ def fmt_method_with_class_ctx(method: Dict, cls: Dict, file_path: str) -> str:
     w(fmt_function_with_context(method, file_path))
     return buf.getvalue()
 
-def fmt_class_overview(cls: Dict, file_path: str) -> str:
+
+def fmt_class_overview(cls: dict, file_path: str) -> str:
     buf = io.StringIO()
     w = buf.write
     w(f"// File: {file_path}")
@@ -120,7 +118,8 @@ def fmt_class_overview(cls: Dict, file_path: str) -> str:
         w("")
     return buf.getvalue()
 
-def fmt_file_summary(file_path: str, fs: Dict) -> str:
+
+def fmt_file_summary(file_path: str, fs: dict) -> str:
     buf = io.StringIO()
     w = buf.write
     w(f"File: {file_path}")

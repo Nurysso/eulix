@@ -48,6 +48,8 @@ static PTHREAD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"pthread|fork|thread")
 static SYSCALL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"syscall|ioctl|fcntl").unwrap());
 static STRING_OPS_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"strcpy|strcat|sprintf|strncpy").unwrap());
+static INLINE_ASM_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\(").unwrap());
 
 static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
     vec![
@@ -85,6 +87,11 @@ static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
             regex: &WEAK_RANDOM_RE,
             note_type: "weak_random",
             description: "Weak random number generator",
+        },
+        SecurityPattern {
+            regex: &INLINE_ASM_RE,
+            note_type: "inline_asm",
+            description: "Inline assembly block",
         },
     ]
 });
@@ -170,22 +177,27 @@ static TAG_RULES: Lazy<Vec<TagRule>> = Lazy::new(|| {
             tag: "signal-handling",
             check_docstring: false,
         },
+        TagRule {
+            keywords: &["asm", "assembler"],
+            tag: "inline-asm",
+            check_docstring: false,
+        },
     ]
 });
 
 pub struct CParser {
     source_code: String,
-    /// macro_name -> expansion text (best-effort from #define)
-    macro_defs: HashMap<String, String>,
-    /// function_ptr_var -> resolved callee name (best-effort)
-    fn_ptr_map: HashMap<String, String>,
+    file_path: String,
+    macro_defs: HashMap<String, String>, // macro_name -> expansion text (best-effort from #define)
+    fn_ptr_map: HashMap<String, String>, // function_ptr_var -> resolved callee name (best-effort)
 }
 
 impl CParser {
-    pub fn new(source_code: String) -> Self {
+    pub fn new(source_code: String, file_path: String) -> Self {
         let macro_defs = Self::pre_scan_macros(&source_code);
         Self {
             source_code,
+            file_path,
             macro_defs,
             fn_ptr_map: HashMap::new(),
         }
@@ -201,6 +213,31 @@ impl CParser {
             map.insert(name, body);
         }
         map
+    }
+
+    /// Builds a file-qualified ID for a top-level function.
+    /// e.g. func_parseFile::src/parser.c
+    ///      method_MyStruct_init::src/parser.c
+    fn make_function_id(&self, name: &str, struct_context: &str) -> String {
+        if struct_context.is_empty() {
+            format!("func_{}::{}", name, self.file_path)
+        } else {
+            format!("method_{}_{}::{}", struct_context, name, self.file_path)
+        }
+    }
+    /// e.g. struct_MyStruct::src/parser.c
+    fn make_struct_id(&self, name: &str) -> String {
+        format!("struct_{}::{}", name, self.file_path)
+    }
+
+    /// e.g. union_MyUnion::src/parser.c
+    fn make_union_id(&self, name: &str) -> String {
+        format!("union_{}::{}", name, self.file_path)
+    }
+
+    /// e.g. enum_MyEnum::src/parser.c
+    fn make_enum_id(&self, name: &str) -> String {
+        format!("enum_{}::{}", name, self.file_path)
     }
 
     pub fn parse(&mut self) -> Result<FileData, String> {
@@ -390,13 +427,10 @@ impl CParser {
         let exceptions = ExceptionInfo::default();
         let complexity = self.calculate_complexity(&body);
 
-        let id = if struct_context.is_empty() {
-            format!("func_{}", name)
-        } else {
-            format!("method_{}_{}", struct_context, name)
-        };
+        let id = self.make_function_id(&name, struct_context);
+        let body_text = self.get_node_text(&body);
 
-        let tags = self.auto_tag_function(&name, &docstring, &calls, &return_type);
+        let tags = self.auto_tag_function(&name, &docstring, &calls, &return_type, &body_text);
         let importance_score = self.estimate_importance(&name, &return_type);
 
         Some(Function {
@@ -850,14 +884,122 @@ impl CParser {
     fn extract_structs(&self, root: &Node) -> Vec<Class> {
         let mut structs = Vec::new();
         let mut cursor = root.walk();
+
         for child in root.children(&mut cursor) {
             if child.kind() == "declaration" {
-                if let Some(s) = self.parse_struct(&child) {
-                    structs.push(s);
+                if let Some(type_node) = child.child_by_field_name("type") {
+                    match type_node.kind() {
+                        "struct_specifier" | "union_specifier" => {
+                            if let Some(s) = self.parse_struct(&child) {
+                                structs.push(s);
+                            }
+                        }
+                        "enum_specifier" => {
+                            if let Some(e) = self.parse_enum(&child) {
+                                structs.push(e);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
         structs
+    }
+
+    fn parse_enum(&self, node: &Node) -> Option<Class> {
+        let type_node = node.child_by_field_name("type")?;
+        if type_node.kind() != "enum_specifier" {
+            return None;
+        }
+
+        let mut name = type_node
+            .child_by_field_name("name")
+            .map(|n| self.get_node_text(&n));
+
+        if name.is_none() {
+            if let Some(declarator) = node.child_by_field_name("declarator") {
+                if declarator.kind() == "type_identifier" {
+                    name = Some(self.get_node_text(&declarator));
+                }
+            }
+        }
+
+        let name = name?;
+
+        let attributes = type_node
+            .child_by_field_name("body")
+            .map(|b| self.extract_enum_fields(&b))
+            .unwrap_or_default();
+
+        let mut decorators = vec!["enum".to_string()];
+        if self.is_flags_enum(&attributes) {
+            decorators.push("flags".to_string());
+        }
+
+        let id = self.make_enum_id(&name);
+
+        Some(Class {
+            id,
+            name,
+            bases: vec![],
+            docstring: self.extract_docstring(node),
+            line_start: node.start_position().row + 1,
+            line_end: node.end_position().row + 1,
+            methods: vec![],
+            attributes,
+            decorators,
+            lang_info: LanguageSpecificInfo::default(),
+        })
+    }
+
+    fn extract_enum_fields(&self, body: &Node) -> Vec<Attribute> {
+        let mut fields = Vec::new();
+        let mut cursor = body.walk();
+
+        for child in body.children(&mut cursor) {
+            if child.kind() == "enumerator" {
+                let name = child
+                    .child_by_field_name("name")
+                    .map(|n| self.get_node_text(&n))
+                    .unwrap_or_default();
+
+                if !name.is_empty() {
+                    let value = child
+                        .child_by_field_name("value")
+                        .map(|v| self.get_node_text(&v));
+
+                    fields.push(Attribute {
+                        name,
+                        type_annotation: "enum_constant".to_string(),
+                        value,
+                    });
+                }
+            }
+        }
+        fields
+    }
+    fn is_flags_enum(&self, attributes: &[Attribute]) -> bool {
+        // Check if enum values look like bit flags (powers of two)
+        // This is a simple heuristic
+        let values: Vec<&str> = attributes
+            .iter()
+            .filter_map(|attr| attr.value.as_deref())
+            .collect();
+
+        if values.len() < 2 {
+            return false;
+        }
+
+        // Check for common flag patterns like 0x1, 0x2, 0x4, 0x8
+        let hex_powers = values
+            .iter()
+            .any(|v| v.starts_with("0x") && (v.len() == 3 || v.len() == 4));
+
+        // Or check for shift expressions like 1 << 0, 1 << 1, etc.
+        let shift_pattern = values.iter().any(|v| v.contains("<<"));
+
+        hex_powers || shift_pattern
     }
 
     fn parse_struct(&self, node: &Node) -> Option<Class> {
@@ -874,13 +1016,22 @@ impl CParser {
         } else {
             "struct"
         };
+
         let attributes = type_node
             .child_by_field_name("body")
             .map(|b| self.extract_struct_fields(&b))
             .unwrap_or_default();
 
+        let id = if struct_type == "union" {
+            self.make_union_id(&name)
+        } else {
+            self.make_struct_id(&name)
+        };
+
+        let decorators = vec![struct_type.to_string()];
+
         Some(Class {
-            id: format!("{}_{}", struct_type, name),
+            id,
             name,
             bases: vec![],
             docstring: self.extract_docstring(node),
@@ -888,7 +1039,7 @@ impl CParser {
             line_end: node.end_position().row + 1,
             methods: vec![],
             attributes,
-            decorators: vec![],
+            decorators,
             lang_info: LanguageSpecificInfo::default(),
         })
     }
@@ -1054,6 +1205,7 @@ impl CParser {
         docstring: &str,
         calls: &[FunctionCall],
         return_type: &str,
+        body_text: &str,
     ) -> Vec<String> {
         let mut tags = Vec::new();
         let name_lower = name.to_lowercase();
@@ -1091,6 +1243,10 @@ impl CParser {
             tags.push("allocates-memory".to_string());
             tags.push("memory-management".to_string());
         }
+        if INLINE_ASM_RE.is_match(body_text) {
+            tags.push("inline-asm".to_string());
+            tags.push("unsafe".to_string());
+        }
 
         if FREE_RE.is_match(&calls_joined) {
             tags.push("frees-memory".to_string());
@@ -1104,6 +1260,9 @@ impl CParser {
 
         if SYSCALL_RE.is_match(&calls_joined) {
             tags.push("system-call".to_string());
+        }
+        if INLINE_ASM_RE.is_match(&self.source_code[..]) {
+            // More precise: check the function body text
         }
 
         if STRING_OPS_RE.is_match(&calls_joined) {
@@ -1148,7 +1307,13 @@ impl CParser {
 pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
-    let mut parser = CParser::new(source_code);
+
+    // Strips leading "./" or ".\" if present, otherwise leaves path as is
+    let clean_path = path.strip_prefix("./").unwrap_or(path);
+    let path_str = clean_path.to_string_lossy().to_string();
+
+    let mut parser = CParser::new(source_code, path_str.clone());
     let file_data = parser.parse()?;
-    Ok((path.to_string_lossy().to_string(), file_data))
+
+    Ok((path_str, file_data))
 }

@@ -1,4 +1,10 @@
-from typing import Any
+# Copyright (C) 2026 Dawood Khan
+# SPDX-License-Identifier: Apache-2.0
+
+# Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+
+# Utils module holds shared code like dynamic imports.
+
 
 def require_ml():
     """
@@ -9,31 +15,29 @@ def require_ml():
     import numpy as np
     import torch
     import torch.nn.functional as F
-    from transformers import AutoModel, AutoTokenizer
     from tqdm import tqdm
+    from transformers import AutoModel, AutoTokenizer
 
     torch.cuda.set_per_process_memory_fraction(0.85)
 
     return np, torch, F, AutoModel, AutoTokenizer, tqdm
 
+
 def require_ml_onnx():
     """
-    Import and return (np, ort, AutoTokenizer, tqdm).
+    Import and return (np, ort, tokenizers, tqdm).
 
-    Inference runs entirely through
-    ONNX Runtime (`ort`). AutoTokenizer from `transformers` is still used
-    since it doesn't require torch/tensorflow to be installed (it's backed
-    by the Rust `tokenizers` library).
-
-    Called once inside EmbeddingGenerator.__init__; results are stored on
-    the instance so no re-import penalty on subsequent calls.
+    Inference runs entirely through ONNX Runtime (`ort`).
+    Tokenization is handled by the `tokenizers` library directly
+    (the Rust-backed core that transformers wraps internally).
+    This removes the transformers dependency entirely.
     """
     import numpy as np
     import onnxruntime as ort
-    from transformers import AutoTokenizer
+    import tokenizers as tklib  # type: ignore[import-untyped, unused-ignore]
     from tqdm import tqdm
 
-    return np, ort, AutoTokenizer, tqdm
+    return np, ort, tklib, tqdm
 
 
 def require_numpy():

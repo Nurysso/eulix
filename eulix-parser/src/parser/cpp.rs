@@ -99,7 +99,8 @@ static VIRTUAL_RE: Lazy<Regex> =
 static RTTI_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\btypeid\b|\bdynamic_cast\s*<").unwrap());
 static OPERATOR_OVERLOAD_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\boperator\s*[+\-*/%=<>!&|^~\[\]()]+\s*\(").unwrap());
-
+static INLINE_ASM_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\(").unwrap());
 static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
     vec![
         SecurityPattern {
@@ -156,6 +157,11 @@ static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
             regex: &EXCEPTION_SAFETY_RE,
             note_type: "exception_safety",
             description: "Potential exception safety issue",
+        },
+        SecurityPattern {
+            regex: &INLINE_ASM_RE,
+            note_type: "inline_asm",
+            description: "Inline assembly block — verify portability and safety",
         },
     ]
 });
@@ -310,26 +316,44 @@ static TAG_RULES: Lazy<Vec<TagRule>> = Lazy::new(|| {
             tag: "compile-time",
             check_docstring: false,
         },
+        TagRule {
+            keywords: &["asm", "assembler", "intrinsic", "simd"],
+            tag: "inline-asm",
+            check_docstring: false,
+        },
     ]
 });
 
 pub struct CppParser {
     source_code: String,
+    file_path: String,
     macro_defs: HashMap<String, String>,
     fn_ptr_map: HashMap<String, String>,
     type_aliases: HashMap<String, String>,
 }
 
 impl CppParser {
-    pub fn new(source_code: String) -> Self {
+    pub fn new(source_code: String, file_path: String) -> Self {
         let macro_defs = Self::pre_scan_macros(&source_code);
         let type_aliases = Self::pre_scan_type_aliases(&source_code);
         Self {
             source_code,
+            file_path,
             macro_defs,
             fn_ptr_map: HashMap::new(),
             type_aliases,
         }
+    }
+    fn make_function_id(&self, name: &str, struct_context: &str) -> String {
+        if struct_context.is_empty() {
+            format!("func_{}::{}", name, self.file_path)
+        } else {
+            format!("method_{}_{}::{}", struct_context, name, self.file_path)
+        }
+    }
+
+    fn make_class_id(&self, name: &str) -> String {
+        format!("class_{}::{}", name, self.file_path)
     }
 
     fn pre_scan_macros(src: &str) -> HashMap<String, String> {
@@ -695,11 +719,7 @@ impl CppParser {
         let docstring = self.extract_docstring(node);
         let signature = self.build_signature(&name, &params, &return_type);
 
-        let id = if struct_context.is_empty() {
-            format!("func_{}", name)
-        } else {
-            format!("method_{}_{}", struct_context, name)
-        };
+        let id = self.make_function_id(&name, struct_context);
 
         let (calls, variables, control_flow, complexity) =
             if let Some(body) = node.child_by_field_name("body") {
@@ -897,6 +917,26 @@ impl CppParser {
                         classes.push(class);
                     }
                 }
+                "enum_specifier" => {
+                    if let Some(e) = self.parse_enum(&child) {
+                        classes.push(e);
+                    }
+                }
+                "declaration" => {
+                    // Handle: enum class Foo { ... }; or typedef enum { ... } Foo;
+                    if let Some(type_node) = child.child_by_field_name("type") {
+                        if type_node.kind() == "enum_specifier" {
+                            if let Some(e) = self.parse_enum(&type_node) {
+                                classes.push(e);
+                            }
+                        }
+                    }
+                }
+                "union_specifier" => {
+                    if let Some(u) = self.parse_union(&child) {
+                        classes.push(u);
+                    }
+                }
                 "namespace_definition" => {
                     if let Some(body) = child.child_by_field_name("body") {
                         self.collect_classes(&body, classes);
@@ -907,10 +947,169 @@ impl CppParser {
         }
     }
 
-    fn parse_class(&self, node: &Node) -> Option<Class> {
+    fn parse_enum(&self, node: &Node) -> Option<Class> {
         let name = node
             .child_by_field_name("name")
             .map(|n| self.get_node_text(&n))?;
+
+        let is_scoped = {
+            let mut cursor = node.walk();
+            let x = node
+                .children(&mut cursor)
+                .any(|c| c.kind() == "class" || c.kind() == "struct");
+            x
+        };
+
+        // Extract underlying type: enum Foo : uint8_t
+        let underlying_type = node
+            .child_by_field_name("base")
+            .map(|b| self.get_node_text(&b).trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let attributes = node
+            .child_by_field_name("body")
+            .map(|b| self.extract_enum_fields(&b))
+            .unwrap_or_default();
+
+        let is_flags = self.is_flags_enum(&attributes);
+
+        // decorators kept for quick JSON scanning without parsing lang_info
+        let mut decorators = vec!["enum".to_string()];
+        if is_scoped {
+            decorators.push("scoped-enum".to_string());
+        }
+        if is_flags {
+            decorators.push("flags".to_string());
+        }
+
+        Some(Class {
+            id: format!("enum_{}::{}", name, self.file_path),
+            name,
+            bases: vec![],
+            docstring: self.extract_docstring(node),
+            line_start: node.start_position().row + 1,
+            line_end: node.end_position().row + 1,
+            methods: vec![],
+            attributes,
+            decorators,
+            lang_info: LanguageSpecificInfo {
+                cpp: Some(CppInfo {
+                    type_kind: CppTypeKind::Enum,
+                    is_scoped_enum: is_scoped,
+                    is_flags_enum: is_flags,
+                    underlying_type,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        })
+    }
+
+    fn parse_union(&self, node: &Node) -> Option<Class> {
+        let name = node
+            .child_by_field_name("name")
+            .map(|n| self.get_node_text(&n))?;
+
+        let attributes = node
+            .child_by_field_name("body")
+            .map(|b| self.extract_struct_fields(&b))
+            .unwrap_or_default();
+
+        let node_text = self.get_node_text(node);
+        let is_packed = node_text.contains("__attribute__((packed))");
+
+        Some(Class {
+            id: format!("union_{}::{}", name, self.file_path),
+            name,
+            bases: vec![],
+            docstring: self.extract_docstring(node),
+            line_start: node.start_position().row + 1,
+            line_end: node.end_position().row + 1,
+            methods: vec![],
+            attributes,
+            decorators: vec!["union".to_string()],
+            lang_info: LanguageSpecificInfo {
+                cpp: Some(CppInfo {
+                    type_kind: CppTypeKind::Union,
+                    is_packed,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        })
+    }
+    fn extract_struct_fields(&self, body: &Node) -> Vec<Attribute> {
+        let mut fields = Vec::new();
+        let mut cursor = body.walk();
+        for child in body.children(&mut cursor) {
+            if child.kind() == "field_declaration" {
+                let type_annotation = child
+                    .child_by_field_name("type")
+                    .map(|t| self.get_node_text(&t))
+                    .unwrap_or_default();
+                if let Some(decl) = child.child_by_field_name("declarator") {
+                    let name = self.extract_declarator_name(&decl);
+                    if !name.is_empty() {
+                        fields.push(Attribute {
+                            name,
+                            type_annotation,
+                            value: None,
+                        });
+                    }
+                }
+            }
+        }
+        fields
+    }
+
+    fn extract_enum_fields(&self, body: &Node) -> Vec<Attribute> {
+        let mut fields = Vec::new();
+        let mut cursor = body.walk();
+
+        for child in body.children(&mut cursor) {
+            if child.kind() == "enumerator" {
+                let name = child
+                    .child_by_field_name("name")
+                    .map(|n| self.get_node_text(&n))
+                    .unwrap_or_default();
+
+                if !name.is_empty() {
+                    let value = child
+                        .child_by_field_name("value")
+                        .map(|v| self.get_node_text(&v));
+                    fields.push(Attribute {
+                        name,
+                        type_annotation: "enum_constant".to_string(),
+                        value,
+                    });
+                }
+            }
+        }
+        fields
+    }
+
+    fn is_flags_enum(&self, attributes: &[Attribute]) -> bool {
+        if attributes.len() < 2 {
+            return false;
+        }
+        let values: Vec<&str> = attributes
+            .iter()
+            .filter_map(|a| a.value.as_deref())
+            .collect();
+
+        let hex_powers = values.iter().any(|v| v.starts_with("0x") && v.len() <= 6);
+        let shift_pattern = values.iter().any(|v| v.contains("<<"));
+        // C++: (1u << N) or static_cast<...>(1 << N)
+        let cast_shift = values
+            .iter()
+            .any(|v| v.contains("cast") && v.contains("<<"));
+
+        hex_powers || shift_pattern || cast_shift
+    }
+
+    fn parse_class(&self, node: &Node) -> Option<Class> {
+        let name_node = node.child_by_field_name("name")?;
+        let name = self.get_node_text(&name_node);
 
         let line_start = node.start_position().row + 1;
         let line_end = node.end_position().row + 1;
@@ -941,8 +1140,51 @@ impl CppParser {
             .unwrap_or((vec![], vec![]));
 
         let is_struct = node.kind() == "struct_specifier";
+        let type_kind = if is_struct {
+            CppTypeKind::Struct
+        } else {
+            CppTypeKind::Class
+        };
+        let has_vtable = methods.iter().any(|m| {
+            m.lang_info
+                .cpp
+                .as_ref()
+                .map_or(false, |c| c.is_virtual || c.is_pure_virtual)
+        });
+        let is_abstract = methods.iter().any(|m| {
+            m.lang_info
+                .cpp
+                .as_ref()
+                .map_or(false, |c| c.is_pure_virtual)
+        });
+        let node_text = self.get_node_text(node);
+        let is_packed =
+            node_text.contains("__attribute__((packed))") || node_text.contains("#pragma pack");
+        let is_template = node
+            .parent()
+            .map_or(false, |p| p.kind() == "template_declaration");
+        let template_params = if is_template {
+            node.parent()
+                .map(|p| self.extract_template_params(&p))
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
+
+        // Inheritance access type: first base clause qualifier
+        let inheritance_type = node.child_by_field_name("base_class_clause").map(|bc| {
+            let text = self.get_node_text(&bc);
+            if text.contains("public") {
+                "public".to_string()
+            } else if text.contains("protected") {
+                "protected".to_string()
+            } else {
+                "private".to_string()
+            }
+        });
+
         Some(Class {
-            id: format!("{}_{}", if is_struct { "struct" } else { "class" }, name),
+            id: self.make_class_id(&name),
             name,
             bases,
             docstring,
@@ -951,7 +1193,19 @@ impl CppParser {
             methods,
             attributes,
             decorators: vec![],
-            lang_info: LanguageSpecificInfo::default(),
+            lang_info: LanguageSpecificInfo {
+                cpp: Some(CppInfo {
+                    type_kind,
+                    has_vtable,
+                    is_abstract,
+                    is_packed,
+                    is_template,
+                    template_params,
+                    inheritance_type,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
         })
     }
 
@@ -1571,6 +1825,10 @@ impl CppParser {
         if OPERATOR_OVERLOAD_RE.is_match(body_text) {
             tags.insert("operator-overload".to_string());
         }
+        if INLINE_ASM_RE.is_match(body_text) {
+            tags.insert("inline-asm".to_string());
+            tags.insert("unsafe".to_string());
+        }
 
         if NAMESPACE_RE.is_match(body_text) {
             tags.insert("namespaced".to_string());
@@ -1669,6 +1927,50 @@ impl CppParser {
         if text.trim_start().starts_with("inline") {
             info.is_inline = true;
         }
+        // extern "C"
+        if text.contains("extern \"C\"") {
+            info.is_extern_c = true;
+        }
+
+        // thread_local
+        if text.contains("thread_local") {
+            info.is_thread_local = true;
+        }
+
+        // consteval / constinit
+        if text.contains("consteval") {
+            info.is_consteval = true;
+        }
+        if text.contains("constinit") {
+            info.is_constinit = true;
+        }
+        // template
+        if let Some(parent) = func_node.parent() {
+            if parent.kind() == "template_declaration" {
+                info.is_template = true;
+                if parent.kind() == "template_declaration" {
+                    // explicit specialization: template <>
+                    let parent_text = self.get_node_text(&parent);
+                    if parent_text
+                        .trim_start_matches("template")
+                        .trim_start()
+                        .starts_with("<>")
+                    {
+                        info.is_explicit_specialization = true;
+                    }
+                }
+            }
+        }
+
+        // operator overload
+        if name.contains("operator") {
+            info.is_operator_overload = true;
+            info.overloaded_operator = name
+                .split("operator")
+                .nth(1)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
 
         if !struct_context.is_empty() {
             if name == struct_context {
@@ -1693,8 +1995,11 @@ impl CppParser {
 }
 
 pub fn parse_file(path: &Path) -> Result<(String, FileData), Box<dyn std::error::Error>> {
-    let source = std::fs::read_to_string(path)?;
-    let mut parser = CppParser::new(source);
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
+    let clean_path = path.strip_prefix("./").unwrap_or(path);
+    let path_str = clean_path.to_string_lossy().to_string();
+    let mut parser = CppParser::new(source, path_str.clone());
     let file_data = parser
         .parse()
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
