@@ -84,7 +84,7 @@ func (cb *ContextBuilder) multiStrategySearch(
 		cb.debugLog.Log("Explicit anchors: %d, gate active: %v (required: %v)",
 			len(anchors), gate.active, gate.required)
 		for _, a := range anchors {
-			cb.debugLog.Log("  anchor: file=%q func=%q line=%q score=%.0f",
+			cb.debugLog.Log("  anchor: file=%q func=%q line=%v score=%.0f",
 				a.File, a.FuncName, a.Line, a.Score)
 		}
 		anchorsHits := cb.explicitAnchorSearch(anchors)
@@ -358,11 +358,11 @@ func (cb *ContextBuilder) multiStrategySearch(
 	cb.debugLog.Log("  Final returned chunks: %d", len(result))
 	if len(result) > 0 {
 		topFiles := make([]string, 0, 10)
-		topScores := make([]float64, 0, 10)
+		// topScores := make([]float64, 0, 10)
 		for i, sc := range result {
 			if i < 10 {
 				topFiles = append(topFiles, fmt.Sprintf("%s (%.1f)", sc.File, sc.Score))
-				topScores = append(topScores, sc.Score)
+				// topScores = append(topScores, sc.Score)
 			}
 		}
 		cb.debugLog.Log("  Top files: %v", topFiles)
