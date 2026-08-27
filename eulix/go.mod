@@ -1,6 +1,6 @@
 module eulix
 
-go 1.25.0
+go 1.26
 
 require (
 	github.com/BurntSushi/toml v1.5.0
@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/joho/godotenv v1.5.1
 	github.com/spf13/cobra v1.10.2
+	github.com/tiktoken-go/tokenizer v0.8.1
 	go.etcd.io/bbolt v1.5.0
 	golang.org/x/sys v0.47.0
 	gonum.org/v1/gonum v0.17.0
@@ -25,6 +26,7 @@ require (
 	github.com/charmbracelet/x/cellbuf v0.0.13-0.20250311204145-2c3ea96c31dd // indirect
 	github.com/charmbracelet/x/term v0.2.1 // indirect
 	github.com/cloudwego/base64x v0.1.7 // indirect
+	github.com/dlclark/regexp2/v2 v2.5.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect

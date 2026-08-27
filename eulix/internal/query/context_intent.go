@@ -7,6 +7,7 @@
 package query
 
 import (
+	"eulix/internal/utils"
 	"math"
 	"sort"
 	"strings"
@@ -164,7 +165,7 @@ func (cb *ContextBuilder) allocateBudget(query string, intent QueryIntent) Budge
 	total := cb.config.LLM.MaxTokens
 
 	sysPromptTokens := 130
-	qTokens := (len(query) / 4) + 10
+	qTokens := utils.CountTokens(query, cb.config.LLM.Provider) + 10
 	respReserve := 2048
 
 	ctxBudget := total - sysPromptTokens - qTokens - respReserve

@@ -23,9 +23,9 @@ import (
 	"path/filepath"
 	"time"
 
+	a "eulix/internal/assets"
 	"eulix/internal/checksum"
 	"eulix/internal/config"
-	"eulix/internal/embedded"
 	"eulix/internal/embeddings"
 )
 
@@ -53,7 +53,7 @@ func analyzeProject(projectPath string) error {
 	// Eulix Parser (always uses embedded binary)
 	fmt.Println("Parsing codebase...")
 
-	parserBin, err := embedded.ParserPath()
+	parserBin, err := a.ParserPath()
 	if err != nil {
 		return fmt.Errorf("could not extract embedded parser: %w", err)
 	}
@@ -83,62 +83,33 @@ func analyzeProject(projectPath string) error {
 
 	fmt.Println("Generating embeddings...")
 	embeddingsPath := eulixDir
-	switch cfg.Project.EmbedIs {
-	case "script":
-		// Original behaviour: use venv Python + eulix_embed/main.py script.
-		venvPath := filepath.Join(homeDir, ".Eulix", ".venv")
-		pythonPath, venvEnv, err := embeddings.GetVenvPython(venvPath)
-		if err != nil {
-			return fmt.Errorf("virtual environment setup failed: %w", err)
-		}
-		if cfg.Project.DebugConfig {
-			fmt.Printf("Using Python venv: %s (interpreter: %s)\n", venvPath, pythonPath)
-		}
+	// Original behaviour: use venv Python + eulix_embed/main.py script.
+	venvPath := filepath.Join(homeDir, ".Eulix", ".venv")
+	pythonPath, venvEnv, err := embeddings.GetVenvPython(venvPath)
+	if err != nil {
+		return fmt.Errorf("virtual environment setup failed: %w", err)
+	}
+	if cfg.Project.DebugConfig {
+		fmt.Printf("Using Python venv: %s (interpreter: %s)\n", venvPath, pythonPath)
+	}
 
-		embedScriptPath := filepath.Join(homeDir, ".Eulix", "eulix_embed", "main.py")
-		if _, err := os.Stat(embedScriptPath); os.IsNotExist(err) {
-			return fmt.Errorf("embed script not found: %s", embedScriptPath)
-		}
+	embedScriptPath := filepath.Join(homeDir, ".Eulix", "eulix_embed", "main.py")
+	if _, err := os.Stat(embedScriptPath); os.IsNotExist(err) {
+		return fmt.Errorf("embed script not found: %s", embedScriptPath)
+	}
 
-		embedCmd := exec.Command(pythonPath, embedScriptPath,
-			"embed",
-			"-k", kbPath,
-			"-o", embeddingsPath,
-			"-m", cfg.Embeddings.Model,
-			"--quantize",
-		)
-		embedCmd.Stdout = os.Stdout
-		embedCmd.Stderr = os.Stderr
-		embedCmd.Env = venvEnv
-		if err := embedCmd.Run(); err != nil {
-			return fmt.Errorf("embedding generation failed (script mode): %w", err)
-		}
-
-	case "binary":
-		// Use the eulix_embed binary embedded inside the eulix executable.
-		embedBin, err := embedded.EmbedBinPath()
-		if err != nil {
-			return fmt.Errorf("could not extract embedded eulix_embed binary: %w", err)
-		}
-		if cfg.Project.DebugConfig {
-			fmt.Printf("Using embedded eulix_embed binary: %s\n", embedBin)
-		}
-
-		embedCmd := exec.Command(embedBin,
-			"embed",
-			"-k", kbPath,
-			"-o", embeddingsPath,
-			"-m", cfg.Embeddings.Model,
-			"--quantize",
-		)
-		embedCmd.Stdout = os.Stdout
-		embedCmd.Stderr = os.Stderr
-		if err := embedCmd.Run(); err != nil {
-			return fmt.Errorf("embedding generation failed (bin mode): %w", err)
-		}
-
-	default:
-		return fmt.Errorf("unknown embedis mode %q in eulix.toml: want \"script\" or \"bin\"", cfg.Project.EmbedIs)
+	embedCmd := exec.Command(pythonPath, embedScriptPath,
+		"embed",
+		"-k", kbPath,
+		"-o", embeddingsPath,
+		"-m", cfg.Embeddings.Model,
+		"--quantize",
+	)
+	embedCmd.Stdout = os.Stdout
+	embedCmd.Stderr = os.Stderr
+	embedCmd.Env = venvEnv
+	if err := embedCmd.Run(); err != nil {
+		return fmt.Errorf("embedding generation failed (script mode): %w", err)
 	}
 
 	fmt.Println("   ✓ Embeddings completed")

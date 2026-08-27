@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"eulix/internal/cache"
@@ -22,13 +23,9 @@ import (
 	"eulix/internal/fixers"
 	"eulix/internal/llm"
 	"eulix/internal/query"
+	"eulix/internal/utils"
 
 	"github.com/spf13/cobra"
-)
-
-const (
-	AppName    = "eulix"
-	AppVersion = "v0.8.0"
 )
 
 var (
@@ -101,12 +98,18 @@ var versionCMD = &cobra.Command{
 	Short: "Displays version of eulix and eulix_parser, eulix_embed",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("%s: %s\n", AppName, AppVersion)
+		fmt.Printf("%s: %s\n", utils.AppName, utils.AppVersion)
 
-		if output, err := runSubCommand("eulix_parser", "--version"); err != nil {
-			fmt.Fprintf(os.Stderr, "eulix_parser: [Error] %v\n", err)
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "eulix_parser: [Error] failed to get user home directory: %v\n", err)
 		} else {
-			fmt.Printf("%s", output)
+			parserPath := filepath.Join(homeDir, ".Eulix", "bin", "eulix_parser")
+			if output, err := runSubCommand(parserPath, "--version"); err != nil {
+				fmt.Fprintf(os.Stderr, "eulix_parser: [Error] %v\n", err)
+			} else {
+				fmt.Printf("%s", output)
+			}
 		}
 
 		scriptPath, pythonPath, venvEnv, err := embeddings.FindEulixEmbed()

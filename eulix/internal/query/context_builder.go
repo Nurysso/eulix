@@ -318,6 +318,7 @@ func (cb *ContextBuilder) assembleContext(chunks []Chunk) *utils.ContextWindow {
 			EndLine:    c.EndLine,
 			Content:    c.Content,
 			Importance: c.Importance,
+			Tokens:     c.Tokens,
 		}
 	}
 	srcList := make([]string, 0, len(sources))
