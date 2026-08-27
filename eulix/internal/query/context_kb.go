@@ -181,7 +181,7 @@ func (cb *ContextBuilder) buildChunkFromParts(p fnParts, filePath string) Chunk 
 		ID:        fmt.Sprintf("%s:%d-%d", filePath, p.lineStart, p.lineEnd),
 		ChunkType: "function", File: filePath,
 		StartLine: p.lineStart, EndLine: p.lineEnd,
-		Content: content, Tokens: len(content) / 4,
+		Content: content, Tokens: utils.CountTokens(content, cb.config.LLM.Provider),
 		Symbols: []string{p.name}, Name: p.name, Importance: 0.9,
 	}
 }
@@ -206,7 +206,7 @@ func (cb *ContextBuilder) buildClassFromParts(p classParts, filePath string) Chu
 		ID:        fmt.Sprintf("%s:%d-%d", filePath, p.lineStart, p.lineEnd),
 		ChunkType: "class", File: filePath,
 		StartLine: p.lineStart, EndLine: p.lineEnd,
-		Content: content, Tokens: len(content) / 4,
+		Content: content, Tokens: utils.CountTokens(content, cb.config.LLM.Provider),
 		Symbols: syms, Name: p.name, Importance: 0.95,
 	}
 }
@@ -288,7 +288,7 @@ func (cb *ContextBuilder) buildChunkFromKBFunction(fn utils.KBFunction, filePath
 		ID:        fn.ID,
 		ChunkType: "function", File: filePath,
 		StartLine: fn.LineStart, EndLine: fn.LineEnd,
-		Content: content, Tokens: len(content) / 4,
+		Content: content, Tokens: utils.CountTokens(content, cb.config.LLM.Provider),
 		Symbols: []string{fn.Name}, Name: fn.Name, Importance: 0.9,
 	}
 }
@@ -317,7 +317,7 @@ func (cb *ContextBuilder) buildChunkFromKBClass(class utils.KBClass, filePath st
 		ID:        class.ID,
 		ChunkType: "class", File: filePath,
 		StartLine: class.LineStart, EndLine: class.LineEnd,
-		Content: content, Tokens: len(content) / 4,
+		Content: content, Tokens: utils.CountTokens(content, cb.config.LLM.Provider),
 		Symbols: syms, Name: class.Name, Importance: 0.95,
 	}
 }

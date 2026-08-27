@@ -34,7 +34,7 @@ type ProjectConfig struct {
 	Path        string `toml:"path"`
 	MaxLines    int    `toml:"Max_Lines"`
 	DebugConfig bool   `toml:"DebugConfig"`
-	EmbedIs     string `toml:"embedIs"`
+	// EmbedIs     string `toml:"embedIs"`
 }
 
 type ParserConfig struct {
@@ -146,13 +146,6 @@ func validateAndClampConfig(cfg *Config) *Config {
 
 	// Project Configuration
 	cfg.Project.MaxLines = max(cfg.Project.MaxLines, 1)
-	switch strings.ToLower(cfg.Project.EmbedIs) {
-	case "binary", "script":
-		// valid
-	default:
-		cfg.Project.EmbedIs = "binary"
-	}
-	// Parser & Embeddings Configuration
 	cfg.Parser.Threads = max(cfg.Parser.Threads, 1)
 	cfg.Embeddings.Dimension = max(cfg.Embeddings.Dimension, 1)
 
@@ -204,7 +197,7 @@ func DefaultConfig() *Config {
 			Path:        cwd,
 			MaxLines:    100,
 			DebugConfig: false,
-			EmbedIs:     "binary",
+			// EmbedIs:     "script",
 		},
 		Parser: ParserConfig{
 			Threads: 4,

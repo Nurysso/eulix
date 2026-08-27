@@ -20,10 +20,43 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 
+	a "eulix/internal/assets"
 	"eulix/internal/cli"
 )
+
+func init() {
+	if a.IsInitialized() {
+		return // Skip setup if already initialized
+	}
+
+	root, err := a.EulixRoot()
+	if err != nil {
+		log.Fatalf("eulix: %v", err)
+	}
+
+	if err := a.VerifyOrExtract(root); err != nil {
+		log.Fatalf("eulix: %v", err)
+	}
+
+	if err := a.CheckUv(); err != nil {
+		log.Fatalf("eulix: %v", err)
+	}
+
+	if err := a.CheckVenv(root); err != nil {
+		log.Fatalf("eulix: %v", err)
+	}
+
+	if err := a.GlobalInitialized(root); err != nil {
+		log.Fatalf("failed to write .initialized file: %v", err)
+	}
+
+	if err := a.InstallEmbedDeps(root); err != nil {
+		log.Fatalf("eulix: %v", err)
+	}
+}
 
 func main() {
 	if err := cli.Execute(); err != nil {

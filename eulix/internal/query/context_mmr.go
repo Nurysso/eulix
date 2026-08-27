@@ -79,17 +79,7 @@ func (cb *ContextBuilder) mmrSelect(
 	}
 
 	simToQuery := func(c ScoredChunk) float64 {
-		base := 0.0
-		found := false
-		if qEmb != nil {
-			if e := embOf(c.ID); e != nil {
-				base = float64(dotProduct(qEmb, e))
-				found = true
-			}
-		}
-		if !found {
-			base = c.Score / maxSc
-		}
+		base := c.Score / maxSc
 		if anchorFiles[c.File] {
 			base = math.Min(1.0, base*1.25)
 		}

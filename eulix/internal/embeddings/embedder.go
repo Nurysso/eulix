@@ -25,9 +25,6 @@ import (
 	"os/exec"
 	"sync"
 	"time"
-
-	"eulix/internal/config"
-	"eulix/internal/embedded"
 )
 
 // Embedder holds a long-lived eulix_embed serve subprocess.
@@ -79,33 +76,13 @@ type serveResponse struct {
 // The subprocess stays alive for the lifetime of the returned Embedder;
 // call Close() when done.
 func VectorWeaver(model string) (*Embedder, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, fmt.Errorf("VectorWeaver: failed to load config: %w", err)
-	}
-
 	var cmd *exec.Cmd
-
-	switch cfg.Project.EmbedIs {
-
-	case "script":
-		scriptPath, pythonPath, venvEnv, err := FindEulixEmbed()
-		if err != nil {
-			return nil, err
-		}
-		cmd = exec.Command(pythonPath, scriptPath, "serve", "-m", model)
-		cmd.Env = venvEnv
-
-	case "binary":
-		binPath, err := embedded.EmbedBinPath()
-		if err != nil {
-			return nil, fmt.Errorf("VectorWeaver: could not extract embedded eulix_embed: %w", err)
-		}
-		cmd = exec.Command(binPath, "serve", "-m", model)
-
-	default:
-		return nil, fmt.Errorf("VectorWeaver: unknown embedIs mode %q: want \"script\" or \"bin\"", cfg.Project.EmbedIs)
+	scriptPath, pythonPath, venvEnv, err := FindEulixEmbed()
+	if err != nil {
+		return nil, err
 	}
+	cmd = exec.Command(pythonPath, scriptPath, "serve", "-m", model)
+	cmd.Env = venvEnv
 
 	// Pipe stdin so we can send JSON requests.
 	stdin, err := cmd.StdinPipe()
