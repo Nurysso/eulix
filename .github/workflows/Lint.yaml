@@ -1,0 +1,66 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      parser: ${{ steps.filter.outputs.parser }}
+      embed: ${{ steps.filter.outputs.embed }}
+      cli: ${{ steps.filter.outputs.cli }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          base: ${{ github.event_name == 'pull_request' && github.base_ref || 'main' }}
+          filters: |
+            parser:
+              - 'eulix-parser/**'
+            embed:
+              - 'eulix-embed/**'
+            cli:
+              - 'eulix-cli/**'
+
+  lint-parser:
+    needs: changes
+    if: needs.changes.outputs.parser == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run clippy
+        working-directory: eulix-parser
+        run: cargo clippy -- -D warnings
+
+  lint-embed:
+    needs: changes
+    if: needs.changes.outputs.embed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run lint.sh
+        working-directory: eulix-embed
+        run: |
+          chmod +x ./lint.sh
+          ./lint.sh
+
+  lint-cli:
+    needs: changes
+    if: needs.changes.outputs.cli == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: eulix-cli/go.mod
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: eulix-cli

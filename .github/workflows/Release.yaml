@@ -1,0 +1,159 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Triggers on tags like v1.0.0, v2.1.3, etc.
+  workflow_dispatch: # Allows manual triggering
+
+env:
+  GO_VERSION: '1.26'
+  RUST_VERSION: 'stable'
+
+jobs:
+  build:
+    name: Build All Binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          rustflags: ''
+
+      - name: Add Rust targets
+        run: |
+          rustup target add x86_64-unknown-linux-gnu
+          rustup target add x86_64-pc-windows-gnu
+        # rustup target add aarch64-apple-darwin
+        # rustup target add x86_64-apple-darwin
+
+      # - name: Install zig
+      #   uses: goto-bus-stop/setup-zig@v2
+      #   with:
+      #     version: 0.11.0
+
+      # - name: Install cargo-zigbuild
+      #   run: cargo install cargo-zigbuild
+
+      - name: Install mingw-w64 (for Windows cross-compile)
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - name: Build eulix-parser
+        working-directory: ./eulix-parser
+        run: |
+          echo "Building for Linux (x86_64)..."
+          cargo build --release --target x86_64-unknown-linux-gnu
+
+          echo "Building for Windows (x86_64)..."
+          cargo build --release --target x86_64-pc-windows-gnu
+
+        # echo "Building for macOS ARM (aarch64)..."
+        # cargo zigbuild --release --target aarch64-apple-darwin
+
+        # echo "Building for macOS Intel (x86_64)..."
+        # cargo zigbuild --release --target x86_64-apple-darwin
+
+      - name: Copy parser binaries into eulix assets
+        run: |
+          mkdir -p eulix/internal/assets/bins
+          cp eulix-parser/target/x86_64-pc-windows-gnu/release/eulix_parser.exe eulix/internal/assets/bins/eulix_parser_windows.exe
+          cp eulix-parser/target/x86_64-unknown-linux-gnu/release/eulix_parser eulix/internal/assets/bins/eulix_parser_linux
+        # cp eulix-parser/target/aarch64-apple-darwin/release/eulix_parser eulix/internal/assets/bins/eulix_parser_macos_arm
+        # cp eulix-parser/target/x86_64-apple-darwin/release/eulix_parser eulix/internal/assets/bins/eulix_parser_macos_intel
+
+      - name: Create eulix-embed.zip
+        run: |
+          zip -r eulix-embed.zip eulix-embed/ \
+            -x "*/.venv/*" \
+            "*/.mypy_cache/*" \
+            "*/.git/*" \
+            "*/__pycache__/*" \
+            "*.pyc" \
+            ".codespell-ignore"
+          cp eulix-embed.zip eulix/internal/assets/bins/eulix-embed.zip
+
+      - name: Build eulix Go binaries
+        working-directory: ./eulix
+        run: |
+          echo "Using Go version: $(go version)"
+
+          echo "Building for Linux (amd64)..."
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -trimpath -o eulix_linux ./cmd/eulix/main.go
+
+          echo "Building for Windows (amd64)..."
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -trimpath -o eulix_windows.exe ./cmd/eulix/main.go
+
+        # echo "Building for macOS Intel (amd64)..."
+        # GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -trimpath -o eulix_macos_intel ./cmd/eulix/main.go
+        # echo "Building for macOS ARM (arm64)..."
+        # GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -trimpath -o eulix_macos_arm ./cmd/eulix/main.go
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-outputs
+          if-no-files-found: error
+          path: |
+            eulix/eulix_linux
+            eulix/eulix_windows.exe
+            eulix-parser/target/x86_64-unknown-linux-gnu/release/eulix_parser
+            eulix-parser/target/x86_64-pc-windows-gnu/release/eulix_parser.exe
+            eulix-embed.zip
+          # eulix/eulix_macos_intel
+          # eulix/eulix_macos_arm
+          # eulix-parser/target/aarch64-apple-darwin/release/eulix_parser
+          # eulix-parser/target/x86_64-apple-darwin/release/eulix_parser
+
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write # Required for creating releases
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-outputs
+          path: artifacts/
+
+      - name: Organize release assets
+        run: |
+          mkdir -p release_assets
+
+          cp artifacts/eulix/eulix_linux release_assets/eulix-linux-amd64
+          cp artifacts/eulix/eulix_windows.exe release_assets/eulix-windows-amd64.exe
+          cp artifacts/eulix-parser/target/x86_64-unknown-linux-gnu/release/eulix_parser release_assets/eulix-parser-linux-amd64
+          cp artifacts/eulix-parser/target/x86_64-pc-windows-gnu/release/eulix_parser.exe release_assets/eulix-parser-windows-amd64.exe
+
+          cp artifacts/eulix-embed.zip release_assets/eulix-embed.zip
+
+          cd release_assets
+          sha256sum * > checksums.txt
+          cd ..
+        # cp artifacts/eulix/eulix_macos_arm release_assets/eulix-darwin-arm64
+        # cp artifacts/eulix/eulix_macos_intel release_assets/eulix-darwin-amd64
+        # cp artifacts/eulix-parser/target/aarch64-apple-darwin/release/eulix_parser release_assets/eulix-parser-darwin-arm64
+        # cp artifacts/eulix-parser/target/x86_64-apple-darwin/release/eulix_parser release_assets/eulix-parser-darwin-amd64
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            release_assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
