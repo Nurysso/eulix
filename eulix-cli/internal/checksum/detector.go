@@ -301,8 +301,8 @@ func combinedHash(files map[string]FileEntry) string {
 
 	hasher := xxh3.New()
 	for _, p := range relPaths {
-		hasher.WriteString(p)
-		hasher.WriteString(files[p].Hash)
+		_, _ = hasher.WriteString(p)
+		_, _ = hasher.WriteString(files[p].Hash)
 	}
 	return fmt.Sprintf("%016x", hasher.Sum64())
 }
@@ -441,7 +441,7 @@ func hashFile(path string) (string, int, error) {
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
-			hasher.Write(buf[:n])
+			_, _ = hasher.Write(buf[:n])
 			for i := 0; i < n; i++ {
 				if buf[i] == '\n' {
 					lines++
