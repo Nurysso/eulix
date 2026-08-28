@@ -22,8 +22,8 @@ deb*
 diff*
 profile_*
 .env
-eulix/internal/assets/bins/eulix-embed.zip
-eulix/internal/assets/bins/eulix_embed
-eulix/internal/assets/bins/eulix_parser_darwin
-eulix/internal/assets/bins/eulix_parser_linux
-eulix/internal/assets/bins/eulix_parser_windows.exe
+eulix-cli/internal/assets/bins/eulix-embed.zip
+eulix-cli/internal/assets/bins/eulix_embed
+eulix-cli/internal/assets/bins/eulix_parser_darwin
+eulix-cli/internal/assets/bins/eulix_parser_linux
+eulix-cli/internal/assets/bins/eulix_parser_windows.exe

@@ -103,7 +103,7 @@ var checksumCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Printf("\n     ✓ Checksum saved to .eulix/checksum.json\n")
+		fmt.Printf("\n     ✓ Checksum saved to .eulix/checksum.json.zst\n")
 
 		return nil
 	},
