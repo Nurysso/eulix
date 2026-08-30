@@ -102,7 +102,7 @@ def parse_args() -> argparse.ArgumentParser:
     qp.add_argument(
         "-e",
         "--engine",
-        default="torch",
+        default="onnx",
         choices=["torch", "onnx"],
         metavar="ENGINE",
         help="Inference engine: torch or onnx  [default: torch]",

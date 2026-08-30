@@ -167,36 +167,6 @@ def cmd_compare(args: argparse.Namespace) -> None:
         print("==================================================================")
 
 
-# checks current py version locked between 3.10-3.11 as some libs used aren't supported
-# by other py versions
-def check_python_version():
-    """
-    Hard version gate: some pinned ML dependencies (torch/transformers
-    versions used elsewhere in this project) aren't validated against
-    Python 3.12+, so we fail fast with actionable instructions rather than
-    letting the user hit a confusing downstream import error.
-    """
-    MIN_VERSION = (3, 10)
-    MAX_VERSION = (3, 11)
-
-    current_version = sys.version_info[:2]
-
-    if current_version < MIN_VERSION or current_version > MAX_VERSION:
-        print("=" * 60)
-        print("❌ CRITICAL: PYTHON VERSION COMPATIBILITY ERROR")
-        print(f"Current version: Python {sys.version.split()[0]}")
-        print(
-            f"Required version: Between Python {MIN_VERSION[0]}.{MIN_VERSION[1]} and {MAX_VERSION[0]}.{MAX_VERSION[1]}"
-        )
-        print("=" * 60)
-        print("\nPlease switch your virtual environment or Python installation.")
-        print("If using 'uv', you can recreate the environment with the correct version:")
-        print(f"  uv venv --python {MIN_VERSION[0]}.{MIN_VERSION[1]}")
-        print("=" * 60)
-
-        sys.exit(1)
-
-
 # Checks ijson backend
 def ijson_check():
     """Check which ijson backend is active."""
