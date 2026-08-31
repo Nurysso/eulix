@@ -46,6 +46,7 @@ type ParserConfig struct {
 type EmbeddingsConfig struct {
 	Model     string `toml:"model"`
 	Dimension int    `toml:"dimension"`
+	Engine    string `toml:"engine"`
 }
 
 type LLMConfig struct {
@@ -207,6 +208,7 @@ func DefaultConfig() *Config {
 		Embeddings: EmbeddingsConfig{
 			Model:     "BAAI/bge-base-en-v1.5",
 			Dimension: 768,
+			Engine:    "onnx",
 		},
 		LLM: LLMConfig{
 			Local:       true,

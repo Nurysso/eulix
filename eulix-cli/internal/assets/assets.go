@@ -13,13 +13,9 @@
 //	    eulix_parser_windows.exe ← Windows PE, via embed_windows.go
 //	    eulix-embed.zip          ← OS-agnostic zip of the eulix_embed Python scripts
 //
-// The parser binary is OS-specific and is selected at *compile time* via Go
-// build tags (see assests_linux.go, assests_darwin.go, assests_windows.go), so a
-// given build only ever embeds the binary for its target OS. eulix-embed.zip
-// is a normal file (Python source), works unmodified on any OS, and is
-// embedded unconditionally here. Its contents are unzipped directly into
-// $HOME/.Eulix/eulix_embed (the zip's own top-level folder, if any, is not
-// preserved as an extra nesting level.
+// OS-specific parser binary (selectable via build tags) and
+// multi-platform scripts inside a zip asset. Accepts an optional `-ldflags`
+// hash at build time to catch pre-build supply chain tampering; relies on runtime checks otherwise.
 //
 // Runtime layout after extraction:
 //
@@ -73,15 +69,13 @@ const (
 	hashNameEmbedDir    = "eulix_embed"
 )
 
-// var initializedFile = filepath.Join(eulixDirName, ".initialized")
+// -ldflags "-X eulix/internal/assets.ParserHash=<sha256>" hash for verification of parser bin, skip if empty
+var ParserHash string
+var embed_requirements = "onnx-amd.txt"
 
-// extractMu guards the per-process extraction so we only unpack once even
-// when multiple goroutines race to use these helpers.
 var extractMu sync.Mutex
+var ErrIntegrityMismatch = errors.New("asset integrity check failed")
 
-// FileHash is a single embedded file or directory's identity, recorded at
-// build time (i.e. computed once from the embedded content, which is itself
-// fixed at compile time by go:embed).
 type FileHash struct {
 	Name   string
 	SHA256 string
@@ -107,12 +101,9 @@ func writeHiddenFile(path string, data []byte, perm os.FileMode) error {
 	return setHiddenAttribute(path)
 }
 
-// Hashes returns the sha256 checksums of every embedded item: the
-// OS-specific parser binary ("eulix_parser"), a combined hash over the whole
-// eulix_embed script tree ("eulix_embed"), and each individual file inside
-// eulix-embed.zip (named by its archive-relative path). Results are computed
-// once from the embedded bytes and cached for the process lifetime. The
-// returned slice is sorted by Name; callers must not mutate it.
+// Hashes computes, validates, and caches SHA-256 integrity hashes for all embedded artifacts.
+// It verifies the parser binary against build-time expectations, hashes the zip payload contents,
+// and caches a sorted list to protect against tampered build binaries.
 func Hashes() ([]FileHash, error) {
 	hashMu.Lock()
 	defer hashMu.Unlock()
@@ -127,7 +118,17 @@ func Hashes() ([]FileHash, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read embedded parser binary: %w", err)
 	}
-	out = append(out, hashOf(hashNameParser, parserBytes))
+	parserFH := hashOf(hashNameParser, parserBytes)
+
+	if ParserHash != "" && parserFH.SHA256 != ParserHash {
+		return nil, fmt.Errorf(
+			"%w: \ncompiled time issue occured: The eulix_parser binary does not match build manifest.\n"+
+				"got sha256=%s\nwant sha256=%s\n"+
+				"this build may have embedded a corrupted or tampered binary and should not be trusted",
+			ErrIntegrityMismatch, parserFH.SHA256, ParserHash,
+		)
+	}
+	out = append(out, parserFH)
 
 	zipBytes, err := EmbedZip.ReadFile(embedZipPath)
 	if err != nil {
@@ -150,23 +151,7 @@ func Hashes() ([]FileHash, error) {
 			relName = strings.TrimPrefix(relName, strip+"/")
 		}
 
-		content, err := func() ([]byte, error) {
-			rc, err := zf.Open()
-			if err != nil {
-				return nil, fmt.Errorf("open zip entry %q: %w", zf.Name, err)
-			}
-			defer func() {
-				if cErr := rc.Close(); cErr != nil && err == nil {
-					err = fmt.Errorf("close zip entry %q: %w", zf.Name, cErr)
-				}
-			}()
-
-			data, err := io.ReadAll(rc)
-			if err != nil {
-				return nil, fmt.Errorf("read zip entry %q: %w", zf.Name, err)
-			}
-			return data, nil
-		}()
+		content, err := readZipEntry(zf)
 		if err != nil {
 			return nil, err
 		}
@@ -182,6 +167,26 @@ func Hashes() ([]FileHash, error) {
 
 	hashCache = out
 	return out, nil
+}
+
+// readZipEntry opens, fully reads, and closes a zip entry, correctly
+// propagating a close error if the read itself succeeded but Close failed.
+func readZipEntry(zf *zip.File) (data []byte, err error) {
+	rc, err := zf.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open zip entry %q: %w", zf.Name, err)
+	}
+	defer func() {
+		if cErr := rc.Close(); cErr != nil && err == nil {
+			err = fmt.Errorf("close zip entry %q: %w", zf.Name, cErr)
+		}
+	}()
+
+	data, err = io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("read zip entry %q: %w", zf.Name, err)
+	}
+	return data, nil
 }
 
 // parserHash and embedDirHash return just the "eulix_parser" and
@@ -250,11 +255,8 @@ func EulixRoot() (string, error) {
 	return filepath.Join(homeDir, eulixDirName), nil
 }
 
-// ExtractAll unpacks the embedded parser binary and the eulix_embed Python
-// scripts (from eulix-embed.zip) into $HOME/.Eulix, and returns that
-// directory's path. It is idempotent: files already on disk with matching
-// size are left untouched, so repeated calls (including across process
-// restarts) are cheap.
+// ExtractAll unpacks embedded binaries and scripts to $HOME/.Eulix idempotently.
+// Uses fast size-only checks to skip existing files—does NOT guarantee integrity against local tampering.
 func ExtractAll() (string, error) {
 	extractMu.Lock()
 	defer extractMu.Unlock()
@@ -310,7 +312,8 @@ func EmbedScriptsDir() (string, error) {
 
 // extractParser writes the embedded, OS-specific parser binary into dir,
 // making it executable. It skips rewriting if a same-size file already
-// exists (cheap "already extracted" check).
+// exists (cheap "already extracted" check; see ExtractAll's note on why
+// this is not an integrity check).
 func extractParser(dir string) error {
 	content, name, err := parserBinaryBytes()
 	if err != nil {
@@ -375,23 +378,7 @@ func extractEmbedZip(dir string) error {
 			continue // already extracted, skip
 		}
 
-		content, err := func() ([]byte, error) {
-			rc, err := zf.Open()
-			if err != nil {
-				return nil, fmt.Errorf("open zip entry %q: %w", zf.Name, err)
-			}
-			defer func() {
-				if cErr := rc.Close(); cErr != nil && err == nil {
-					err = fmt.Errorf("close zip entry %q: %w", zf.Name, cErr)
-				}
-			}()
-
-			data, err := io.ReadAll(rc)
-			if err != nil {
-				return nil, fmt.Errorf("read zip entry %q: %w", zf.Name, err)
-			}
-			return data, nil
-		}()
+		content, err := readZipEntry(zf)
 		if err != nil {
 			return err
 		}
@@ -456,8 +443,8 @@ func hasDotDotPrefix(rel string) bool {
 		(len(rel) == 2 || os.IsPathSeparator(rel[2]))
 }
 
-// verifyOrExtract makes sure bin/eulix_parser and eulix_embed/ are present
-// under root, then hash-checks them per the rules described on Init.
+// VerifyOrExtract ensures binary and script assets exist under root and verifies their hashes.
+// eulix_parser binary hash mismatch = fatal; script changes = ok
 func VerifyOrExtract(root string) error {
 	parserDir := filepath.Join(root, parserSubDir)
 	scriptsDir := filepath.Join(root, scriptsSubDir)
@@ -477,35 +464,38 @@ func VerifyOrExtract(root string) error {
 		}
 	}
 
+	// Verify parser binary, fail if modified
 	wantParser, err := parserHash()
 	if err != nil {
 		return err
 	}
+
 	gotParser, err := sha256File(parserPath)
 	if err != nil {
 		return fmt.Errorf("hash %q: %w", parserPath, err)
 	}
-	if gotParser != wantParser.SHA256 {
-		return fmt.Errorf(
-			"eulix_parser at %q is corrupted or has been modified (sha256 mismatch); refusing to run",
-			parserPath,
-		)
-	}
 
-	wantEmbed, err := embedDirHash()
-	if err != nil {
-		return err
-	}
-	gotEmbed, err := sha256Dir(scriptsDir)
-	if err != nil {
-		return fmt.Errorf("hash %q: %w", scriptsDir, err)
-	}
-	if gotEmbed != wantEmbed.SHA256 {
-		// A changed eulix_embed tree is expected (e.g. after an app update
-		// ships new scripts) and is not an error: just re-sync it.
-		if err := extractEmbedZip(scriptsDir); err != nil {
-			return fmt.Errorf("re-extract eulix_embed: %w", err)
-		}
+	if gotParser != wantParser.SHA256 {
+		// Print clear error with instructions
+		fmt.Fprintf(os.Stderr, "\n"+
+			"╔══════════════════════════════════════════════════════════════════════════════╗\n"+
+			"║               OOPS    Eulix_parser BINARY INTEGRITY ERROR                    ║\n"+
+			"╚══════════════════════════════════════════════════════════════════════════════╝\n\n"+
+			"The eulix_parser binary has been modified or corrupted.\n\n"+
+			"  File:     %[1]s\n"+
+			"  Expected: %[2]s\n"+
+			"  Got:      %[3]s\n\n"+
+			"To fix this issue:\n\n"+
+			"  1. Delete the corrupted binary:\n"+
+			"     rm %[1]s\n\n"+
+			"  2. Run eulix again - it will automatically extract a fresh copy:\n"+
+			"     eulix analyze\n\n"+
+			parserPath, wantParser.SHA256, gotParser,
+			filepath.Dir(parserPath),
+		)
+
+		// Exit with error code
+		os.Exit(1)
 	}
 
 	return nil
@@ -576,7 +566,7 @@ func dirHasEntries(dir string) bool {
 	return err == nil && len(entries) > 0
 }
 
-// checkUv confirms the `uv` tool is installed and on PATH.
+// CheckUv confirms the `uv` tool is installed and on PATH.
 func CheckUv() error {
 	if _, err := exec.LookPath("uv"); err != nil {
 		return fmt.Errorf(
@@ -586,7 +576,7 @@ func CheckUv() error {
 	return nil
 }
 
-// checkVenv confirms $HOME/.Eulix/.venv exists and reports Python 3.11.
+// CheckVenv confirms $HOME/.Eulix/.venv exists and reports Python 3.11.
 func CheckVenv(root string) error {
 	venvPath := filepath.Join(root, venvSubDir)
 
@@ -615,9 +605,7 @@ func CheckVenv(root string) error {
 	return nil
 }
 
-// venvPythonVersion runs the venv's own python to ask its version, which is
-// more reliable than parsing pyvenv.cfg (whose "version" key format has
-// varied across Python releases).
+// venvPythonVersion runs the venv's own python to ask its version
 func venvPythonVersion(venvPath string) (string, error) {
 	pythonPath := filepath.Join(venvPath, "bin", "python")
 	if runtime.GOOS == "windows" {
@@ -635,12 +623,43 @@ func venvPythonVersion(venvPath string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// installEmbedDeps runs `eulix --get-embed-deps`, which is expected to use
-// uv itself to install the eulix_embed scripts' dependencies into the venv.
+// PrintReqFileCmd prints the base and embed-specific pip requirements to stdout
+func PrintReqFileCmd() (string, error) {
+	root, err := EulixRoot()
+	if err != nil {
+		return "", fmt.Errorf("eulix: %w", err)
+	}
+
+	basePath := filepath.Join(root, scriptsSubDir, "requiremenents", "requirements.base.txt")
+	reqPath := filepath.Join(root, scriptsSubDir, "requiremenents", embed_requirements)
+
+	baseData, err := os.ReadFile(basePath)
+	if err != nil {
+		return "", fmt.Errorf("read base requirements %q: %w", basePath, err)
+	}
+	fmt.Println(string(baseData))
+
+	reqData, err := os.ReadFile(reqPath)
+	if err != nil {
+		return "", fmt.Errorf("read embed requirements %q: %w", reqPath, err)
+	}
+	lines := strings.Split(string(reqData), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "-r") {
+			fmt.Println(trimmed)
+		}
+	}
+
+	return embed_requirements, nil
+}
+
+// InstallEmbedDeps runs `uv pip install`, which uses uv to install the
+// eulix_embed scripts' dependencies into the venv.
 func InstallEmbedDeps(root string) error {
 	venvPath := filepath.Join(root, venvSubDir)
 
-	reqFilePath := filepath.Join(root, scriptsSubDir, "requiremenents", "onnx-amd.txt")
+	reqFilePath := filepath.Join(root, scriptsSubDir, "requiremenents", embed_requirements)
 
 	cmdArgs := []string{
 		"pip", "install",
@@ -679,8 +698,8 @@ func IsInitialized() bool {
 	return false
 }
 
-// IsInitialized write .initialized file in $HOME/.Eulix this is a hidden file
-// that marks wether eulix was ran before and other metadata.
+// GlobalInitialized writes the .initialized file in $HOME/.Eulix. This is a
+// hidden file that marks whether eulix was run before, and other metadata.
 func GlobalInitialized(EulixRoot string) error {
 	runAt := time.Now()
 	config := InitializedEulixGlobal{
@@ -691,12 +710,12 @@ func GlobalInitialized(EulixRoot string) error {
 
 	jsonData, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
-		log.Fatalf("JSON encoding failed: %v", err)
+		return fmt.Errorf("encode initialized config: %w", err)
 	}
 
 	filename := filepath.Join(EulixRoot, ".initialized")
 	if err := writeHiddenFile(filename, jsonData, 0644); err != nil {
-		log.Fatalf("Failed to write file: %v", err)
+		return fmt.Errorf("write initialized file %q: %w", filename, err)
 	}
 
 	return nil

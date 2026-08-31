@@ -11,11 +11,13 @@ package cli
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	a "eulix/internal/assets"
 	"eulix/internal/cache"
 	"eulix/internal/checksum"
 	"eulix/internal/config"
@@ -39,19 +41,64 @@ var rootCmd = &cobra.Command{
 	Long: `eulix is an intelligent CLI tool for understanding and querying your codebase.
 
 Turn your codebase into a searchable book. Ask questions about your code,
-get accurate answers using local/cloud ML and LLMs.
-
-eulix is currently in beta.`,
+get accurate answers using local/cloud ML and LLMs.`,
 	CompletionOptions: cobra.CompletionOptions{
 		DisableDefaultCmd: true,
 	},
 }
 
+var printReqFile = &cobra.Command{
+	Use:   "printEmbedDeps",
+	Short: "Analyze codebase and generate knowledge base",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		_, _ = a.PrintReqFileCmd()
+	},
+}
+
+var verifyBinCmd = &cobra.Command{
+	Use:   "verifyBins",
+	Short: "Virify bins hashes",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		root, err := a.EulixRoot()
+		if err != nil {
+			log.Fatalf("eulix: %v", err)
+		}
+		_ = a.VerifyOrExtract(root)
+	},
+}
+
+var installEmbedDeps = &cobra.Command{
+	Use:   "getEmbedDeps",
+	Short: "Installs eulix_embed deps at ~/.Eulix/.venv by using uv",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		root, err := a.EulixRoot()
+		if err != nil {
+			log.Fatalf("cant find root dir, %v", err)
+		}
+		if err := a.CheckUv(); err != nil {
+			log.Fatalf("Uv not found on system: %v", err)
+		}
+		if err := a.InstallEmbedDeps(root); err != nil {
+			log.Fatalf("eulix: %v", err)
+		}
+	},
+}
 var analyzeCmd = &cobra.Command{
 	Use:   "analyze",
 	Short: "Analyze codebase and generate knowledge base",
 	Args:  cobra.NoArgs,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		root, err := a.EulixRoot()
+		if err != nil {
+			return err
+		}
+		// Verify assets before running the command
+		if err := a.VerifyOrExtract(root); err != nil {
+			return err
+		}
 		if _, err := requireProjectRoot(); err != nil {
 			return err
 		}
@@ -177,13 +224,13 @@ var embedCMD = &cobra.Command{
 //
 //nolint:unused
 var parserCMD = &cobra.Command{
-	Use:                "embed [flags]",
+	Use:                "pasrser [flags]",
 	Short:              "wrapper around eulix_parser",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		scriptPath, pythonPath, venvEnv, err := embeddings.FindEulixEmbed()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "eulix embed: setup failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "eulix_parser failed: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -214,7 +261,7 @@ var configCmd = &cobra.Command{
 
 var queryCmd = &cobra.Command{
 	Use:   "query [question]",
-	Short: "Build context prompt for LLM queries, or answer non‑LLM queries directly",
+	Short: "Build context prompt for LLM queries, or answer non LLM queries",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		if _, err := requireProjectRoot(); err != nil {
 			return err
@@ -533,6 +580,9 @@ func registerCommands() {
 		versionCMD,
 		checksumCmd,
 		initCmd,
+		printReqFile,
+		verifyBinCmd,
+		installEmbedDeps,
 		analyzeCmd,
 		chatCmd,
 		queryCmd,
