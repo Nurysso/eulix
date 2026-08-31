@@ -189,9 +189,7 @@ func readZipEntry(zf *zip.File) (data []byte, err error) {
 	return data, nil
 }
 
-// parserHash and embedDirHash return just the "eulix_parser" and
-// "eulix_embed" entries from Hashes, respectively. They exist to make Init's
-// verification logic read plainly.
+// parserHash return just the "eulix_parser" Hash
 func parserHash() (FileHash, error) {
 	all, err := Hashes()
 	if err != nil {
@@ -203,19 +201,6 @@ func parserHash() (FileHash, error) {
 		}
 	}
 	return FileHash{}, fmt.Errorf("internal error: %q hash missing", hashNameParser)
-}
-
-func embedDirHash() (FileHash, error) {
-	all, err := Hashes()
-	if err != nil {
-		return FileHash{}, err
-	}
-	for _, h := range all {
-		if h.Name == hashNameEmbedDir {
-			return h, nil
-		}
-	}
-	return FileHash{}, fmt.Errorf("internal error: %q hash missing", hashNameEmbedDir)
 }
 
 func hashOf(name string, content []byte) FileHash {
@@ -489,9 +474,8 @@ func VerifyOrExtract(root string) error {
 			"  1. Delete the corrupted binary:\n"+
 			"     rm %[1]s\n\n"+
 			"  2. Run eulix again - it will automatically extract a fresh copy:\n"+
-			"     eulix analyze\n\n"+
+			"     eulix analyze\n\n",
 			parserPath, wantParser.SHA256, gotParser,
-			filepath.Dir(parserPath),
 		)
 
 		// Exit with error code
@@ -514,46 +498,6 @@ func sha256File(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// sha256Dir computes a combined hash over every regular file under dir,
-// using the same "name:sha256\n" scheme as combinedHash so it is directly
-// comparable to the "eulix_embed" entry from Hashes.
-func sha256Dir(dir string) (string, error) {
-	var files []FileHash
-
-	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(dir, p)
-		if err != nil {
-			return err
-		}
-		sum, err := sha256File(p)
-		if err != nil {
-			return err
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		files = append(files, FileHash{
-			Name:   filepath.ToSlash(rel),
-			SHA256: sum,
-			Size:   info.Size(),
-		})
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-
-	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
-	return combinedHash(hashNameEmbedDir, files).SHA256, nil
 }
 
 func fileExists(path string) bool {
