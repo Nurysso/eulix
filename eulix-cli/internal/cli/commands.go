@@ -58,7 +58,7 @@ var printReqFile = &cobra.Command{
 
 var verifyBinCmd = &cobra.Command{
 	Use:   "verifyBins",
-	Short: "Virify bins hashes",
+	Short: "Verify bins hashes, prints nothing if everything is correct",
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		root, err := a.EulixRoot()
