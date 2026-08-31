@@ -28,33 +28,33 @@ import (
 )
 
 func init() {
-	if a.IsInitialized() {
-		return // Skip setup if already initialized
-	}
-
 	root, err := a.EulixRoot()
 	if err != nil {
 		log.Fatalf("eulix: %v", err)
 	}
 
+	// ALWAYS verify assets, regardless of initialization status
 	if err := a.VerifyOrExtract(root); err != nil {
 		log.Fatalf("eulix: %v", err)
 	}
 
-	if err := a.CheckUv(); err != nil {
-		log.Fatalf("eulix: %v", err)
-	}
+	// Only run setup if not already initialized
+	if !a.IsInitialized() {
+		if err := a.CheckUv(); err != nil {
+			log.Fatalf("eulix: %v", err)
+		}
 
-	if err := a.CheckVenv(root); err != nil {
-		log.Fatalf("eulix: %v", err)
-	}
+		if err := a.CheckVenv(root); err != nil {
+			log.Fatalf("eulix: %v", err)
+		}
 
-	if err := a.GlobalInitialized(root); err != nil {
-		log.Fatalf("failed to write .initialized file: %v", err)
-	}
+		if err := a.GlobalInitialized(root); err != nil {
+			log.Fatalf("failed to write .initialized file: %v", err)
+		}
 
-	if err := a.InstallEmbedDeps(root); err != nil {
-		log.Fatalf("eulix: %v", err)
+		if err := a.InstallEmbedDeps(root); err != nil {
+			log.Fatalf("eulix: %v", err)
+		}
 	}
 }
 

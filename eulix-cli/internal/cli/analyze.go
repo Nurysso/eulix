@@ -9,11 +9,11 @@ eulix_parser and eulix_embed based on config provided in eulix.toml.
 
 eulix_parser is always run from the binary embedded inside the eulix executable.
 
-eulix_embed is run in one of two modes depending on config.Project.Embedis:
+eulix_embed is always a script no more `config.Project.Embedis` config
   - "script" → uses the Python venv at $HOME/.Eulix/.venv and the script at
     $HOME/.Eulix/eulix_embed/main.py  (original behaviour)
-  - "bin"    → uses the eulix_embed binary embedded inside the eulix executable
 */
+
 package cli
 
 import (
@@ -109,6 +109,7 @@ func analyzeProject(projectPath string) error {
 		"-o", eulixDir,
 		"-m", cfg.Embeddings.Model,
 		"--quantize",
+		"-e", cfg.Embeddings.Engine,
 	)
 	embedCmd.Stdout = os.Stdout
 	embedCmd.Stderr = os.Stderr

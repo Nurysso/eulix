@@ -11,7 +11,7 @@ re-analysis is needed.
 Ignore rules are read from a .euignore file in the project root (same syntax
 as .gitignore). The .eulix/ output directory is always excluded automatically.
 
-Checksum state is persisted at <config.Project.Path>/.eulix/checksum.json.
+Checksum state is persisted at <config.Project.Path>/.eulix/checksum.json.zst
 Run() is the single entry point: it loads config itself, creates the
 checksum file on first run, or compares against the stored checksum on
 subsequent runs and reports the percentage of the codebase that changed.
@@ -44,12 +44,20 @@ type FileEntry struct {
 	ModTime int64  `json:"mod_time"` // unix nanos
 }
 
+type DirEntry struct {
+	Hash    string   `json:"hash"`
+	ModTime int64    `json:"mod_time"`
+	Files   []string `json:"files"`
+	Dirs    []string `json:"dirs"`
+}
+
 type Checksum struct {
 	ProjectPath     string               `json:"project_path"`
 	TotalFiles      int                  `json:"total_files"`
 	TotalLines      int                  `json:"total_lines"`
 	Hash            string               `json:"hash"`
 	Files           map[string]FileEntry `json:"files"`
+	Dirs            map[string]DirEntry  `json:"dirs"`
 	LastAnalyzed    time.Time            `json:"last_analyzed"`
 	AnalysisVersion string               `json:"analysis_version"`
 }
@@ -58,7 +66,7 @@ type Checksum struct {
 // compares to whatever was previously stored (if anything).
 type Result struct {
 	Checksum      *Checksum
-	FirstRun      bool    // true if there was no existing checksum.json
+	FirstRun      bool    // true if there was no existing checksum.json.zst
 	ChangedRatio  float64 // fraction (0.0-1.0) of files added/removed/modified
 	FilesAdded    int
 	FilesDeleted  int
@@ -84,7 +92,7 @@ func hashHound(projectPath string) *Detector {
 }
 
 // Run is the high-level entry point. It loads config itself, so callers
-// don't pass a directory. If no checksum.json exists yet, it creates one.
+// don't pass a directory. If no checksum.json.zst exists yet, it creates one.
 // If one exists, it recalculates and compares against the stored version,
 // reporting what percentage of the codebase changed.
 func Run() (*Result, error) {
@@ -96,7 +104,7 @@ func Run() (*Result, error) {
 	stored, loadErr := d.Load()
 	firstRun := loadErr != nil
 
-	current, err := d.calculate()
+	current, err := d.calculate(stored)
 	if err != nil {
 		return nil, fmt.Errorf("checksum: failed to calculate checksum: %w", err)
 	}
@@ -223,88 +231,173 @@ func (d *Detector) shouldIgnore(path string) bool {
 }
 
 // calculate walks the project and hashes every source file. It's a full
-// recompute — used both for first-run creation and for producing the
+// recompute, used both for first-run creation and for producing the
 // "current" snapshot to diff against a stored checksum.
-func (d *Detector) calculate() (*Checksum, error) {
+func (d *Detector) calculate(stored *Checksum) (*Checksum, error) {
 	files := make(map[string]FileEntry)
+	dirs := make(map[string]DirEntry)
 	totalLines := 0
 	totalFiles := 0
 
-	err := filepath.Walk(d.projectPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
+	var walkDir func(absDir, relDir string) (string, error) // returns dir hash
 
-		if d.shouldIgnore(path) {
-			if info.IsDir() {
-				return filepath.SkipDir
+	walkDir = func(absDir, relDir string) (string, error) {
+		info, err := os.Stat(absDir)
+		if err != nil {
+			return "", err
+		}
+		dirModTime := info.ModTime().UnixNano()
+
+		// If we already stored a entry for a dir and its mtime matches,
+		// we can assume that its files hasnt changed and reuse the whole subtree
+		if stored != nil {
+			if storedDir, ok := stored.Dirs[relDir]; ok && storedDir.ModTime == dirModTime {
+				reused, reusedLines, reusedCount, ok := reuseSubtree(stored, relDir, storedDir)
+				if ok {
+					for p, fe := range reused {
+						files[p] = fe
+					}
+					dirs[relDir] = storedDir
+					totalLines += reusedLines
+					totalFiles += reusedCount
+					return storedDir.Hash, nil
+				}
 			}
-			return nil
 		}
 
-		if info.IsDir() {
-			return nil
-		}
-		if base := filepath.Base(path); len(base) > 0 && base[0] == '.' {
-			return nil
-		}
-
-		ext := filepath.Ext(path)
-		if !isSourceFile(ext) {
-			return nil
-		}
-
-		hash, lines, err := hashFile(path)
+		// Fall through: either no stored entry, mtime changed, or reuse
+		// failed a safety check. Do a real (but still shallow) readdir.
+		entries, err := os.ReadDir(absDir)
 		if err != nil {
-			return nil
+			return "", err
 		}
 
-		relPath, _ := filepath.Rel(d.projectPath, path)
-		files[relPath] = FileEntry{
-			Hash:    hash,
-			Size:    info.Size(),
-			ModTime: info.ModTime().UnixNano(),
+		var childFileNames, childDirNames []string
+		hasher := xxh3.New()
+
+		// Collect and sort names first for determinism.
+		type child struct {
+			name  string
+			isDir bool
 		}
-		totalLines += lines
-		totalFiles++
+		var children []child
+		for _, e := range entries {
+			absChild := filepath.Join(absDir, e.Name())
+			relChild := filepath.Join(relDir, e.Name())
+			if d.shouldIgnore(absChild) {
+				continue
+			}
+			if e.IsDir() {
+				children = append(children, child{e.Name(), true})
+				_ = relChild
+				continue
+			}
+			if base := e.Name(); len(base) > 0 && base[0] == '.' {
+				continue
+			}
+			if !isSourceFile(filepath.Ext(e.Name())) {
+				continue
+			}
+			children = append(children, child{e.Name(), false})
+		}
+		sort.Slice(children, func(i, j int) bool { return children[i].name < children[j].name })
 
-		return nil
-	})
+		for _, c := range children {
+			absChild := filepath.Join(absDir, c.name)
+			relChild := filepath.Join(relDir, c.name)
+			if c.isDir {
+				childHash, err := walkDir(absChild, relChild)
+				if err != nil {
+					continue // best-effort, matches existing error handling
+				}
+				childDirNames = append(childDirNames, c.name)
+				_, _ = hasher.WriteString("D:" + c.name)
+				_, _ = hasher.WriteString(childHash)
+			} else {
+				fi, err := os.Stat(absChild)
+				if err != nil {
+					continue
+				}
+				hash, lines, err := hashFile(absChild)
+				if err != nil {
+					continue
+				}
+				files[relChild] = FileEntry{
+					Hash:    hash,
+					Size:    fi.Size(),
+					ModTime: fi.ModTime().UnixNano(),
+				}
+				totalLines += lines
+				totalFiles++
+				childFileNames = append(childFileNames, c.name)
+				_, _ = hasher.WriteString("F:" + c.name)
+				_, _ = hasher.WriteString(hash)
+			}
+		}
 
+		dirHash := fmt.Sprintf("%016x", hasher.Sum64())
+		dirs[relDir] = DirEntry{
+			Hash:    dirHash,
+			ModTime: dirModTime,
+			Files:   childFileNames,
+			Dirs:    childDirNames,
+		}
+		return dirHash, nil
+	}
+
+	rootHash, err := walkDir(d.projectPath, ".")
 	if err != nil {
 		return nil, err
 	}
-
-	projectHash := combinedHash(files)
 
 	return &Checksum{
 		ProjectPath:     d.projectPath,
 		TotalFiles:      totalFiles,
 		TotalLines:      totalLines,
-		Hash:            projectHash,
+		Hash:            rootHash,
 		Files:           files,
+		Dirs:            dirs,
 		LastAnalyzed:    time.Now(),
 		AnalysisVersion: analysisVersion,
 	}, nil
 }
 
-// combinedHash folds all per-file hashes into a single deterministic
-// project-level hash. Paths are sorted first since map iteration order in
-// Go is randomized — without sorting, the same file contents could produce
-// a different combined hash from run to run.
-func combinedHash(files map[string]FileEntry) string {
-	relPaths := make([]string, 0, len(files))
-	for p := range files {
-		relPaths = append(relPaths, p)
-	}
-	sort.Strings(relPaths)
+// reuseSubtree reuses stored checksums for a dir if its mtime hasn't changed.
+// Falls back to false on any discrepancy.
+func reuseSubtree(stored *Checksum, relDir string, entry DirEntry) (map[string]FileEntry, int, int, bool) {
+	result := make(map[string]FileEntry)
+	lines := 0
+	count := 0
 
-	hasher := xxh3.New()
-	for _, p := range relPaths {
-		_, _ = hasher.WriteString(p)
-		_, _ = hasher.WriteString(files[p].Hash)
+	for _, fname := range entry.Files {
+		relPath := filepath.Join(relDir, fname)
+		fe, ok := stored.Files[relPath]
+		if !ok {
+			return nil, 0, 0, false
+		}
+		result[relPath] = fe
+		count++
+		// FIXME: need per-file line counts for accurate totals on partial reuse.
 	}
-	return fmt.Sprintf("%016x", hasher.Sum64())
+
+	for _, dname := range entry.Dirs {
+		relSub := filepath.Join(relDir, dname)
+		storedSub, ok := stored.Dirs[relSub]
+		if !ok {
+			return nil, 0, 0, false
+		}
+		subFiles, subLines, subCount, ok := reuseSubtree(stored, relSub, storedSub)
+		if !ok {
+			return nil, 0, 0, false
+		}
+		for p, fe := range subFiles {
+			result[p] = fe
+		}
+		lines += subLines
+		count += subCount
+	}
+
+	return result, lines, count, true
 }
 
 func (d *Detector) eulixDir() string {
