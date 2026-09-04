@@ -4,43 +4,45 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 use crate::struc::kb_struct::*;
-use once_cell::sync::Lazy;
+// use once_cell::sync::LazyLock;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
 
 struct SecurityPattern {
-    regex: &'static Lazy<Regex>,
+    regex: &'static LazyLock<Regex>,
     note_type: &'static str,
     description: &'static str,
 }
 
 //  Regex Patterns compiled once at first use
-static TODO_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid TODO regex"));
+static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid TODO regex")
+});
 
-static UNSAFE_BLOCK_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"unsafe\s*\{").expect("Invalid unsafe block regex"));
+static UNSAFE_BLOCK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"unsafe\s*\{").expect("Invalid unsafe block regex"));
 
-static TRANSMUTE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"std::mem::transmute").expect("Invalid transmute regex"));
+static TRANSMUTE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"std::mem::transmute").expect("Invalid transmute regex"));
 
-static UNWRAP_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"unwrap\(\)").expect("Invalid unwrap regex"));
+static UNWRAP_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"unwrap\(\)").expect("Invalid unwrap regex"));
 
-static EXPECT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"expect\(").expect("Invalid expect regex"));
+static EXPECT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"expect\(").expect("Invalid expect regex"));
 
-static COMMAND_EXEC_RE: Lazy<Regex> = Lazy::new(|| {
+static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"Command::new|std::process::Command").expect("Invalid command_exec regex")
 });
 
-static RAW_POINTER_RE: Lazy<Regex> = Lazy::new(|| {
+static RAW_POINTER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"from_raw_parts|from_raw_parts_mut").expect("Invalid raw_pointer regex")
 });
 
-static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
+static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
         SecurityPattern {
             regex: &UNSAFE_BLOCK_RE,
@@ -77,7 +79,7 @@ static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
 
 /// Traits from std::ops whose impl signals operator overloading.
 /// Maps trait name → the operator symbol it overloads.
-static OPERATOR_TRAIT_MAP: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
+static OPERATOR_TRAIT_MAP: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     let mut m = HashMap::new();
     m.insert("Add", "+");
     m.insert("Sub", "-");
@@ -322,16 +324,15 @@ impl RustParser {
         }
 
         // Trait / impl context
-        let (trait_name, is_trait_impl_method, is_trait_default_method) =
-            match trait_context {
-                Some(ctx) => (
-                    Some(ctx.trait_name.clone()),
-                    ctx.is_impl,
-                    // A method inside a trait definition with a body is a default method.
-                    !ctx.is_impl && node.child_by_field_name("body").is_some(),
-                ),
-                None => (None, false, false),
-            };
+        let (trait_name, is_trait_impl_method, is_trait_default_method) = match trait_context {
+            Some(ctx) => (
+                Some(ctx.trait_name.clone()),
+                ctx.is_impl,
+                // A method inside a trait definition with a body is a default method.
+                !ctx.is_impl && node.child_by_field_name("body").is_some(),
+            ),
+            None => (None, false, false),
+        };
 
         // Operator overloading (derived from trait_name)
         let (is_operator_overload, overloaded_operator) = trait_name
@@ -339,7 +340,9 @@ impl RustParser {
             .and_then(|t| {
                 // Strip generic args: "Add<Rhs>" → "Add"
                 let bare = t.split('<').next().unwrap_or(t).trim();
-                OPERATOR_TRAIT_MAP.get(bare).map(|op| (true, Some(op.to_string())))
+                OPERATOR_TRAIT_MAP
+                    .get(bare)
+                    .map(|op| (true, Some(op.to_string())))
             })
             .unwrap_or((false, None));
 
@@ -995,7 +998,7 @@ impl RustParser {
                     .last()
                     .unwrap_or(&call_text)
                     .split('.')
-                    .last()
+                    .next_back()
                     .unwrap_or(&call_text)
                     .trim()
                     .to_string();
@@ -1436,7 +1439,6 @@ impl RustParser {
         String::from_utf8_lossy(&bytes[start..end]).to_string()
     }
 }
-
 
 // Internal context carrier never surfaces in FileData
 

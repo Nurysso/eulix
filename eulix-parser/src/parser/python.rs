@@ -4,49 +4,54 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 use crate::struc::kb_struct::*;
-use once_cell::sync::Lazy;
+// use once_cell::sync::LazyLock;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
 
 struct SecurityPattern {
-    regex: &'static Lazy<Regex>,
+    regex: &'static LazyLock<Regex>,
     note_type: &'static str,
     description: &'static str,
 }
 
 //  Regex Patterns compiled once at first use
-static FROM_IMPORT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"from\s+(\S+)\s+import\s+(.+)").expect("Invalid from-import regex"));
+static FROM_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"from\s+(\S+)\s+import\s+(.+)").expect("Invalid from-import regex")
+});
 
-static ATTRIBUTE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(\w+)\s*:\s*([^=]+)(?:=\s*(.+))?").expect("Invalid attribute regex"));
+static ATTRIBUTE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(\w+)\s*:\s*([^=]+)(?:=\s*(.+))?").expect("Invalid attribute regex")
+});
 
-static TODO_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"#\s*TODO:?\s*(.+)").expect("Invalid TODO regex"));
+static TODO_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"#\s*TODO:?\s*(.+)").expect("Invalid TODO regex"));
 
-static PASSWORD_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"password").expect("Invalid password regex"));
+static PASSWORD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"password").expect("Invalid password regex"));
 
-static SENSITIVE_DATA_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"secret|api_key|token").expect("Invalid sensitive_data regex"));
+static SENSITIVE_DATA_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"secret|api_key|token").expect("Invalid sensitive_data regex"));
 
-static EVAL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"eval\(").expect("Invalid eval regex"));
+static EVAL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"eval\(").expect("Invalid eval regex"));
 
-static EXEC_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"exec\(").expect("Invalid exec regex"));
+static EXEC_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"exec\(").expect("Invalid exec regex"));
 
-static DYNAMIC_IMPORT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"__import__").expect("Invalid dynamic_import regex"));
+static DYNAMIC_IMPORT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"__import__").expect("Invalid dynamic_import regex"));
 
-static PICKLE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"pickle\.load").expect("Invalid pickle regex"));
+static PICKLE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"pickle\.load").expect("Invalid pickle regex"));
 
-static COMMAND_EXEC_RE: Lazy<Regex> = Lazy::new(|| {
+static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"subprocess|os\.system|os\.popen").expect("Invalid command_exec regex")
 });
 
-static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
+static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
         SecurityPattern {
             regex: &PASSWORD_RE,
@@ -96,7 +101,7 @@ impl PythonParser {
         Self {
             source_code,
             file_path,
-         }
+        }
     }
 
     fn make_function_id(&self, name: &str, struct_context: &str) -> String {
@@ -214,7 +219,7 @@ impl PythonParser {
             let items_str = caps.get(2)?.as_str();
             let items: Vec<String> = items_str
                 .split(',')
-                .map(|s| s.trim().split_whitespace().next().unwrap_or(s.trim()))
+                .map(|s| s.split_whitespace().next().unwrap_or(s.trim()))
                 .map(|s| s.to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
@@ -476,7 +481,7 @@ impl PythonParser {
                 if let Ok(call_name) = func_node.utf8_text(self.source_code.as_bytes()) {
                     let name = call_name
                         .split('.')
-                        .last()
+                        .next_back()
                         .unwrap_or(call_name)
                         .trim()
                         .to_string();
@@ -676,11 +681,7 @@ impl PythonParser {
     }
 
     fn extract_condition(&self, node: &Node) -> Option<String> {
-        if let Some(cond_node) = node.child_by_field_name("condition") {
-            Some(self.get_node_text(&cond_node))
-        } else {
-            None
-        }
+        node.child_by_field_name("condition").map(|cond_node| self.get_node_text(&cond_node))
     }
 
     fn extract_execution_path(&self, node: &Node, field: &str) -> Option<ExecutionPath> {
@@ -964,7 +965,7 @@ impl PythonParser {
         for raw in decorators {
             let d = raw.trim().trim_start_matches('@');
             let base = d.split('(').next().unwrap_or(d).trim();
-            let leaf = base.split('.').last().unwrap_or(base);
+            let leaf = base.split('.').next_back().unwrap_or(base);
 
             match leaf {
                 "dataclass" => info.is_dataclass = true,
@@ -1155,8 +1156,8 @@ impl PythonParser {
                             if expr.kind() == "string" {
                                 let text = self.get_node_text(&expr);
                                 return text
-                                    .trim_start_matches(|c| c == '"' || c == '\'')
-                                    .trim_end_matches(|c| c == '"' || c == '\'')
+                                    .trim_start_matches(['"', '\''])
+                                    .trim_end_matches(['"', '\''])
                                     .trim()
                                     .to_string();
                             }

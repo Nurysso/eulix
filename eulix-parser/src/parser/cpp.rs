@@ -4,14 +4,14 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 use crate::struc::kb_struct::*;
-use once_cell::sync::Lazy;
+// use once_cell::sync::LazyLock;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
-
 struct SecurityPattern {
-    regex: &'static Lazy<Regex>,
+    regex: &'static LazyLock<Regex>,
     note_type: &'static str,
     description: &'static str,
 }
@@ -22,86 +22,92 @@ struct TagRule {
     check_docstring: bool,
 }
 
-static UNSAFE_STRING_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"strcpy|strcat|sprintf|vsprintf|gets|wcscpy|wcscat|_mbscpy").unwrap());
-static COMMAND_EXEC_RE: Lazy<Regex> = Lazy::new(|| {
+static UNSAFE_STRING_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"strcpy|strcat|sprintf|vsprintf|gets|wcscpy|wcscat|_mbscpy").unwrap()
+});
+static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"system\(|popen\(|exec|CreateProcess|ShellExecute|std::system").unwrap()
 });
-static MANUAL_MEMORY_RE: Lazy<Regex> = Lazy::new(|| {
+static MANUAL_MEMORY_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"malloc|calloc|realloc|free|new\s|new\[|delete\s|delete\[\]").unwrap()
 });
-static UNSAFE_INPUT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"scanf|fscanf|cin\s*>>|gets_s").unwrap());
-static MEMORY_OP_RE: Lazy<Regex> = Lazy::new(|| {
+static UNSAFE_INPUT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"scanf|fscanf|cin\s*>>|gets_s").unwrap());
+static MEMORY_OP_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"memcpy|memmove|memset|std::memcpy|std::memmove|std::memset").unwrap()
 });
-static PRIVILEGE_CHANGE_RE: Lazy<Regex> = Lazy::new(|| {
+static PRIVILEGE_CHANGE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"setuid|setgid|seteuid|SetTokenInformation|AdjustTokenPrivileges").unwrap()
 });
-static WEAK_RANDOM_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"rand\(\)|random\(\)|std::rand\(\)").unwrap());
-static RAW_POINTER_RE: Lazy<Regex> = Lazy::new(|| {
+static WEAK_RANDOM_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"rand\(\)|random\(\)|std::rand\(\)").unwrap());
+static RAW_POINTER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"new\s+(?:std::|make_unique|make_shared)\w+|new\s+\w+|delete\s+\w+").unwrap()
 });
-static REINTERPRET_CAST_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"reinterpret_cast\s*<").unwrap());
-static C_STYLE_CAST_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\(\s*\w+\s*\)\s*\w+").unwrap());
-static EXCEPTION_SAFETY_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"catch\s*\(\.\.\.\)|noexcept\s*\(\s*false\s*\)").unwrap());
+static REINTERPRET_CAST_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"reinterpret_cast\s*<").unwrap());
+static C_STYLE_CAST_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(\s*\w+\s*\)\s*\w+").unwrap());
+static EXCEPTION_SAFETY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"catch\s*\(\.\.\.\)|noexcept\s*\(\s*false\s*\)").unwrap());
 
-static INCLUDE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"^#include\s+[<"]([^>"]+)[>"]"#).expect("Invalid include regex"));
+static INCLUDE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^#include\s+[<"]([^>"]+)[>"]"#).expect("Invalid include regex"));
 
-static TODO_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid todo regex"));
+static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid todo regex")
+});
 
-static MACRO_DEFINE_RE: Lazy<Regex> = Lazy::new(|| {
+static MACRO_DEFINE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^#define\s+([A-Za-z_]\w*)(?:\([^)]*\))?\s+(.+)$")
         .expect("Invalid macro define regex")
 });
 
-static TYPEDEF_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?m)^\s*typedef\s+(.+?)\s+(\w+)\s*;").unwrap());
+static TYPEDEF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^\s*typedef\s+(.+?)\s+(\w+)\s*;").unwrap());
 
-static USING_ALIAS_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?m)^\s*using\s+(\w+)\s*=\s*(.+?)\s*;").unwrap());
+static USING_ALIAS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^\s*using\s+(\w+)\s*=\s*(.+?)\s*;").unwrap());
 
-static BIND_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"std::bind\s*\(\s*&?(\w+(?:::?\w+)*)").unwrap());
+static BIND_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"std::bind\s*\(\s*&?(\w+(?:::?\w+)*)").unwrap());
 
-static MALLOC_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"malloc|calloc|realloc|alloca|new\s|new\[").unwrap());
-static FREE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\bfree\b|\bdelete\b|\bdelete\[\]\b").unwrap());
-static THREAD_RE: Lazy<Regex> = Lazy::new(|| {
+static MALLOC_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"malloc|calloc|realloc|alloca|new\s|new\[").unwrap());
+static FREE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bfree\b|\bdelete\b|\bdelete\[\]\b").unwrap());
+static THREAD_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"std::thread|pthread|std::async|std::future|fork|std::jthread").unwrap()
 });
-static MUTEX_RE: Lazy<Regex> = Lazy::new(|| {
+static MUTEX_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"std::mutex|std::lock_guard|std::unique_lock|std::shared_lock|std::scoped_lock")
         .unwrap()
 });
-static SYSCALL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"syscall|ioctl|fcntl").unwrap());
-static STRING_OPS_RE: Lazy<Regex> = Lazy::new(|| {
+static SYSCALL_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"syscall|ioctl|fcntl").unwrap());
+static STRING_OPS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"strcpy|strcat|sprintf|strncpy|std::string::c_str|std::string::data").unwrap()
 });
-static SMART_POINTER_RE: Lazy<Regex> = Lazy::new(|| {
+static SMART_POINTER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"std::unique_ptr|std::shared_ptr|std::weak_ptr|std::make_unique|std::make_shared")
         .unwrap()
 });
-static TEMPLATE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"template\s*<|typename|constexpr|consteval|constinit").unwrap());
-static LAMBDA_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[\s*[=&\w]*\s*\]\s*\(").unwrap());
-static NAMESPACE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bnamespace\s+(\w+)").unwrap());
-static CLASS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bclass\s+(\w+)").unwrap());
-static STRUCT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bstruct\s+(\w+)").unwrap());
-static VIRTUAL_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\bvirtual\b|\boverride\b|\bfinal\b").unwrap());
-static RTTI_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\btypeid\b|\bdynamic_cast\s*<").unwrap());
-static OPERATOR_OVERLOAD_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\boperator\s*[+\-*/%=<>!&|^~\[\]()]+\s*\(").unwrap());
-static INLINE_ASM_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\(").unwrap());
-static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
+static TEMPLATE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"template\s*<|typename|constexpr|consteval|constinit").unwrap());
+static LAMBDA_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[\s*[=&\w]*\s*\]\s*\(").unwrap());
+static NAMESPACE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bnamespace\s+(\w+)").unwrap());
+static CLASS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bclass\s+(\w+)").unwrap());
+static STRUCT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bstruct\s+(\w+)").unwrap());
+static VIRTUAL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bvirtual\b|\boverride\b|\bfinal\b").unwrap());
+static RTTI_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\btypeid\b|\bdynamic_cast\s*<").unwrap());
+static OPERATOR_OVERLOAD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\boperator\s*[+\-*/%=<>!&|^~\[\]()]+\s*\(").unwrap());
+static INLINE_ASM_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\(").unwrap());
+static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
         SecurityPattern {
             regex: &UNSAFE_STRING_RE,
@@ -166,7 +172,7 @@ static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
     ]
 });
 
-static TAG_RULES: Lazy<Vec<TagRule>> = Lazy::new(|| {
+static TAG_RULES: LazyLock<Vec<TagRule>> = LazyLock::new(|| {
     vec![
         TagRule {
             keywords: &[
@@ -450,14 +456,13 @@ impl CppParser {
                     .trim()
                     .to_string();
 
-                if !name.is_empty() && !val_text.is_empty() {
-                    if val_text
+                if !name.is_empty() && !val_text.is_empty()
+                    && val_text
                         .chars()
                         .all(|c| c.is_alphanumeric() || c == '_' || c == ':')
                     {
                         map.insert(name, val_text);
                     }
-                }
             }
         }
 
@@ -497,8 +502,7 @@ impl CppParser {
             } else {
                 (
                     node.child_by_field_name("left")
-                        .map(|l| Some(self.get_node_text(&l)))
-                        .flatten(),
+                        .and_then(|l| Some(self.get_node_text(&l))),
                     node.child_by_field_name("right"),
                 )
             };
@@ -750,7 +754,7 @@ impl CppParser {
             vec![]
         };
 
-        let cpp_info = self.extract_cpp_info(&node, &name, struct_context, access, template_params);
+        let cpp_info = self.extract_cpp_info(node, &name, struct_context, access, template_params);
 
         Some(Function {
             id,
@@ -1149,20 +1153,20 @@ impl CppParser {
             m.lang_info
                 .cpp
                 .as_ref()
-                .map_or(false, |c| c.is_virtual || c.is_pure_virtual)
+                .is_some_and(|c| c.is_virtual || c.is_pure_virtual)
         });
         let is_abstract = methods.iter().any(|m| {
             m.lang_info
                 .cpp
                 .as_ref()
-                .map_or(false, |c| c.is_pure_virtual)
+                .is_some_and(|c| c.is_pure_virtual)
         });
         let node_text = self.get_node_text(node);
         let is_packed =
             node_text.contains("__attribute__((packed))") || node_text.contains("#pragma pack");
         let is_template = node
             .parent()
-            .map_or(false, |p| p.kind() == "template_declaration");
+            .is_some_and(|p| p.kind() == "template_declaration");
         let template_params = if is_template {
             node.parent()
                 .map(|p| self.extract_template_params(&p))
@@ -1345,8 +1349,8 @@ impl CppParser {
                 let call_text = self.get_node_text(&func_node);
                 let resolved = self.resolve_callee(&call_text, fn_ptr_map);
                 let name = call_text
-                    .split(|c: char| c == '.' || c == '>')
-                    .last()
+                    .split(['.', '>'])
+                    .next_back()
                     .and_then(|s| s.split("::").last())
                     .unwrap_or(&call_text)
                     .trim()

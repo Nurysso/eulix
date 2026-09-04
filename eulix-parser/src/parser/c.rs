@@ -4,15 +4,15 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 use crate::struc::kb_struct::*;
-use once_cell::sync::Lazy;
+// use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
-
 // Regex Patterns Compiled once
 struct SecurityPattern {
-    regex: &'static Lazy<Regex>,
+    regex: &'static LazyLock<Regex>,
     note_type: &'static str,
     description: &'static str,
 }
@@ -22,36 +22,41 @@ struct TagRule {
     check_docstring: bool,
 }
 
-static UNSAFE_STRING_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"strcpy|strcat|sprintf|vsprintf|gets").unwrap());
-static COMMAND_EXEC_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"system\(|popen\(|exec").unwrap());
-static MANUAL_MEMORY_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"malloc|calloc|realloc|free").unwrap());
-static UNSAFE_INPUT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"scanf|fscanf").unwrap());
-static MEMORY_OP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"memcpy|memmove|memset").unwrap());
-static PRIVILEGE_CHANGE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"setuid|setgid|seteuid").unwrap());
-static WEAK_RANDOM_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"rand\(\)|random\(\)").unwrap());
+static UNSAFE_STRING_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"strcpy|strcat|sprintf|vsprintf|gets").unwrap());
+static COMMAND_EXEC_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"system\(|popen\(|exec").unwrap());
+static MANUAL_MEMORY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"malloc|calloc|realloc|free").unwrap());
+static UNSAFE_INPUT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"scanf|fscanf").unwrap());
+static MEMORY_OP_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"memcpy|memmove|memset").unwrap());
+static PRIVILEGE_CHANGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"setuid|setgid|seteuid").unwrap());
+static WEAK_RANDOM_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"rand\(\)|random\(\)").unwrap());
 
-static INCLUDE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"^#include\s+[<"]([^>"]+)[>"]"#).expect("Invalid include regex"));
+static INCLUDE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^#include\s+[<"]([^>"]+)[>"]"#).expect("Invalid include regex"));
 
-static TODO_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid todo regex"));
-static MACRO_DEFINE_RE: Lazy<Regex> = Lazy::new(|| {
+static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid todo regex")
+});
+static MACRO_DEFINE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^#define\s+([A-Za-z_]\w*)(?:\([^)]*\))?\s+(.+)$")
         .expect("Invalid macro define regex")
 });
-static MALLOC_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"malloc|calloc|realloc|alloca").unwrap());
-static FREE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bfree\b").unwrap());
-static PTHREAD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"pthread|fork|thread").unwrap());
-static SYSCALL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"syscall|ioctl|fcntl").unwrap());
-static STRING_OPS_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"strcpy|strcat|sprintf|strncpy").unwrap());
-static INLINE_ASM_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\(").unwrap());
+static MALLOC_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"malloc|calloc|realloc|alloca").unwrap());
+static FREE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bfree\b").unwrap());
+static PTHREAD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"pthread|fork|thread").unwrap());
+static SYSCALL_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"syscall|ioctl|fcntl").unwrap());
+static STRING_OPS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"strcpy|strcat|sprintf|strncpy").unwrap());
+static INLINE_ASM_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\(").unwrap());
 
-static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
+static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
         SecurityPattern {
             regex: &UNSAFE_STRING_RE,
@@ -96,7 +101,7 @@ static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
     ]
 });
 
-static TAG_RULES: Lazy<Vec<TagRule>> = Lazy::new(|| {
+static TAG_RULES: LazyLock<Vec<TagRule>> = LazyLock::new(|| {
     vec![
         TagRule {
             keywords: &["init", "setup", "initialize", "bootstrap"],
@@ -630,7 +635,7 @@ impl CParser {
 
         // 2. Member access: take last segment after `.` or `->`
         let base: &str = deref_stripped
-            .rsplit(|c| c == '.' || c == '>')
+            .rsplit(['.', '>'])
             .next()
             .unwrap_or(deref_stripped)
             .trim();
@@ -1072,8 +1077,8 @@ impl CParser {
         let mut vars = Vec::new();
         let mut cursor = root.walk();
         for child in root.children(&mut cursor) {
-            if child.kind() == "declaration" {
-                if child
+            if child.kind() == "declaration"
+                && child
                     .child_by_field_name("declarator")
                     .map(|d| d.kind() != "function_declarator")
                     .unwrap_or(true)
@@ -1082,7 +1087,6 @@ impl CParser {
                         vars.push(var);
                     }
                 }
-            }
         }
         vars
     }

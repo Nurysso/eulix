@@ -115,6 +115,7 @@ mod os_io {
                 if let Ok(f) = std::fs::File::open(path) {
                     let fd = f.as_raw_fd();
                     let size = metadata.len().min(16 * 1024 * 1024);
+                    #[allow(unsafe_code)]
                     unsafe {
                         libc::readahead(fd, 0, size as usize);
                     }
@@ -125,6 +126,7 @@ mod os_io {
 
     pub fn hint_read_sequential(f: &File) {
         let fd = f.as_raw_fd();
+        #[allow(unsafe_code)]
         unsafe {
             libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
         }
@@ -135,6 +137,7 @@ mod os_io {
         if let Ok(metadata) = f.metadata() {
             if metadata.len() > MIN_CACHE_EVICT_SIZE {
                 let fd = f.as_raw_fd();
+                #[allow(unsafe_code)]
                 unsafe {
                     libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
                 }
@@ -155,6 +158,7 @@ mod os_io {
         if let Ok(metadata) = f.metadata() {
             if metadata.len() > MIN_CACHE_EVICT_SIZE {
                 use std::os::unix::io::AsRawFd;
+                #[allow(unsafe_code)]
                 unsafe {
                     libc::posix_fadvise(f.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
                 }
@@ -317,7 +321,6 @@ fn validate_prism_input(val: &str) -> Result<u8, String> {
     // disable_version_flag = true,
     about = "Fast multi-language code parser"
 )]
-
 struct Args {
     /// Project root directory
     #[arg(short, long)]
@@ -354,6 +357,7 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(unix)]
+    #[allow(unsafe_code)]
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
@@ -402,7 +406,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.euignore.as_deref(),
         args.verbose,
         version,
-        &bin_hash,
+        bin_hash,
     )?;
     let metadata = kb.metadata.clone();
 
@@ -986,6 +990,7 @@ fn parse_file(
     let _contents = if let Ok(metadata) = file.metadata() {
         if metadata.len() > 10 * 1024 * 1024 {
             use memmap2::Mmap;
+            #[allow(unsafe_code)]
             let mmap = unsafe { Mmap::map(&file)? };
             std::str::from_utf8(&mmap)?.to_string()
         } else {

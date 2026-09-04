@@ -4,48 +4,51 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 use crate::struc::kb_struct::*;
-use once_cell::sync::Lazy;
+// use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
 
 struct SecurityPattern {
-    regex: &'static Lazy<Regex>,
+    regex: &'static LazyLock<Regex>,
     note_type: &'static str,
     description: &'static str,
 }
 
 //  Regex Patterns compiled once at first use
-static TODO_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid TODO regex"));
+static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid TODO regex")
+});
 
-static EVAL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"eval\s*\(").expect("Invalid eval regex"));
+static EVAL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"eval\s*\(").expect("Invalid eval regex"));
 
-static INNERHTML_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"innerHTML\s*=|outerHTML\s*=").expect("Invalid innerHTML regex"));
+static INNERHTML_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"innerHTML\s*=|outerHTML\s*=").expect("Invalid innerHTML regex"));
 
-static DOCUMENT_WRITE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"document\.write\s*\(").expect("Invalid document.write regex"));
+static DOCUMENT_WRITE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"document\.write\s*\(").expect("Invalid document.write regex"));
 
-static DANGEROUSLY_RE: Lazy<Regex> = Lazy::new(|| {
+static DANGEROUSLY_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"dangerouslySetInnerHTML").expect("Invalid dangerouslySetInnerHTML regex")
 });
 
-static BROWSER_STORAGE_RE: Lazy<Regex> = Lazy::new(|| {
+static BROWSER_STORAGE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"localStorage\.|sessionStorage\.").expect("Invalid browser_storage regex")
 });
 
-static WEAK_RANDOM_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"Math\.random\(\)").expect("Invalid weak_random regex"));
+static WEAK_RANDOM_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"Math\.random\(\)").expect("Invalid weak_random regex"));
 
-static DYNAMIC_REQUIRE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"require\s*\(\s*req\.").expect("Invalid dynamic_require regex"));
+static DYNAMIC_REQUIRE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"require\s*\(\s*req\.").expect("Invalid dynamic_require regex"));
 
-static NEW_FUNCTION_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"new\s+Function\s*\(").expect("Invalid new Function regex"));
+static NEW_FUNCTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"new\s+Function\s*\(").expect("Invalid new Function regex"));
 
-static SECURITY_PATTERNS: Lazy<Vec<SecurityPattern>> = Lazy::new(|| {
+static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
         SecurityPattern {
             regex: &EVAL_RE,
@@ -99,8 +102,8 @@ impl TypeScriptParser {
     pub fn new(source_code: String, file_path: String) -> Self {
         Self {
             source_code,
-        file_path,
-     }
+            file_path,
+        }
     }
 
     pub fn parse(&self) -> Result<FileData, String> {
@@ -305,7 +308,7 @@ impl TypeScriptParser {
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
         let signature = self.build_signature(name, &params, &return_type, is_async);
-        let id = self.make_function_id(&name, struct_context);
+        let id = self.make_function_id(name, struct_context);
 
         let (calls, variables, control_flow, complexity) =
             if let Some(body) = node.child_by_field_name("body") {
@@ -715,7 +718,7 @@ impl TypeScriptParser {
                 let name = call_text
                     .trim_start_matches("await ")
                     .split('.')
-                    .last()
+                    .next_back()
                     .unwrap_or(&call_text)
                     .trim()
                     .to_string();
