@@ -13,6 +13,7 @@ pub struct GoParser {
     source_code: String,
     file_path: String,
     build_tags: Vec<String>,
+    #[allow(dead_code)]
     go_directives: Vec<String>,
     uses_cgo: bool,
     embed_patterns: Vec<String>,
@@ -126,47 +127,44 @@ impl GoParser {
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {
-            match child.kind() {
-                "import_declaration" => {
-                    let mut import_cursor = child.walk();
-                    for spec_node in child.children(&mut import_cursor) {
-                        if spec_node.kind() == "import_spec" {
-                            if let Some(path_node) = spec_node.child_by_field_name("path") {
-                                let path =
-                                    self.get_node_text(&path_node).trim_matches('"').to_string();
+            if child.kind() == "import_declaration" {
+                let mut import_cursor = child.walk();
+                for spec_node in child.children(&mut import_cursor) {
+                    if spec_node.kind() == "import_spec" {
+                        if let Some(path_node) = spec_node.child_by_field_name("path") {
+                            let path =
+                                self.get_node_text(&path_node).trim_matches('"').to_string();
 
-                                let alias = spec_node
-                                    .child_by_field_name("name")
-                                    .map(|n| self.get_node_text(&n));
+                            let alias = spec_node
+                                .child_by_field_name("name")
+                                .map(|n| self.get_node_text(&n));
 
-                                imports.push(Import {
-                                    module: path.clone(),
-                                    items: if let Some(a) = alias { vec![a] } else { vec![] },
-                                    import_type: self.classify_import(&path),
-                                });
-                            }
-                        } else if spec_node.kind() == "import_spec_list" {
-                            let mut list_cursor = spec_node.walk();
-                            for item in spec_node.children(&mut list_cursor) {
-                                if item.kind() == "import_spec" {
-                                    if let Some(path_node) = item.child_by_field_name("path") {
-                                        let path = self
-                                            .get_node_text(&path_node)
-                                            .trim_matches('"')
-                                            .to_string();
+                            imports.push(Import {
+                                module: path.clone(),
+                                items: if let Some(a) = alias { vec![a] } else { vec![] },
+                                import_type: self.classify_import(&path),
+                            });
+                        }
+                    } else if spec_node.kind() == "import_spec_list" {
+                        let mut list_cursor = spec_node.walk();
+                        for item in spec_node.children(&mut list_cursor) {
+                            if item.kind() == "import_spec" {
+                                if let Some(path_node) = item.child_by_field_name("path") {
+                                    let path = self
+                                        .get_node_text(&path_node)
+                                        .trim_matches('"')
+                                        .to_string();
 
-                                        imports.push(Import {
-                                            module: path.clone(),
-                                            items: vec![],
-                                            import_type: self.classify_import(&path),
-                                        });
-                                    }
+                                    imports.push(Import {
+                                        module: path.clone(),
+                                        items: vec![],
+                                        import_type: self.classify_import(&path),
+                                    });
                                 }
                             }
                         }
                     }
                 }
-                _ => {}
             }
         }
 
@@ -379,7 +377,7 @@ impl GoParser {
         let type_constraints = self.extract_type_constraints(node);
 
         let go_info = GoInfo {
-            is_exported: name.chars().next().map_or(false, |c| c.is_uppercase()),
+            is_exported: name.chars().next().is_some_and(|c| c.is_uppercase()),
             receiver_type: recv_type.map(|t| {
                 // Preserve pointer indicator for caller
                 if is_pointer_receiver {
@@ -410,7 +408,7 @@ impl GoParser {
             embed_patterns: self.embed_patterns.clone(),
             is_variadic: params
                 .last()
-                .map_or(false, |p| p.type_annotation.starts_with("...")),
+                .is_some_and(|p| p.type_annotation.starts_with("...")),
             // Add the missing fields:
             has_embedded_types: false,
             is_pointer_receiver,
@@ -740,7 +738,7 @@ impl GoParser {
             let full = self.get_node_text(&func_node);
             // Use the last segment so "fmt.Println" → "Println", but keep
             // the full name too for qualified calls in `defined_in`.
-            let callee = full.split('.').last().unwrap_or(&full).trim().to_string();
+            let callee = full.split('.').next_back().unwrap_or(&full).trim().to_string();
 
             if callee.is_empty() {
                 return;
@@ -1052,7 +1050,7 @@ impl GoParser {
                     if let Some(method) = self.parse_function(&child, &type_name) {
                         methods_map
                             .entry(type_name)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push(method);
                     }
                 }
@@ -1103,7 +1101,7 @@ impl GoParser {
             decorators: vec![],
             lang_info: LanguageSpecificInfo {
                 go: Some(GoInfo {
-                    is_exported: name.chars().next().map_or(false, |c| c.is_uppercase()),
+                    is_exported: name.chars().next().is_some_and(|c| c.is_uppercase()),
                     type_kind: Some(GoTypeKind::Struct),
                     has_embedded_types: has_embedded,
                     build_tags: self.build_tags.clone(),
@@ -1245,7 +1243,7 @@ impl GoParser {
             decorators: vec!["interface".to_string()], // reuse decorators to signal kind
             lang_info: LanguageSpecificInfo {
                 go: Some(GoInfo {
-                    is_exported: name.chars().next().map_or(false, |c| c.is_uppercase()),
+                    is_exported: name.chars().next().is_some_and(|c| c.is_uppercase()),
                     type_kind: Some(GoTypeKind::Interface),
                     build_tags: self.build_tags.clone(),
                     uses_cgo: self.uses_cgo,
@@ -1294,12 +1292,12 @@ impl GoParser {
                                     is_exported: name
                                         .chars()
                                         .next()
-                                        .map_or(false, |c| c.is_uppercase()),
+                                        .is_some_and(|c| c.is_uppercase()),
                                     is_interface_method: true,
                                     returns_error: return_type.contains("error"),
                                     is_variadic: params
                                         .last()
-                                        .map_or(false, |p| p.type_annotation.starts_with("...")),
+                                        .is_some_and(|p| p.type_annotation.starts_with("...")),
                                     build_tags: self.build_tags.clone(),
                                     uses_cgo: self.uses_cgo,
                                     ..Default::default()
@@ -1634,7 +1632,7 @@ impl GoParser {
         }
 
         // Exported functions (start with uppercase)
-        if name.chars().next().map_or(false, |c| c.is_uppercase()) {
+        if name.chars().next().is_some_and(|c| c.is_uppercase()) {
             tags.push("exported".to_string());
         }
 
@@ -1651,7 +1649,7 @@ impl GoParser {
             score += 0.3;
         }
 
-        if name.chars().next().map_or(false, |c| c.is_uppercase()) {
+        if name.chars().next().is_some_and(|c| c.is_uppercase()) {
             score += 0.1;
         }
 

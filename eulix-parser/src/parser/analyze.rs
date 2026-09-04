@@ -70,7 +70,7 @@ impl Analyzer {
         // auxiliary indices in memory at once; past a certain repo size that
         // cost isn't worth it, so we trade call-graph fidelity for staying
         // resident on modest machines instead of OOMing.
-        let is_large = file_count > 100000;
+        let is_large = file_count > 100_000;
         let use_precise = prism;
         if verbose && is_large {
             println!(
@@ -607,9 +607,7 @@ impl Analyzer {
         }
 
         // A reverse idx→id table is built once and reused by the BFS walks
-        // below, instead of reconstructing it per lookup (which is what the
-        // now-dead `resolve_v2` used to do, and part of why it was replaced
-        // by `ResolveCtx`).
+        // below, instead of reconstructing it per lookup.
         let idx_to_key: Vec<&str> = {
             let mut v = vec![""; unique_nodes.len()];
             for (&id, &idx) in &node_map {
@@ -998,6 +996,7 @@ impl Analyzer {
             if plen + blen <= buf.len() {
                 buf[..plen].copy_from_slice(prefix.as_bytes());
                 buf[plen..plen + blen].copy_from_slice(base.as_bytes());
+                #[allow(unsafe_code)]
                 let candidate = unsafe { std::str::from_utf8_unchecked(&buf[..plen + blen]) };
                 if let Some(&i) = node_map.get(candidate) {
                     return Some(i);
@@ -1086,16 +1085,16 @@ impl Analyzer {
 
         for (fn_by_name, fn_by_tag, fn_calling, types) in all_indices {
             for (k, v) in fn_by_name {
-                functions_by_name.entry(k).or_insert_with(Vec::new).push(v);
+                functions_by_name.entry(k).or_default().push(v);
             }
             for (k, v) in fn_by_tag {
-                functions_by_tag.entry(k).or_insert_with(Vec::new).push(v);
+                functions_by_tag.entry(k).or_default().push(v);
             }
             for (k, v) in fn_calling {
-                functions_calling.entry(k).or_insert_with(Vec::new).push(v);
+                functions_calling.entry(k).or_default().push(v);
             }
             for (k, v) in types {
-                types_by_name.entry(k).or_insert_with(Vec::new).push(v);
+                types_by_name.entry(k).or_default().push(v);
             }
         }
 
@@ -1273,7 +1272,7 @@ impl Analyzer {
         let mut snake_case_count = 0;
         let mut camel_case_count = 0;
 
-        for (_, filedata) in &kb.structure {
+        for filedata in kb.structure.values() {
             for func in &filedata.functions {
                 if func.name.contains('_') {
                     snake_case_count += 1;
@@ -1449,7 +1448,7 @@ impl Analyzer {
             let category = Self::classify_file(filepath, filedata);
             categories
                 .entry(category)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(filepath.to_string());
         }
 
@@ -1508,7 +1507,7 @@ impl Analyzer {
         // templates), so the feature list isn't dominated by repeats.
         let mut features = HashSet::new();
 
-        for (_, filedata) in &kb.structure {
+        for  filedata in kb.structure.values() {
             for func in &filedata.functions {
                 // Length threshold (>20 chars) filters out placeholder or
                 // near-empty docstrings that wouldn't read as a real
@@ -1542,240 +1541,7 @@ impl Analyzer {
         features.into_iter().take(10).collect()
     }
 
-    // Superseded by `ResolveCtx::resolve`, which carries the same resolution
-    // tiers but avoids two costs this version paid on every call: rebuilding
-    // an idx→id `String` map per invocation, and cloning `String`s while
-    // walking the inheritance chain in `lookup_method_in_chain`. Kept around
-    // (dead_code) as a readable reference for the resolution *strategy*
-    // since `ResolveCtx`'s version is optimized to the point of being harder
-    // to follow.
-    #[allow(dead_code)]
-    fn resolve_v2(
-        callee: &str,
-        caller_file: &str,
-        caller_class_id: Option<&str>,
-        node_map: &HashMap<String, usize>,
-        symbol_index: &HashMap<String, usize>,
-        class_methods: &HashMap<String, HashMap<String, usize>>,
-        inheritance_ids: &HashMap<usize, Vec<usize>>,
-        descendants_ids: &HashMap<usize, Vec<usize>>,
-        file_scope: &HashMap<String, HashMap<String, Vec<usize>>>,
-        imports_per_file: &HashMap<String, Vec<(String, String)>>,
-        module_to_files: &HashMap<String, Vec<String>>,
-        idx_to_id: &HashMap<usize, String>,
-    ) -> Option<usize> {
-        // Trusted outright: if something upstream (v1 pre-pass, or the
-        // parser itself) already produced a fully-qualified ID, redoing
-        // resolution would only risk getting a worse answer.
-        if let Some(&idx) = node_map.get(callee) {
-            return Some(idx);
-        }
-
-        // `self.foo()` is scoped to the caller's own type hierarchy first,
-        // because resolving it globally would let unrelated classes with a
-        // same-named method collide — exactly the v1 failure mode this
-        // whole resolver exists to fix.
-        if let Some(cls_id) = caller_class_id {
-            if let Some(class_idx) = node_map.get(cls_id).copied() {
-                // Own class checked before the hierarchy, since a local
-                // override should always win over an inherited definition.
-                if let Some(methods) = class_methods.get(cls_id) {
-                    if let Some(&idx) = methods.get(callee) {
-                        return Some(idx);
-                    }
-                }
-                // Not overridden locally — the method may still be inherited
-                // from a base class, so walk up before giving up.
-                if inheritance_ids.contains_key(&class_idx) {
-                    if let Some(idx) = Self::lookup_method_in_chain(
-                        callee,
-                        class_idx,
-                        inheritance_ids,
-                        class_methods,
-                        node_map,
-                        idx_to_id,
-                        true,
-                    ) {
-                        return Some(idx);
-                    }
-                }
-                // Also check descendants: at a call site typed as the base
-                // class, the runtime target could be a subclass override —
-                // we can't know which without real type info, so we search
-                // both directions rather than assume the base implementation.
-                if let Some(idx) = Self::lookup_method_in_chain(
-                    callee,
-                    class_idx,
-                    descendants_ids,
-                    class_methods,
-                    node_map,
-                    idx_to_id,
-                    true,
-                ) {
-                    return Some(idx);
-                }
-            }
-        }
-
-        // No class context, or the class-scoped search above missed. Same
-        // file is checked next because shadowing within a file is common
-        // (e.g. multiple free functions with intentionally similar names)
-        // while shadowing across files is rare — so same-file is a much
-        // stronger signal than a global guess.
-        if let Some(file_map) = file_scope.get(caller_file) {
-            if let Some(candidates) = file_map.get(callee) {
-                match candidates.len() {
-                    0 => {}
-                    1 => return Some(candidates[0]),
-                    _ => {
-                        // True disambiguation would need node_type here to
-                        // prefer a method vs. a function candidate, but that
-                        // isn't available on this fast path — returning the
-                        // first candidate keeps the result at least
-                        // deterministic rather than picking arbitrarily.
-                        if let Some(cls_id) = caller_class_id {
-                            let _ = cls_id;
-                        }
-                        return Some(candidates[0]);
-                    }
-                }
-            }
-        }
-
-        // Not local either — check whether the name was imported, since an
-        // explicit import is a much more reliable link to a definition than
-        // guessing globally by name alone.
-        if let Some(imports) = imports_per_file.get(caller_file) {
-            for (imported_name, source_module) in imports {
-                if imported_name == callee {
-                    if let Some(target_files) = module_to_files.get(source_module) {
-                        for tf in target_files {
-                            if let Some(file_map) = file_scope.get(tf) {
-                                if let Some(candidates) = file_map.get(callee) {
-                                    return candidates.first().copied();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Every structural check above missed — fall back to a global
-        // guess so cross-module calls that slip past the other tiers still
-        // resolve to *something*, preserving v1-level coverage as a floor.
-        symbol_index.get(callee).copied()
-    }
-
-    /// BFS-walk the class hierarchy (ancestors or descendants) looking for
-    /// a class that defines the given method short name.
-    ///
-    /// BFS (not DFS) and an explicit `visited` set are used because class
-    /// hierarchies can have multiple inheritance and, in malformed or
-    /// generated input, cycles — without tracking visited nodes this could
-    /// loop forever instead of just failing to find a match.
-    fn lookup_method_in_chain(
-        method_short: &str,
-        start_class_idx: usize,
-        chain: &HashMap<usize, Vec<usize>>,
-        class_methods: &HashMap<String, HashMap<String, usize>>,
-        node_map: &HashMap<String, usize>,
-        idx_to_id: &HashMap<usize, String>,
-        _walk_kind: bool, // true=walk both, currently unused (kept for future tuning)
-    ) -> Option<usize> {
-        let _ = _walk_kind;
-        let start_id = idx_to_id.get(&start_class_idx)?;
-
-        let mut queue: VecDeque<String> = VecDeque::new();
-        let mut visited: HashSet<String> = HashSet::new();
-        queue.push_back(start_id.clone());
-        visited.insert(start_id.clone());
-
-        while let Some(cid) = queue.pop_front() {
-            if let Some(methods) = class_methods.get(&cid) {
-                if let Some(&idx) = methods.get(method_short) {
-                    return Some(idx);
-                }
-            }
-            if let Some(cidx) = node_map.get(&cid).copied() {
-                if let Some(neighbors) = chain.get(&cidx) {
-                    for &nidx in neighbors {
-                        if let Some(nid) = idx_to_id.get(&nidx) {
-                            if visited.insert(nid.clone()) {
-                                queue.push_back(nid.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    // Only used by the now-superseded `resolve_v2`; `build_call_graph_v2`
-    // builds its own `idx_to_key` once up front instead, which is why this
-    // is dead_code rather than deleted — removing it would also mean
-    // rewriting `resolve_v2`'s signature, and it's kept only as a reference.
-    #[allow(dead_code)]
-    fn build_idx_to_id(node_map: &HashMap<String, usize>) -> HashMap<usize, String> {
-        node_map.iter().map(|(k, v)| (*v, k.clone())).collect()
-    }
-
-    /// Build a reverse index: parent_id → [child_id, ...].
-    // Unused by the current pipeline (v2 derives descendants from
-    // `inheritance_ids` inline instead), kept as a standalone utility in
-    // case a caller needs reverse inheritance without going through the
-    // full `build_call_graph_v2` machinery.
-    #[allow(dead_code)]
-    fn reverse_inheritance(forward: &HashMap<String, Vec<String>>) -> HashMap<String, Vec<String>> {
-        let mut reverse: HashMap<String, Vec<String>> = HashMap::new();
-        for (child, parents) in forward {
-            for parent in parents {
-                reverse
-                    .entry(parent.clone())
-                    .or_default()
-                    .push(child.clone());
-            }
-        }
-        reverse
-    }
-
-    /// Heuristic: map a module name to the files that "declare" it.
-    ///
-    /// There's no reliable, language-agnostic way to resolve `import foo`
-    /// to a file without actually running each language's module resolution
-    /// rules, which isn't practical here. This uses filename/path
-    /// conventions as a best-effort proxy instead, and is intentionally
-    /// conservative — an empty result just means the import-guided
-    /// resolution tier misses and falls through to the global symbol
-    /// fallback, rather than risking a wrong match.
-    #[allow(dead_code)]
-    fn build_module_to_files(file_list: &[String]) -> HashMap<String, Vec<String>> {
-        let mut map: HashMap<String, Vec<String>> = HashMap::new();
-        for path in file_list {
-            let cleaned = path.trim_start_matches("./").to_string();
-            let stem = match cleaned.rsplit_once('.') {
-                Some((s, _ext)) => s,
-                None => cleaned.as_str(),
-            };
-            let module = stem.rsplit_once('/').map(|(_, tail)| tail).unwrap_or(stem);
-            if !module.is_empty() {
-                map.entry(module.to_string())
-                    .or_default()
-                    .push(path.clone());
-            }
-            // Dotted form kept alongside the plain module name to also
-            // match languages (Python/Java-style) that reference modules by
-            // their full dotted path rather than just the leaf name.
-            let dotted = stem.replace('/', ".");
-            if dotted != module {
-                map.entry(dotted).or_default().push(path.clone());
-            }
-        }
-        map
-    }
-
-    // Borrowed-string twin of `build_module_to_files`, used by v2 to avoid
+    // build_module_to_files_borrowed used by v2 to avoid
     // cloning every file path into this map when the caller already holds
     // the strings for the lifetime of the whole build — the owned version
     // above is kept for callers (or future use) that need an owned result.
@@ -1802,8 +1568,7 @@ impl Analyzer {
 
 // Bundles every read-only index the resolver needs behind one struct so it
 // can be passed into parallel closures by shared reference without each one
-// carrying a long, error-prone parameter list (the pain point that made
-// `resolve_v2` awkward to call).
+// carrying a long, error-prone parameter list
 struct ResolveCtx<'a> {
     node_map: &'a HashMap<&'a str, usize>,
     symbol_index: &'a HashMap<&'a str, usize>,
@@ -1889,10 +1654,7 @@ impl<'a> ResolveCtx<'a> {
         self.symbol_index.get(callee).copied()
     }
 
-    /// BFS over an index map using only usize — no String clones, unlike
-    /// the `resolve_v2`/`lookup_method_in_chain` version this replaces,
-    /// since cloning class IDs on every hop was measurable overhead at the
-    /// scale this runs at.
+    /// BFS over an index map using only usize — no String clones.
     #[inline]
     fn lookup_in_chain(
         &self,

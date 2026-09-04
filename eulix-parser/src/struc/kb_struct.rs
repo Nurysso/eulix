@@ -386,7 +386,6 @@ pub struct LanguageSpecificInfo {
     pub cpp: Option<CppInfo>,
 }
 
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RustInfo {
@@ -394,20 +393,20 @@ pub struct RustInfo {
     pub is_pub: bool,
     pub is_pub_crate: bool,
     pub is_const_fn: bool,
-    pub is_async: bool,               // async fn
-    pub is_extern: bool,              // extern "C" fn / extern fn
-    pub abi: Option<String>,          // e.g. "C" in `extern "C" fn`
+    pub is_async: bool,      // async fn
+    pub is_extern: bool,     // extern "C" fn / extern fn
+    pub abi: Option<String>, // e.g. "C" in `extern "C" fn`
 
     pub lifetimes: Vec<String>,       // e.g. ["'a", "'b"]
     pub generics: Vec<String>,        // non-lifetime type params, e.g. ["T", "K: Clone"]
     pub where_clause: Option<String>, // raw text of a `where ...` clause, if present
     pub is_generic: bool,             // true if lifetimes or generics is non-empty
 
-    pub derives: Vec<String>,         // #[derive(Debug, Clone, ...)]
-    pub is_test: bool,                // #[test]
-    pub is_bench: bool,               // #[bench]
-    pub cfg_attrs: Vec<String>,       // #[cfg(target_os = "linux")] etc.
-    pub unknown_attrs: Vec<String>,   // catch-all for unrecognized #[...] (incl. proc-macro attrs)
+    pub derives: Vec<String>,       // #[derive(Debug, Clone, ...)]
+    pub is_test: bool,              // #[test]
+    pub is_bench: bool,             // #[bench]
+    pub cfg_attrs: Vec<String>,     // #[cfg(target_os = "linux")] etc.
+    pub unknown_attrs: Vec<String>, // catch-all for unrecognized #[...] (incl. proc-macro attrs)
 
     // Trait / impl relationships (populated on functions & methods)
     /// The trait this method belongs to: `Some("Display")` for a method inside
@@ -430,7 +429,7 @@ pub struct RustInfo {
     pub is_marker_trait: bool,    // trait with no methods (marker/auto-trait-like)
 
     // Function-body signals
-    pub uses_try_operator: bool,  // `?` propagation present somewhere in the body
+    pub uses_try_operator: bool, // `?` propagation present somewhere in the body
     pub macro_calls: Vec<String>, // vec!, println!, format!, custom_macro!, etc. invoked in body
 }
 
@@ -440,13 +439,13 @@ pub struct GoInfo {
     pub receiver_type: Option<String>, // e.g. "*MyStruct" for pointer receivers
     pub receiver_name: Option<String>, // e.g. "s" in `func (s *Server) Serve()`
     pub is_interface_method: bool,
-    pub spawns_goroutines: bool,       // contains `go` statements
-    pub uses_channels: bool,           // sends/receives on a chan
-    pub uses_select: bool,             // contains a select statement
-    pub uses_mutex: bool,              // sync.Mutex / sync.RWMutex usage
-    pub uses_waitgroup: bool,          // sync.WaitGroup usage
-    pub uses_atomic: bool,             // sync/atomic usage
-    pub returns_error: bool,           // last return type is `error`
+    pub spawns_goroutines: bool, // contains `go` statements
+    pub uses_channels: bool,     // sends/receives on a chan
+    pub uses_select: bool,       // contains a select statement
+    pub uses_mutex: bool,        // sync.Mutex / sync.RWMutex usage
+    pub uses_waitgroup: bool,    // sync.WaitGroup usage
+    pub uses_atomic: bool,       // sync/atomic usage
+    pub returns_error: bool,     // last return type is `error`
     pub uses_panic: bool,
     pub uses_recover: bool,
     pub defer_count: usize,            // number of `defer` statements
@@ -458,8 +457,8 @@ pub struct GoInfo {
     pub embed_patterns: Vec<String>,   // //go:embed *.html → ["*.html"]
     pub is_variadic: bool,             // last param is `...T`
     pub type_kind: Option<GoTypeKind>,
-    pub is_pointer_receiver: bool,     // for method entries: with receiver *T ?
-    pub has_embedded_types: bool,      // struct embeds another type
+    pub is_pointer_receiver: bool, // for method entries: with receiver *T ?
+    pub has_embedded_types: bool,  // struct embeds another type
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -480,16 +479,16 @@ pub struct TypeScriptInfo {
     pub is_abstract: bool,
     pub access_modifier: Option<String>, // "public" | "private" | "protected"
     pub is_readonly: bool,
-    pub is_optional: bool,               // optional method/property (?)
-    pub decorators: Vec<String>,         // @Component, @Injectable etc.
-    pub generic_params: Vec<String>,     // e.g. ["T", "K extends string"]
-    pub is_arrow_fn: bool,               // const foo = () => ...
-    pub is_overload: bool,               // TS function overloads
+    pub is_optional: bool,           // optional method/property (?)
+    pub decorators: Vec<String>,     // @Component, @Injectable etc.
+    pub generic_params: Vec<String>, // e.g. ["T", "K extends string"]
+    pub is_arrow_fn: bool,           // const foo = () => ...
+    pub is_overload: bool,           // TS function overloads
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CInfo {
-    pub is_static: bool,                    // file-scoped linkage
+    pub is_static: bool, // file-scoped linkage
     pub is_inline: bool,
     pub is_extern: bool,
     pub is_variadic: bool,                  // printf-style ...
@@ -515,9 +514,9 @@ pub struct CppInfo {
 
     pub type_kind: CppTypeKind, // for Class entries
     // Struct/Union specific
-    pub is_pod: bool,           // no user-defined ctor/dtor/virtual → plain-old-data
-    pub is_packed: bool,        // __attribute__((packed)) or #pragma pack
-    pub has_vtable: bool,       // has at least one virtual method
+    pub is_pod: bool,     // no user-defined ctor/dtor/virtual → plain-old-data
+    pub is_packed: bool,  // __attribute__((packed)) or #pragma pack
+    pub has_vtable: bool, // has at least one virtual method
 
     // Enum specific
     pub is_scoped_enum: bool,            // enum class / enum struct
@@ -531,8 +530,8 @@ pub struct CppInfo {
     pub concept_constraints: Vec<String>, // requires clauses / concept names
 
     // Linkage / storage
-    pub is_extern_c: bool,                // extern "C" linkage
-    pub is_thread_local: bool,            // thread_local storage
+    pub is_extern_c: bool,     // extern "C" linkage
+    pub is_thread_local: bool, // thread_local storage
     pub is_consteval: bool,
     pub is_constinit: bool,
 
