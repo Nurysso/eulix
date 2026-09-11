@@ -19,34 +19,56 @@ struct SecurityPattern {
 
 //  Regex Patterns compiled once at first use
 static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid TODO regex")
+    #[allow(clippy::expect_used)]
+    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)")
+        .expect("static JS/TS TODO comment extraction regex pattern is valid")
 });
 
-static EVAL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"eval\s*\(").expect("Invalid eval regex"));
+static EVAL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"eval\s*\(").expect("static dynamic eval execution regex pattern is valid")
+});
 
-static INNERHTML_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"innerHTML\s*=|outerHTML\s*=").expect("Invalid innerHTML regex"));
+static INNERHTML_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"innerHTML\s*=|outerHTML\s*=")
+        .expect("static DOM HTML injection assignment regex pattern is valid")
+});
 
-static DOCUMENT_WRITE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"document\.write\s*\(").expect("Invalid document.write regex"));
+static DOCUMENT_WRITE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"document\.write\s*\(")
+        .expect("static document.write invocation regex pattern is valid")
+});
 
 static DANGEROUSLY_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"dangerouslySetInnerHTML").expect("Invalid dangerouslySetInnerHTML regex")
+    #[allow(clippy::expect_used)]
+    Regex::new(r"dangerouslySetInnerHTML")
+        .expect("static React dangerouslySetInnerHTML prop regex pattern is valid")
 });
 
 static BROWSER_STORAGE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"localStorage\.|sessionStorage\.").expect("Invalid browser_storage regex")
+    #[allow(clippy::expect_used)]
+    Regex::new(r"localStorage\.|sessionStorage\.")
+        .expect("static Web Storage API access regex pattern is valid")
 });
 
-static WEAK_RANDOM_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"Math\.random\(\)").expect("Invalid weak_random regex"));
+static WEAK_RANDOM_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"Math\.random\(\)").expect("static weak PRNG Math.random regex pattern is valid")
+});
 
-static DYNAMIC_REQUIRE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"require\s*\(\s*req\.").expect("Invalid dynamic_require regex"));
+static DYNAMIC_REQUIRE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"require\s*\(\s*req\.")
+        .expect("static dynamic CommonJS require call regex pattern is valid")
+});
 
-static NEW_FUNCTION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"new\s+Function\s*\(").expect("Invalid new Function regex"));
+static NEW_FUNCTION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"new\s+Function\s*\(")
+        .expect("static Function constructor instantiation regex pattern is valid")
+});
 
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
@@ -1043,30 +1065,25 @@ impl TypeScriptParser {
     }
 
     fn extract_docstring(&self, node: &Node) -> String {
-        let prev = node.prev_sibling();
-
-        while let Some(sib) = prev {
-            match sib.kind() {
-                "comment" => {
-                    let text = self.get_node_text(&sib);
-                    if text.starts_with("/**") {
-                        return text
-                            .trim_start_matches("/**")
-                            .trim_end_matches("*/")
-                            .lines()
-                            .map(|l| l.trim_start_matches('*').trim().to_string())
-                            .filter(|l| !l.is_empty())
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                    }
+        if let Some(sib) = node.prev_sibling() {
+            if sib.kind() == "comment" {
+                let text = self.get_node_text(&sib);
+                if text.starts_with("/**") {
                     return text
-                        .trim_start_matches("//")
-                        .trim_start_matches("/*")
+                        .trim_start_matches("/**")
                         .trim_end_matches("*/")
-                        .trim()
-                        .to_string();
+                        .lines()
+                        .map(|l| l.trim_start_matches('*').trim().to_string())
+                        .filter(|l| !l.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ");
                 }
-                _ => break,
+                return text
+                    .trim_start_matches("//")
+                    .trim_start_matches("/*")
+                    .trim_end_matches("*/")
+                    .trim()
+                    .to_string();
             }
         }
 
@@ -1078,28 +1095,28 @@ impl TypeScriptParser {
             .lines()
             .enumerate()
             .filter_map(|(idx, line)| {
-                TODO_RE.captures(line).map(|caps| {
-                    let text = caps.get(1).unwrap().as_str().trim().to_string();
-                    let priority = if text.to_lowercase().contains("critical")
-                        || text.to_lowercase().contains("urgent")
-                    {
-                        "high"
-                    } else if text.to_lowercase().contains("minor") {
-                        "low"
-                    } else {
-                        "medium"
-                    };
-
-                    Todo {
-                        line: idx + 1,
-                        text,
-                        priority: priority.to_string(),
-                    }
+                TODO_RE.captures(line).and_then(|caps| {
+                    caps.get(1).map(|m| {
+                        let text = m.as_str().trim().to_string();
+                        let text_lower = text.to_lowercase();
+                        let priority =
+                            if text_lower.contains("critical") || text_lower.contains("urgent") {
+                                "high"
+                            } else if text_lower.contains("minor") {
+                                "low"
+                            } else {
+                                "medium"
+                            };
+                        Todo {
+                            line: idx + 1,
+                            text,
+                            priority: priority.to_string(),
+                        }
+                    })
                 })
             })
             .collect()
     }
-
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
 

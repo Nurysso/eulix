@@ -3,9 +3,11 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ignore::WalkBuilder;
+use std::fs;
 use std::path::{Path, PathBuf};
+use xxhash_rust::xxh3::Xxh3;
 
 pub struct FileWalker {
     root: PathBuf,
@@ -92,6 +94,24 @@ impl FileWalker {
             .collect();
 
         Ok(files)
+    }
+    pub fn project_hash(&self) -> Result<String> {
+        let mut files = self.walk_files(|_| true)?;
+        files.sort();
+        let mut hasher = Xxh3::new();
+        for path in &files {
+            let rel = path.strip_prefix(&self.root).unwrap_or(path);
+            hasher.update(rel.to_string_lossy().as_bytes());
+            hasher.update(b"\0");
+
+            let contents = fs::read(path).with_context(|| {
+                format!("failed to read {} while hashing project", path.display())
+            })?;
+            hasher.update(&contents);
+            hasher.update(b"\0");
+            drop(contents);
+        }
+        Ok(format!("{:016x}", hasher.digest()))
     }
 }
 

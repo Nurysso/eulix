@@ -19,27 +19,42 @@ struct SecurityPattern {
 
 //  Regex Patterns compiled once at first use
 static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid TODO regex")
+    #[allow(clippy::expect_used)]
+    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)")
+        .expect("static Rust TODO comment extraction regex pattern is valid")
 });
 
-static UNSAFE_BLOCK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"unsafe\s*\{").expect("Invalid unsafe block regex"));
+static UNSAFE_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"unsafe\s*\{").expect("static Rust unsafe block expression regex pattern is valid")
+});
 
-static TRANSMUTE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"std::mem::transmute").expect("Invalid transmute regex"));
+static TRANSMUTE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"std::mem::transmute")
+        .expect("static std::mem::transmute invocation regex pattern is valid")
+});
 
-static UNWRAP_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"unwrap\(\)").expect("Invalid unwrap regex"));
+static UNWRAP_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"unwrap\(\)").expect("static Result/Option unwrap call regex pattern is valid")
+});
 
-static EXPECT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"expect\(").expect("Invalid expect regex"));
+static EXPECT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"expect\(").expect("static Result/Option expect call regex pattern is valid")
+});
 
 static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"Command::new|std::process::Command").expect("Invalid command_exec regex")
+    #[allow(clippy::expect_used)]
+    Regex::new(r"Command::new|std::process::Command")
+        .expect("static process Command instantiation regex pattern is valid")
 });
 
 static RAW_POINTER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"from_raw_parts|from_raw_parts_mut").expect("Invalid raw_pointer regex")
+    #[allow(clippy::expect_used)]
+    Regex::new(r"from_raw_parts|from_raw_parts_mut")
+        .expect("static slice from raw parts construct regex pattern is valid")
 });
 
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
@@ -1340,22 +1355,24 @@ impl RustParser {
             .lines()
             .enumerate()
             .filter_map(|(idx, line)| {
-                TODO_RE.captures(line).map(|caps| {
-                    let text = caps.get(1).unwrap().as_str().trim().to_string();
-                    let priority = if text.to_lowercase().contains("critical")
-                        || text.to_lowercase().contains("urgent")
-                    {
-                        "high"
-                    } else if text.to_lowercase().contains("minor") {
-                        "low"
-                    } else {
-                        "medium"
-                    };
-                    Todo {
-                        line: idx + 1,
-                        text,
-                        priority: priority.to_string(),
-                    }
+                TODO_RE.captures(line).and_then(|caps| {
+                    caps.get(1).map(|m| {
+                        let text = m.as_str().trim().to_string();
+                        let text_lower = text.to_lowercase();
+                        let priority =
+                            if text_lower.contains("critical") || text_lower.contains("urgent") {
+                                "high"
+                            } else if text_lower.contains("minor") {
+                                "low"
+                            } else {
+                                "medium"
+                            };
+                        Todo {
+                            line: idx + 1,
+                            text,
+                            priority: priority.to_string(),
+                        }
+                    })
                 })
             })
             .collect()

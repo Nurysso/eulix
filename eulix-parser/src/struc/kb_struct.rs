@@ -3,9 +3,9 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
+// use rustc_hash::FxHashMap; todo move to FxHashMap instead of HashMap
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
 // kb.json structure
 #[derive(Serialize)]
 pub struct KnowledgeBaseSimplifiedRef<'a> {
@@ -74,9 +74,10 @@ pub struct KnowledgeBase {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Metadata {
-    pub project_name: String,
     pub version: String,
     pub git_hash: String,
+    pub project_name: String,
+    pub project_hash: String,
     pub parsed_at: String,
     pub languages: Vec<String>,
     pub total_files: usize,

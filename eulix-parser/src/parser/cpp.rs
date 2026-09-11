@@ -23,90 +23,197 @@ struct TagRule {
 }
 
 static UNSAFE_STRING_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"strcpy|strcat|sprintf|vsprintf|gets|wcscpy|wcscat|_mbscpy").unwrap()
+    #[allow(clippy::expect_used)]
+    Regex::new(r"strcpy|strcat|sprintf|vsprintf|gets|wcscpy|wcscat|_mbscpy")
+        .expect("static unsafe string regex pattern is valid")
 });
-static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"system\(|popen\(|exec|CreateProcess|ShellExecute|std::system").unwrap()
-});
-static MANUAL_MEMORY_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"malloc|calloc|realloc|free|new\s|new\[|delete\s|delete\[\]").unwrap()
-});
-static UNSAFE_INPUT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"scanf|fscanf|cin\s*>>|gets_s").unwrap());
-static MEMORY_OP_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"memcpy|memmove|memset|std::memcpy|std::memmove|std::memset").unwrap()
-});
-static PRIVILEGE_CHANGE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"setuid|setgid|seteuid|SetTokenInformation|AdjustTokenPrivileges").unwrap()
-});
-static WEAK_RANDOM_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"rand\(\)|random\(\)|std::rand\(\)").unwrap());
-static RAW_POINTER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"new\s+(?:std::|make_unique|make_shared)\w+|new\s+\w+|delete\s+\w+").unwrap()
-});
-static REINTERPRET_CAST_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"reinterpret_cast\s*<").unwrap());
-static C_STYLE_CAST_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\(\s*\w+\s*\)\s*\w+").unwrap());
-static EXCEPTION_SAFETY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"catch\s*\(\.\.\.\)|noexcept\s*\(\s*false\s*\)").unwrap());
 
-static INCLUDE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"^#include\s+[<"]([^>"]+)[>"]"#).expect("Invalid include regex"));
+static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"system\(|popen\(|exec|CreateProcess|ShellExecute|std::system")
+        .expect("static command execution regex pattern is valid")
+});
+
+static MANUAL_MEMORY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"malloc|calloc|realloc|free|new\s|new\[|delete\s|delete\[\]")
+        .expect("static manual memory management regex pattern is valid")
+});
+
+static UNSAFE_INPUT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"scanf|fscanf|cin\s*>>|gets_s")
+        .expect("static unsafe input function regex pattern is valid")
+});
+
+static MEMORY_OP_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"memcpy|memmove|memset|std::memcpy|std::memmove|std::memset")
+        .expect("static direct memory operation regex pattern is valid")
+});
+
+static PRIVILEGE_CHANGE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"setuid|setgid|seteuid|SetTokenInformation|AdjustTokenPrivileges")
+        .expect("static privilege alteration regex pattern is valid")
+});
+
+static WEAK_RANDOM_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"rand\(\)|random\(\)|std::rand\(\)")
+        .expect("static weak pseudo-random generator regex pattern is valid")
+});
+
+static RAW_POINTER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"new\s+(?:std::|make_unique|make_shared)\w+|new\s+\w+|delete\s+\w+")
+        .expect("static heap allocation and raw pointer usage regex pattern is valid")
+});
+
+static REINTERPRET_CAST_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"reinterpret_cast\s*<")
+        .expect("static reinterpret_cast detection regex pattern is valid")
+});
+
+static C_STYLE_CAST_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"\(\s*\w+\s*\)\s*\w+").expect("static C-style explicit cast regex pattern is valid")
+});
+
+static EXCEPTION_SAFETY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"catch\s*\(\.\.\.\)|noexcept\s*\(\s*false\s*\)")
+        .expect("static catch-all and exception policy regex pattern is valid")
+});
+
+static INCLUDE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r#"^#include\s+[<"]([^>"]+)[>"]"#)
+        .expect("static include header regex pattern is valid")
+});
 
 static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)").expect("Invalid todo regex")
+    #[allow(clippy::expect_used)]
+    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)")
+        .expect("static TODO comment extraction regex pattern is valid")
 });
 
 static MACRO_DEFINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
     Regex::new(r"(?m)^#define\s+([A-Za-z_]\w*)(?:\([^)]*\))?\s+(.+)$")
-        .expect("Invalid macro define regex")
+        .expect("static preprocessor macro definition regex pattern is valid")
 });
 
-static TYPEDEF_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*typedef\s+(.+?)\s+(\w+)\s*;").unwrap());
+static TYPEDEF_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"(?m)^\s*typedef\s+(.+?)\s+(\w+)\s*;")
+        .expect("static typedef type alias regex pattern is valid")
+});
 
-static USING_ALIAS_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*using\s+(\w+)\s*=\s*(.+?)\s*;").unwrap());
+static USING_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"(?m)^\s*using\s+(\w+)\s*=\s*(.+?)\s*;")
+        .expect("static modern type alias regex pattern is valid")
+});
 
-static BIND_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"std::bind\s*\(\s*&?(\w+(?:::?\w+)*)").unwrap());
+static BIND_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"std::bind\s*\(\s*&?(\w+(?:::?\w+)*)")
+        .expect("static std::bind expression regex pattern is valid")
+});
 
-static MALLOC_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"malloc|calloc|realloc|alloca|new\s|new\[").unwrap());
-static FREE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bfree\b|\bdelete\b|\bdelete\[\]\b").unwrap());
+static MALLOC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"malloc|calloc|realloc|alloca|new\s|new\[")
+        .expect("static memory allocation routine regex pattern is valid")
+});
+
+static FREE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"\bfree\b|\bdelete\b|\bdelete\[\]\b")
+        .expect("static memory deallocation routine regex pattern is valid")
+});
+
 static THREAD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"std::thread|pthread|std::async|std::future|fork|std::jthread").unwrap()
+    #[allow(clippy::expect_used)]
+    Regex::new(r"std::thread|pthread|std::async|std::future|fork|std::jthread")
+        .expect("static multithreading primitive regex pattern is valid")
 });
+
 static MUTEX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
     Regex::new(r"std::mutex|std::lock_guard|std::unique_lock|std::shared_lock|std::scoped_lock")
-        .unwrap()
+        .expect("static thread synchronization lock regex pattern is valid")
 });
-static SYSCALL_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"syscall|ioctl|fcntl").unwrap());
+
+static SYSCALL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"syscall|ioctl|fcntl").expect("static system call interface regex pattern is valid")
+});
+
 static STRING_OPS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"strcpy|strcat|sprintf|strncpy|std::string::c_str|std::string::data").unwrap()
+    #[allow(clippy::expect_used)]
+    Regex::new(r"strcpy|strcat|sprintf|strncpy|std::string::c_str|std::string::data")
+        .expect("static C/C++ string operations regex pattern is valid")
 });
+
 static SMART_POINTER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
     Regex::new(r"std::unique_ptr|std::shared_ptr|std::weak_ptr|std::make_unique|std::make_shared")
-        .unwrap()
+        .expect("static smart pointer abstraction regex pattern is valid")
 });
-static TEMPLATE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"template\s*<|typename|constexpr|consteval|constinit").unwrap());
-static LAMBDA_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[\s*[=&\w]*\s*\]\s*\(").unwrap());
-static NAMESPACE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bnamespace\s+(\w+)").unwrap());
-static CLASS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bclass\s+(\w+)").unwrap());
-static STRUCT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bstruct\s+(\w+)").unwrap());
-static VIRTUAL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bvirtual\b|\boverride\b|\bfinal\b").unwrap());
-static RTTI_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\btypeid\b|\bdynamic_cast\s*<").unwrap());
-static OPERATOR_OVERLOAD_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\boperator\s*[+\-*/%=<>!&|^~\[\]()]+\s*\(").unwrap());
-static INLINE_ASM_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\(").unwrap());
+
+static TEMPLATE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"template\s*<|typename|constexpr|consteval|constinit")
+        .expect("static template meta-programming regex pattern is valid")
+});
+
+static LAMBDA_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"\[\s*[=&\w]*\s*\]\s*\(").expect("static lambda closure regex pattern is valid")
+});
+
+static NAMESPACE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"\bnamespace\s+(\w+)")
+        .expect("static C++ namespace definition regex pattern is valid")
+});
+
+static CLASS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"\bclass\s+(\w+)").expect("static C++ class declaration regex pattern is valid")
+});
+
+static STRUCT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"\bstruct\s+(\w+)").expect("static struct declaration regex pattern is valid")
+});
+
+static VIRTUAL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"\bvirtual\b|\boverride\b|\bfinal\b")
+        .expect("static object-oriented polymorphism regex pattern is valid")
+});
+
+static RTTI_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"\btypeid\b|\bdynamic_cast\s*<")
+        .expect("static run-time type information regex pattern is valid")
+});
+
+static OPERATOR_OVERLOAD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"\boperator\s*[+\-*/%=<>!&|^~\[\]()]+\s*\(")
+        .expect("static operator overloading declaration regex pattern is valid")
+});
+
+static INLINE_ASM_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\(")
+        .expect("static inline assembly directive regex pattern is valid")
+});
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
         SecurityPattern {
@@ -456,13 +563,14 @@ impl CppParser {
                     .trim()
                     .to_string();
 
-                if !name.is_empty() && !val_text.is_empty()
+                if !name.is_empty()
+                    && !val_text.is_empty()
                     && val_text
                         .chars()
                         .all(|c| c.is_alphanumeric() || c == '_' || c == ':')
-                    {
-                        map.insert(name, val_text);
-                    }
+                {
+                    map.insert(name, val_text);
+                }
             }
         }
 
@@ -502,7 +610,7 @@ impl CppParser {
             } else {
                 (
                     node.child_by_field_name("left")
-                        .and_then(|l| Some(self.get_node_text(&l))),
+                        .map(|l| self.get_node_text(&l)),
                     node.child_by_field_name("right"),
                 )
             };
@@ -587,13 +695,15 @@ impl CppParser {
             if child.kind() == "preproc_include" {
                 let text = self.get_node_text(&child);
                 if let Some(caps) = INCLUDE_RE.captures(&text) {
-                    let path = caps.get(1).unwrap().as_str().to_string();
-                    let is_system = text.contains('<');
-                    imports.push(Import {
-                        module: path.clone(),
-                        items: vec![],
-                        import_type: self.classify_import(&path, is_system),
-                    });
+                    if let Some(path_match) = caps.get(1) {
+                        let path = path_match.as_str().to_string();
+                        let is_system = text.contains('<');
+                        imports.push(Import {
+                            module: path.clone(),
+                            items: vec![],
+                            import_type: self.classify_import(&path, is_system),
+                        });
+                    }
                 }
             }
         }
@@ -1155,12 +1265,9 @@ impl CppParser {
                 .as_ref()
                 .is_some_and(|c| c.is_virtual || c.is_pure_virtual)
         });
-        let is_abstract = methods.iter().any(|m| {
-            m.lang_info
-                .cpp
-                .as_ref()
-                .is_some_and(|c| c.is_pure_virtual)
-        });
+        let is_abstract = methods
+            .iter()
+            .any(|m| m.lang_info.cpp.as_ref().is_some_and(|c| c.is_pure_virtual));
         let node_text = self.get_node_text(node);
         let is_packed =
             node_text.contains("__attribute__((packed))") || node_text.contains("#pragma pack");

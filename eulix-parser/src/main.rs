@@ -61,13 +61,13 @@
 
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
+use libc as _;
 use mimalloc::MiMalloc;
 use rayon::prelude::*;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use libc as _;
 mod parser;
 mod struc;
 mod utils;
@@ -241,28 +241,27 @@ fn open_source_file(path: &Path) -> std::io::Result<std::fs::File> {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn write_json_file(path: &Path, json: &str) -> std::io::Result<()> {
-    let f = std::fs::File::create(path)?;
-    let len = json.len();
-    let buffer_size = if len > 100 * 1024 * 1024 {
-        8 * 1024 * 1024
-    } else if len > 10 * 1024 * 1024 {
-        2 * 1024 * 1024
+fn write_json_streaming<T: serde::Serialize>(
+    path: &Path,
+    value: &T,
+    pretty: bool,
+) -> std::io::Result<()> {
+    let file = std::fs::File::create(path)?;
+    // Use 256 KB buffer instead of default 8 KB
+    let writer = BufWriter::with_capacity(256 * 1024, file);
+    if pretty {
+        serde_json::to_writer_pretty(writer, value)
     } else {
-        512 * 1024
-    };
-    let mut w = BufWriter::with_capacity(buffer_size, f);
-    w.write_all(json.as_bytes())?;
-    w.flush()?;
-    Ok(())
+        serde_json::to_writer(writer, value)
+    }
+    .map_err(std::io::Error::other)
 }
 
-#[cfg(not(target_os = "linux"))]
+// No longer used, kept only for future refrence
+#[allow(dead_code)]
 fn write_json_file(path: &Path, json: &str) -> std::io::Result<()> {
     let f = std::fs::File::create(path)?;
     let len = json.len();
-
     let buffer_size = if len > 100 * 1024 * 1024 {
         8 * 1024 * 1024
     } else if len > 10 * 1024 * 1024 {
@@ -270,7 +269,6 @@ fn write_json_file(path: &Path, json: &str) -> std::io::Result<()> {
     } else {
         512 * 1024
     };
-
     let mut w = BufWriter::with_capacity(buffer_size, f);
     w.write_all(json.as_bytes())?;
     w.flush()?;
@@ -363,17 +361,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut args = Args::parse();
     let version = env!("CARGO_PKG_VERSION");
-    let bin_hash = "miku"; // temperoraly placeholder till I figure out how to store git hash.
-                           // let bin_hash = var("VERGEN_GIT_SHA")?;
-                           // let bin_hash = env!("VERGEN_GIT_SHA");
-                           // Set thread pool size
+
+    // Bin hash of eulix_parser binary (using build-time environment variable or fallback)
+    let bin_hash = option_env!("VERGEN_GIT_SHA").unwrap_or("unknown");
+
+    // Initialize FileWalker to calculate XXH3 project hash
+    let walker = FileWalker::new((&args.root).into());
+    let project_hash = walker.project_hash().unwrap_or_else(|e| {
+        eprintln!("Warning: Failed to compute project hash: {e}");
+        "unknown_hash".to_string()
+    });
+
+    // Set thread pool size
     if args.threads == 0 {
         args.threads = default_thread_count();
     }
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
-        .build_global()
-        .unwrap();
+        .build_global()?;
 
     let start_time = Instant::now();
 
@@ -383,6 +388,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("╚════════════════════════════════════════════════════════════════╝");
         println!();
         println!("Project Root:    {}", args.root);
+        println!("Project Hash:    {}", project_hash);
         println!("Threads:         {}", args.threads);
         println!("Output:          {}", args.output);
         println!("Languages:       {}", args.languages);
@@ -407,6 +413,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.verbose,
         version,
         bin_hash,
+        &project_hash,
     )?;
     let metadata = kb.metadata.clone();
 
@@ -469,6 +476,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", "─".repeat(64));
         }
 
+        // Set up output paths
         let output_path = Path::new(&args.output);
         let output_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(output_dir)?;
@@ -485,6 +493,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let deps_path = output_dir.join(format!("{}_external_deps.json", base_name));
         let patterns_path = output_dir.join(format!("{}_patterns.json", base_name));
 
+        // Build reference wrappers (cheap, zero‑copy)
         let kb_ref = KnowledgeBaseSimplifiedRef {
             metadata: &kb.metadata,
             structure: &kb.structure,
@@ -506,86 +515,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             patterns: &kb.patterns,
         };
 
-        // Serialize all four in parallel — each worker borrows its own ref
-        let (
-            (kb_json, index_json),
-            ((summary_json, callgraph_json), (metrics_json, (ep_json, (deps_json, patterns_json)))),
-        ) = rayon::join(
-            || {
-                rayon::join(
-                    || sonic_rs::to_string(&kb_ref).expect("serialize kb"),
-                    || sonic_rs::to_string(&index_ref).expect("serialize indices"),
-                )
-            },
-            || {
-                rayon::join(
-                    || {
-                        rayon::join(
-                            || sonic_rs::to_string_pretty(&summary).expect("serialize summary"),
-                            || sonic_rs::to_string(&cg_ref).expect("serialize call_graph"),
-                        )
-                    },
-                    || {
-                        rayon::join(
-                            || sonic_rs::to_string_pretty(&metrics).expect("serialize metrics"),
-                            || {
-                                rayon::join(
-                                    || {
-                                        sonic_rs::to_string(&ep_ref)
-                                            .expect("serialize entry_points")
-                                    },
-                                    || {
-                                        rayon::join(
-                                            || {
-                                                sonic_rs::to_string(&deps_ref)
-                                                    .expect("serialize external_deps")
-                                            },
-                                            || {
-                                                sonic_rs::to_string(&pat_ref)
-                                                    .expect("serialize patterns")
-                                            },
-                                        )
-                                    },
-                                )
-                            },
-                        )
-                    },
-                )
-            },
-        );
-
-        // Write all four files in parallel
-        let files: Vec<(&Path, &str, &str)> = vec![
-            (output_path, "knowledge base", kb_json.as_str()),
-            (&index_path, "index", index_json.as_str()),
-            (&summary_path, "summary", summary_json.as_str()),
-            (&callgraph_path, "call graph", callgraph_json.as_str()),
-            (&metrics_path, "metrics", metrics_json.as_str()),
-            (&ep_path, "entry points", ep_json.as_str()),
-            (&deps_path, "external deps", deps_json.as_str()),
-            (&patterns_path, "patterns", patterns_json.as_str()),
-        ];
-
-        let write_errors: Vec<String> = files
-            .iter()
-            .filter_map(|(path, name, json)| {
-                if args.verbose {
-                    println!("   Writing {}...", name);
-                }
-                write_json_file(path, json)
-                    .err()
-                    .map(|e| format!("{} ({}): {}", path.display(), name, e))
-            })
-            .collect();
-
-        if !write_errors.is_empty() {
-            for e in &write_errors {
-                eprintln!("   ✗ Failed to write {}", e);
-            }
+        // Write all files SEQUENTIALLY, streaming directly to disk
+        if args.verbose {
+            println!("   Writing knowledge base...");
         }
+        write_json_streaming(output_path, &kb_ref, false)?;
 
         if args.verbose {
-            for (path, name, _) in &files {
+            println!("   Writing index...");
+        }
+        write_json_streaming(&index_path, &index_ref, true)?;
+
+        if args.verbose {
+            println!("   Writing summary...");
+        }
+        write_json_streaming(&summary_path, &summary, true)?;
+
+        if args.verbose {
+            println!("   Writing call graph...");
+        }
+        write_json_streaming(&callgraph_path, &cg_ref, false)?;
+
+        if args.verbose {
+            println!("   Writing metrics...");
+        }
+        write_json_streaming(&metrics_path, &metrics, true)?;
+
+        if args.verbose {
+            println!("   Writing entry points...");
+        }
+        write_json_streaming(&ep_path, &ep_ref, true)?;
+
+        if args.verbose {
+            println!("   Writing external deps...");
+        }
+        write_json_streaming(&deps_path, &deps_ref, true)?;
+
+        if args.verbose {
+            println!("   Writing patterns...");
+        }
+        write_json_streaming(&patterns_path, &pat_ref, true)?;
+
+        // Prints files and there size in kb,
+        // todo let print value round off to mb or gb anything else nope.
+        if args.verbose {
+            let files_to_check = [
+                (output_path, "knowledge base"),
+                (&index_path, "index"),
+                (&summary_path, "summary"),
+                (&callgraph_path, "call graph"),
+                (&metrics_path, "metrics"),
+                (&ep_path, "entry points"),
+                (&deps_path, "external deps"),
+                (&patterns_path, "patterns"),
+            ];
+            for (path, name) in &files_to_check {
                 if path.exists() {
                     let size = fs::metadata(path)?.len();
                     println!(
@@ -608,7 +592,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     } else {
-        // Write only kb.json without analysis
+        // --no-analyze branch: writes only kb.json
         if args.verbose {
             println!("\n WRITING OUTPUT (ANALYSIS SKIPPED)");
             println!("{}", "─".repeat(64));
@@ -619,14 +603,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fs::create_dir_all(parent)?;
         }
 
-        // Write simplified KnowledgeBase
         let kb_simplified = KnowledgeBaseSimplifiedRef {
             metadata: &kb.metadata,
             structure: &kb.structure,
         };
 
-        let kb_json = serde_json::to_string(&kb_simplified)?;
-        write_json_file(output_path, &kb_json)?;
+        write_json_streaming(output_path, &kb_simplified, false)?;
 
         if args.verbose {
             let size = fs::metadata(output_path)?.len();
@@ -683,6 +665,7 @@ fn parse_directory(
     verbose: bool,
     version: &str,
     git_hash: &str,
+    project_hash: &str,
 ) -> Result<(KnowledgeBase, ParseStats), Box<dyn std::error::Error>> {
     let path = PathBuf::from(dir);
 
@@ -706,14 +689,12 @@ fn parse_directory(
 
     let pb = if verbose {
         let pb = ProgressBar::new(files.len() as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(
-                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
-                )
-                .unwrap()
-                .progress_chars("#>-"),
-        );
+        let style = ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+            )?
+            .progress_chars("#>-");
+        pb.set_style(style);
         Some(pb)
     } else {
         None
@@ -739,7 +720,7 @@ fn parse_directory(
         usize,                 // total_classes
         usize,                 // total_methods
         FxHashSet<String>,     // languages
-        Vec<String>,           // parsed (no more Mutex!)
+        Vec<String>,           // parsed
         Vec<(String, String)>, // failed: (path, error)
     );
 
@@ -837,18 +818,24 @@ fn parse_directory(
         parsed,
         failed,
         ..ParseStats::new()
-    }; // adjust to your struct's actual fields
+    };
 
     let project_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        })
+        .unwrap_or_else(|| "unknown".to_string());
 
     let metadata = Metadata {
-        project_name,
         version: version.to_string(),
         git_hash: git_hash.to_string(),
+        project_name,
+        project_hash: project_hash.to_string(),
         parsed_at: chrono::Utc::now().format("%Y.%m.%d.%H%M%S").to_string(),
         languages: languages_set.into_iter().collect(),
         total_files: structure.len(),
@@ -860,7 +847,7 @@ fn parse_directory(
 
     let kb = KnowledgeBase {
         metadata,
-        structure: structure.into_iter().collect(), // if downstream needs std::HashMap
+        structure: structure.into_iter().collect(),
         call_graph: CallGraph::default(),
         dependency_graph: DependencyGraph::default(),
         indices: Indices::default(),
@@ -875,6 +862,7 @@ fn parse_directory(
 
     Ok((kb, final_stats))
 }
+
 fn collect_source_files(
     root: &Path,
     languages: &str,

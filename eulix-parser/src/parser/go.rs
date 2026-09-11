@@ -4,9 +4,10 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 use crate::struc::kb_struct::*;
-use regex::Regex;
+use regex::bytes::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
 
 pub struct GoParser {
@@ -18,6 +19,12 @@ pub struct GoParser {
     uses_cgo: bool,
     embed_patterns: Vec<String>,
 }
+
+static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)")
+        .expect("static TODO comment regex pattern is valid")
+});
 
 impl GoParser {
     pub fn new(source_code: String, file_path: String) -> Self {
@@ -132,8 +139,7 @@ impl GoParser {
                 for spec_node in child.children(&mut import_cursor) {
                     if spec_node.kind() == "import_spec" {
                         if let Some(path_node) = spec_node.child_by_field_name("path") {
-                            let path =
-                                self.get_node_text(&path_node).trim_matches('"').to_string();
+                            let path = self.get_node_text(&path_node).trim_matches('"').to_string();
 
                             let alias = spec_node
                                 .child_by_field_name("name")
@@ -738,7 +744,12 @@ impl GoParser {
             let full = self.get_node_text(&func_node);
             // Use the last segment so "fmt.Println" → "Println", but keep
             // the full name too for qualified calls in `defined_in`.
-            let callee = full.split('.').next_back().unwrap_or(&full).trim().to_string();
+            let callee = full
+                .split('.')
+                .next_back()
+                .unwrap_or(&full)
+                .trim()
+                .to_string();
 
             if callee.is_empty() {
                 return;
@@ -1048,10 +1059,7 @@ impl GoParser {
                 if let Some(type_name) = receiver_type {
                     // Parse this as a method of the receiver type
                     if let Some(method) = self.parse_function(&child, &type_name) {
-                        methods_map
-                            .entry(type_name)
-                            .or_default()
-                            .push(method);
+                        methods_map.entry(type_name).or_default().push(method);
                     }
                 }
             }
@@ -1368,29 +1376,30 @@ impl GoParser {
     }
 
     fn extract_todos(&self) -> Vec<Todo> {
-        let re = Regex::new(r"//\s*TODO:?\s*(.+)").unwrap();
-
         self.source_code
             .lines()
             .enumerate()
             .filter_map(|(idx, line)| {
-                re.captures(line).map(|caps| {
-                    let text = caps.get(1).unwrap().as_str().trim().to_string();
-                    let priority = if text.to_lowercase().contains("critical")
-                        || text.to_lowercase().contains("urgent")
-                    {
-                        "high"
-                    } else if text.to_lowercase().contains("minor") {
-                        "low"
-                    } else {
-                        "medium"
-                    };
+                TODO_RE.captures(line.as_bytes()).and_then(|caps| {
+                    caps.get(1).map(|m| {
+                        let text = String::from_utf8_lossy(m.as_bytes()).trim().to_string();
+                        let text_lower = text.to_lowercase();
 
-                    Todo {
-                        line: idx + 1,
-                        text,
-                        priority: priority.to_string(),
-                    }
+                        let priority =
+                            if text_lower.contains("critical") || text_lower.contains("urgent") {
+                                "high"
+                            } else if text_lower.contains("minor") {
+                                "low"
+                            } else {
+                                "medium"
+                            };
+
+                        Todo {
+                            line: idx + 1,
+                            text,
+                            priority: priority.to_string(),
+                        }
+                    })
                 })
             })
             .collect()
@@ -1422,7 +1431,8 @@ impl GoParser {
         for (pattern, note_type, description) in patterns {
             if let Ok(re) = Regex::new(pattern) {
                 for (idx, line) in self.source_code.lines().enumerate() {
-                    if re.is_match(&line.to_lowercase()) {
+                    let line_bytes = line.as_bytes();
+                    if re.is_match(line_bytes) {
                         notes.push(SecurityNote {
                             note_type: note_type.to_string(),
                             line: idx + 1,
@@ -1656,8 +1666,7 @@ impl GoParser {
         if is_method {
             score += 0.1;
         }
-
-        score.max(0.0).min(1.0)
+        score.clamp(0.0, 1.0)
     }
 
     fn get_node_text(&self, node: &Node) -> String {

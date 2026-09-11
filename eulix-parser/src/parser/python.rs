@@ -17,38 +17,61 @@ struct SecurityPattern {
     description: &'static str,
 }
 
-//  Regex Patterns compiled once at first use
+// Regex Patterns compiled once at first use
 static FROM_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"from\s+(\S+)\s+import\s+(.+)").expect("Invalid from-import regex")
+    #[allow(clippy::expect_used)]
+    Regex::new(r"from\s+(\S+)\s+import\s+(.+)")
+        .expect("static Python from-import declaration regex pattern is valid")
 });
 
 static ATTRIBUTE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(\w+)\s*:\s*([^=]+)(?:=\s*(.+))?").expect("Invalid attribute regex")
+    #[allow(clippy::expect_used)]
+    Regex::new(r"(\w+)\s*:\s*([^=]+)(?:=\s*(.+))?")
+        .expect("static type-annotated attribute assignment regex pattern is valid")
 });
 
-static TODO_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"#\s*TODO:?\s*(.+)").expect("Invalid TODO regex"));
+static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"#\s*TODO:?\s*(.+)")
+        .expect("static Python TODO comment extraction regex pattern is valid")
+});
 
-static PASSWORD_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"password").expect("Invalid password regex"));
+static PASSWORD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"password").expect("static hardcoded password detection regex pattern is valid")
+});
 
-static SENSITIVE_DATA_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"secret|api_key|token").expect("Invalid sensitive_data regex"));
+static SENSITIVE_DATA_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"secret|api_key|token")
+        .expect("static sensitive credential keyword regex pattern is valid")
+});
 
-static EVAL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"eval\(").expect("Invalid eval regex"));
+static EVAL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"eval\(").expect("static dynamic eval execution regex pattern is valid")
+});
 
-static EXEC_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"exec\(").expect("Invalid exec regex"));
+static EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"exec\(").expect("static dynamic exec statement regex pattern is valid")
+});
 
-static DYNAMIC_IMPORT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"__import__").expect("Invalid dynamic_import regex"));
+static DYNAMIC_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"__import__").expect("static dynamic import invocation regex pattern is valid")
+});
 
-static PICKLE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"pickle\.load").expect("Invalid pickle regex"));
+static PICKLE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    #[allow(clippy::expect_used)]
+    Regex::new(r"pickle\.load")
+        .expect("static insecure pickle deserialization regex pattern is valid")
+});
 
 static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"subprocess|os\.system|os\.popen").expect("Invalid command_exec regex")
+    #[allow(clippy::expect_used)]
+    Regex::new(r"subprocess|os\.system|os\.popen")
+        .expect("static system command execution invocation regex pattern is valid")
 });
 
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
@@ -681,7 +704,8 @@ impl PythonParser {
     }
 
     fn extract_condition(&self, node: &Node) -> Option<String> {
-        node.child_by_field_name("condition").map(|cond_node| self.get_node_text(&cond_node))
+        node.child_by_field_name("condition")
+            .map(|cond_node| self.get_node_text(&cond_node))
     }
 
     fn extract_execution_path(&self, node: &Node, field: &str) -> Option<ExecutionPath> {
@@ -1201,23 +1225,26 @@ impl PythonParser {
             .lines()
             .enumerate()
             .filter_map(|(idx, line)| {
-                TODO_RE.captures(line).map(|caps| {
-                    let text = caps.get(1).unwrap().as_str().trim().to_string();
-                    let priority = if text.to_lowercase().contains("critical")
-                        || text.to_lowercase().contains("urgent")
-                    {
-                        "high"
-                    } else if text.to_lowercase().contains("minor") {
-                        "low"
-                    } else {
-                        "medium"
-                    };
+                TODO_RE.captures(line).and_then(|caps| {
+                    caps.get(1).map(|m| {
+                        let text = m.as_str().trim().to_string();
+                        let text_lower = text.to_lowercase();
 
-                    Todo {
-                        line: idx + 1,
-                        text,
-                        priority: priority.to_string(),
-                    }
+                        let priority =
+                            if text_lower.contains("critical") || text_lower.contains("urgent") {
+                                "high"
+                            } else if text_lower.contains("minor") {
+                                "low"
+                            } else {
+                                "medium"
+                            };
+
+                        Todo {
+                            line: idx + 1,
+                            text,
+                            priority: priority.to_string(),
+                        }
+                    })
                 })
             })
             .collect()
@@ -1477,7 +1504,7 @@ impl PythonParser {
             score -= 0.2;
         }
 
-        score.max(0.0).min(1.0)
+        score.clamp(0.0, 1.0)
     }
 
     fn get_node_text(&self, node: &Node) -> String {

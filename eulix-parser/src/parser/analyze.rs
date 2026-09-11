@@ -1350,43 +1350,35 @@ impl Analyzer {
 
     /// Generate project summary
     pub fn generate_summary(kb: &KnowledgeBase) -> ProjectSummary {
-        let mut summary = ProjectSummary::default();
-
-        summary.project_name = kb.metadata.project_name.clone();
-        summary.total_files = kb.metadata.total_files;
-        summary.total_loc = kb.metadata.total_loc;
-        summary.languages = kb.metadata.languages.clone();
-
-        summary.categories = Self::categorize_files(&kb.structure);
-        summary.key_features = Self::extract_key_features(kb);
-        summary.entry_points = kb
-            .entry_points
-            .iter()
-            .map(|ep| format!("{}:{}", ep.file, ep.line))
-            .collect();
-        // for debuging level 3 todo
-        // for d in &kb.external_dependencies {
-        //     println!("DEP: {:?}  LANGS: {:?}", d.name, summary.languages);
-        // }
-        summary.dependencies = DependencyInfo {
-            stdlib: kb
-                .external_dependencies
+        ProjectSummary {
+            project_name: kb.metadata.project_name.clone(),
+            total_files: kb.metadata.total_files,
+            total_loc: kb.metadata.total_loc,
+            languages: kb.metadata.languages.clone(),
+            categories: Self::categorize_files(&kb.structure),
+            key_features: Self::extract_key_features(kb),
+            entry_points: kb
+                .entry_points
                 .iter()
-                .filter(|d| d.source == "stdlib")
-                .map(|d| d.name.clone())
+                .map(|ep| format!("{}:{}", ep.file, ep.line))
                 .collect(),
-            third_party: kb
-                .external_dependencies
-                .iter()
-                .filter(|d| d.source == "external")
-                .map(|d| d.name.clone())
-                .collect(),
-        };
-        summary.patterns = kb.patterns.clone();
-
-        summary
+            dependencies: DependencyInfo {
+                stdlib: kb
+                    .external_dependencies
+                    .iter()
+                    .filter(|d| d.source == "stdlib")
+                    .map(|d| d.name.clone())
+                    .collect(),
+                third_party: kb
+                    .external_dependencies
+                    .iter()
+                    .filter(|d| d.source == "external")
+                    .map(|d| d.name.clone())
+                    .collect(),
+            },
+            patterns: kb.patterns.clone(),
+        }
     }
-
     // Borrows from `kb` (`'a`) instead of cloning every function's name into
     // the report, since this can run over every function in the codebase and
     // the report is typically discarded right after being printed/serialized.
@@ -1507,7 +1499,7 @@ impl Analyzer {
         // templates), so the feature list isn't dominated by repeats.
         let mut features = HashSet::new();
 
-        for  filedata in kb.structure.values() {
+        for filedata in kb.structure.values() {
             for func in &filedata.functions {
                 // Length threshold (>20 chars) filters out placeholder or
                 // near-empty docstrings that wouldn't read as a real
