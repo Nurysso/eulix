@@ -15,7 +15,7 @@ from data_io.binary import (
     load_vectors_bin,
 )
 from data_io.serialization import sq8_decode
-from utils.constants import BINARY_MAGIC
+from utils.constants import BINARY_MAGIC, BINARY_VERSION
 
 
 def check_duplicate_ids(path: Path) -> list[str]:
@@ -35,7 +35,10 @@ def check_duplicate_ids(path: Path) -> list[str]:
                 raise ValueError(f"Bad magic in {path.name}: {magic!r}")
             try:
                 (version,) = struct.unpack("<I", f.read(4))
-                print("  ✓ Binary Version Matched" if version == 5 else "⚠️ Binary version mismatch")
+                if version == BINARY_VERSION:
+                    print("  ✓ Binary Version Matched")
+                else:
+                    print(f"⚠️ Binary version mismatch: wanted {BINARY_VERSION} got {version}")
                 # Read model name
                 (model_len,) = struct.unpack("<I", f.read(4))
                 _ = f.read(model_len).decode("utf-8")

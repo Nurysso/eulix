@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import io
+import os
 import struct as _struct
 from pathlib import Path
 from types import TracebackType
@@ -175,15 +176,16 @@ class FastEmbeddingsReader:  # pylint: disable=too-many-instance-attributes
             raise IndexError(f"Index {idx} out of range (0 to {self.count - 1})")
 
         offset = self.header_size + (idx * self.record_size)
-        self.fh.seek(offset)
+        fd = self.fh.fileno()
 
         if self.quantized:
-            (scale,) = _struct.unpack("<f", self.fh.read(4))
-            raw = self.fh.read(self.dimension)
+            header = os.pread(fd, 4, offset)
+            (scale,) = _struct.unpack("<f", header)
+            raw = os.pread(fd, self.dimension, offset + 4)
             q = self.np.frombuffer(raw, dtype=self.np.int8).copy()
             return sq8_decode(q, scale) if dequantize else (q, scale)
         else:
-            raw = self.fh.read(self.dimension * 4)
+            raw = os.pread(fd, self.dimension * 4, offset)
             return self.np.frombuffer(raw, dtype=self.np.float32).copy()
 
     def close(self) -> None:
