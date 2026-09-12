@@ -234,12 +234,16 @@ func (cb *ContextBuilder) multiStrategySearch(
 		intent.Specificity > 0.85
 	if cb.hasEmbeddings && !skipSemantic && qEmb != nil {
 		semTopK := int(float64(topK) * (0.2 + 0.5*weights["semantic"]))
+		minimumSimimilarity := float64(0.15)
+		if cb.config.RetrievalConfig.SemanticMinSimilarity > 0 {
+			minimumSimimilarity = cb.config.RetrievalConfig.SemanticMinSimilarity
+		}
 		run("semantic", func() []ScoredChunk {
 			var raw []ScoredChunk
 			if cb.ivfIndex != nil {
-				raw = cb.vectorSearchIVF(qEmb, semTopK, 0.15)
+				raw = cb.vectorSearchIVF(qEmb, semTopK, minimumSimimilarity)
 			} else {
-				raw = cb.vectorSearch(qEmb, semTopK, 0.15)
+				raw = cb.vectorSearch(qEmb, semTopK, minimumSimimilarity)
 			}
 			for i := range raw {
 				raw[i].Score *= 20.0
@@ -266,24 +270,27 @@ func (cb *ContextBuilder) multiStrategySearch(
 	}
 
 	// Subsystem-aware boosting replaces old boostBySubSystemPath call.
-	queryTokens := extractQueryKeywords(strings.ToLower(query))
-	detected := detectQuerySubsystems(cb.subsystemTree, queryTokens)
-	detected = filterNoiseSubsystems(detected, cb.noisePaths)
-	if len(detected) > subsysFinalK {
-		detected = detected[:subsysFinalK]
-	}
-	if len(detected) > 0 {
-		cb.debugLog.Log("Detected subsystem (%d): top=%q score=%.2f",
-			len(detected), detected[0].node.Path, detected[0].score) // Use detected[0].score, not node.score
-		if trace != nil {
-			for _, ds := range detected {
-				trace.Warnings = append(trace.Warnings,
-					fmt.Sprintf("subsystem: %s (score=%.2f chunks=%d)",
-						ds.node.Path, ds.score, ds.node.TotalChunks)) // ds.score, not ds.node.score
+	var detected []subsystemScore
+	if cb.config.RetrievalConfig.EnableSubsystemBoosting {
+		queryTokens := extractQueryKeywords(strings.ToLower(query))
+		detected = detectQuerySubsystems(cb.subsystemTree, queryTokens)
+		detected = filterNoiseSubsystems(detected, cb.noisePaths)
+		if len(detected) > subsysFinalK {
+			detected = detected[:subsysFinalK]
+		}
+		if len(detected) > 0 {
+			cb.debugLog.Log("Detected subsystem (%d): top=%q score=%.2f",
+				len(detected), detected[0].node.Path, detected[0].score) // Use detected[0].score, not node.score
+			if trace != nil {
+				for _, ds := range detected {
+					trace.Warnings = append(trace.Warnings,
+						fmt.Sprintf("subsystem: %s (score=%.2f chunks=%d)",
+							ds.node.Path, ds.score, ds.node.TotalChunks)) // ds.score, not ds.node.score
+				}
 			}
 		}
+		boostByDetectedSubsystems(result, detected, cb.noisePaths, &cb.config.RetrievalConfig)
 	}
-	boostByDetectedSubsystems(result, detected, cb.noisePaths, &cb.config.RetrievalConfig)
 	result = filterTestDocChunks(result)
 	cb.debugLog.Log("[Timing] Subsystem detection & boosting took %v", time.Since(tSubsys))
 
@@ -306,6 +313,11 @@ func (cb *ContextBuilder) multiStrategySearch(
 			strings.Contains(f, "_test.go")
 	}
 
+	testPenalty := float64(0.3)
+	if cb.config.RetrievalConfig.TestFilePenalty > 0 {
+		testPenalty = float64(cb.config.RetrievalConfig.TestFilePenalty)
+	}
+
 	demotionCount := 0
 	for i := range result {
 		if result[i].IsExact {
@@ -316,18 +328,23 @@ func (cb *ContextBuilder) multiStrategySearch(
 
 		switch {
 		case isTestFile(f) && !isTestQuery:
-			result[i].Score *= 0.3
+			result[i].Score *= testPenalty
 			demoted = true
 		case isTestFile(f) && (intent.Type == IntentConcept || intent.Type == IntentFlow):
 			// still demote lightly even on a testing query, if intent is conceptual
-			result[i].Score *= 0.7
+			conceptPenalty := math.Min(1.0, testPenalty*2.33)
+			result[i].Score *= conceptPenalty
 			demoted = true
 		}
 
-		if primaryRepo != "" {
+		if primaryRepo != "" && cb.config.RetrievalConfig.ApplyCrossRootIsolation {
 			if fParts := strings.SplitN(f, "/", 2); len(fParts) > 0 && fParts[0] != primaryRepo {
 				if strings.HasPrefix(fParts[0], "charm-") || fParts[0] == "requirements" {
-					result[i].Score *= 0.3
+					penalty := float64(cb.config.RetrievalConfig.CrossRootPenalty)
+					if penalty <= 0 {
+						penalty = 0.32
+					}
+					result[i].Score *= penalty
 					demoted = true
 				}
 			}

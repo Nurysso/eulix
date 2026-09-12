@@ -260,7 +260,7 @@ func boostByDetectedSubsystems(
 	}
 
 	topConf := detected[0].score
-	applyPenalty := topConf >= 6.0 // Enforce penalties when top detection is confident.
+	applyPenalty := topConf >= 6.0 && (cfg == nil || cfg.ApplyCrossRootIsolation) // Enforce penalties when top detection is confident and cross-root isolation is enabled.
 
 	for i := range results {
 		fileLow := strings.ToLower(results[i].File)
@@ -298,7 +298,11 @@ func boostByDetectedSubsystems(
 
 		if !matched && applyPenalty {
 			// Use configurable penalty instead of hardcoded multiplier
-			bestBoost = float64(cfg.CrossRootPenalty)
+			penalty := 0.32
+			if cfg != nil && cfg.CrossRootPenalty > 0 {
+				penalty = float64(cfg.CrossRootPenalty)
+			}
+			bestBoost = penalty
 
 			// Keep aggressive noise path check
 			for _, np := range noisePaths {

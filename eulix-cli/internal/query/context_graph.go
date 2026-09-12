@@ -84,11 +84,22 @@ func (cb *ContextBuilder) findCallSites(query string, intent QueryIntent) []Scor
 func (cb *ContextBuilder) buildContextWithGraph(
 	candidates []ScoredChunk, budget int, intent QueryIntent,
 ) []ScoredChunk {
+	maxDepth := cb.config.RetrievalConfig.MaxGraphExpansionDepth
+	if maxDepth <= 0 {
+		cb.debugLog.Log("Graph expansion skipped: max_graph_expansion_depth is %d", maxDepth)
+		return cb.buildContextWithoutGraph(candidates, budget)
+	}
+
+	maxExp := cb.config.RetrievalConfig.MaxGraphExpansions
+	if maxExp <= 0 {
+		maxExp = maxGraphExpansions
+	}
+
 	// pos + result replaces map[string]ScoredChunk: updates mutate 3 fields
 	// in place via index instead of copying the whole (embedded-Chunk) struct,
 	// and we skip the final "flatten map into slice" pass entirely.
-	result := make([]ScoredChunk, 0, len(candidates)+maxGraphExpansions*maxNewChunksPerRel)
-	pos := make(map[string]int, len(candidates)+maxGraphExpansions*maxNewChunksPerRel)
+	result := make([]ScoredChunk, 0, len(candidates)+maxExp*maxNewChunksPerRel)
+	pos := make(map[string]int, len(candidates)+maxExp*maxNewChunksPerRel)
 
 	for _, c := range candidates {
 		pos[c.ID] = len(result)
@@ -110,7 +121,7 @@ outerLoop:
 				continue
 			}
 			for _, rel := range rels {
-				if relCount >= maxGraphExpansions {
+				if relCount >= maxExp {
 					break outerLoop
 				}
 
@@ -152,6 +163,57 @@ outerLoop:
 						Distance: rel.Distance,
 						FromID:   cand.ID,
 					})
+				}
+
+				// Transitive expansion if maxDepth >= 2
+				if maxDepth >= 2 && relCount < maxExp {
+					transRels, ok := cb.callGraph[rel.Target]
+					if ok {
+						for _, transRel := range transRels {
+							if relCount >= maxExp {
+								break outerLoop
+							}
+							if transRel.Target == sym || transRel.Target == rel.Target {
+								continue
+							}
+							transScore := score
+							switch {
+							case intent.Type == IntentCallers && transRel.Type == "called_by":
+								transScore *= 1.1
+							case intent.Type == IntentCallees && transRel.Type == "calls":
+								transScore *= 1.1
+							case transRel.Type == "calls" || transRel.Type == "called_by":
+								transScore *= 0.8
+							default:
+								continue
+							}
+							transScore *= 0.6
+							relCount++
+
+							transTargets := cb.symbolIndex[transRel.Target]
+							if len(transTargets) > maxNewChunksPerRel {
+								transTargets = transTargets[:maxNewChunksPerRel]
+							}
+							for _, idx := range transTargets {
+								chunk := cb.chunks[idx]
+								if j, ok := pos[chunk.ID]; ok {
+									if ex := &result[j]; transScore > ex.Score {
+										ex.Score = transScore
+										ex.Distance = 2
+										ex.FromID = rel.Target
+									}
+									continue
+								}
+								pos[chunk.ID] = len(result)
+								result = append(result, ScoredChunk{
+									Chunk:    chunk,
+									Score:    transScore,
+									Distance: 2,
+									FromID:   rel.Target,
+								})
+							}
+						}
+					}
 				}
 			}
 		}

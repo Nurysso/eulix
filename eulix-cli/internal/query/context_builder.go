@@ -142,8 +142,12 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 			filteredAnchors = append(filteredAnchors, a)
 		}
 	}
-	if len(filteredAnchors) > 2 {
-		filteredAnchors = filteredAnchors[:2]
+	maxAnchors := cb.config.RetrievalConfig.MaxExactAnchors
+	if maxAnchors <= 0 {
+		maxAnchors = 2
+	}
+	if len(filteredAnchors) > maxAnchors {
+		filteredAnchors = filteredAnchors[:maxAnchors]
 	}
 	for _, a := range filteredAnchors {
 		anchorFiles[a.File] = true
@@ -242,6 +246,12 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	return ctx, trace, nil
 }
 
+// candidateLimitForIntent sets these limit values by default, used to limit candidates in context window.
+// Callers/Callees (>0.9): 82
+// Concept/Flow (<=0.8):  247
+// Fallback (<=0.5):       300
+// Fallback (<=0.8):       202
+// Default (>0.8):         150
 func (cb *ContextBuilder) candidateLimitForIntent(intent QueryIntent) int {
 	scale := 1.0
 	n := len(cb.chunks)
@@ -254,31 +264,37 @@ func (cb *ContextBuilder) candidateLimitForIntent(intent QueryIntent) int {
 		scale = 1.5
 	}
 
-	var base int
+	base := cb.config.RetrievalConfig.TopKCandidates
+	if base <= 0 {
+		base = 150
+	}
+
 	switch {
 	case intent.Type == IntentCallers || intent.Type == IntentCallees:
 		if intent.Specificity > 0.9 {
-			base = 80
-		} else {
-			base = 150
+			base = int(float64(base) * 0.55)
 		}
 	case intent.Type == IntentConcept || intent.Type == IntentFlow:
-		if intent.Specificity > 0.8 {
-			base = 150
-		} else {
-			base = 250
+		if intent.Specificity <= 0.8 {
+			base = int(float64(base) * 1.65)
 		}
-	case intent.Specificity > 0.8:
-		base = 150
-	case intent.Specificity > 0.5:
-		base = 200
+	case intent.Specificity <= 0.5:
+		base = int(float64(base) * 2.0)
+	case intent.Specificity <= 0.8:
+		base = int(float64(base) * 1.35)
 	default:
-		base = 300
+		// Keeps unscaled base for high-specificity general queries (> 0.8)
+		base = int(float64(base) * 1.0)
+	}
+
+	if base < 10 {
+		base = 10
 	}
 
 	limit := int(float64(base) * scale)
-	if limit > 1000 {
-		limit = 1000
+	maxCap := max(1000, cb.config.RetrievalConfig.TopKCandidates*4)
+	if limit > maxCap {
+		limit = maxCap
 	}
 	return limit
 }

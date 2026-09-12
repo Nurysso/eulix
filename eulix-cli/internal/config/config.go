@@ -62,13 +62,19 @@ type LLMConfig struct {
 
 // --- General RAG / Graph Tuning (Additions will be made here A MASSIVE TODO) ---
 type RetrievalConfig struct {
-	CodeToAstRatio          float64 `toml:"code_to_ast_ratio"`
+	CodeToAstRatio          float64 `toml:"code_to_ast_ratio"`          // How much code with respect to ast will be there in context window.
 	ApplyCrossRootIsolation bool    `toml:"apply_cross_root_isolation"` // Toggles whether we care about crossing project boundaries at all.
 	CrossRootPenalty        float32 `toml:"cross_root_penalty"`         // Multiplier applied to candidates outside the primary root (e.g., 0.3 = soft penalty, 0.01 = strict).
 	PreMMRScoreFloorRatio   float32 `toml:"pre_mmr_score_floor_ratio"`  // Minimum relative score required to survive pre-MMR pruning (e.g., 0.05 = drops candidates < 5% of max score).
 	TopKCandidates          int     `toml:"top_k_candidates"`           // How many raw vector hits to pull before applying graph expansion and MMR pruning.
 	MMRDiversityFactor      float32 `toml:"mmr_diversity_factor"`       // Balances MMR relevance vs. diversity (0.0 = max diversity, 1.0 = max relevance).
 	MaxGraphExpansionDepth  int     `toml:"max_graph_expansion_depth"`  // How many hops to traverse in your Rust call-graph (1 = direct deps, 2 = transitive deps).
+	SemanticMinSimilarity   float64 `toml:"semantic_min_similarity"`    // Minimum cosine similarity threshold for vector search hits (e.g., 0.15 - 0.40).
+	MaxGraphExpansions      int     `toml:"max_graph_expansions"`       // Maximum number of call-graph relationship edges to expand (default 15).
+	MaxExactAnchors         int     `toml:"max_exact_anchors"`          // Maximum number of exact symbol anchors to pin to context (default 2).
+	TestFilePenalty         float32 `toml:"test_file_penalty"`          // Score multiplier applied to test/mock files when query is not testing-specific (default 0.3).
+	EnableSubsystemBoosting bool    `toml:"enable_subsystem_boosting"`  // Enables dynamic subsystem/directory boosting based on query context (default true).
+	MaxContextChunks        int     `toml:"max_context_chunks"`         // Maximum number of chunks allowed in the final context window (default 30).
 }
 
 type CacheConfig struct {
@@ -137,6 +143,11 @@ func validateAndClampConfig(cfg *Config) *Config {
 	rc.MMRDiversityFactor = clamp(rc.MMRDiversityFactor, 0.0, 1.0)
 	rc.TopKCandidates = max(rc.TopKCandidates, 1)
 	rc.MaxGraphExpansionDepth = max(rc.MaxGraphExpansionDepth, 0)
+	rc.SemanticMinSimilarity = clamp(rc.SemanticMinSimilarity, 0.0, 1.0)
+	rc.MaxGraphExpansions = max(rc.MaxGraphExpansions, 0)
+	rc.MaxExactAnchors = max(rc.MaxExactAnchors, 1)
+	rc.TestFilePenalty = clamp(rc.TestFilePenalty, 0.0, 1.0)
+	rc.MaxContextChunks = max(rc.MaxContextChunks, 1)
 
 	// Checksum Configuration
 	cs := &cfg.Checksum
@@ -161,12 +172,10 @@ func validateAndClampConfig(cfg *Config) *Config {
 func Load() (*Config, error) {
 	// Load .env into process env if present. Missing file is fine not an error.
 	_ = godotenv.Load()
-	var cfg Config
+	cfg := *DefaultConfig()
 
-	// Try to load from file, fallback to defaults
-	if _, err := toml.DecodeFile("eulix.toml", &cfg); err != nil {
-		cfg = *DefaultConfig()
-	}
+	// Overlay configuration from file if present
+	_, _ = toml.DecodeFile("eulix.toml", &cfg)
 
 	// Validate and clamp configuration values
 	cfg = *validateAndClampConfig(&cfg)
@@ -227,6 +236,12 @@ func DefaultConfig() *Config {
 			TopKCandidates:          150,
 			MMRDiversityFactor:      0.65,
 			MaxGraphExpansionDepth:  1,
+			SemanticMinSimilarity:   0.15,
+			MaxGraphExpansions:      15,
+			MaxExactAnchors:         2,
+			TestFilePenalty:         0.30,
+			EnableSubsystemBoosting: true,
+			MaxContextChunks:        30,
 		},
 		Cache: CacheConfig{
 			Enable: true,

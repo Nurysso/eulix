@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	mmrLambda            = 0.7
+	defaultMMRLambda     = 0.65
 	headerOverhead       = 20
 	distantLineThreshold = 150
 	simPenaltyFactor     = 1.20
@@ -138,6 +138,13 @@ func (cb *ContextBuilder) mmrSelect(
 		return float64(inter) / float64(union)
 	}
 
+	lambda := float64(cb.config.RetrievalConfig.MMRDiversityFactor)
+	if lambda <= 0.0 || lambda > 1.0 {
+		lambda = defaultMMRLambda
+		cb.debugLog.Log("[!] MMR selection value %[1]v is out of range using default value: lambda=%[2].2f ", lambda, defaultMMRLambda)
+	}
+	cb.debugLog.Log("MMR selection: lambda=%.2f, budget=%d", lambda, budget)
+
 	remaining := make([]ScoredChunk, len(candidates))
 	copy(remaining, candidates)
 
@@ -145,8 +152,12 @@ func (cb *ContextBuilder) mmrSelect(
 	selSC := make([]ScoredChunk, 0, 24)
 	tokenSum := 0
 	chunkTraces := make([]ChunkTrace, 0, len(candidates))
+	maxChunks := cb.config.RetrievalConfig.MaxContextChunks
+	if maxChunks <= 0 {
+		maxChunks = 30
+	}
 
-	for len(remaining) > 0 {
+	for len(remaining) > 0 && len(selected) < maxChunks {
 		bestIdx, bestMMR := -1, -math.MaxFloat64
 
 		for i, c := range remaining {
@@ -159,7 +170,7 @@ func (cb *ContextBuilder) mmrSelect(
 				}
 			}
 
-			if mmr := mmrLambda*rel - (1-mmrLambda)*maxRedund; mmr > bestMMR {
+			if mmr := lambda*rel - (1.0-lambda)*maxRedund; mmr > bestMMR {
 				bestMMR, bestIdx = mmr, i
 			}
 		}
@@ -218,6 +229,10 @@ func (cb *ContextBuilder) selectChunks(scored []ScoredChunk, budget int) []Chunk
 	selected := make([]Chunk, 0)
 	tokenSum := 0
 	hdr := 20
+	maxChunks := cb.config.RetrievalConfig.MaxContextChunks
+	if maxChunks <= 0 {
+		maxChunks = 30
+	}
 
 	sort.Slice(scored, func(i, j int) bool {
 		if scored[i].File != scored[j].File {
@@ -229,6 +244,9 @@ func (cb *ContextBuilder) selectChunks(scored []ScoredChunk, budget int) []Chunk
 		return scored[i].StartLine < scored[j].StartLine
 	})
 	for _, sc := range scored {
+		if len(selected) >= maxChunks {
+			break
+		}
 		if tokenSum+sc.Tokens+hdr > budget {
 			break
 		}
