@@ -30,11 +30,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	force bool
-	fix   bool
-)
-
 var rootCmd = &cobra.Command{
 	Use:   "eulix",
 	Short: "eulix - Turn your codebase into a searchable book",
@@ -53,6 +48,7 @@ var printReqFile = &cobra.Command{
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		_, _ = a.PrintReqFileCmd()
+		fmt.Println("\nThis only prints default deps required by eulix_embed.\nPyTorch can be installed and used too.")
 	},
 }
 
@@ -192,7 +188,7 @@ var versionCMD = &cobra.Command{
 
 var embedCMD = &cobra.Command{
 	Use:                "embed [flags]",
-	Short:              "Run the eulix_embed pipeline (Python venv)",
+	Short:              "Runs the eulix_embed pipeline (Python venv)",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
 		scriptPath, pythonPath, venvEnv, err := embeddings.FindEulixEmbed()
@@ -220,23 +216,17 @@ var embedCMD = &cobra.Command{
 	},
 }
 
-// TODO pass through flags to rust bin
-//
-//nolint:unused
 var parserCMD = &cobra.Command{
-	Use:                "pasrser [flags]",
+	Use:                "parser [flags]",
 	Short:              "wrapper around eulix_parser",
 	DisableFlagParsing: true,
 	Run: func(cmd *cobra.Command, args []string) {
-		scriptPath, pythonPath, venvEnv, err := embeddings.FindEulixEmbed()
+		parserBin, err := a.ParserPath()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "eulix_parser failed: %v\n", err)
-			os.Exit(1)
+			fmt.Println("could not extract embedded parser: %w", err)
 		}
 
-		cmdArgs := append([]string{scriptPath}, args...)
-		proc := exec.Command(pythonPath, cmdArgs...)
-		proc.Env = venvEnv
+		proc := exec.Command(parserBin, args...)
 		proc.Stdin = os.Stdin
 		proc.Stdout = os.Stdout
 		proc.Stderr = os.Stderr
@@ -245,7 +235,7 @@ var parserCMD = &cobra.Command{
 			if exitErr, ok := err.(*exec.ExitError); ok {
 				os.Exit(exitErr.ExitCode())
 			}
-			fmt.Fprintf(os.Stderr, "eulix embed: run failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "eulix_parser: run failed: %v\n", err)
 			os.Exit(1)
 		}
 	},
@@ -400,13 +390,49 @@ var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize eulix in the current directory",
 	Run: func(cmd *cobra.Command, args []string) {
-		var targets []string
-		if fix && !force {
-			state := checkInitState()
-			targets = state.missing()
+		if err := initializeProject(false, nil); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
+var initFixCmd = &cobra.Command{
+	Use:   "fix",
+	Short: "Creates missing config/files/folder without touching what already exists",
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := requireProjectRoot(); err != nil {
+			return err
+		}
+		return nil
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		state := checkInitState()
+		targets := state.missingTargets()
+
+		if len(targets) == 0 {
+			fmt.Println("Eulix is already fully initialized. Nothing to fix.")
+			return
 		}
 
-		if err := initializeProject(force, targets); err != nil {
+		if err := initializeProject(false, targets); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
+var initForceCmd = &cobra.Command{
+	Use:   "force",
+	Short: "Rewrites config, .euignore, and .eulix/ (leaves .env untouched)",
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := requireProjectRoot(); err != nil {
+			return err
+		}
+		return nil
+	},
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := initializeProject(true, nil); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -542,17 +568,21 @@ func Execute() error {
 }
 
 func init() {
+	setupInitSubcommands()
 	setupFlags()
 	setupHistoryCommands()
 	setupCacheCommands()
 	registerCommands()
 }
 
-func setupFlags() {
-	// init flags
-	initCmd.Flags().BoolVarP(&force, "force", "f", false, "Reset and overwrite all eulix files")
-	initCmd.Flags().BoolVar(&fix, "fix", false, "Create only missing components, keep existing ones")
+func setupInitSubcommands() {
+	initCmd.AddCommand(
+		initFixCmd,
+		initForceCmd,
+	)
+}
 
+func setupFlags() {
 	// aspirine flags
 	aspirineCmd.Flags().Bool("no-backup", false, "Don't backup existing embeddings.bin")
 	aspirineCmd.Flags().Bool("force", false, "Force rebuild even if validations fail")
@@ -592,5 +622,6 @@ func registerCommands() {
 		historyCmd,
 		cacheCmd,
 		embedCMD,
+		parserCMD,
 	)
 }

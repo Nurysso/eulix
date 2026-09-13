@@ -132,12 +132,12 @@ func checkInitialized() error {
 		return nil
 	}
 
-	missing := state.missing()
+	missing := state.missingDescriptions()
 	var b strings.Builder
 	b.WriteString("\nEulix is not fully initialized. Missing:\n")
 	for _, m := range missing {
 		fmt.Fprintf(&b, "  - %s\n", m)
 	}
-	b.WriteString("\nRun 'eulix init --fix' to restore missing files, or 'eulix init --force' to reset.\n\n")
+	b.WriteString("\nRun 'eulix init fix' to restore missing files, or 'eulix init force' to reset.\n\n")
 	return fmt.Errorf("%s", b.String())
 }

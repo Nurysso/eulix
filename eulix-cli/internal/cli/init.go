@@ -14,6 +14,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -52,7 +53,23 @@ func (s initState) fullyInitialized() bool {
 	return s.hasConfig && s.hasDir && s.hasEuignore
 }
 
-func (s initState) missing() []string {
+// missingTargets returns short keys matching shouldWrite() in initializeProject.
+func (s initState) missingTargets() []string {
+	var m []string
+	if !s.hasConfig {
+		m = append(m, "config")
+	}
+	if !s.hasDir {
+		m = append(m, "dir")
+	}
+	if !s.hasEuignore {
+		m = append(m, "euignore")
+	}
+	return m
+}
+
+// missingDescriptions returns human-readable lines for printing to the user.
+func (s initState) missingDescriptions() []string {
 	var m []string
 	if !s.hasConfig {
 		m = append(m, configPath+" (configuration)")
@@ -79,16 +96,15 @@ func initializeProject(force bool, targets []string) error {
 		return nil
 	}
 
-	// Partially initialized: warn and prompt
-	if !force && (state.hasConfig || state.hasDir || state.hasEuignore) {
-		if missing := state.missing(); len(missing) > 0 {
+	if !force && targets == nil && (state.hasConfig || state.hasDir || state.hasEuignore) {
+		if missing := state.missingDescriptions(); len(missing) > 0 {
 			fmt.Println("Eulix is partially initialized. The following components are missing:")
 			for _, m := range missing {
 				fmt.Printf("  - %s\n", m)
 			}
 			fmt.Println("\nOptions:")
-			fmt.Println("  • Run 'eulix init --fix' to create only the missing components")
-			fmt.Println("  • Run 'eulix init --force' to reset and recreate everything")
+			fmt.Println("  • Run 'eulix init fix' to create only the missing components")
+			fmt.Println("  • Run 'eulix init force' to reset and recreate everything")
 			return nil
 		}
 	}
@@ -144,23 +160,29 @@ func initializeProject(force bool, targets []string) error {
 	env := setup.LoadEnvFile(envPath)
 	if euignoreWritten {
 		fmt.Println()
-		if err := setup.RunWizard(setup.BuildEuignoreSteps(euignorePath), nil, env); err != nil {
+		err := setup.RunWizard(setup.BuildEuignoreSteps(euignorePath), cfg, env)
+		if err != nil && !errors.Is(err, setup.ErrWizardCancelled) {
 			return fmt.Errorf("euignore wizard: %w", err)
 		}
 	}
 
 	if configWritten {
 		fmt.Println()
-		if err := setup.RunWizard(setup.BuildConfigSteps(), cfg, env); err != nil {
+		err := setup.RunWizard(setup.BuildConfigSteps(), cfg, env)
+		switch {
+		case errors.Is(err, setup.ErrWizardCancelled):
+			fmt.Println("\neulix.toml was not written (wizard cancelled).")
+		case err != nil:
 			return fmt.Errorf("config wizard: %w", err)
+		default:
+			if err := writeConfig(cfg, configPath); err != nil {
+				return fmt.Errorf("failed to create config: %w", err)
+			}
+			created = append(created, fmt.Sprintf("  - %-20s (configuration)", configPath))
 		}
-		if err := writeConfig(cfg, configPath); err != nil {
-			return fmt.Errorf("failed to create config: %w", err)
-		}
-		created = append(created, fmt.Sprintf("  - %-20s (configuration)", configPath))
 	}
 
-	if env.HasValues() {
+	if env.Changed() {
 		if err := env.Save(); err != nil {
 			return fmt.Errorf("failed to write %s: %w", envPath, err)
 		}

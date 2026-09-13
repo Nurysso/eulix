@@ -18,6 +18,7 @@ type EnvFile struct {
 	path     string
 	values   map[string]string
 	keyOrder []string
+	changed  bool
 }
 
 func LoadEnvFile(path string) *EnvFile {
@@ -52,18 +53,26 @@ func parseEnvLine(line string) (string, string, bool) {
 }
 
 func (envFile *EnvFile) Set(key, value string) {
+	if old, exists := envFile.values[key]; exists && old == value {
+		return
+	}
 	if _, exists := envFile.values[key]; !exists {
 		envFile.keyOrder = append(envFile.keyOrder, key)
 	}
 	envFile.values[key] = value
+	envFile.changed = true
 }
 
 func (envFile *EnvFile) HasValues() bool {
 	return len(envFile.values) > 0
 }
 
+func (envFile *EnvFile) Changed() bool {
+	return envFile.changed
+}
+
 func (envFile *EnvFile) Save() error {
-	if !envFile.HasValues() {
+	if !envFile.changed {
 		return nil
 	}
 	var builder strings.Builder

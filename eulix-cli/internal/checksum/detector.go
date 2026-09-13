@@ -34,6 +34,7 @@ import (
 	"github.com/zeebo/xxh3"
 
 	"eulix/internal/config"
+	"eulix/internal/utils"
 )
 
 // FileEntry stores enough metadata per file to allow cheap "did this file
@@ -73,7 +74,7 @@ type Result struct {
 	FilesModified int
 }
 
-const analysisVersion = "0.5.3"
+const analysisVersion = utils.AppVersion // i dont rememeber why this was set to 0.5.3 or what it meant.
 const eulixDirName = ".eulix"
 const checksumFileName = "checksum.json.zst"
 const ignoreFileName = ".euignore"

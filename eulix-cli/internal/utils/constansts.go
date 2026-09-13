@@ -8,5 +8,5 @@ package utils
 
 const (
 	AppName    = "eulix"
-	AppVersion = "v0.8.0"
+	AppVersion = "v0.8.1"
 )

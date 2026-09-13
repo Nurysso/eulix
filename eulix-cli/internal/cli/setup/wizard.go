@@ -8,6 +8,7 @@
 package setup
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -57,17 +58,20 @@ type Step struct {
 }
 
 type wizardModel struct {
-	steps   []Step
-	idx     int
-	answers Answers
-	cursor  int
-	input   textinput.Model
-	cfg     *config.Config
-	env     *EnvFile
-	status  string
-	err     error
-	done    bool
+	steps     []Step
+	idx       int
+	answers   Answers
+	cursor    int
+	input     textinput.Model
+	cfg       *config.Config
+	env       *EnvFile
+	status    string
+	err       error
+	done      bool
+	cancelled bool
 }
+
+var ErrWizardCancelled = errors.New("wizard cancelled by user")
 
 var (
 	promptStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
@@ -197,6 +201,7 @@ func (m *wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if keyMsg.String() == "ctrl+c" || keyMsg.String() == "esc" {
 		m.done = true
+		m.cancelled = true
 		return m, tea.Quit
 	}
 
@@ -329,12 +334,22 @@ func (m *wizardModel) renderTextInput() string {
 // user answers. Pressing esc/ctrl+c at any point stops the wizard early
 // without losing answers already applied.
 func RunWizard(steps []Step, cfg *config.Config, env *EnvFile) error {
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
 	final, err := tea.NewProgram(newWizard(steps, cfg, env)).Run()
 	if err != nil {
 		return fmt.Errorf("wizard failed: %w", err)
 	}
-	if model, ok := final.(*wizardModel); ok && model.err != nil {
+	model, ok := final.(*wizardModel)
+	if !ok {
+		return nil
+	}
+	if model.err != nil {
 		return model.err
+	}
+	if model.cancelled {
+		return ErrWizardCancelled
 	}
 	return nil
 }
