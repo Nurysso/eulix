@@ -18,6 +18,7 @@ import (
 	"os"
 	"strings"
 
+	"eulix/internal/cli/setup"
 	"eulix/internal/config"
 
 	"github.com/BurntSushi/toml"
@@ -27,6 +28,7 @@ const (
 	eulixDir     = ".eulix"
 	euignorePath = ".euignore"
 	configPath   = "eulix.toml"
+	envPath      = ".env"
 )
 
 type initState struct {
@@ -65,18 +67,19 @@ func (s initState) missing() []string {
 }
 
 // initializeProject accepts a force boolean and an optional list of specific
-// components to create (nil = create all missing).
+// components to create (nil = create all missing). Once files are written it
+// walks the user through the interactive wizard for whichever of
+// .euignore / eulix.toml were just (re)created.
 func initializeProject(force bool, targets []string) error {
 	state := checkInitState()
 
-	// --- Already fully initialized ---
 	if state.fullyInitialized() && !force {
 		fmt.Println("Eulix is already initialized.")
 		fmt.Println("\nUse --force / -f to reset and overwrite all files.")
 		return nil
 	}
 
-	// --- Partially initialized: warn and prompt ---
+	// Partially initialized: warn and prompt
 	if !force && (state.hasConfig || state.hasDir || state.hasEuignore) {
 		if missing := state.missing(); len(missing) > 0 {
 			fmt.Println("Eulix is partially initialized. The following components are missing:")
@@ -90,7 +93,6 @@ func initializeProject(force bool, targets []string) error {
 		}
 	}
 
-	// --- Determine what to write ---
 	writeAll := force || (!state.hasConfig && !state.hasDir && !state.hasEuignore)
 	shouldWrite := func(name string) bool {
 		if writeAll || targets == nil {
@@ -105,8 +107,9 @@ func initializeProject(force bool, targets []string) error {
 	}
 
 	var created []string
+	euignoreWritten := false
+	configWritten := false
 
-	// 1. Knowledge base directory
 	if shouldWrite("dir") || !state.hasDir {
 		if err := os.MkdirAll(eulixDir, 0755); err != nil {
 			return fmt.Errorf("failed to create %s: %w", eulixDir, err)
@@ -114,12 +117,10 @@ func initializeProject(force bool, targets []string) error {
 		created = append(created, fmt.Sprintf("  - %-20s (knowledge base directory)", eulixDir+"/"))
 	}
 
-	// 2. .euignore
+	// .euignore is written immediately so there's a real file for the wizard's
 	if (shouldWrite("euignore") || !state.hasEuignore) && (!state.hasEuignore || force) {
 		defaultIgnore := "# Eulix ignore patterns\n" +
-			"node_modules/\n" +
-			".git/\n" +
-			"*.test.go\n" +
+			"*.test*\n" +
 			"vendor/\n" +
 			"dist/\n" +
 			"test/\n" +
@@ -128,17 +129,46 @@ func initializeProject(force bool, targets []string) error {
 			return fmt.Errorf("failed to create %s: %w", euignorePath, err)
 		}
 		created = append(created, fmt.Sprintf("  - %-20s (ignore patterns)", euignorePath))
+		euignoreWritten = true
 	}
 
-	// 3. eulix.toml serialized from DefaultConfig() so it never drifts
+	// eulix.toml built in memory from DefaultConfig() first; the
+	// wizard (if the user opts in) edits this struct.
+	var cfg *config.Config
 	if (shouldWrite("config") || !state.hasConfig) && (!state.hasConfig || force) {
-		if err := writeDefaultConfig(configPath); err != nil {
+		cfg = config.DefaultConfig()
+		configWritten = true
+	}
+
+	// Interactive wizard for whatever was just (re)created
+	env := setup.LoadEnvFile(envPath)
+	if euignoreWritten {
+		fmt.Println()
+		if err := setup.RunWizard(setup.BuildEuignoreSteps(euignorePath), nil, env); err != nil {
+			return fmt.Errorf("euignore wizard: %w", err)
+		}
+	}
+
+	if configWritten {
+		fmt.Println()
+		if err := setup.RunWizard(setup.BuildConfigSteps(), cfg, env); err != nil {
+			return fmt.Errorf("config wizard: %w", err)
+		}
+		if err := writeConfig(cfg, configPath); err != nil {
 			return fmt.Errorf("failed to create config: %w", err)
 		}
 		created = append(created, fmt.Sprintf("  - %-20s (configuration)", configPath))
 	}
 
-	// --- Feedback ---
+	if env.HasValues() {
+		if err := env.Save(); err != nil {
+			return fmt.Errorf("failed to write %s: %w", envPath, err)
+		}
+		created = append(created, fmt.Sprintf("  - %-20s (API keys)", envPath))
+	}
+
+	// Feedback
+	fmt.Println()
 	if force {
 		fmt.Println("Eulix configuration has been reset!")
 	} else {
@@ -151,17 +181,16 @@ func initializeProject(force bool, targets []string) error {
 		}
 	}
 	fmt.Println("\nNext steps:")
-	fmt.Println("  1. Edit eulix.toml to configure your setup")
+	fmt.Println("  1. Review eulix.toml / .euignore if you skipped the wizard")
 	fmt.Println("  2. Run 'eulix analyze' to analyze your codebase")
 	fmt.Println("  3. Run 'eulix chat' to start querying")
 	return nil
 }
 
-// writeDefaultConfig serializes DefaultConfig() to TOML at dst.
-// It uses BurntSushi/toml's encoder so the output is always in sync
-// with the actual Config struct no hardcoded strings to maintain.
-func writeDefaultConfig(dst string) error {
-	cfg := config.DefaultConfig()
+// writeConfig serializes cfg to TOML at dst using BurntSushi/toml's encoder
+// so the output is always in sync with the actual Config struct - no
+// hardcoded strings to maintain.
+func writeConfig(cfg *config.Config, dst string) error {
 	var buf bytes.Buffer
 	buf.WriteString("# Eulix Configuration\n\n")
 	enc := toml.NewEncoder(&buf)
