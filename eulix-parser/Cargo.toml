@@ -1,6 +1,6 @@
 [package]
 name = "eulix-parser"
-version = "0.7.5"
+version = "0.7.6"
 edition = "2021"
 description = "Fast, secure code parser for multiple languages using tree-sitter"
 readme = "README.md"
@@ -34,6 +34,7 @@ tree-sitter = "=0.20.10"
 tree-sitter-c = "=0.20.4"
 tree-sitter-cpp = "=0.20.2"
 tree-sitter-go = "=0.20.0"
+tree-sitter-javascript = "=0.20.3"
 tree-sitter-python = "=0.20.3"
 tree-sitter-rust = "=0.20.3"
 tree-sitter-typescript = "=0.20.3"
@@ -73,10 +74,11 @@ secrecy = { version = "0.8", optional = true }  # For sensitive data handling
 xxhash-rust = { version = "0.8.18", features = ["const_xxh3", "xxh3"] }
 # sonic-rs = "0.5.8"
 
-# [dev-dependencies]
+[dev-dependencies]
 # criterion = { version = "0.5", features = ["html_reports"] }
 # pretty_assertions = "1.4"
-# tempfile = "3.9"
+tempfile = "3.9"
+# tempfile = "3.27.0"
 
 [build-dependencies]
 cc = { version = "1.0", optional = true }  # For building grammars if needed

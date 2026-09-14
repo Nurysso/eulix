@@ -87,7 +87,7 @@ pub struct Metadata {
     pub total_methods: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct FileData {
     pub language: String,
     pub loc: usize,
@@ -107,7 +107,7 @@ pub struct Import {
     pub import_type: String, // "external" | "internal"
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct Function {
     pub id: String,
     pub name: String,
@@ -242,7 +242,7 @@ pub struct ExceptionInfo {
     pub handles: Vec<String>,    // Exception types caught in try-except
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct Class {
     pub id: String,
     pub name: String,
@@ -382,6 +382,8 @@ pub struct LanguageSpecificInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub typescript: Option<TypeScriptInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub javascript: Option<JavaScriptInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub c: Option<CInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpp: Option<CppInfo>,
@@ -485,6 +487,54 @@ pub struct TypeScriptInfo {
     pub generic_params: Vec<String>, // e.g. ["T", "K extends string"]
     pub is_arrow_fn: bool,           // const foo = () => ...
     pub is_overload: bool,           // TS function overloads
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JavaScriptInfo {
+    pub is_async: bool,
+    pub is_exported: bool,
+    pub is_default_export: bool,
+    pub is_arrow_fn: bool,
+    pub is_generator: bool,
+    pub is_iife: bool,
+    pub is_strict_mode: bool,
+    pub module_system: Option<String>,
+    pub is_commonjs_export: bool,
+    pub binds_this_lexically: bool,
+    pub is_callback: bool,
+    pub is_higher_order: bool,
+    pub uses_hoisted_var: bool,
+}
+
+#[expect(dead_code)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JavaInfo {
+    pub is_static: bool,
+    pub is_final: bool,
+    pub is_abstract: bool,
+    pub is_synchronized: bool,
+    pub is_native: bool,
+    pub is_default_method: bool, // interface default method
+    pub is_constructor: bool,
+    pub access_modifier: Option<String>, // public/private/protected/package-private
+    pub annotations: Vec<String>,        // @Override, @Deprecated, @Autowired, etc.
+    pub throws: Vec<String>,             // checked exceptions in `throws` clause
+    pub generic_params: Vec<String>,     // <T, K, V>
+    pub extends: Option<String>,
+    pub implements: Vec<String>,
+    pub type_kind: Option<String>, // class/interface/enum/record/annotation
+    pub is_functional_interface: bool, // @FunctionalInterface
+    pub is_lambda: bool,
+    pub is_anonymous_class: bool,
+    pub is_inner_class: bool,
+    pub is_static_nested_class: bool,
+    pub is_record: bool,
+    pub is_sealed: bool,
+    pub permitted_subclasses: Vec<String>, // sealed classes' `permits`
+    pub overrides_equals_hashcode: bool,
+    pub uses_streams: bool, // java.util.stream usage
+    pub uses_try_with_resources: bool,
+    pub is_varargs: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

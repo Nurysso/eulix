@@ -36,7 +36,7 @@ struct RawEdge {
 // lookups would silently miss.
 #[inline(always)]
 fn short_name_of(id: &str, node_type: u8) -> &str {
-    let stripped = id.split("::").last().unwrap_or(id);
+    let stripped = id.split("::").next().unwrap_or(id);
     if node_type == 1 {
         stripped.strip_prefix("method_").unwrap_or(stripped)
     } else {
@@ -106,9 +106,6 @@ impl Analyzer {
                     println!("      Using direct analysis (PRISMv1)...");
                 }
                 kb.call_graph = Self::build_call_graph(&kb.structure);
-            }
-            if verbose {
-                println!("   → Building reverse call graphs...");
             }
             if verbose {
                 println!("   → Building reverse call graphs...");
@@ -822,7 +819,7 @@ impl Analyzer {
 
         let base_name = callee
             .split("::")
-            .last()
+            .next()
             .and_then(|s: &str| s.strip_prefix("method_").or(Some(s)))
             .unwrap_or(callee);
 
@@ -1640,10 +1637,19 @@ impl<'a> ResolveCtx<'a> {
             }
         }
 
-        // global symbol fallback — last resort so a call still resolves
-        // to *something* rather than being dropped, even without any of
-        // the stronger signals above.
-        self.symbol_index.get(callee).copied()
+        // Direct hit on the symbol index (covers already-qualified calls like
+        // "func_foo" / "method_Bar_baz").
+        if let Some(&idx) = self.symbol_index.get(callee) {
+            return Some(idx);
+        }
+        // Bare name fallback: try each known ID prefix. Mirrors find_base_idx.
+        for prefix in ["func_", "method_", "class_"] {
+            let prefixed = format!("{}{}", prefix, callee);
+            if let Some(&idx) = self.symbol_index.get(prefixed.as_str()) {
+                return Some(idx);
+            }
+        }
+        None
     }
 
     /// BFS over an index map using only usize — no String clones.
@@ -1723,4 +1729,954 @@ pub struct ProjectSummary {
 pub struct DependencyInfo {
     pub stdlib: Vec<String>,
     pub third_party: Vec<String>,
+}
+
+// AI was heavily involved in writing the below tests, i did checked the test and code
+// and lgtm.
+
+#[cfg(test)]
+mod tests {
+    // #![expect(clippy::expect_used)]
+    #![expect(clippy::unwrap_used)]
+
+    use super::*;
+
+    mod short_name_of_tests {
+        use super::*;
+
+        #[test]
+        fn strips_method_prefix_only_for_methods() {
+            assert_eq!(short_name_of("method_foo_bar::file.rs", 1), "foo_bar");
+        }
+
+        #[test]
+        fn leaves_functions_untouched_even_if_they_look_like_methods() {
+            // node_type 0 => no stripping, even if id happens to start with "method_"
+            assert_eq!(
+                short_name_of("method_looking::file.rs", 0),
+                "method_looking"
+            );
+        }
+
+        #[test]
+        fn no_double_colon_returns_whole_id() {
+            assert_eq!(short_name_of("bare_id", 0), "bare_id");
+        }
+
+        #[test]
+        fn embedded_double_colons_in_the_file_path_do_not_break_lookup() {
+            // ID format is `<short>::<file>`. Even if the file path itself contains
+            // `::`, the short name is the segment before the FIRST `::`.
+            let id = "func_foo::pkg::sub::file.go";
+            assert_eq!(short_name_of(id, 0), "func_foo");
+        }
+
+        #[test]
+        fn method_id_missing_the_method_prefix_is_a_noop_strip() {
+            assert_eq!(short_name_of("weird_id::file.rs", 1), "weird_id");
+        }
+
+        #[test]
+        fn empty_string_does_not_panic() {
+            assert_eq!(short_name_of("", 0), "");
+        }
+    }
+
+    mod first_self_param_tests {
+        use super::*;
+
+        fn p(name: &str) -> Parameter {
+            Parameter {
+                name: name.to_string(),
+                type_annotation: String::new(),
+                default_value: None,
+            }
+        }
+
+        #[test]
+        fn recognizes_all_known_receiver_spellings() {
+            for name in ["self", "this", "cls", "_self", "self_", "myself"] {
+                assert!(first_self_param(&[p(name)]), "{name} should be recognized");
+            }
+        }
+
+        #[test]
+        fn empty_params_is_false() {
+            assert!(!first_self_param(&[]));
+        }
+
+        #[test]
+        fn only_the_first_param_is_checked() {
+            // a receiver-like name in second position must NOT count
+            assert!(!first_self_param(&[p("other"), p("self")]));
+        }
+
+        #[test]
+        fn case_sensitivity_gap() {
+            assert!(!first_self_param(&[p("Self")]));
+            assert!(!first_self_param(&[p("This")]));
+            assert!(!first_self_param(&[p("Cls")]));
+        }
+
+        #[test]
+        fn near_miss_spellings_rejected() {
+            for name in ["self1", "SELF", "s_elf", " self", "self ", "__self__"] {
+                assert!(!first_self_param(&[p(name)]), "{name} should NOT match");
+            }
+        }
+    }
+
+    mod resolve_indirect_call_tests {
+        use super::*;
+        use std::collections::HashMap;
+
+        #[test]
+        fn direct_hit_wins_over_symbol_index() {
+            let mut node_map = HashMap::new();
+            node_map.insert("func_foo::a.c".to_string(), 0usize);
+            let mut symbol_index: HashMap<&str, usize> = HashMap::new();
+            symbol_index.insert("foo", 99); // deliberately wrong to prove precedence
+            let res = Analyzer::resolve_indirect_call("func_foo::a.c", &node_map, &symbol_index);
+            assert_eq!(res, Some(0));
+        }
+
+        #[test]
+        fn base_name_extraction_keeps_the_whole_suffix_after_method_() {
+            // base_name = split("::").last() -> strip "method_" prefix only.
+            // For "method_bar_baz::x.c" the base name is "bar_baz", NOT "bar".
+            let node_map: HashMap<String, usize> = HashMap::new();
+            let mut symbol_index: HashMap<&str, usize> = HashMap::new();
+            symbol_index.insert("bar", 5); // wrong key on purpose
+            let res =
+                Analyzer::resolve_indirect_call("method_bar_baz::x.c", &node_map, &symbol_index);
+            assert_eq!(
+                res, None,
+                "documents that only the full post-prefix suffix is used as the key"
+            );
+        }
+
+        #[test]
+        fn correct_symbol_index_key_resolves() {
+            let node_map: HashMap<String, usize> = HashMap::new();
+            let mut symbol_index: HashMap<&str, usize> = HashMap::new();
+            symbol_index.insert("bar_baz", 5);
+            let res =
+                Analyzer::resolve_indirect_call("method_bar_baz::x.c", &node_map, &symbol_index);
+            assert_eq!(res, Some(5));
+        }
+
+        #[test]
+        fn unresolvable_returns_none_not_panic() {
+            let node_map: HashMap<String, usize> = HashMap::new();
+            let symbol_index: HashMap<&str, usize> = HashMap::new();
+            assert_eq!(
+                Analyzer::resolve_indirect_call("nope", &node_map, &symbol_index),
+                None
+            );
+        }
+
+        #[test]
+        fn empty_callee_string_does_not_panic() {
+            let node_map: HashMap<String, usize> = HashMap::new();
+            let symbol_index: HashMap<&str, usize> = HashMap::new();
+            assert_eq!(
+                Analyzer::resolve_indirect_call("", &node_map, &symbol_index),
+                None
+            );
+        }
+    }
+
+    mod find_base_idx_tests {
+        use super::*;
+        use std::collections::HashMap;
+
+        #[test]
+        fn exact_match_wins() {
+            let mut node_map: HashMap<&str, usize> = HashMap::new();
+            node_map.insert("Base", 0);
+            let suffix_index: HashMap<&str, Vec<usize>> = HashMap::new();
+            assert_eq!(
+                Analyzer::find_base_idx("Base", &node_map, &suffix_index),
+                Some(0)
+            );
+        }
+
+        #[test]
+        fn tries_class_then_func_then_method_prefixes() {
+            let mut node_map: HashMap<&str, usize> = HashMap::new();
+            node_map.insert("class_Base", 1);
+            let suffix_index: HashMap<&str, Vec<usize>> = HashMap::new();
+            assert_eq!(
+                Analyzer::find_base_idx("Base", &node_map, &suffix_index),
+                Some(1)
+            );
+        }
+
+        #[test]
+        fn falls_back_to_suffix_index_first_candidate() {
+            // ambiguity (multiple classes with the same short name) is silently
+            // resolved to whichever candidate happens to be first in the Vec.
+            let node_map: HashMap<&str, usize> = HashMap::new();
+            let mut suffix_index: HashMap<&str, Vec<usize>> = HashMap::new();
+            suffix_index.insert("Base", vec![7, 8]);
+            assert_eq!(
+                Analyzer::find_base_idx("Base", &node_map, &suffix_index),
+                Some(7)
+            );
+        }
+
+        #[test]
+        fn oversized_base_name_silently_skips_prefix_candidates() {
+            // Performance constraint check: `find_base_idx` uses a fixed 256-byte stack
+            // buffer for speed. If a generated name is massive (like from minified code),
+            // it will silently skip prefix checks rather than panicking or overflowing.
+            let huge = "x".repeat(300);
+            let mut node_map: HashMap<&str, usize> = HashMap::new();
+            let leaked: &'static str = Box::leak(format!("method_{huge}").into_boxed_str());
+            node_map.insert(leaked, 42);
+            let suffix_index: HashMap<&str, Vec<usize>> = HashMap::new();
+            assert_eq!(
+                Analyzer::find_base_idx(&huge, &node_map, &suffix_index),
+                None,
+                "prefix+base > 256 bytes silently skips the candidate"
+            );
+        }
+
+        #[test]
+        fn boundary_at_exactly_256_bytes() {
+            // Verifying the exact boundaries of our 256-byte stack buffer limitation.
+            // The prefix ("method_" = 7 bytes) + the base name length must be <= 256.
+            let base_249 = "y".repeat(249); // 7 + 249 = 256, exactly fits
+            let mut node_map: HashMap<&str, usize> = HashMap::new();
+            let leaked: &'static str = Box::leak(format!("method_{base_249}").into_boxed_str());
+            node_map.insert(leaked, 11);
+            let suffix_index: HashMap<&str, Vec<usize>> = HashMap::new();
+            assert_eq!(
+                Analyzer::find_base_idx(&base_249, &node_map, &suffix_index),
+                Some(11)
+            );
+
+            let base_250 = "y".repeat(250); // 7 + 250 = 257, one byte over
+            let suffix_index2: HashMap<&str, Vec<usize>> = HashMap::new();
+            assert_eq!(
+                Analyzer::find_base_idx(&base_250, &node_map, &suffix_index2),
+                None
+            );
+        }
+
+        #[test]
+        fn no_match_anywhere_returns_none() {
+            let node_map: HashMap<&str, usize> = HashMap::new();
+            let suffix_index: HashMap<&str, Vec<usize>> = HashMap::new();
+            assert_eq!(
+                Analyzer::find_base_idx("Ghost", &node_map, &suffix_index),
+                None
+            );
+        }
+
+        #[test]
+        fn empty_base_name_does_not_panic() {
+            let mut node_map: HashMap<&str, usize> = HashMap::new();
+            node_map.insert("class_", 3);
+            let suffix_index: HashMap<&str, Vec<usize>> = HashMap::new();
+            assert_eq!(
+                Analyzer::find_base_idx("", &node_map, &suffix_index),
+                Some(3)
+            );
+        }
+
+        #[test]
+        fn multibyte_utf8_base_name_round_trips_safely() {
+            // Validating that our stack-buffer string formatting doesn't mangle
+            // multi-byte UTF-8 characters by accidentally splitting bytes.
+            let base = "Bäse_日本語_class";
+            let mut node_map: HashMap<&str, usize> = HashMap::new();
+            let leaked: &'static str = Box::leak(format!("class_{base}").into_boxed_str());
+            node_map.insert(leaked, 9);
+            let suffix_index: HashMap<&str, Vec<usize>> = HashMap::new();
+            assert_eq!(
+                Analyzer::find_base_idx(base, &node_map, &suffix_index),
+                Some(9)
+            );
+        }
+    }
+
+    mod module_to_files_tests {
+        use super::*;
+
+        #[test]
+        fn basic_stem_and_dotted_module_both_registered() {
+            let files = vec!["src/foo/bar.py"];
+            let map = Analyzer::build_module_to_files_borrowed(&files);
+            assert_eq!(map.get("bar"), Some(&vec!["src/foo/bar.py"]));
+            assert_eq!(map.get("src.foo.bar"), Some(&vec!["src/foo/bar.py"]));
+        }
+
+        #[test]
+        fn leading_dot_slash_is_trimmed() {
+            let files = vec!["./main.go"];
+            let map = Analyzer::build_module_to_files_borrowed(&files);
+            assert_eq!(map.get("main"), Some(&vec!["./main.go"]));
+        }
+
+        #[test]
+        fn file_with_no_extension_uses_whole_name_as_stem() {
+            let files = vec!["Makefile"];
+            let map = Analyzer::build_module_to_files_borrowed(&files);
+            assert_eq!(map.get("Makefile"), Some(&vec!["Makefile"]));
+        }
+
+        #[test]
+        fn dotted_directory_component_confuses_extension_stripping() {
+            let files = vec!["vendor.v2/module.py"];
+            let map = Analyzer::build_module_to_files_borrowed(&files);
+            // Expected ideally: module name "module". Document actual behavior:
+            assert!(
+                map.contains_key("module") || map.contains_key("vendor"),
+                "directory dot vs. extension dot ambiguity — verify actual behavior matches intent"
+            );
+        }
+
+        #[test]
+        fn multiple_extensions_only_the_last_dot_is_stripped() {
+            let files = vec!["archive.tar.gz"];
+            let map = Analyzer::build_module_to_files_borrowed(&files);
+            assert_eq!(map.get("archive.tar"), Some(&vec!["archive.tar.gz"]));
+        }
+
+        #[test]
+        fn same_module_name_from_multiple_files_all_collected() {
+            let files = vec!["a/util.py", "b/util.py"];
+            let map = Analyzer::build_module_to_files_borrowed(&files);
+            assert_eq!(map.get("util").unwrap().len(), 2);
+        }
+
+        #[test]
+        fn empty_file_list_produces_empty_map() {
+            let files: Vec<&str> = vec![];
+            assert!(Analyzer::build_module_to_files_borrowed(&files).is_empty());
+        }
+
+        #[test]
+        fn root_level_file_does_not_double_insert_when_stem_equals_module() {
+            let files = vec!["main.rs"];
+            let map = Analyzer::build_module_to_files_borrowed(&files);
+            assert_eq!(map.len(), 1);
+        }
+    }
+
+    mod resolve_ctx_tests {
+        use super::*;
+        use std::collections::HashMap;
+
+        #[allow(clippy::too_many_arguments)]
+        fn ctx<'a>(
+            node_map: &'a HashMap<&'a str, usize>,
+            symbol_index: &'a HashMap<&'a str, usize>,
+            class_methods: &'a HashMap<&'a str, HashMap<String, usize>>,
+            inheritance_ids: &'a HashMap<usize, Vec<usize>>,
+            descendants_ids: &'a HashMap<usize, Vec<usize>>,
+            file_scope: &'a HashMap<&'a str, HashMap<&'a str, Vec<usize>>>,
+            imports_per_file: &'a HashMap<String, Vec<(String, String)>>,
+            module_to_files: &'a HashMap<String, Vec<&'a str>>,
+            idx_to_key: &'a Vec<&'a str>,
+        ) -> ResolveCtx<'a> {
+            ResolveCtx {
+                node_map,
+                symbol_index,
+                class_methods,
+                inheritance_ids,
+                descendants_ids,
+                file_scope,
+                imports_per_file,
+                module_to_files,
+                idx_to_key,
+            }
+        }
+
+        #[test]
+        fn direct_node_map_hit() {
+            let mut node_map = HashMap::new();
+            node_map.insert("func_foo::a.py", 0usize);
+            let (
+                symbol_index,
+                class_methods,
+                inheritance_ids,
+                descendants_ids,
+                file_scope,
+                imports_per_file,
+                module_to_files,
+            ) = Default::default();
+            let idx_to_key = vec!["func_foo::a.py"];
+            let c = ctx(
+                &node_map,
+                &symbol_index,
+                &class_methods,
+                &inheritance_ids,
+                &descendants_ids,
+                &file_scope,
+                &imports_per_file,
+                &module_to_files,
+                &idx_to_key,
+            );
+            assert_eq!(c.resolve("func_foo::a.py", "a.py", None), Some(0));
+        }
+
+        #[test]
+        fn self_call_resolved_via_class_methods() {
+            let node_map: HashMap<&str, usize> = [("class_Foo", 0)].into_iter().collect();
+            let symbol_index = HashMap::new();
+            let mut cm: HashMap<&str, HashMap<String, usize>> = HashMap::new();
+            cm.insert(
+                "class_Foo",
+                [("bar".to_string(), 1usize)].into_iter().collect(),
+            );
+            let (inheritance_ids, descendants_ids, file_scope, imports_per_file, module_to_files) =
+                Default::default();
+            let idx_to_key = vec!["class_Foo", "method_Foo_bar::a.py"];
+            let c = ctx(
+                &node_map,
+                &symbol_index,
+                &cm,
+                &inheritance_ids,
+                &descendants_ids,
+                &file_scope,
+                &imports_per_file,
+                &module_to_files,
+                &idx_to_key,
+            );
+            assert_eq!(c.resolve("bar", "a.py", Some("class_Foo")), Some(1));
+        }
+
+        #[test]
+        fn inherited_method_two_levels_up_resolves_via_fast_path() {
+            // Child(0) -> Parent(1) -> GParent(2); method only on GParent.
+            let node_map: HashMap<&str, usize> = [
+                ("class_Child", 0),
+                ("class_Parent", 1),
+                ("class_GParent", 2),
+            ]
+            .into_iter()
+            .collect();
+            let symbol_index = HashMap::new();
+            let mut cm: HashMap<&str, HashMap<String, usize>> = HashMap::new();
+            cm.insert(
+                "class_GParent",
+                [("greet".to_string(), 3usize)].into_iter().collect(),
+            );
+            let mut inheritance_ids: HashMap<usize, Vec<usize>> = HashMap::new();
+            inheritance_ids.insert(0, vec![1]);
+            inheritance_ids.insert(1, vec![2]);
+            let (descendants_ids, file_scope, imports_per_file, module_to_files) =
+                Default::default();
+            let idx_to_key = vec![
+                "class_Child",
+                "class_Parent",
+                "class_GParent",
+                "method_GParent_greet::a.py",
+            ];
+            let c = ctx(
+                &node_map,
+                &symbol_index,
+                &cm,
+                &inheritance_ids,
+                &descendants_ids,
+                &file_scope,
+                &imports_per_file,
+                &module_to_files,
+                &idx_to_key,
+            );
+            assert_eq!(c.resolve("greet", "a.py", Some("class_Child")), Some(3));
+        }
+
+        #[test]
+        fn inherited_method_three_levels_up() {
+            // Documenting a known BUG in the current lookup chain implementation.
+            // Our single-inheritance fast path `lookup_in_chain` only walks 2 hops up.
+            // If a method is 3 levels deep (GGParent), it silently fails to resolve,
+            // even though this is very common in OOP.
+            let node_map: HashMap<&str, usize> = [
+                ("class_Child", 0),
+                ("class_Parent", 1),
+                ("class_GParent", 2),
+                ("class_GGParent", 3),
+            ]
+            .into_iter()
+            .collect();
+            let symbol_index = HashMap::new();
+            let mut cm: HashMap<&str, HashMap<String, usize>> = HashMap::new();
+            cm.insert(
+                "class_GGParent",
+                [("greet".to_string(), 4usize)].into_iter().collect(),
+            );
+            let mut inheritance_ids: HashMap<usize, Vec<usize>> = HashMap::new();
+            inheritance_ids.insert(0, vec![1]);
+            inheritance_ids.insert(1, vec![2]);
+            inheritance_ids.insert(2, vec![3]);
+            let (descendants_ids, file_scope, imports_per_file, module_to_files) =
+                Default::default();
+            let idx_to_key = vec![
+                "class_Child",
+                "class_Parent",
+                "class_GParent",
+                "class_GGParent",
+                "method_GGParent_greet::a.py",
+            ];
+            let c = ctx(
+                &node_map,
+                &symbol_index,
+                &cm,
+                &inheritance_ids,
+                &descendants_ids,
+                &file_scope,
+                &imports_per_file,
+                &module_to_files,
+                &idx_to_key,
+            );
+            assert_eq!(
+                c.resolve("greet", "a.py", Some("class_Child")),
+                None,
+                "documents that 3+ level single-inheritance chains don't resolve inherited calls"
+            );
+        }
+
+        #[test]
+        fn self_inheritance_cycle_terminates_via_bfs_visited_set() {
+            let node_map: HashMap<&str, usize> = [("class_Weird", 0)].into_iter().collect();
+            let symbol_index = HashMap::new();
+            let cm: HashMap<&str, HashMap<String, usize>> = HashMap::new();
+            let mut inheritance_ids: HashMap<usize, Vec<usize>> = HashMap::new();
+            inheritance_ids.insert(0, vec![0, 0]); // len != 1 forces BFS path; self-loop
+            let (descendants_ids, file_scope, imports_per_file, module_to_files) =
+                Default::default();
+            let idx_to_key = vec!["class_Weird"];
+            let c = ctx(
+                &node_map,
+                &symbol_index,
+                &cm,
+                &inheritance_ids,
+                &descendants_ids,
+                &file_scope,
+                &imports_per_file,
+                &module_to_files,
+                &idx_to_key,
+            );
+            // Must terminate promptly (not hang) and simply fail to resolve.
+            assert_eq!(c.resolve("missing", "a.py", Some("class_Weird")), None);
+        }
+
+        #[test]
+        fn diamond_inheritance_resolves_via_bfs_path() {
+            // Child(0) -> [Left(1), Right(2)] -> Base(3); method lives on Base.
+            let node_map: HashMap<&str, usize> = [
+                ("class_Child", 0),
+                ("class_Left", 1),
+                ("class_Right", 2),
+                ("class_Base", 3),
+            ]
+            .into_iter()
+            .collect();
+            let symbol_index = HashMap::new();
+            let mut cm: HashMap<&str, HashMap<String, usize>> = HashMap::new();
+            cm.insert(
+                "class_Base",
+                [("act".to_string(), 9usize)].into_iter().collect(),
+            );
+            let mut inheritance_ids: HashMap<usize, Vec<usize>> = HashMap::new();
+            inheritance_ids.insert(0, vec![1, 2]);
+            inheritance_ids.insert(1, vec![3]);
+            inheritance_ids.insert(2, vec![3]);
+            let (descendants_ids, file_scope, imports_per_file, module_to_files) =
+                Default::default();
+            let idx_to_key = vec![
+                "class_Child",
+                "class_Left",
+                "class_Right",
+                "class_Base",
+                "method_Base_act::a.py",
+            ];
+            let c = ctx(
+                &node_map,
+                &symbol_index,
+                &cm,
+                &inheritance_ids,
+                &descendants_ids,
+                &file_scope,
+                &imports_per_file,
+                &module_to_files,
+                &idx_to_key,
+            );
+            assert_eq!(c.resolve("act", "a.py", Some("class_Child")), Some(9));
+        }
+
+        #[test]
+        fn file_scope_fallback_used_without_class_context() {
+            // When calling a simple function in the same file (not attached to a class),
+            // it should resolve using the local file scope dictionary.
+            let node_map: HashMap<&str, usize> = HashMap::new();
+            let symbol_index = HashMap::new();
+            let cm = HashMap::new();
+            let (inheritance_ids, descendants_ids) = Default::default();
+            let mut file_scope: HashMap<&str, HashMap<&str, Vec<usize>>> = HashMap::new();
+            file_scope.insert("a.py", [("helper", vec![2usize])].into_iter().collect());
+            let (imports_per_file, module_to_files) = Default::default();
+            let idx_to_key = vec!["", "", "func_helper::a.py"];
+            let c = ctx(
+                &node_map,
+                &symbol_index,
+                &cm,
+                &inheritance_ids,
+                &descendants_ids,
+                &file_scope,
+                &imports_per_file,
+                &module_to_files,
+                &idx_to_key,
+            );
+            assert_eq!(c.resolve("helper", "a.py", None), Some(2));
+        }
+
+        #[test]
+        fn file_scope_from_a_different_file_is_not_leaked() {
+            // A function called `helper` defined in `b.py` shouldn't magically resolve
+            // when `a.py` tries to call `helper` without importing it.
+            let node_map: HashMap<&str, usize> = HashMap::new();
+            let symbol_index = HashMap::new();
+            let cm = HashMap::new();
+            let (inheritance_ids, descendants_ids) = Default::default();
+            let mut file_scope: HashMap<&str, HashMap<&str, Vec<usize>>> = HashMap::new();
+            file_scope.insert("b.py", [("helper", vec![2usize])].into_iter().collect());
+            let (imports_per_file, module_to_files) = Default::default();
+            let idx_to_key = vec!["", "", "func_helper::b.py"];
+            let c = ctx(
+                &node_map,
+                &symbol_index,
+                &cm,
+                &inheritance_ids,
+                &descendants_ids,
+                &file_scope,
+                &imports_per_file,
+                &module_to_files,
+                &idx_to_key,
+            );
+            assert_eq!(c.resolve("helper", "a.py", None), None);
+        }
+
+        #[test]
+        fn import_resolution_crosses_module_to_files() {
+            // Tests the cross-file import mapping.
+            // Setup: `utils.py` exports `helper`. `main.py` imports `helper` from `utils`.
+            let node_map: HashMap<&str, usize> = HashMap::new();
+            let symbol_index = HashMap::new();
+            let cm = HashMap::new();
+            let (inheritance_ids, descendants_ids) = Default::default();
+            let mut file_scope: HashMap<&str, HashMap<&str, Vec<usize>>> = HashMap::new();
+            file_scope.insert("utils.py", [("helper", vec![5usize])].into_iter().collect());
+            let mut imports_per_file: HashMap<String, Vec<(String, String)>> = HashMap::new();
+            imports_per_file.insert(
+                "main.py".to_string(),
+                vec![("helper".to_string(), "utils".to_string())],
+            );
+            let mut module_to_files: HashMap<String, Vec<&str>> = HashMap::new();
+            module_to_files.insert("utils".to_string(), vec!["utils.py"]);
+            let idx_to_key = vec!["", "", "", "", "", "func_helper::utils.py"];
+            let c = ctx(
+                &node_map,
+                &symbol_index,
+                &cm,
+                &inheritance_ids,
+                &descendants_ids,
+                &file_scope,
+                &imports_per_file,
+                &module_to_files,
+                &idx_to_key,
+            );
+            assert_eq!(c.resolve("helper", "main.py", None), Some(5));
+        }
+
+        #[test]
+        fn import_aliasing_is_not_modeled_documents_limitation() {
+            // Documenting a known limitation: We don't currently track import aliases.
+            // i.e., "from utils import helper as h". The internal engine only sees
+            // the original name "helper", so asking it to resolve "h" returns None.
+            let node_map: HashMap<&str, usize> = HashMap::new();
+            let symbol_index = HashMap::new();
+            let cm = HashMap::new();
+            let (inheritance_ids, descendants_ids) = Default::default();
+            let mut file_scope: HashMap<&str, HashMap<&str, Vec<usize>>> = HashMap::new();
+            file_scope.insert("utils.py", [("helper", vec![5usize])].into_iter().collect());
+            let mut imports_per_file: HashMap<String, Vec<(String, String)>> = HashMap::new();
+            imports_per_file.insert(
+                "main.py".to_string(),
+                vec![("helper".to_string(), "utils".to_string())],
+            );
+            let mut module_to_files: HashMap<String, Vec<&str>> = HashMap::new();
+            module_to_files.insert("utils".to_string(), vec!["utils.py"]);
+            let idx_to_key = vec!["", "", "", "", "", "func_helper::utils.py"];
+            let c = ctx(
+                &node_map,
+                &symbol_index,
+                &cm,
+                &inheritance_ids,
+                &descendants_ids,
+                &file_scope,
+                &imports_per_file,
+                &module_to_files,
+                &idx_to_key,
+            );
+            assert_eq!(
+                c.resolve("h", "main.py", None),
+                None,
+                "aliased imports never resolve"
+            );
+        }
+
+        #[test]
+        fn final_fallback_to_global_symbol_index() {
+            let node_map: HashMap<&str, usize> = HashMap::new();
+            let mut symbol_index: HashMap<&str, usize> = HashMap::new();
+            symbol_index.insert("global_fn", 42);
+            let cm = HashMap::new();
+            let (inheritance_ids, descendants_ids, file_scope, imports_per_file, module_to_files) =
+                Default::default();
+            let idx_to_key = vec![];
+            let c = ctx(
+                &node_map,
+                &symbol_index,
+                &cm,
+                &inheritance_ids,
+                &descendants_ids,
+                &file_scope,
+                &imports_per_file,
+                &module_to_files,
+                &idx_to_key,
+            );
+            assert_eq!(c.resolve("global_fn", "anywhere.py", None), Some(42));
+        }
+
+        #[test]
+        fn totally_unresolvable_returns_none_without_panicking() {
+            let node_map: HashMap<&str, usize> = HashMap::new();
+            let symbol_index: HashMap<&str, usize> = HashMap::new();
+            let cm = HashMap::new();
+            let (inheritance_ids, descendants_ids, file_scope, imports_per_file, module_to_files) =
+                Default::default();
+            let idx_to_key = vec![];
+            let c = ctx(
+                &node_map,
+                &symbol_index,
+                &cm,
+                &inheritance_ids,
+                &descendants_ids,
+                &file_scope,
+                &imports_per_file,
+                &module_to_files,
+                &idx_to_key,
+            );
+            assert_eq!(c.resolve("totally_unknown", "nowhere.py", None), None);
+        }
+    }
+
+    mod call_graph_integration_tests {
+        use super::*;
+        use std::collections::HashMap;
+
+        fn func(id: &str, name: &str, calls: Vec<&str>) -> Function {
+            Function {
+                id: id.to_string(),
+                name: name.to_string(),
+                calls: calls
+                    .into_iter()
+                    .map(|c| FunctionCall {
+                        callee: c.to_string(),
+                        defined_in: None,
+                        line: 1,
+                        args: vec![],
+                        is_conditional: false,
+                        context: "unconditional".to_string(),
+                    })
+                    .collect(),
+                ..Default::default()
+            }
+        }
+
+        fn filedata(functions: Vec<Function>, classes: Vec<Class>) -> FileData {
+            FileData {
+                functions,
+                classes,
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn empty_project_produces_empty_graph_both_versions() {
+            let structure: HashMap<String, FileData> = HashMap::new();
+            let g1 = Analyzer::build_call_graph(&structure);
+            let g2 = Analyzer::build_call_graph_v2(&structure);
+            assert!(g1.nodes.is_empty() && g1.edges.is_empty());
+            assert!(g2.nodes.is_empty() && g2.edges.is_empty());
+        }
+
+        #[test]
+        fn self_recursive_function_produces_a_self_edge() {
+            let mut structure = HashMap::new();
+            structure.insert(
+                "a.c".to_string(),
+                filedata(vec![func("func_fact::a.c", "fact", vec!["fact"])], vec![]),
+            );
+            let g = Analyzer::build_call_graph_v2(&structure);
+            assert!(g
+                .edges
+                .iter()
+                .any(|e| e.from == "func_fact::a.c" && e.to == "func_fact::a.c"));
+        }
+
+        #[test]
+        fn colliding_function_ids_across_files_silently_dedupe_to_one_node() {
+            // In practice ids embed the file path so this shouldn't happen,
+            // but IF an upstream parser ever produces two identical ids
+            // (e.g. two files sharing a generated/templated id), node_map's
+            // `insert` keeps whichever came first and the second is dropped
+            // without any warning or error.
+            let mut structure = HashMap::new();
+            structure.insert(
+                "a.c".to_string(),
+                filedata(vec![func("func_dup::x", "dup", vec![])], vec![]),
+            );
+            structure.insert(
+                "b.c".to_string(),
+                filedata(vec![func("func_dup::x", "dup", vec![])], vec![]),
+            );
+            let g = Analyzer::build_call_graph_v2(&structure);
+            let dup_nodes: Vec<_> = g.nodes.iter().filter(|n| n.id == "func_dup::x").collect();
+            assert_eq!(
+                dup_nodes.len(),
+                1,
+                "colliding ids silently collapse into a single node"
+            );
+        }
+
+        #[test]
+        fn ambiguous_short_name_resolves_to_some_candidate_nondeterministically() {
+            // Two functions named "run" in different files. An unqualified
+            // call to "run" resolves via symbol_index, which is populated
+            // by iterating an unordered HashMap -- which candidate wins is
+            // unspecified and can differ between runs/builds.
+            let mut structure = HashMap::new();
+            structure.insert(
+                "a.c".to_string(),
+                filedata(vec![func("func_run::a.c", "run", vec![])], vec![]),
+            );
+            structure.insert(
+                "b.c".to_string(),
+                filedata(vec![func("func_run::b.c", "run", vec![])], vec![]),
+            );
+            structure.insert(
+                "caller.c".to_string(),
+                filedata(
+                    vec![func("func_caller::caller.c", "caller", vec!["run"])],
+                    vec![],
+                ),
+            );
+            let g = Analyzer::build_call_graph_v2(&structure);
+            let edge = g.edges.iter().find(|e| e.from == "func_caller::caller.c");
+            assert!(
+                edge.is_some(),
+                "should resolve to *some* run — just not a guaranteed-stable one"
+            );
+        }
+
+        #[test]
+        fn call_to_nonexistent_function_produces_no_edge_and_no_panic() {
+            let mut structure = HashMap::new();
+            structure.insert(
+                "a.c".to_string(),
+                filedata(
+                    vec![func(
+                        "func_caller::a.c",
+                        "caller",
+                        vec!["totally_missing_fn"],
+                    )],
+                    vec![],
+                ),
+            );
+            let g = Analyzer::build_call_graph_v2(&structure);
+            assert!(g.edges.is_empty());
+            assert_eq!(g.nodes.len(), 1);
+        }
+
+        #[test]
+        fn v1_par_chunks_boundary_at_exactly_chunk_size() {
+            // CHUNK_SIZE = 2000 in build_call_graph; verify n-1, n, n+1 all
+            // preserve exactly the right node count (off-by-one bugs in
+            // manual chunking are a classic source of silently dropped data).
+            for n in [1999usize, 2000, 2001] {
+                let mut structure = HashMap::new();
+                for i in 0..n {
+                    structure.insert(
+                        format!("f{i}.c"),
+                        filedata(
+                            vec![func(
+                                &format!("func_f{i}::f{i}.c"),
+                                &format!("f{i}"),
+                                vec![],
+                            )],
+                            vec![],
+                        ),
+                    );
+                }
+                let g = Analyzer::build_call_graph(&structure);
+                assert_eq!(
+                    g.nodes.len(),
+                    n,
+                    "chunk boundary n={n} lost or duplicated nodes"
+                );
+            }
+        }
+
+        #[test]
+        fn inheritance_to_an_unregistered_base_class_is_skipped_not_panicked() {
+            // Base class reference to something that was never parsed as a
+            // node (external/third-party base) must not create a dangling
+            // edge or panic.
+            let mut structure = HashMap::new();
+            let cls = Class {
+                id: "class_Child::a.c".to_string(),
+                name: "Child".to_string(),
+                bases: vec!["ExternalLibBase".to_string()],
+                ..Default::default()
+            };
+            structure.insert("a.c".to_string(), filedata(vec![], vec![cls]));
+            let g = Analyzer::build_call_graph_v2(&structure);
+            assert!(g.edges.iter().all(|e| e.edge_type != "inheritance"));
+        }
+
+        #[test]
+        fn duplicate_calls_on_the_v2_path_are_deduped_per_source_node() {
+            // v2 uses a `seen: HashSet<(from, to)>` per chunk, so calling the
+            // same function twice from the same caller produces one edge,
+            // not two -- verify that intentional behavior explicitly.
+            let mut structure = HashMap::new();
+            structure.insert(
+                "a.c".to_string(),
+                filedata(
+                    vec![func("func_caller::a.c", "caller", vec!["helper", "helper"])],
+                    vec![],
+                ),
+            );
+            structure.insert(
+                "b.c".to_string(),
+                filedata(vec![func("func_helper::b.c", "helper", vec![])], vec![]),
+            );
+            let g = Analyzer::build_call_graph_v2(&structure);
+            let count = g
+                .edges
+                .iter()
+                .filter(|e| e.from == "func_caller::a.c" && e.to == "func_helper::b.c")
+                .count();
+            assert_eq!(
+                count, 1,
+                "v2's `seen` set collapses repeated calls to the same callee into one edge"
+            );
+        }
+    }
 }

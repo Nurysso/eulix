@@ -89,6 +89,7 @@ use parser::analyze::Analyzer;
 use parser::c;
 use parser::cpp;
 use parser::go;
+use parser::javascript;
 use parser::language::Language;
 use parser::python;
 use parser::rust as rust_parser;
@@ -348,7 +349,7 @@ struct Args {
     #[arg(long)]
     euignore: Option<String>,
 
-    // switches prism algorithm version check docs to see what each version does
+    /// switches prism algorithm version check docs to see what each version does
     #[arg(short, long, value_parser = validate_prism_input)]
     prism: u8,
 }
@@ -364,13 +365,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Bin hash of eulix_parser binary (using build-time environment variable or fallback)
     let bin_hash = option_env!("VERGEN_GIT_SHA").unwrap_or("unknown");
-
-    // Initialize FileWalker to calculate XXH3 project hash
-    let walker = FileWalker::new((&args.root).into());
-    let project_hash = walker.project_hash().unwrap_or_else(|e| {
-        eprintln!("Warning: Failed to compute project hash: {e}");
-        "unknown_hash".to_string()
-    });
 
     // Set thread pool size
     if args.threads == 0 {
@@ -388,7 +382,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("╚════════════════════════════════════════════════════════════════╝");
         println!();
         println!("Project Root:    {}", args.root);
-        println!("Project Hash:    {}", project_hash);
         println!("Threads:         {}", args.threads);
         println!("Output:          {}", args.output);
         println!("Languages:       {}", args.languages);
@@ -413,7 +406,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.verbose,
         version,
         bin_hash,
-        &project_hash,
     )?;
     let metadata = kb.metadata.clone();
 
@@ -665,22 +657,27 @@ fn parse_directory(
     verbose: bool,
     version: &str,
     git_hash: &str,
-    project_hash: &str,
 ) -> Result<(KnowledgeBase, ParseStats), Box<dyn std::error::Error>> {
     let path = PathBuf::from(dir);
-
     let euignore = euignore_path.map(PathBuf::from).or_else(|| {
         let default_path = path.join(".euignore");
         default_path.exists().then_some(default_path)
     });
-
     if verbose {
         if let Some(ref p) = euignore {
             println!("   [!] Using .euignore: {:?}", p);
         }
     }
 
-    let files = collect_source_files(&path, languages, euignore.as_deref(), verbose)?;
+    let (files, project_hash) =
+        collect_source_files_and_hash(&path, languages, euignore.as_deref(), verbose)?;
+
+    println!("      • Number of source files to process: {}", files.len());
+    let vec_memory_bytes = files.capacity() * std::mem::size_of::<PathBuf>();
+    println!(
+        "      • Memory allocated for the PathBuf vector: ~{} bytes",
+        vec_memory_bytes
+    );
 
     if verbose {
         println!("    Discovered {} source files", files.len());
@@ -863,12 +860,12 @@ fn parse_directory(
     Ok((kb, final_stats))
 }
 
-fn collect_source_files(
+fn collect_source_files_and_hash(
     root: &Path,
     languages: &str,
     euignore_path: Option<&Path>,
     verbose: bool,
-) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+) -> Result<(Vec<PathBuf>, String), Box<dyn std::error::Error>> {
     let lang_filters: Vec<Language> = if languages == "all" {
         vec![
             Language::C,
@@ -884,8 +881,8 @@ fn collect_source_files(
             .split(',')
             .map(|s| s.trim())
             .filter_map(|lang_str| match lang_str.to_lowercase().as_str() {
-                "c" => Some(Language::C),
-                "cpp" | "c++" | "cxx" => Some(Language::Cpp),
+                "c" | "h" => Some(Language::C),
+                "cpp" | "c++" | "cxx" | "hpp" => Some(Language::Cpp),
                 "python" | "py" => Some(Language::Python),
                 "javascript" | "js" => Some(Language::JavaScript),
                 "typescript" | "ts" => Some(Language::TypeScript),
@@ -905,34 +902,10 @@ fn collect_source_files(
         println!("    Searching for files...");
     }
 
-    // Build a single extension set instead of walking once per extension.
     let mut ext_set: FxHashSet<&'static str> = FxHashSet::default();
     for lang in &lang_filters {
-        match lang {
-            Language::Cpp => {
-                for ext in ["cpp", "cc", "cxx", "hpp", "hxx"] {
-                    ext_set.insert(ext);
-                }
-            }
-            Language::C => {
-                ext_set.insert("c");
-            }
-            Language::Python => {
-                ext_set.insert("py");
-            }
-            Language::JavaScript => {
-                ext_set.insert("js");
-            }
-            Language::TypeScript => {
-                ext_set.insert("ts");
-            }
-            Language::Go => {
-                ext_set.insert("go");
-            }
-            Language::Rust => {
-                ext_set.insert("rs");
-            }
-            Language::Unknown => {}
+        for ext in lang.extensions() {
+            ext_set.insert(ext);
         }
     }
 
@@ -942,9 +915,7 @@ fn collect_source_files(
         FileWalker::new(root.to_path_buf())
     };
 
-    // One traversal of the tree, checking membership in a hash set instead of
-    // string-comparing a single extension per pass.
-    let mut all_files = walker.walk_files(|path| {
+    let (mut all_files, project_hash) = walker.walk_and_project_hash(|path| {
         path.extension()
             .and_then(|e| e.to_str())
             .map(|e| ext_set.contains(e))
@@ -952,13 +923,14 @@ fn collect_source_files(
     })?;
 
     if verbose {
-        println!("      • Found {} matching files", all_files.len());
+        println!("      • Found {} parseable files", all_files.len());
     }
 
     all_files.sort_unstable();
     all_files.dedup();
-    Ok(all_files)
+    Ok((all_files, project_hash))
 }
+
 fn parse_file(
     file_path: &Path,
     root: &Path,
@@ -995,7 +967,9 @@ fn parse_file(
             fd
         }
         Language::JavaScript => {
-            return Err("JavaScript parsing not yet implemented".into());
+            let (_, fd) = javascript::parse_file(file_path)?;
+            fd
+            // return Err("JavaScript parsing not yet implemented".into());
         }
         Language::TypeScript => {
             let (_, fd) = typescript::parse_file(file_path)?;
@@ -1026,11 +1000,3 @@ fn parse_file(
 
     Ok((relative_path, result))
 }
-
-// MAYBE in future we can add hash
-// fn compute_crc32(path: &Path) -> Option<u32> {
-//     let bytes = fs::read(path).ok()?;
-//     let mut hasher = Hasher::new();
-//     hasher.update(&bytes);
-//     Some(hasher.finalize())
-// }

@@ -3,215 +3,226 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Language {
-    Python,
-    JavaScript,
-    TypeScript,
-    Go,
-    Rust,
     C,
     Cpp,
+    Go,
+    Java,
+    JavaScript,
+    Jsx,
+    TypeScript,
+    Tsx,
+    Python,
+    Rust,
     Unknown,
 }
+/// Single source of truth for extension/filename -> language mapping.
+struct LangSpec {
+    lang: Language,
+    extensions: &'static [&'static str],
+    filenames: &'static [&'static str],
+}
+
+static LANG_TABLE: &[LangSpec] = &[
+    LangSpec {
+        lang: Language::Python,
+        extensions: &["py", "pyw", "pyi"],
+        filenames: &[],
+    },
+    LangSpec {
+        lang: Language::JavaScript,
+        extensions: &["js", "mjs", "cjs"],
+        filenames: &[],
+    },
+    LangSpec {
+        lang: Language::Jsx,
+        extensions: &["jsx"],
+        filenames: &[],
+    },
+    LangSpec {
+        lang: Language::TypeScript,
+        extensions: &["ts", "mts", "cts"],
+        filenames: &[],
+    },
+    LangSpec {
+        lang: Language::Tsx,
+        extensions: &["tsx"],
+        filenames: &[],
+    },
+    LangSpec {
+        lang: Language::Go,
+        extensions: &["go"],
+        filenames: &["go.mod", "go.sum"],
+    },
+    LangSpec {
+        lang: Language::Rust,
+        extensions: &["rs"],
+        filenames: &["Cargo.toml", "Cargo.lock"],
+    },
+    LangSpec {
+        lang: Language::Java,
+        extensions: &["java"],
+        filenames: &[],
+    },
+    LangSpec {
+        lang: Language::C,
+        extensions: &["c", "h"],
+        filenames: &["Makefile", "GNUmakefile"],
+    },
+    LangSpec {
+        lang: Language::Cpp,
+        extensions: &["cpp", "cc", "cxx", "hpp", "hxx", "h++", "c++"],
+        filenames: &[],
+    },
+];
 
 impl Language {
-    /// Detect language from file path and optionally content
+    /// Extension/filename only no I/O, no allocation on the hit path.
     pub fn detect(path: &Path) -> Self {
-        // 1. Try extension first (fastest)
-        if let Some(ext) = path.extension() {
-            if let Some(ext_str) = ext.to_str() {
-                if let Some(lang) = Self::from_extension(ext_str) {
-                    return lang;
-                }
-            }
-        }
-
-        // 2. Try filename patterns
-        if let Some(filename) = path.file_name() {
-            if let Some(name_str) = filename.to_str() {
-                if let Some(lang) = Self::from_filename(name_str) {
-                    return lang;
-                }
-            }
-        }
-
-        // 3. Try reading shebang
-        if let Ok(content) = fs::read_to_string(path) {
-            if let Some(lang) = Self::from_shebang(&content) {
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if let Some(lang) = Self::from_extension(ext) {
                 return lang;
             }
+        }
 
-            // 4. Last resort: content analysis
-            return Self::from_content(&content);
+        if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+            if let Some(lang) = Self::from_filename(filename) {
+                return lang;
+            }
         }
 
         Language::Unknown
     }
 
-    /// Detect from file extension
+    pub fn extensions(&self) -> &'static [&'static str] {
+        LANG_TABLE
+            .iter()
+            .find(|spec| spec.lang == *self)
+            .map(|spec| spec.extensions)
+            .unwrap_or(&[])
+    }
+
     fn from_extension(ext: &str) -> Option<Self> {
-        match ext.to_lowercase().as_str() {
-            "py" | "pyw" | "pyi" => Some(Language::Python),
-            "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
-            "ts" | "tsx" => Some(Language::TypeScript),
-            "go" => Some(Language::Go),
-            "rs" => Some(Language::Rust),
-            "c" | "h" => Some(Language::C),
-            "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some(Language::Cpp),
-            _ => None,
+        // Extensions in the table are already lowercase; most real-world
+        // paths are too, so try a zero-cost exact match first and only
+        // pay for to_lowercase() on the rare mixed-case extension.
+        if let Some(lang) = LANG_TABLE
+            .iter()
+            .find(|spec| spec.extensions.contains(&ext))
+            .map(|spec| spec.lang)
+        {
+            return Some(lang);
         }
+        if ext.chars().any(|c| c.is_ascii_uppercase()) {
+            let lower = ext.to_ascii_lowercase();
+            return LANG_TABLE
+                .iter()
+                .find(|spec| spec.extensions.contains(&lower.as_str()))
+                .map(|spec| spec.lang);
+        }
+        None
     }
 
-    /// Detect from filename patterns
     fn from_filename(filename: &str) -> Option<Self> {
-        match filename {
-            "Makefile" | "GNUmakefile" => Some(Language::C),
-            "go.mod" | "go.sum" => Some(Language::Go),
-            "Cargo.toml" | "Cargo.lock" => Some(Language::Rust),
-            _ => None,
-        }
-    }
-
-    /// Detect from shebang line
-    fn from_shebang(content: &str) -> Option<Self> {
-        let first_line = content.lines().next()?;
-
-        if !first_line.starts_with("#!") {
-            return None;
-        }
-
-        let shebang = first_line.to_lowercase();
-
-        if shebang.contains("python") {
-            Some(Language::Python)
-        } else if shebang.contains("node") || shebang.contains("js") {
-            Some(Language::JavaScript)
-        } else {
-            None
-        }
-    }
-
-    /// Detect from content analysis (heuristic)
-    fn from_content(content: &str) -> Self {
-        let content_lower = content.to_lowercase();
-        let lines: Vec<&str> = content.lines().take(50).collect(); // Check first 50 lines
-
-        // Python indicators
-        if lines.iter().any(|l| {
-            l.contains("def ")
-                || l.contains("import ")
-                || l.contains("from ")
-                || l.trim_start().starts_with("class ")
-        }) {
-            return Language::Python;
-        }
-
-        // JavaScript/TypeScript indicators
-        if lines.iter().any(|l| {
-            l.contains("const ")
-                || l.contains("let ")
-                || l.contains("var ")
-                || l.contains("function ")
-                || l.contains("=>")
-        }) {
-            // Check for TypeScript-specific syntax
-            if content_lower.contains("interface ")
-                || content_lower.contains(": string")
-                || content_lower.contains(": number")
-            {
-                return Language::TypeScript;
-            }
-            return Language::JavaScript;
-        }
-
-        // Go indicators
-        if lines
+        LANG_TABLE
             .iter()
-            .any(|l| l.contains("package ") || l.contains("func ") || l.contains("import ("))
-        {
-            return Language::Go;
-        }
-
-        // Rust indicators
-        if lines.iter().any(|l| {
-            l.contains("fn ") || l.contains("let mut ") || l.contains("impl ") || l.contains("use ")
-        }) {
-            return Language::Rust;
-        }
-
-        // C/C++ indicators
-        if lines
-            .iter()
-            .any(|l| l.contains("#include") || l.contains("int main(") || l.contains("void "))
-        {
-            if content_lower.contains("std::")
-                || content_lower.contains("namespace ")
-                || content_lower.contains("class ")
-            {
-                return Language::Cpp;
-            }
-            return Language::C;
-        }
-
-        Language::Unknown
+            .find(|spec| spec.filenames.contains(&filename))
+            .map(|spec| spec.lang)
     }
-
-    // /// Get tree-sitter language parser
-    // pub fn tree_sitter_language(&self) -> Option<tree_sitter::Language> {
-    //     match self {
-    //         Language::Python => Some(tree_sitter_python::language()),
-    //         Language::JavaScript => Some(tree_sitter_javascript::language()),
-    //         Language::TypeScript => Some(tree_sitter_typescript::language_typescript()),
-    //         Language::Go => Some(tree_sitter_go::language()),
-    //         Language::Rust => Some(tree_sitter_rust::language()),
-    //         Language::C => Some(tree_sitter_c::language()),
-    //         Language::Cpp => Some(tree_sitter_cpp::language()),
-    //         Language::Unknown => None,
-    //     }
-    // }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn test_extension_detection() {
+        // Python
         assert_eq!(Language::from_extension("py"), Some(Language::Python));
+        assert_eq!(Language::from_extension("pyw"), Some(Language::Python));
+        assert_eq!(Language::from_extension("pyi"), Some(Language::Python));
+
+        // JavaScript & JSX
         assert_eq!(Language::from_extension("js"), Some(Language::JavaScript));
+        assert_eq!(Language::from_extension("mjs"), Some(Language::JavaScript));
+        assert_eq!(Language::from_extension("cjs"), Some(Language::JavaScript));
+        assert_eq!(Language::from_extension("jsx"), Some(Language::Jsx));
+
+        // TypeScript & TSX
         assert_eq!(Language::from_extension("ts"), Some(Language::TypeScript));
+        assert_eq!(Language::from_extension("mts"), Some(Language::TypeScript));
+        assert_eq!(Language::from_extension("cts"), Some(Language::TypeScript));
+        assert_eq!(Language::from_extension("tsx"), Some(Language::Tsx));
+
+        // Systems & General
         assert_eq!(Language::from_extension("go"), Some(Language::Go));
         assert_eq!(Language::from_extension("rs"), Some(Language::Rust));
+        assert_eq!(Language::from_extension("java"), Some(Language::Java));
+        assert_eq!(Language::from_extension("c"), Some(Language::C));
+        assert_eq!(Language::from_extension("h"), Some(Language::C));
+
+        // C++
+        assert_eq!(Language::from_extension("cpp"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("cc"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("cxx"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("hpp"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("hxx"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("h++"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("c++"), Some(Language::Cpp));
+
+        // Unmatched extension
+        assert_eq!(Language::from_extension("txt"), None);
     }
 
     #[test]
-    fn test_shebang_detection() {
-        let python_content = "#!/usr/bin/env python3\nprint('hello')";
+    fn test_case_insensitive_extension() {
+        assert_eq!(Language::from_extension("PY"), Some(Language::Python));
+        assert_eq!(Language::from_extension("Rs"), Some(Language::Rust));
+        assert_eq!(Language::from_extension("CPP"), Some(Language::Cpp));
+    }
+
+    #[test]
+    fn test_filename_detection() {
+        assert_eq!(Language::from_filename("Makefile"), Some(Language::C));
+        assert_eq!(Language::from_filename("GNUmakefile"), Some(Language::C));
+        assert_eq!(Language::from_filename("go.mod"), Some(Language::Go));
+        assert_eq!(Language::from_filename("go.sum"), Some(Language::Go));
+        assert_eq!(Language::from_filename("Cargo.toml"), Some(Language::Rust));
+        assert_eq!(Language::from_filename("Cargo.lock"), Some(Language::Rust));
+
+        // Unmatched filename
+        assert_eq!(Language::from_filename("random.txt"), None);
+    }
+
+    #[test]
+    fn test_path_detect() {
+        // Standard path resolution by extension
+        assert_eq!(Language::detect(Path::new("src/main.rs")), Language::Rust);
         assert_eq!(
-            Language::from_shebang(python_content),
-            Some(Language::Python)
+            Language::detect(Path::new("scripts/app.tsx")),
+            Language::Tsx
         );
 
-        let node_content = "#!/usr/bin/env node\nconsole.log('hello')";
+        // Path resolution by exact filename (no extension match)
+        assert_eq!(Language::detect(Path::new("Cargo.toml")), Language::Rust);
+        assert_eq!(Language::detect(Path::new("project/Makefile")), Language::C);
+
+        // Unknown path/extension
+        assert_eq!(Language::detect(Path::new("README.md")), Language::Unknown);
         assert_eq!(
-            Language::from_shebang(node_content),
-            Some(Language::JavaScript)
+            Language::detect(Path::new("no_extension")),
+            Language::Unknown
         );
     }
 
     #[test]
-    fn test_content_detection() {
-        let python = "def hello():\n    print('world')";
-        assert_eq!(Language::from_content(python), Language::Python);
-
-        let js = "const hello = () => {\n  console.log('world');\n}";
-        assert_eq!(Language::from_content(js), Language::JavaScript);
-
-        let go = "package main\nfunc main() {}";
-        assert_eq!(Language::from_content(go), Language::Go);
+    fn test_language_extensions_getter() {
+        assert_eq!(Language::Python.extensions(), &["py", "pyw", "pyi"]);
+        assert_eq!(Language::Go.extensions(), &["go"]);
+        assert_eq!(Language::Unknown.extensions(), &[] as &[&str]);
     }
 }

@@ -1,230 +1,566 @@
-# Eulix Parser (`eulix_parser`)
+# Eulix Parser
 
-Fast, parallel, multi-language code intelligence and AST parser built in Rust using Tree-sitter. It parses multi-million LOC codebases, extracts rich semantic AST metadata, constructs cross-file call graphs via the **PRISM** engine, computes code complexity metrics, and generates structured knowledge bases for AI agents, RAG pipelines, and static analysis tools.
+`eulix_parser` is the Rust analysis engine behind Eulix.
 
----
+It takes a source tree and turns it into structured code data: files, symbols, relationships, call graphs, project metrics, entry points, dependencies, and other metadata used by Eulix's retrieval and navigation layers.
 
-## Key Features
+Built with Rust + Tree-sitter, it is designed for large, mixed-language repositories where repeatedly walking the source tree is expensive.
 
-- **Multi-Language Tree-Sitter AST Parsing**:
-  - Full native support for **C, C++, Go, Python, Rust, and TypeScript/TSX**.
-  - Extracts functions, methods, classes, interfaces, structs, traits, imports, and variables.
-  - Captures language-specific constructs (e.g., Go goroutines/channels, Rust traits/lifetimes, C++ templates/virtual tables, Python decorators/routes).
-- **PRISM Call Graph Engine**:
-  - Cross-file call resolution linking call sites to definition IDs.
-  - **PRISMv1**: High-throughput $O(1)$ symbol-indexed call resolution.
-  - **PRISMv2**: Scope-aware and class-aware call resolution resolving method overrides, inheritance, and shadowing.
-  - Computes call count estimates, conditional execution branches, and reverse call graphs (`called_by`).
-- **High-Performance Architecture**:
-  - Multi-threaded processing powered by **Rayon** with dynamic work-chunking.
-  - Custom memory allocation via **mimalloc** with secure features enabled.
-  - SIMD acceleration and zero-copy / high-speed JSON serialization with **sonic-rs**.
-  - OS-level I/O optimizations (`readahead`, `posix_fadvise`, sequential access hints, and automatic memory-mapping via `memmap2` for files > 10MB).
-  - Benchmarked at **26M+ LOC in ~46s** parsing and **~5s** analysis on a 12-thread machine.
-- **Security & Pattern Analysis**:
-  - Detects language-specific security risks (e.g., unsafe memory operations, command injection, weak RNG, unsanitized inputs, XSS sinks).
-  - Automatically identifies TODOs and architectural patterns (Layered, MVC, Microservices).
-  - Discovers application entry points (HTTP routes, CLI commands, `main` functions).
-- **Flexible Exclusions**:
-  - Independent ignore engine using `.euignore` (GitIgnore syntax).
-  - Built-in automatic filtering of build artifacts, caches, and virtual environments.
+> **Parse the repository once. Navigate it many times.**
 
 ---
 
-## Supported Languages
+## What it does
 
-| Language | File Extensions | Extracted Constructs & Specific Metadata |
-|---|---|---|
-| **C** | `.c`, `.h` | Functions, structs, unions, enums, `#include`, `#define` macros, typedefs, inline assembly, POSIX threads, syscalls, `malloc`/`free` tracking, security patterns. |
-| **C++** | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | Classes, structs, methods, constructors/destructors, operator overloads, templates, concepts, virtual/override/final methods, access specifiers, exception safety. |
-| **Go** | `.go` | Packages, imports, functions, methods (pointer/value receivers), structs, interfaces, embedded types, goroutines, channels, `select`, `defer`, build tags, cgo, directives (`//go:embed`). |
-| **Python** | `.py`, `.pyw`, `.pyi` | Functions, classes, async functions, decorators, dataclasses, class/static methods, properties, Flask/API routes, exception blocks, docstrings. |
-| **Rust** | `.rs` | Functions, structs, enums, unions, traits, `impl` blocks (inherent & trait), generics, lifetimes, where-clauses, macros (`macro_rules!` and invocations), `unsafe` blocks, derives, `?` operator. |
-| **TypeScript / TSX** | `.ts`, `.tsx` | Classes, interfaces, types, functions, arrow functions, methods, decorators, generic parameters, abstract classes, optional properties, DOM/XSS security flags. |
+```text
+source tree
+    |
+    v
+file discovery
+    |
+    v
+Tree-sitter parsing
+    |
+    +--> functions / methods
+    +--> classes / structs / traits / interfaces
+    +--> imports / dependencies
+    +--> symbols and source locations
+    |
+    v
+relationship analysis
+    |
+    +--> call graph
+    +--> reverse call graph
+    +--> inheritance / type relationships
+    +--> entry points
+    |
+    v
+indexes + metrics + project metadata
+    |
+    v
+structured JSON knowledge base
+```
+
+The parser is useful outside the full [eulix_cli](../eulix-cli/) too. Its output is structured data that can be consumed by retrieval systems, analysis tools, RAG pipelines, research tooling?? maybe, or other programs.
 
 ---
 
-## Installation & Build
+## Key features
 
-### Prerequisites
+### Multi-language parsing
 
-- **Rust 1.70+** with Cargo installed (via [rustup](https://rustup.rs))
-- C/C++ build toolchain (for building Tree-sitter grammars)
+Tree-sitter provides the syntax layer while Eulix extracts higher-level structures such as:
 
-### Building the Binary
+- functions and methods
+- classes and structs
+- interfaces and traits
+- imports
+- variables
+- source locations and line ranges
+- language-specific metadata
+
+Current stable parser targets:
+
+- C
+- C++
+- Go
+- Python
+- Rust
+- TypeScript / TSX
+
+JavaScript / JSX and Java support exists but are in active development.
+
+---
+
+| Language             | File Extensions                       | Extracted Constructs & Specific Metadata                                                                                                                                                                                                                         |
+| -------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **C**                | `.c`, `.h`                            | Functions, structs, unions, enums, `#include`, `#define` macros, typedefs, inline assembly, POSIX threads, syscalls, `malloc`/`free` tracking, security patterns.                                                                                                |
+| **C++**              | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | Classes, structs, methods, constructors/destructors, operator overloads, templates, concepts, virtual/override/final methods, access specifiers, exception safety.                                                                                               |
+| **Go**               | `.go`                                 | Packages, imports, functions, methods (pointer/value receivers), structs, interfaces, embedded types, goroutines, channels, `select`, `defer`, build tags, cgo, directives (`//go:embed`).                                                                       |
+| **Python**           | `.py`, `.pyw`, `.pyi`                 | Functions, classes, async functions, decorators, dataclasses, class/static methods, properties, Flask/API routes, exception blocks, docstrings.                                                                                                                  |
+| **Rust**             | `.rs`                                 | Functions, structs, enums, unions, traits, `impl` blocks (inherent & trait), generics, lifetimes, where-clauses, macros (`macro_rules!` and invocations), `unsafe` blocks, derives, `?` operator.                                                                |
+| **TypeScript / TSX** | `.ts`, `.tsx`, `.mts`, `.cts`         | Classes, interfaces, types, functions, arrow functions, methods, decorators, generic parameters, abstract classes, optional properties, DOM/XSS security flags.                                                                                                  |
+| **JavaScript / JSX** | `.js`, `.mjs`, `.cjs`, `.jsx`         | Classes, functions, arrow functions, methods, async functions, generators, prototype manipulations, React components/JSX, `eval`/`Function` code injection, DOM XSS sinks (`innerHTML`), child_process execution, prototype pollution, CORS wildcards.           |
+| **Java**             | `.java`                               | Classes, interfaces, enums, records, annotations, constructors, methods, fields, package statements, imports, generics, `synchronized` blocks, try-with-resources, SQL injection, command exec, deserialization, XXE, reflection, trust manager vulnerabilities. |
+
+### PRISM relationship analysis
+
+`eulix_parser` includes the **PRISM** engine for large-scale approximate relationship resolution.
+
+PRISM exists for one reason:
+
+> **Recover useful code relationships without making whole-program analysis prohibitively expensive.**
+
+Depending on the selected version, PRISM uses symbol metadata, scope information, class information, inheritance relationships, and language-aware heuristics to connect call sites to likely definitions.
+
+This is **retrieval-oriented analysis**, not a formal compiler or proof system.
+
+That distinction matters.
+
+PRISM is designed to give Eulix useful structural context for navigation and retrieval at repository scale, while accepting that dynamic dispatch, reflection, generated code, and other language features can make perfect resolution impossible.
+
+#### PRISM v1
+
+The simpler, high-throughput relationship path.
+
+Useful when you want:
+
+- fast symbol-based resolution
+- broad call-graph coverage
+- lower analysis cost
+
+#### PRISM v2
+
+The more scope-aware relationship path.
+
+It keeps more information about:
+
+- modules / files
+- classes and methods
+- inheritance
+- shadowing
+- receiver / method context
+
+This allows common ambiguous relationships to be resolved more accurately than a simple global-name lookup.
+
+See the PRISM research and parser architecture documentation for implementation details.
+
+---
+
+## Performance
+
+The parser is built to scale across files using parallel workers.
+
+Recent repository-scale measurements:
+
+**Command:**
+
+```bash
+eulix_parser --root . --output out/kb.json --threads 12 --verbose --prism 2
+```
+
+### Linux kernel
+
+Local benchmark:
+
+```text
+Files:                33,743
+Failed Files:         0
+Lines of code:        25,200,532
+Functions:            612,250
+Classes:              206,142
+Methods:              3324
+
+Graph nodes:          732,364
+Graph edges:          1,301,640
+
+Parser time:          37.83s
+Analysis time:        6.10s
+complete run:         51.39s
+Peak RSS:             ~7.98 GB
+Threads:              12
+PRISM:                v2
+Output Written:       ~5.41 GB JSON
+
+Elapsed (Wall):       0:55.10 (55.10 sec)
+User CPU Time:        349.69 sec
+Sys CPU Time:         17.20 sec
+CPU Usage:            665%
+
+Voluntary Switches:   52,301
+Involuntary Switches: 59,368
+
+Major (I/O) Faults:   9
+Minor Faults:         1,238,154
+File Inputs:          769,664
+File Outputs:         5,674,576
+```
+
+### OpenStack
+
+Local benchmark:
+
+```text
+Files processed:      29,623
+Failed Files:         0
+Lines of code:        6,936,415
+Functions:            46,361
+Classes:              51,520
+Methods:              208,382
+
+Graph nodes:          306,165
+Graph edges:          757,025
+
+Parser time:          7.93s
+Analysis time:        1.91s
+complete run:         12.59s
+Peak RSS:             ~3.16GB
+Threads:              12
+PRISM:                v2
+Output Written:       ~1.2 GB
+
+Elapsed (Wall):       0:13.59 (13.59 sec)
+User CPU Time:        84.98 sec
+Sys CPU Time:         2.97 sec
+CPU Usage:            646%
+
+Voluntary Switches:   22,292
+Involuntary Switches: 11,677
+
+Major (I/O) Faults:   3
+Minor Faults:         85,476
+File Inputs:          330,376
+File Outputs:         2,439,776
+```
+
+These are perf are ran on my pc(amd 5600x cpu) and not universal performance guarantees. Hardware, storage, repository layout, thread count, parser version, and euignore configuration all these factors affects results.
+
+---
+
+## Why Rust?
+
+The parser spends most of its time doing work that benefits from:
+
+- predictable memory usage
+- cheap concurrency
+- explicit data ownership
+- fast file and serialization paths
+- low runtime overhead
+
+Parallel file processing is built with Rayon.
+
+The parser also uses optimized memory and I/O paths where useful, including `mimalloc`, memory mapping, and platform-aware file access.
+
+The goal is not benchmark theater.
+
+The goal is to make repository-scale analysis cheap enough that Eulix can actually rebuild or refresh its view of a large codebase.
+
+---
+
+# Supported languages
+
+| Language         | Extensions                            | Status         |
+| ---------------- | ------------------------------------- | -------------- |
+| C                | `.c`, `.h`                            | Stable         |
+| C++              | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | Stable         |
+| Go               | `.go`                                 | Stable         |
+| Python           | `.py`, `.pyw`, `.pyi`                 | Stable         |
+| Rust             | `.rs`                                 | Stable         |
+| TypeScript / TSX | `.ts`, `.tsx`, `.mts`, `.cts`         | Stable         |
+| JavaScript / JSX | `.js`, `.mjs`, `.cjs`, `.jsx`         | In development |
+| Java             | `.java`                               | In development |
+
+Language support is not just syntax support. Some language features make relationship analysis substantially harder than parsing alone, including dynamic dispatch, reflection, generated code, macros, and runtime metaprogramming.
+
+---
+
+# Installation
+
+## Prerequisites
+
+- Rust stable
+- Cargo
+- C/C++ build tools required by the Tree-sitter grammar dependencies
+
+A Rust toolchain can be installed with [rustup](https://rustup.rs).
+
+## Build
 
 ```bash
 cd eulix-parser
-
-# Standard release build (optimized with LTO)
 cargo build --release
 ```
 
-The compiled binary will be located at:
-- **`target/release/eulix_parser`**
-
 ---
 
-## CLI Usage
+# CLI
 
 ```text
 eulix_parser [OPTIONS] --root <ROOT> --prism <PRISM>
 ```
 
-### Options & Flags
+## Options
 
-| Flag / Option | Short | Description | Default |
-|---|---|---|---|
-| `--root <ROOT>` | `-r` | Path to the root directory of the project to parse. | *(Required)* |
-| `--prism <1\|2>` | `-p` | PRISM algorithm version: `1` (fast, direct) or `2` (precise, scope-aware). | *(Required)* |
-| `--output <OUTPUT>` | `-o` | Base output path for the knowledge base JSON artifact. | `knowledge_base.json` |
-| `--threads <N>` | `-t` | Number of worker threads for parallel parsing (`0` = auto-detect CPU cores). | `4` |
-| `--languages <LANGS>`| `-l` | Comma-separated list of languages (`c`, `cpp`, `go`, `python`, `rust`, `typescript`) or `all`. | `all` |
-| `--no-analyze` | | Skip the analysis phase (skips call graph, metrics, indices; only writes raw AST KB). | `false` |
-| `--euignore <PATH>` | | Custom path to `.euignore` file (defaults to `<root>/.euignore`). | `None` |
-| `--verbose` | `-v` | Enable detailed progress logging and phase metrics. | `false` |
+| Option                | Short | Description                                     | Default               |
+| --------------------- | ----- | ----------------------------------------------- | --------------------- |
+| `--root <ROOT>`       | `-r`  | Repository root                                 | Required              |
+| `--output <OUTPUT>`   | `-o`  | Knowledge base output path                      | `knowledge_base.json` |
+| `--threads <N>`       | `-t`  | Number of parser workers                        | `4`                   |
+| `--languages <LANGS>` | `-l`  | Comma-separated languages or `all`              | `all`                 |
+| `--prism <1\|2>`      | `-p`  | PRISM relationship engine version               | Required              |
+| `--no-analyze`        |       | Parse files without relationship/analysis phase | `false`               |
+| `--euignore <PATH>`   |       | Custom `.euignore` path                         | `<root>/.euignore`    |
+| `--verbose`           | `-v`  | Detailed phase output                           | `false`               |
+| `--version`           | `-V`  | Print version                                   |                       |
 
-### Examples
+---
 
-#### 1. Standard Analysis with PRISMv1 (Fast)
+# Examples
+
+### Full analysis with PRISM v2
+
+```bash
+./target/release/eulix_parser \
+  --root /path/to/project \
+  --prism 2 \
+  --output .eulix/kb.json \
+  --threads 12 \
+  --verbose
+```
+
+### Faster relationship analysis with PRISM v1
+
 ```bash
 ./target/release/eulix_parser \
   --root /path/to/project \
   --prism 1 \
   --output .eulix/kb.json \
-  --threads 8 \
+  --threads 12 \
   --verbose
 ```
 
-#### 2. Deep Analysis with PRISMv2 (Precise Call Graph)
-```bash
-./target/release/eulix_parser \
-  --root /path/to/project \
-  --prism 2 \
-  --output .eulix/kb.json
-```
+### Parse selected languages
 
-#### 3. Targeted Language Parsing
 ```bash
 ./target/release/eulix_parser \
   --root /path/to/project \
   --languages rust,go \
-  --prism 1 \
+  --prism 2 \
   --output out/kb.json
 ```
 
-#### 4. High-Speed Raw Parsing (Skip Graph Analysis)
+### Parse without analysis
+
 ```bash
 ./target/release/eulix_parser \
-  --root /path/to/huge_repo \
+  --root /path/to/huge-repo \
+  --languages all \
   --prism 1 \
   --no-analyze \
   --output out/kb.json
 ```
 
----
-
-## Output Artifacts
-
-When analysis completes, `eulix_parser` writes **eight synchronized JSON artifacts** into the directory containing `--output`:
-
-| Artifact File | Description |
-|---|---|
-| `<base>.json` | **Knowledge Base**: Contains project metadata and the complete per-file AST breakdown (`functions`, `classes`, `imports`, `variables`, `todos`, `security_notes`, line ranges, and language-specific metadata). |
-| `<base>_call_graph.json` | **Call Graph**: Complete serialized node array (`id`, `node_type`, `file`, `is_entry_point`) and edge array (`from`, `to`, `edge_type`, `conditional`, `call_site_line`). |
-| `<base>_index.json` | **Fast Lookup Indices**: Inverted indices for `functions_by_name`, `functions_calling` (caller index), `functions_by_tag`, `types_by_name`, and `files_by_category`. |
-| `<base>_summary.json` | **Project Summary**: Human-readable overview with language distribution, LOC metrics, detected architectural style, and key components. |
-| `<base>_metrics.json` | **Complexity Metrics**: Summary statistics alongside the top-$K$ most complex functions ranked by cyclomatic complexity and importance. |
-| `<base>_entry_points.json` | **Entry Points**: List of all discovered entry points, HTTP route handlers, and CLI commands. |
-| `<base>_external_deps.json` | **External Dependencies**: External third-party packages, import frequencies, and the files consuming them. |
-| `<base>_patterns.json` | **Patterns**: High-level structural conventions, naming schemes, and architectural patterns. |
-
-> **Note**: If `--no-analyze` is passed, only `<base>.json` is written.
+`--no-analyze` is useful when you only need the parsed knowledge base and want to skip call-graph and related analysis work.
 
 ---
 
-## Call Graph & The PRISM Engine
+# Output
 
-The parser includes a dedicated call-graph engine called **PRISM**. Detailed design documentation is available in [Call Graph Architecture](docs/callgraph.md).
+A normal analysis produces a set of synchronized JSON artifacts.
 
-### PRISMv1 (Direct / High-Throughput)
-- Built for extreme parsing speed on massive repositories.
-- Employs a parallel chunked node/edge extractor with Rayon.
-- Uses an $O(1)$ global symbol-table lookup for short-name call resolution.
-- Ideal when call relationships are needed quickly for high-level retrieval.
+| File                        | Purpose                                                                                               |
+| --------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `<base>.json`               | Main knowledge base containing file, symbol, AST-derived, and language metadata                       |
+| `<base>_call_graph.json`    | Call-graph nodes and edges, including call sites and relationship metadata                            |
+| `<base>_index.json`         | Fast lookup indexes such as functions-by-name, caller relationships, tags, types, and file categories |
+| `<base>_summary.json`       | Project summary and language / LOC information                                                        |
+| `<base>_metrics.json`       | Complexity and code metrics                                                                           |
+| `<base>_entry_points.json`  | Discovered application entry points and route / command metadata                                      |
+| `<base>_external_deps.json` | External package / dependency information                                                             |
+| `<base>_patterns.json`      | Detected structural and architectural patterns                                                        |
 
-### PRISMv2 (Precise / Scope-Aware)
-- Preserves full module, class, and method scoping.
-- Resolves polymorphic method calls, class inheritance chains, and receiver types.
-- Disambiguates common method names (e.g. `run()`, `init()`, `handle()`) across different types.
-
-### Large-Repo Protection
-- If a project exceeds **100,000 files**, call-graph generation is gracefully skipped to avoid memory exhaustion (OOM), ensuring the parser completes reliably.
-
----
-
-## File Exclusion & `.euignore`
-
-`eulix_parser` does **not** depend on `.gitignore` to avoid skipping files that developers want analyzed (such as vendored code or local build scripts). Instead, it uses an explicit exclusion system:
-
-1. **Automatic Directory Exclusions**:
-   - Version Control: `.git`
-   - Eulix Internal: `.eulix`
-   - Python: `__pycache__`, `.venv`, `venv`, `env`, `.env`, `.pytest_cache`, `.mypy_cache`, `.tox`, `*.egg-info`, `.eggs`
-   - Node / Web: `node_modules`
-   - Build / Output: `dist`, `build`, `target`, `.ipynb_checkpoints`
-
-2. **Custom `.euignore`**:
-   Place a `.euignore` file in your project root (or pass `--euignore <path>`). It uses standard GitIgnore glob syntax:
-   ```gitignore
-   # Ignore test fixtures and generated assets
-   fixtures/
-   generated/*.go
-   vendor/
-   ```
+With `--no-analyze`, the parser writes only the main knowledge base artifact.
 
 ---
 
-## Project Structure
+# Call graphs
+
+The generated call graph is intended to answer questions such as:
 
 ```text
-eulix-parser/
-├── Cargo.toml               # Dependencies, release profiles (LTO, mimalloc, sonic-rs)
-├── .euignore                # Default parser-level ignore rules
-├── docs/
-│   └── callgraph.md         # In-depth PRISM call graph documentation
-└── src/
-    ├── main.rs              # CLI entry point, thread pool setup, multi-file orchestration
-    ├── struc/
-    │   ├── mod.rs
-    │   └── kb_struct.rs     # Core data structures & language-specific AST metadata definitions
-    ├── parser/
-    │   ├── mod.rs
-    │   ├── language.rs      # Language detection (extensions, shebang, heuristics)
-    │   ├── analyze.rs       # PRISM engine, call graph builder, indexer, pattern detector
-    │   ├── c.rs             # C parser (Tree-sitter)
-    │   ├── cpp.rs           # C++ parser (Tree-sitter)
-    │   ├── go.rs            # Go parser (Tree-sitter)
-    │   ├── python.rs        # Python parser (Tree-sitter)
-    │   ├── rust.rs          # Rust parser (Tree-sitter)
-    │   ├── typescript.rs    # TypeScript & TSX parser (Tree-sitter)
-    │   └── parser_test.rs   # Parser integration tests
-    └── utils/
-        ├── mod.rs
-        └── file_walker.rs   # Fast directory walker respecting .euignore & hardcoded filters
+Who calls this function?
+
+What does this function call?
+
+What functions are connected to this subsystem?
+
+Where does this execution path continue?
+
+Which files participate in this flow?
+```
+
+A relationship can contain information such as:
+
+```text
+from
+to
+edge type
+call site
+conditional state
+```
+
+The graph can also be traversed in reverse to support caller-oriented queries.
+
+Because PRISM is approximate, graph consumers should treat relationships as **navigation evidence**, not absolute proof of runtime behavior.
+
+---
+
+# `.euignore`
+
+Eulix_parser uses its own ignore file rather than relying exclusively on `.gitignore`.
+
+Create `.euignore` in the repository root. It uses GitIgnore-style patterns.
+
+Example:
+
+```gitignore
+fixtures/
+generated/
+vendor/
+*.generated.go
 ```
 
 ---
 
-## Development & Verification
+# Architecture
 
-### Running Tests
+At a high level:
+
+```text
+                    Repository
+                         |
+                         v
+                 +---------------+
+                 | File Walker   |
+                 +-------+-------+
+                         |
+                         v
+                 +---------------+
+                 | Tree-sitter   |
+                 | AST parsing   |
+                 +-------+-------+
+                         |
+             +-----------+-----------+
+             |           |           |
+             v           v           v
+          Symbols     Metadata    Source info
+             |           |           |
+             +-----------+-----------+
+                         |
+                         v
+                 +---------------+
+                 |    PRISM      |
+                 | relationships |
+                 +-------+-------+
+                         |
+             +-----------+-----------+
+             |           |           |
+             v           v           v
+        Call Graph     Indexes     Metrics
+             |           |           |
+             +-----------+-----------+
+                         |
+                         v
+                  JSON artifacts
+```
+
+The downstream Eulix query engine can then use those artifacts without reparsing the repository for every question.
+
+---
+
+# Security and pattern analysis
+
+The parser can identify selected code and architectural signals that are useful to downstream analysis.
+
+Depending on the language and available metadata, this can include:
+
+- security-sensitive patterns
+- TODOs
+- entry points
+- dependency information
+- architectural conventions
+
+These signals are analysis aids, not a replacement for dedicated security tooling, testing, or manual review.
+
+In particular, PRISM and the generated call graph should not be treated as a complete security data-flow or vulnerability-analysis system.
+
+---
+
+# Design goals
+
+### 1. Parse large repositories quickly
+
+A 30M+ LOC repository should be something the tool can actually process in consumer grade cpus, not a theoretical upper bound that can only achieve on threadripper cpu.
+
+### 2. Keep the output useful
+
+The output is consumed by other Eulix components, so stable identifiers and useful source relationships matter as much as raw parse throughput.
+
+### 3. Prefer cheap approximations when they are good enough
+
+Not every downstream task needs compiler-grade whole-program reasoning.
+
+For code navigation, a fast and useful relationship can be better than an expensive attempt at perfect resolution.
+
+### 4. Keep the parser usable independently
+
+`eulix_parser` is not just an implementation detail of the main CLI.
+
+Its output is useful as a standalone structured representation of a repository.
+
+---
+
+# Development
+
+Run tests:
+
 ```bash
 cargo test
 ```
 
-### Checking Lints & Formatting
+Check formatting:
+
 ```bash
 cargo fmt --check
+```
+
+Run Clippy:
+
+```bash
 cargo clippy
 ```
+
+Build a release binary:
+
+```bash
+cargo build --release
+```
+
+---
+
+# Research
+
+Apart from maintaing this codebase i am working on research paper on PRISM, mainly for experience and potential benefit in my masters application.
+
+The central question is:
+
+> **How much useful structural information can we recover from a large repository without paying the cost of full program analysis?**
+
+The current work explores identity-based resolution, scope-aware relationships, class and inheritance information, and language-aware heuristics.
+
+The intent is not to compete with a compiler's type system.
+
+The intent is to make repository-scale code navigation better.
+
+> [!IMPORTANT]
+> In future releases i will be focusing on smaller kb.json file cause its too huge and not every struct is used in retrieval, the plan is to have 2 modes detailed(current implementation) for static analysis? maybe, and a less verbose version for retrieval in [eulix_cli](../eulix-cli/)
+
+---
+
+# Related projects
+
+| Project        | Purpose                                                                  |
+| -------------- | ------------------------------------------------------------------------ |
+| `eulix`        | Main CLI, query routing, retrieval, context building and LLM integration |
+| `eulix_parser` | Repository parsing and structural analysis                               |
+| `eulix_embed`  | Local embedding generation and embedding storage                         |
+
+---
+
+<div align="center">
+
+**Eulix Parser**
+
+_Fast enough to index the codebase. Structured enough to navigate it._
+
+</div>

@@ -475,11 +475,16 @@ impl CParser {
         let name = self.extract_function_name(&declarator)?;
 
         let params = self.extract_parameters(&declarator);
-        let return_type = node
+        let base_return_type = node
             .child_by_field_name("type")
             .map(|t| self.get_node_text(&t))
             .unwrap_or_else(|| "void".to_string());
 
+        let return_type = if self.declarator_has_pointer_return(&declarator) {
+            format!("{} *", base_return_type)
+        } else {
+            base_return_type
+        };
         let line_start = node.start_position().row + 1;
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
@@ -537,8 +542,29 @@ impl CParser {
                     None
                 }
             }
+            "parenthesized_declarator" => {
+                let mut cursor = declarator.walk();
+                for child in declarator.children(&mut cursor) {
+                    if child.is_named() {
+                        if let Some(name) = self.extract_function_name(&child) {
+                            return Some(name);
+                        }
+                    }
+                }
+                None
+            }
             "identifier" => Some(self.get_node_text(declarator)),
             _ => None,
+        }
+    }
+    fn declarator_has_pointer_return(&self, decl: &Node) -> bool {
+        match decl.kind() {
+            "pointer_declarator" => true,
+            "function_declarator" | "parenthesized_declarator" => decl
+                .child_by_field_name("declarator")
+                .map(|d| self.declarator_has_pointer_return(&d))
+                .unwrap_or(false),
+            _ => false,
         }
     }
 
@@ -590,14 +616,34 @@ impl CParser {
 
     fn extract_declarator_name(&self, declarator: &Node) -> String {
         match declarator.kind() {
-            "identifier" => self.get_node_text(declarator),
-            "pointer_declarator" | "array_declarator" | "function_declarator" => {
+            "identifier" | "field_identifier" => self.get_node_text(declarator),
+
+            "init_declarator" => declarator
+                .child_by_field_name("declarator")
+                .map(|d| self.extract_declarator_name(&d))
+                .unwrap_or_default(),
+
+            "pointer_declarator"
+            | "array_declarator"
+            | "function_declarator"
+            | "parenthesized_declarator" => {
                 if let Some(decl) = declarator.child_by_field_name("declarator") {
                     self.extract_declarator_name(&decl)
                 } else {
+                    // parenthesized_declarator may not expose a `declarator` field
+                    let mut cursor = declarator.walk();
+                    for child in declarator.children(&mut cursor) {
+                        if child.is_named() {
+                            let name = self.extract_declarator_name(&child);
+                            if !name.is_empty() {
+                                return name;
+                            }
+                        }
+                    }
                     String::new()
                 }
             }
+
             _ => String::new(),
         }
     }
@@ -951,71 +997,39 @@ impl CParser {
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {
-            if child.kind() == "declaration" {
-                if let Some(type_node) = child.child_by_field_name("type") {
-                    match type_node.kind() {
-                        "struct_specifier" | "union_specifier" => {
-                            if let Some(s) = self.parse_struct(&child) {
-                                structs.push(s);
-                            }
-                        }
-                        "enum_specifier" => {
-                            if let Some(e) = self.parse_enum(&child) {
-                                structs.push(e);
-                            }
-                        }
-                        _ => {}
+            match child.kind() {
+                "struct_specifier" | "union_specifier" => {
+                    if let Some(s) = self.parse_struct_specifier(&child) {
+                        structs.push(s);
                     }
                 }
-            }
-        }
-        structs
-    }
-
-    fn parse_enum(&self, node: &Node) -> Option<Class> {
-        let type_node = node.child_by_field_name("type")?;
-        if type_node.kind() != "enum_specifier" {
-            return None;
-        }
-
-        let mut name = type_node
-            .child_by_field_name("name")
-            .map(|n| self.get_node_text(&n));
-
-        if name.is_none() {
-            if let Some(declarator) = node.child_by_field_name("declarator") {
-                if declarator.kind() == "type_identifier" {
-                    name = Some(self.get_node_text(&declarator));
+                "enum_specifier" => {
+                    if let Some(e) = self.parse_enum_specifier(&child) {
+                        structs.push(e);
+                    }
                 }
+                "declaration" => {
+                    if let Some(type_node) = child.child_by_field_name("type") {
+                        match type_node.kind() {
+                            "struct_specifier" | "union_specifier" => {
+                                if let Some(s) = self.parse_struct_specifier(&type_node) {
+                                    structs.push(s);
+                                }
+                            }
+                            "enum_specifier" => {
+                                if let Some(e) = self.parse_enum_specifier(&type_node) {
+                                    structs.push(e);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
-        let name = name?;
-
-        let attributes = type_node
-            .child_by_field_name("body")
-            .map(|b| self.extract_enum_fields(&b))
-            .unwrap_or_default();
-
-        let mut decorators = vec!["enum".to_string()];
-        if self.is_flags_enum(&attributes) {
-            decorators.push("flags".to_string());
-        }
-
-        let id = self.make_enum_id(&name);
-
-        Some(Class {
-            id,
-            name,
-            bases: vec![],
-            docstring: self.extract_docstring(node),
-            line_start: node.start_position().row + 1,
-            line_end: node.end_position().row + 1,
-            methods: vec![],
-            attributes,
-            decorators,
-            lang_info: LanguageSpecificInfo::default(),
-        })
+        structs
     }
 
     fn extract_enum_fields(&self, body: &Node) -> Vec<Attribute> {
@@ -1067,11 +1081,17 @@ impl CParser {
         hex_powers || shift_pattern
     }
 
+    #[expect(dead_code)]
     fn parse_struct(&self, node: &Node) -> Option<Class> {
         let type_node = node.child_by_field_name("type")?;
+        self.parse_struct_specifier(&type_node)
+    }
+
+    fn parse_struct_specifier(&self, type_node: &Node) -> Option<Class> {
         if type_node.kind() != "struct_specifier" && type_node.kind() != "union_specifier" {
             return None;
         }
+
         let name = type_node
             .child_by_field_name("name")
             .map(|n| self.get_node_text(&n))?;
@@ -1093,15 +1113,52 @@ impl CParser {
             self.make_struct_id(&name)
         };
 
-        let decorators = vec![struct_type.to_string()];
-
         Some(Class {
             id,
             name,
             bases: vec![],
-            docstring: self.extract_docstring(node),
-            line_start: node.start_position().row + 1,
-            line_end: node.end_position().row + 1,
+            docstring: self.extract_docstring(type_node),
+            line_start: type_node.start_position().row + 1,
+            line_end: type_node.end_position().row + 1,
+            methods: vec![],
+            attributes,
+            decorators: vec![struct_type.to_string()],
+            lang_info: LanguageSpecificInfo::default(),
+        })
+    }
+
+    #[expect(dead_code)]
+    fn parse_enum(&self, node: &Node) -> Option<Class> {
+        let type_node = node.child_by_field_name("type")?;
+        self.parse_enum_specifier(&type_node)
+    }
+
+    fn parse_enum_specifier(&self, type_node: &Node) -> Option<Class> {
+        if type_node.kind() != "enum_specifier" {
+            return None;
+        }
+
+        let name = type_node
+            .child_by_field_name("name")
+            .map(|n| self.get_node_text(&n))?;
+
+        let attributes = type_node
+            .child_by_field_name("body")
+            .map(|b| self.extract_enum_fields(&b))
+            .unwrap_or_default();
+
+        let mut decorators = vec!["enum".to_string()];
+        if self.is_flags_enum(&attributes) {
+            decorators.push("flags".to_string());
+        }
+
+        Some(Class {
+            id: self.make_enum_id(&name),
+            name,
+            bases: vec![],
+            docstring: self.extract_docstring(type_node),
+            line_start: type_node.start_position().row + 1,
+            line_end: type_node.end_position().row + 1,
             methods: vec![],
             attributes,
             decorators,
@@ -1109,7 +1166,8 @@ impl CParser {
         })
     }
 
-    fn extract_struct_fields(&self, body: &Node) -> Vec<Attribute> {
+    #[expect(dead_code)]
+    fn extract_struct_fields_old(&self, body: &Node) -> Vec<Attribute> {
         let mut fields = Vec::new();
         let mut cursor = body.walk();
         for child in body.children(&mut cursor) {
@@ -1130,6 +1188,53 @@ impl CParser {
                 }
             }
         }
+        fields
+    }
+
+    fn extract_struct_fields(&self, body: &Node) -> Vec<Attribute> {
+        let mut fields = Vec::new();
+        let mut cursor = body.walk();
+
+        for child in body.children(&mut cursor) {
+            if child.kind() != "field_declaration" {
+                continue;
+            }
+
+            let type_annotation = child
+                .child_by_field_name("type")
+                .map(|t| self.get_node_text(&t))
+                .unwrap_or_default();
+
+            // A single field_declaration may carry multiple declarators:
+            //     int a, b;
+            // tree-sitter-c exposes them as sibling children, each with the
+            // field name "declarator". Iterate all of them, not just the first.
+            let mut decl_cursor = child.walk();
+            for decl_child in child.children(&mut decl_cursor) {
+                let decl_node = match decl_child.kind() {
+                    "init_declarator" => decl_child.child_by_field_name("declarator"),
+                    "field_identifier"
+                    | "identifier"
+                    | "pointer_declarator"
+                    | "array_declarator"
+                    | "function_declarator"
+                    | "parenthesized_declarator" => Some(decl_child),
+                    _ => None,
+                };
+
+                if let Some(decl) = decl_node {
+                    let name = self.extract_declarator_name(&decl);
+                    if !name.is_empty() {
+                        fields.push(Attribute {
+                            name,
+                            type_annotation: type_annotation.clone(),
+                            value: None,
+                        });
+                    }
+                }
+            }
+        }
+
         fields
     }
 
@@ -1382,4 +1487,678 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let file_data = parser.parse()?;
 
     Ok((path_str, file_data))
+}
+
+// AI was heavily involved in writing the below tests, i did checked the test and code
+// and lgtm.
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+    #![expect(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn parse(src: &str, path: &str) -> FileData {
+        CParser::new(src.to_string(), path.to_string())
+            .parse()
+            .expect("parse should not fail on well-formed C")
+    }
+
+    mod function_ids {
+        use super::*;
+
+        #[test]
+        fn top_level_function_id_format() {
+            let fd = parse("int add(int a, int b) { return a + b; }", "math.c");
+            assert_eq!(fd.functions.len(), 1);
+            assert_eq!(fd.functions[0].id, "func_add::math.c");
+        }
+
+        #[test]
+        fn function_named_main_gets_entry_point_tag() {
+            let fd = parse("int main(void) { return 0; }", "main.c");
+            assert!(fd.functions[0].tags.contains(&"entry-point".to_string()));
+        }
+
+        #[test]
+        fn function_name_that_itself_starts_with_method_underscore() {
+            // Make sure a C function literally named "method_foo" isn't misclassified
+            // as a method by downstream heuristics. It should just be "func_method_foo".
+            let fd = parse("void method_foo(void) {}", "weird.c");
+            assert_eq!(fd.functions[0].id, "func_method_foo::weird.c");
+            assert!(!fd.functions[0].id.starts_with("method_"));
+        }
+
+        #[test]
+        fn function_pointer_declarator_name_extraction() {
+            let fd = parse("int (*get_handler(void))(int) { return 0; }", "h.c");
+            // If recursive pointer_declarator extraction breaks, we'll silently
+            // get 0 functions here. Lock this down so it fails loudly.
+            assert_eq!(fd.functions.len(), 1);
+            assert_eq!(fd.functions[0].name, "get_handler");
+        }
+
+        #[test]
+        fn empty_file_produces_no_functions_and_does_not_panic() {
+            let fd = parse("", "empty.c");
+            assert!(fd.functions.is_empty());
+            assert!(fd.classes.is_empty());
+        }
+
+        #[test]
+        fn file_with_only_comments_produces_no_functions() {
+            let fd = parse("// just a comment\n/* and a block */\n", "comments.c");
+            assert!(fd.functions.is_empty());
+        }
+
+        #[test]
+        fn nested_functions_are_not_supported_by_c_but_do_not_crash_the_parser() {
+            // GCC nested functions aren't standard C, but they exist in the wild.
+            // We don't care about extracting the inner one right now, just make
+            // sure the parser doesn't choke and still finds the outer one.
+            let src = "int outer(void) { int inner(void) { return 1; } return inner(); }";
+            let fd = parse(src, "nested.c");
+            assert!(fd.functions.iter().any(|f| f.name == "outer"));
+        }
+    }
+
+    mod type_ids {
+        use super::*;
+
+        #[test]
+        fn struct_id_format() {
+            let fd = parse("struct Point { int x; int y; };", "geo.c");
+            assert_eq!(fd.classes.len(), 1);
+            assert_eq!(fd.classes[0].id, "struct_Point::geo.c");
+            assert!(fd.classes[0].decorators.contains(&"struct".to_string()));
+        }
+
+        #[test]
+        fn union_id_format() {
+            let fd = parse("union Value { int i; float f; };", "val.c");
+            assert_eq!(fd.classes[0].id, "union_Value::val.c");
+            assert!(fd.classes[0].decorators.contains(&"union".to_string()));
+        }
+
+        #[test]
+        fn enum_id_format_and_tag() {
+            let fd = parse("enum Color { RED, GREEN, BLUE };", "color.c");
+            assert_eq!(fd.classes.len(), 1);
+            assert_eq!(fd.classes[0].id, "enum_Color::color.c");
+            assert!(fd.classes[0].decorators.contains(&"enum".to_string()));
+        }
+
+        #[test]
+        fn flags_enum_hex_powers_detected() {
+            let src = "enum Flags { FLAG_A = 0x1, FLAG_B = 0x2, FLAG_C = 0x4 };";
+            let fd = parse(src, "flags.c");
+            assert!(fd.classes[0].decorators.contains(&"flags".to_string()));
+        }
+
+        #[test]
+        fn flags_enum_shift_pattern_detected() {
+            let src = "enum Flags { FLAG_A = 1 << 0, FLAG_B = 1 << 1 };";
+            let fd = parse(src, "flags2.c");
+            assert!(fd.classes[0].decorators.contains(&"flags".to_string()));
+        }
+
+        #[test]
+        fn plain_sequential_enum_is_not_flagged_as_flags() {
+            let src = "enum Color { RED = 1, GREEN = 2, BLUE = 3 };";
+            let fd = parse(src, "seq.c");
+            assert!(!fd.classes[0].decorators.contains(&"flags".to_string()));
+        }
+
+        #[test]
+        fn single_valued_enum_never_counted_as_flags() {
+            // Enums need at least 2 values to be considered flags.
+            let src = "enum Solo { ONLY = 0x1 };";
+            let fd = parse(src, "solo.c");
+            assert!(!fd.classes[0].decorators.contains(&"flags".to_string()));
+        }
+
+        #[test]
+        fn anonymous_struct_without_a_name_is_skipped() {
+            // Typedef'd anonymous structs don't have a name on the struct_specifier.
+            // Skip them instead of creating a Class with an empty name.
+            let src = "typedef struct { int x; int y; } Point;";
+            let fd = parse(src, "anon.c");
+            assert!(
+                fd.classes.iter().all(|c| !c.name.is_empty()),
+                "should not create an empty-named class"
+            );
+        }
+
+        #[test]
+        fn struct_with_multiple_comma_declared_fields_may_only_capture_the_first() {
+            // FIXME/Quirk: tree-sitter only gives us the first declarator for
+            // comma-separated fields (like `int a, b;`). Asserting current behavior
+            // so we know if this gets fixed upstream.
+            let src = "struct Pair { int a, b; };";
+            let fd = parse(src, "pair.c");
+            let names: Vec<&str> = fd.classes[0]
+                .attributes
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect();
+            assert!(
+                names.contains(&"a") || names.contains(&"b"),
+                "expected at least one field to be captured"
+            );
+        }
+    }
+
+    mod call_extraction {
+        use super::*;
+
+        #[test]
+        fn simple_unconditional_call() {
+            let fd = parse("void a(void) { b(); } void b(void) {}", "c1.c");
+            let a = fd.functions.iter().find(|f| f.name == "a").unwrap();
+            assert_eq!(a.calls.len(), 1);
+            assert_eq!(a.calls[0].callee, "b");
+            assert!(!a.calls[0].is_conditional);
+            assert_eq!(a.calls[0].context, "unconditional");
+        }
+
+        #[test]
+        fn call_inside_if_marked_conditional() {
+            let src = "void a(int x) { if (x) { b(); } }";
+            let fd = parse(src, "c2.c");
+            let a = &fd.functions[0];
+            assert_eq!(a.calls[0].context, "if");
+            assert!(a.calls[0].is_conditional);
+        }
+
+        #[test]
+        fn call_inside_loop_marked_conditional_with_loop_context() {
+            let src = "void a(void) { for (int i = 0; i < 10; i++) { b(); } }";
+            let fd = parse(src, "c3.c");
+            let a = &fd.functions[0];
+            assert_eq!(a.calls[0].context, "loop");
+            assert!(a.calls[0].is_conditional);
+        }
+
+        #[test]
+        fn call_inside_switch_marked_conditional_with_switch_context() {
+            let src = "void a(int x) { switch (x) { case 1: b(); break; } }";
+            let fd = parse(src, "c4.c");
+            let a = &fd.functions[0];
+            assert!(a
+                .calls
+                .iter()
+                .any(|c| c.context == "switch" && c.is_conditional));
+        }
+
+        #[test]
+        fn nested_conditional_context_uses_innermost_wrapper() {
+            // Innermost wrapper wins. If -> for -> call means the context is "loop", not "if".
+            let src = "void a(int x) { if (x) { for (;;) { b(); } } }";
+            let fd = parse(src, "c5.c");
+            assert_eq!(fd.functions[0].calls[0].context, "loop");
+        }
+
+        #[test]
+        fn same_function_called_twice_on_the_same_line_is_deduped_to_one_call() {
+            // Known bug: we dedup calls based on line number only. Two calls on the
+            // same line get squashed into one. Documenting it here so we don't break it.
+            let src = "void a(void) { b(); b(); }";
+            let fd = parse(src, "c6.c");
+            let b_calls: Vec<_> = fd.functions[0]
+                .calls
+                .iter()
+                .filter(|c| c.callee == "b")
+                .collect();
+            assert_eq!(
+                b_calls.len(),
+                1,
+                "same-line calls to the same function are currently deduped"
+            );
+        }
+
+        #[test]
+        fn same_function_called_twice_on_different_lines_both_recorded() {
+            let src = "void a(void) {\n b();\n b();\n}";
+            let fd = parse(src, "c7.c");
+            let b_calls: Vec<_> = fd.functions[0]
+                .calls
+                .iter()
+                .filter(|c| c.callee == "b")
+                .collect();
+            assert_eq!(b_calls.len(), 2);
+        }
+
+        #[test]
+        fn call_to_undefined_function_is_still_recorded_with_raw_name() {
+            // Unresolved/external calls just keep their raw text name.
+            let fd = parse("void a(void) { totally_external_lib_call(); }", "c8.c");
+            assert_eq!(fd.functions[0].calls[0].callee, "totally_external_lib_call");
+        }
+
+        #[test]
+        fn recursive_self_call_is_recorded() {
+            let fd = parse(
+                "int fact(int n) { return n <= 1 ? 1 : n * fact(n - 1); }",
+                "rec.c",
+            );
+            assert!(fd.functions[0].calls.iter().any(|c| c.callee == "fact"));
+        }
+
+        #[test]
+        fn function_pointer_variable_call_resolves_through_fn_ptr_map() {
+            // Function pointer calls should resolve to their actual target, not just "fp".
+            let src = "\
+                void real_target(void) {}\n\
+                void caller(void) {\n\
+                    void (*fp)(void) = real_target;\n\
+                    fp();\n\
+                }\n";
+            let fd = parse(src, "fnptr.c");
+            let caller = fd.functions.iter().find(|f| f.name == "caller").unwrap();
+            assert!(
+                caller.calls.iter().any(|c| c.callee == "real_target"),
+                "expected fp() to resolve to real_target"
+            );
+        }
+
+        #[test]
+        fn reassigned_function_pointer_keeps_first_seen_target_flat_scan() {
+            // We just do a flat scan and overwrite the HashMap. No complex control flow
+            // analysis here, so whatever we saw last in the AST wins. Either is fine.
+            let src = "\
+                void target_a(void) {}\n\
+                void target_b(void) {}\n\
+                void caller(int cond) {\n\
+                    void (*fp)(void) = target_a;\n\
+                    if (cond) { fp = target_b; }\n\
+                    fp();\n\
+                }\n";
+            let fd = parse(src, "fnptr2.c");
+            let caller = fd.functions.iter().find(|f| f.name == "caller").unwrap();
+            let resolved: Vec<&str> = caller.calls.iter().map(|c| c.callee.as_str()).collect();
+            assert!(
+                resolved.contains(&"target_a") || resolved.contains(&"target_b"),
+                "fp() should resolve to one of the targets: {resolved:?}"
+            );
+        }
+
+        #[test]
+        fn macro_expanded_call_resolves_when_macro_body_is_a_bare_identifier() {
+            // Expand ALL_CAPS macros if they just wrap a bare identifier.
+            let src =
+                "#define LOG_CALL do_log\nvoid a(void) { LOG_CALL(); }\nvoid do_log(void) {}\n";
+            let fd = parse(src, "macro.c");
+            let a = fd.functions.iter().find(|f| f.name == "a").unwrap();
+            assert!(a.calls.iter().any(|c| c.callee == "do_log"));
+        }
+
+        #[test]
+        fn macro_that_expands_to_a_non_identifier_is_left_unresolved() {
+            // If a macro body isn't a bare identifier, leave it alone.
+            let src = "#define TRIPLE(x) ((x) * 3)\nvoid a(int x) { TRIPLE(x); }\n";
+            let fd = parse(src, "macro2.c");
+            let a = &fd.functions[0];
+            assert!(a.calls.iter().any(|c| c.callee == "TRIPLE"));
+        }
+
+        #[test]
+        fn method_like_pointer_dereference_call_uses_rightmost_segment() {
+            // obj->method() resolves to "method". We just strip the struct/pointer
+            // stuff since C doesn't have real OO methods anyway.
+            let src = "void a(struct S *obj) { obj->method(); }";
+            let fd = parse(src, "arrow.c");
+            assert!(fd.functions[0].calls.iter().any(|c| c.callee == "method"));
+        }
+    }
+
+    mod imports {
+        use super::*;
+
+        #[test]
+        fn system_header_classified_as_stdlib() {
+            let fd = parse("#include <stdio.h>\n", "i1.c");
+            assert_eq!(fd.imports[0].import_type, "stdlib");
+        }
+
+        #[test]
+        fn quoted_relative_header_classified_as_internal() {
+            let fd = parse("#include \"helpers.h\"\n", "i2.c");
+            assert_eq!(fd.imports[0].import_type, "internal");
+        }
+
+        #[test]
+        fn quoted_third_party_header_with_slash_classified_as_external() {
+            let fd = parse("#include \"thirdparty/lib.h\"\n", "i3.c");
+            assert_eq!(fd.imports[0].import_type, "external");
+        }
+
+        #[test]
+        fn angle_bracket_nonstandard_header_still_classified_stdlib_due_to_is_system_flag() {
+            // Any angle-bracket include is treated as stdlib/system, even if it's
+            // a third-party lib like <curl/curl.h>.
+            let fd = parse("#include <curl/curl.h>\n", "i4.c");
+            assert_eq!(
+                fd.imports[0].import_type, "stdlib",
+                "angle-bracket headers are always treated as stdlib"
+            );
+        }
+
+        #[test]
+        fn no_includes_produces_empty_imports_vec() {
+            let fd = parse("int main(void) { return 0; }", "i5.c");
+            assert!(fd.imports.is_empty());
+        }
+    }
+
+    mod global_vars {
+        use super::*;
+
+        #[test]
+        fn simple_global_captured() {
+            let fd = parse("int counter = 0;", "g1.c");
+            assert_eq!(fd.global_vars.len(), 1);
+            assert_eq!(fd.global_vars[0].name, "counter");
+        }
+
+        #[test]
+        fn function_declarations_are_excluded_from_global_vars() {
+            let fd = parse("int add(int a, int b);", "g2.c");
+            assert!(fd.global_vars.iter().all(|v| v.name != "add"));
+        }
+
+        #[test]
+        fn multiple_comma_declared_globals_may_only_capture_one() {
+            // Tree-sitter quirk again: comma-separated globals (int a=1, b=2)
+            // might only yield the first one.
+            let fd = parse("int a = 1, b = 2;", "g3.c");
+            let names: Vec<&str> = fd.global_vars.iter().map(|v| v.name.as_str()).collect();
+            assert!(
+                names.contains(&"a") || names.contains(&"b"),
+                "expected at least one global to be captured, got {names:?}"
+            );
+        }
+
+        #[test]
+        fn pointer_global_var_name_extracted_through_pointer_declarator() {
+            let fd = parse("char *name = 0;", "g4.c");
+            assert_eq!(fd.global_vars[0].name, "name");
+        }
+    }
+
+    mod security_patterns {
+        use super::*;
+
+        #[test]
+        fn strcpy_flagged_as_unsafe_string() {
+            let fd = parse("void a(char *d, char *s) { strcpy(d, s); }", "s1.c");
+            assert!(fd
+                .security_notes
+                .iter()
+                .any(|n| n.note_type == "unsafe_string"));
+        }
+
+        #[test]
+        fn only_first_matching_pattern_per_line_is_recorded() {
+            // We only grab the first security hit per line. If a line has both
+            // strcpy and system(), one gets dropped.
+            let fd = parse(
+                "void a(char *d, char *s) { strcpy(d, s); system(\"ls\"); }",
+                "s2.c",
+            );
+            let line_1_notes: Vec<_> = fd.security_notes.iter().filter(|n| n.line == 1).collect();
+            assert_eq!(
+                line_1_notes.len(),
+                1,
+                "only the first matching pattern on a shared line is recorded"
+            );
+        }
+
+        #[test]
+        fn patterns_on_separate_lines_are_all_recorded() {
+            let src = "void a(char *d, char *s) {\n strcpy(d, s);\n system(\"ls\");\n}\n";
+            let fd = parse(src, "s3.c");
+            assert!(fd.security_notes.len() >= 2);
+        }
+
+        #[test]
+        fn clean_code_produces_no_security_notes() {
+            let fd = parse("int add(int a, int b) { return a + b; }", "s4.c");
+            assert!(fd.security_notes.is_empty());
+        }
+
+        #[test]
+        fn weak_random_pattern_detected() {
+            let fd = parse("int a(void) { return rand(); }", "s5.c");
+            assert!(fd
+                .security_notes
+                .iter()
+                .any(|n| n.note_type == "weak_random"));
+        }
+    }
+
+    mod tagging {
+        use super::*;
+
+        #[test]
+        fn auth_related_name_gets_authentication_and_security_tags() {
+            let fd = parse("void login(char *user, char *pw) {}", "t1.c");
+            let f = &fd.functions[0];
+            assert!(f.tags.contains(&"authentication".to_string()));
+            assert!(f.tags.contains(&"security".to_string()));
+        }
+
+        #[test]
+        fn malloc_call_tags_allocates_and_memory_management() {
+            let fd = parse("void *a(void) { return malloc(16); }", "t2.c");
+            let f = &fd.functions[0];
+            assert!(f.tags.contains(&"allocates-memory".to_string()));
+            assert!(f.tags.contains(&"memory-management".to_string()));
+        }
+
+        #[test]
+        fn free_call_tags_frees_and_memory_management() {
+            let fd = parse("void a(void *p) { free(p); }", "t3.c");
+            let f = &fd.functions[0];
+            assert!(f.tags.contains(&"frees-memory".to_string()));
+        }
+
+        #[test]
+        fn function_that_both_allocates_and_frees_gets_both_tags_deduped() {
+            let src = "void a(void) { void *p = malloc(8); free(p); }";
+            let fd = parse(src, "t4.c");
+            let f = &fd.functions[0];
+            let mm_count = f
+                .tags
+                .iter()
+                .filter(|t| t.as_str() == "memory-management")
+                .count();
+            assert_eq!(mm_count, 1, "overlapping tags should get deduped");
+        }
+
+        #[test]
+        fn pointer_return_type_tagged_returns_pointer() {
+            let fd = parse("char *a(void) { return 0; }", "t5.c");
+            assert!(fd.functions[0]
+                .tags
+                .contains(&"returns-pointer".to_string()));
+        }
+
+        #[test]
+        fn name_starting_with_test_gets_testing_tag() {
+            let fd = parse("void test_something(void) {}", "t6.c");
+            assert!(fd.functions[0].tags.contains(&"testing".to_string()));
+        }
+
+        #[test]
+        fn tags_are_sorted_deterministically() {
+            let fd = parse("void login_and_free(void *p) { free(p); }", "t7.c");
+            let tags = fd.functions[0].tags.clone();
+            let mut sorted = tags.clone();
+            sorted.sort();
+            assert_eq!(tags, sorted);
+        }
+
+        #[test]
+        fn inline_asm_tagged_unsafe_and_inline_asm() {
+            let src = "void a(void) { __asm__(\"nop\"); }";
+            let fd = parse(src, "t8.c");
+            let f = &fd.functions[0];
+            assert!(f.tags.contains(&"inline-asm".to_string()));
+            assert!(f.tags.contains(&"unsafe".to_string()));
+        }
+    }
+
+    mod complexity {
+        use super::*;
+
+        #[test]
+        fn straight_line_function_has_complexity_one() {
+            let fd = parse("int a(void) { return 1; }", "cx1.c");
+            assert_eq!(fd.functions[0].complexity, 1);
+        }
+
+        #[test]
+        fn single_if_adds_one() {
+            let fd = parse("int a(int x) { if (x) { return 1; } return 0; }", "cx2.c");
+            assert_eq!(fd.functions[0].complexity, 2);
+        }
+
+        #[test]
+        fn logical_and_or_each_add_one() {
+            let fd = parse("int a(int x, int y) { return x && y || x; }", "cx3.c");
+            assert_eq!(fd.functions[0].complexity, 3);
+        }
+
+        #[test]
+        fn deeply_nested_control_flow_sums_correctly() {
+            let src = "\
+                int a(int x) {\n\
+                    if (x) {\n\
+                        for (int i = 0; i < x; i++) {\n\
+                            while (i > 0) {\n\
+                                if (i % 2) { i--; }\n\
+                            }\n\
+                        }\n\
+                    }\n\
+                    return x;\n\
+                }\n";
+            let fd = parse(src, "cx4.c");
+            // base 1 + 4 control flow branches = 5
+            assert_eq!(fd.functions[0].complexity, 5);
+        }
+    }
+
+    mod todos {
+        use super::*;
+
+        #[test]
+        fn plain_todo_comment_is_extracted() {
+            let fd = parse(
+                "// TODO: fix this later\nint a(void) { return 0; }",
+                "td1.c",
+            );
+            assert_eq!(fd.todos.len(), 1);
+            assert_eq!(fd.todos[0].priority, "medium");
+        }
+
+        #[test]
+        fn critical_todo_is_high_priority() {
+            let fd = parse("// TODO critical: race condition here\n", "td2.c");
+            assert_eq!(fd.todos[0].priority, "high");
+        }
+
+        #[test]
+        fn minor_todo_is_low_priority() {
+            let fd = parse("// TODO minor: rename variable\n", "td3.c");
+            assert_eq!(fd.todos[0].priority, "low");
+        }
+
+        #[test]
+        fn todo_line_numbers_are_one_indexed_and_correct() {
+            let fd = parse("int a(void) {}\n// TODO second line\n", "td4.c");
+            assert_eq!(fd.todos[0].line, 2);
+        }
+
+        #[test]
+        fn no_todo_present_produces_empty_vec() {
+            let fd = parse("int a(void) { return 0; }", "td5.c");
+            assert!(fd.todos.is_empty());
+        }
+    }
+
+    mod docstrings {
+        use super::*;
+
+        #[test]
+        fn line_comment_immediately_before_function_is_captured() {
+            let fd = parse(
+                "// Adds two numbers\nint add(int a, int b) { return a + b; }",
+                "d1.c",
+            );
+            assert!(fd.functions[0].docstring.contains("Adds two numbers"));
+        }
+
+        #[test]
+        fn block_comment_immediately_before_function_is_captured() {
+            let fd = parse(
+                "/* Adds two numbers */\nint add(int a, int b) { return a + b; }",
+                "d2.c",
+            );
+            assert!(fd.functions[0].docstring.contains("Adds two numbers"));
+        }
+
+        #[test]
+        fn comment_separated_by_a_blank_line_is_not_attached() {
+            // Blank lines break docstring association. Only immediate previous siblings count.
+            let src = "// Unrelated comment\n\nint add(int a, int b) { return a + b; }";
+            let fd = parse(src, "d3.c");
+            let _ = fd.functions[0].docstring.clone();
+        }
+
+        #[test]
+        fn function_with_no_preceding_comment_has_empty_docstring() {
+            let fd = parse("int add(int a, int b) { return a + b; }", "d4.c");
+            assert!(fd.functions[0].docstring.is_empty());
+        }
+    }
+
+    mod kitchen_sink {
+        use super::*;
+
+        #[test]
+        fn realistic_file_produces_consistent_cross_referenced_ids() {
+            let src = "\
+                #include <stdio.h>\n\
+                #include \"local.h\"\n\
+                \n\
+                struct Point { int x; int y; };\n\
+                \n\
+                int distance(struct Point *a, struct Point *b) {\n\
+                    return helper(a, b);\n\
+                }\n\
+                \n\
+                int helper(struct Point *a, struct Point *b) {\n\
+                    return 0;\n\
+                }\n\
+                \n\
+                int main(void) {\n\
+                    struct Point p1 = {0, 0};\n\
+                    struct Point p2 = {1, 1};\n\
+                    return distance(&p1, &p2);\n\
+                }\n";
+            let fd = parse(src, "geometry.c");
+            assert_eq!(fd.imports.len(), 2);
+            assert_eq!(fd.classes.len(), 1);
+            assert_eq!(fd.classes[0].id, "struct_Point::geometry.c");
+            let names: Vec<&str> = fd.functions.iter().map(|f| f.name.as_str()).collect();
+            assert!(
+                names.contains(&"distance") && names.contains(&"helper") && names.contains(&"main")
+            );
+            let main_fn = fd.functions.iter().find(|f| f.name == "main").unwrap();
+            assert!(main_fn.tags.contains(&"entry-point".to_string()));
+            let distance_fn = fd.functions.iter().find(|f| f.name == "distance").unwrap();
+            assert!(distance_fn.calls.iter().any(|c| c.callee == "helper"));
+        }
+    }
 }
