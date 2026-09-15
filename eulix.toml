@@ -1,0 +1,50 @@
+# Eulix Configuration
+
+[project]
+path = "."
+Max_Lines = 100
+DebugConfig = true
+
+[parser]
+threads = 12
+prismVersion = 2
+verbose = true
+
+[embeddings]
+model = "BAAI/bge-base-en-v1.5"
+dimension = 768
+engine = "onnx"
+debug = false
+
+[llm]
+local = true
+provider = "ollama"
+model = "qwen2.5-coder:7b"
+api_key = ""
+max_tokens = 8192
+temperature = 0.7
+baseURL = "http://localhost:11434"
+endpoint = "/v1/chat/completions"
+
+[retrievalConfig]
+code_to_ast_ratio = 0.85
+apply_cross_root_isolation = true
+cross_root_penalty = 0.32
+pre_mmr_score_floor_ratio = 0.05
+top_k_candidates = 150
+mmr_diversity_factor = 0.65
+max_graph_expansion_depth = 1
+semantic_min_similarity = 0.15
+max_graph_expansions = 15
+max_exact_anchors = 2
+test_file_penalty = 0.3
+enable_subsystem_boosting = true
+max_context_chunks = 30
+
+[cache]
+enable = true
+path = ".eulix/history.db"
+
+[checksum]
+change_threshold = 0.1
+force_reanalyze_threshold = 0.3

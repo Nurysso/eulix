@@ -47,6 +47,7 @@ type EmbeddingsConfig struct {
 	Model     string `toml:"model"`
 	Dimension int    `toml:"dimension"`
 	Engine    string `toml:"engine"`
+	Debug     bool   `toml:"debug"`
 }
 
 type LLMConfig struct {
@@ -218,6 +219,7 @@ func DefaultConfig() *Config {
 			Model:     "BAAI/bge-base-en-v1.5",
 			Dimension: 768,
 			Engine:    "onnx",
+			Debug:     false,
 		},
 		LLM: LLMConfig{
 			Local:       true,

@@ -36,7 +36,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	// Start auto-flush every 5 seconds
 	cb.debugLog.StartAutoFlush(5 * time.Second)
 
-	queryEmbedder, err := embeddings.VectorWeaver(cfg.Embeddings.Model)
+	queryEmbedder, err := embeddings.VectorWeaver(cfg.Embeddings.Model, cfg.Embeddings.Debug)
 	if err != nil {
 		cb.debugLog.Log("Failed to initialize embedder: %v", err)
 		cb.debugLog.Close()

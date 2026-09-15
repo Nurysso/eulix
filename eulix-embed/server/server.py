@@ -28,12 +28,21 @@ class _Shutdown(Exception):
     """Raised internally to unwind the request loop on signal/shutdown."""
 
 
+# Third-party libraries (httpx, huggingface_hub, urllib3, etc.) log at INFO
+# by default and spam every HF Hub HEAD/GET check. Only our own logger
+# should be INFO by default; libraries stay at WARNING unless -v/debug.
+_NOISY_LOGGERS = ("httpx", "httpcore", "huggingface_hub", "urllib3", "filelock")
+
+
 def _configure_logging(level: str) -> None:
     logging.basicConfig(
         stream=sys.stderr,
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
+    if level.upper() != "DEBUG":
+        for name in _NOISY_LOGGERS:
+            logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def _write(obj: dict[str, Any]) -> None:
