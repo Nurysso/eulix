@@ -39,7 +39,7 @@ BUCKETS_JINA: list[int] = [32, 64, 128, 192, 256, 384, 512, 768, 1024, 2048, 409
 BINARY_MAGIC = b"EULX"  # 4-byte file signature written at the start of embeddings.bin / vectors.bin
 BINARY_VERSION = 5  # Bump this whenever the on-disk binary layout changes (see save_embeddings_bin docstring)
 # VECTOR_MAGIC = b"EULX"
-Version = "0.4.0"  # different from Binary and vector magic
+Version = "0.4.1"  # different from Binary and vector magic
 
 # Dataclass slots: Python ≥3.10 natively; earlier versions fall back gracefully.
 DC_KW: dict[str, Any] = {"slots": True} if sys.version_info >= (3, 10) else {}
