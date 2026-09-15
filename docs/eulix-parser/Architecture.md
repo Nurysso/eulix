@@ -92,7 +92,7 @@ Eulix Parser is a static code analysis tool that transforms source code into str
          │
          ↓ List of files
   ┌──────────────┐
-  │  Language    │ ← calls for specifc parser by checking file extension
+  │  Language    │ ← calls for specific parser by checking file extension
   │  Detector    │
   └──────┬───────┘
          │

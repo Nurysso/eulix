@@ -419,7 +419,7 @@ Legend: ✓✓✓ = Excellent parallelization
 
 ```bash
 # Install tools
-# Instal hyperfine based on you distro/OS
+# Install hyperfine based on you distro/OS
 sudo pacman -S time hyperfine perf
 
 # Single run with detailed metrics

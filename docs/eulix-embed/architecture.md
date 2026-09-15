@@ -18,7 +18,7 @@ vectorises it, and downstream search / RAG / agent layers consume the vectors.
 - A **general, cross-platform** embedder. If PyTorch runs there, this script
   runs there — Linux, Windows, macOS, WSL2, Docker, CI runners, laptops,
   workstations, headless servers.
-- One-file CLI with three working modes (`embed`, `query`, `serve`) plus
+- One-file CLI with three working modes (`embed`, `query`, `server`) plus
   diagnostics (`compare`, `ijson-backend`, `version`).
 - A pure-Python dependency surface (`ijson`, `numpy`, `torch`, `transformers`,
   `tqdm`, optional `orjson`, optional `sentence-transformers`) — no native
@@ -99,12 +99,12 @@ order of "how much RAM/time you save if you keep them in mind".
 
 **Why:**
 
-- A 4.6 GB KB(Orignal parser output size on linux kernel) file costs ~9.2 GB of disk I/O and ~10–20× RAM overhead when
+- A 4.6 GB KB(Original parser output size on linux kernel) file costs ~9.2 GB of disk I/O and ~10–20× RAM overhead when
   loaded into Python `dict`s. The Rust original is fine because Rust strings
   are 24 bytes and the structures are arena-allocated; Python `dict[str, Any]`
   is a memory disaster.
 - Every key we do not need (`call_graph`, `dependency_graph`, `patterns`,
-  `entry_points`) is skipped at the parser level(Stored in seprate files) — never materialised.
+  `entry_points`) is skipped at the parser level(Stored in separate files) — never materialised.
 - Peak RAM ≈ max(one file_struct, one edge dict). On a 4.6 GB file that
   collapsed ~14 GB working set to ~600 MB.
 - The KB is parsed top-down: small top-level keys (`metadata`, structure-root)
@@ -259,7 +259,7 @@ dimension, and (v4+) the quant flag.
 - Format docs live in the `save_embeddings_bin` / `save_vectors_bin`
   docstrings rather than only in this file — code is the source of truth.
 
-### 3.10 Long-lived `serve` mode (Experimental not ready yet)
+### 3.10 Long-lived `server` mode (Experimental not ready yet)
 
 **Decision:** a third subcommand runs an NDJSON-over-stdin/stdout server that
 keeps the model resident and handles one request per line.
@@ -294,7 +294,7 @@ keeps the model resident and handles one request per line.
   someone forgot to ship a CFFI backend. The wrapper degrades silently.
 - Both code paths are pre-bound at import — no per-call branch on
   `HAS_ORJSON`. The branch cost matters at the rate we serialise progress
-  messages in `serve` mode.
+  messages in `server` mode.
 
 ### 3.12 Disk-space pre-flight (Experimental not ready yet)
 
@@ -339,7 +339,7 @@ though neither holds much mutable state beyond the model itself.
 
 **Why:**
 
-- A second model in the same process (`serve` mode held alongside a search
+- A second model in the same process (`server` mode held alongside a search
   ranker, or unit tests) needs two generators. Modules force globals.
 - Subclassing `EmbeddingGenerator` is the extension point used by the
   upcoming compute-platform-specific builds ([#11](#11-compute-platform-strategy)). They override
@@ -499,7 +499,7 @@ that vector in `embeddings.bin`. Search-time readers load both, map
 | --------------- | --------------------------------------------------- | ------------------------------------- |
 | `embed`         | Full KB → embeddings.bin pipeline                   | Default if no subcommand given        |
 | `query`         | One-shot embed a string, print JSON or binary       | Useful for sanity-checking a model    |
-| `serve`         | Long-lived NDJSON stdin/stdout server               | Avoids per-call model reload          |
+| `server`        | Long-lived NDJSON stdin/stdout server               | Avoids per-call model reload          |
 | `compare`       | Header sanity check on embeddings.bin + vectors.bin | Does _not_ compare vectors pairwise   |
 | `ijson-backend` | Report which ijson C backend is active              | "yajl2_c" is what you want            |
 | `version`       | Version + Python + ijson backend                    | `--short` for just the version string |
@@ -518,7 +518,7 @@ a config file, wrap this script in `make`.
 | ----------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------ |
 | Single-pass streaming         | No random access into the KB after parse   | Re-running is cheap; RAM is the constraint                                     |
 | No persistent chunk cache     | Re-chunk on every run                      | Chunks are deterministic from the parser                                       |
-| `serve` mode has no auth      | Anyone with the pipe can embed             | This is a leaf tool, not a service                                             |
+| `server` mode has no auth     | Anyone with the pipe can embed             | This is a leaf tool, not a service                                             |
 | Python 3.10–3.11 pin          | Blocks users on 3.12+                      | Avoids `slots=True` regression + torch ABI churn                               |
 | HF AutoModel (vs ORT)         | ~10–25% slower per token on stock hardware | Portability; vendor builds reclaim this ([#11](#11-compute-platform-strategy)) |
 | ijson pure-python fallback    | ~10× slower than `yajl2_c`                 | Installer simplicity; user can opt in                                          |
@@ -619,7 +619,7 @@ So: **this script is the baseline.** The vendor builds are siblings that
 import or re-implement the same `Chunk` shape, the same bucketing, the same
 binary format, and the same CLI subcommands. They swap `_embed_batch()` and
 load a different embedding model class. Everything else — chunking, streaming,
-serve mode, disk check, format versioning — is shared.
+server mode, disk check, format versioning — is shared.
 
 If you are reading this from a vendor-specific build's repo, the architectural
 decisions in §3 still apply unless that build's own ARCHITECTURE.md says

@@ -21,7 +21,7 @@ from utils.json_util import json_dumps
 MAX_BATCH_SIZE = 512
 MAX_LINE_BYTES = 10 * 1024 * 1024  # 10 MB
 
-log = logging.getLogger("eulix_embed.serve")
+log = logging.getLogger("eulix_embed.server")
 
 
 class _Shutdown(Exception):
@@ -67,14 +67,14 @@ def cmd_serve(args: argparse.Namespace) -> None:
     Stderr receives all human-readable/log output; stdout is protocol-only.
 
     Usage:
-        python eulix_embed.py serve -m sentence-transformers/all-MiniLM-L6-v2
+        python main.py server -m sentence-transformers/all-MiniLM-L6-v2
     """
     _configure_logging(getattr(args, "log_level", "info"))
     max_batch_size = getattr(args, "max_batch_size", MAX_BATCH_SIZE)
 
     gen: EmbeddingGeneratorTorch | EmbeddingGeneratorOnnx
     log.info(
-        "starting serve mode | model=%s engine=%s device=%s",
+        "starting server mode | model=%s engine=%s device=%s",
         args.model,
         args.engine,
         args.device,

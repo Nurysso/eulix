@@ -1,0 +1,6 @@
+[codespell]
+quiet-level = 2
+check-filenames =
+check-hidden =
+skip = *.pyc,*.pyo,*.pyd,__pycache__,*.so,*.o,*.a,*.egg-info,*.dist-info,target,node_modules,go.sum,go.mod,.eulix,.git,.venv,scripts
+ignore-words-list = eulix,foo,bar,mmaped,struc,thirdparty,ANS

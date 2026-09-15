@@ -2,10 +2,10 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package Fixers makes an atempt to fix files present in .eulix
-// Incase they are corrupted
+// Package Fixers makes an attempt to fix files present in .eulix
+// In case they are corrupted
 
-// This file is reponsible for Glasdos command that checks wether the
+// This file is responsible for Glasdos command that checks whether the
 // analyze output was correct or not
 package fixers
 

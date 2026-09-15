@@ -42,7 +42,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def print_help(parser: argparse.ArgumentParser) -> None:
     parser.print_help()
-    DETAIL_COMMANDS = ("embed", "query", "serve", "compare")
+    DETAIL_COMMANDS = ("embed", "query", "server", "compare")
     sub_action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
 
     for name, subparser in sub_action.choices.items():

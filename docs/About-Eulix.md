@@ -14,9 +14,9 @@ Grab the latest release or build from source via the [GitHub repository](https:/
 
 Make sure you have your toolchain ready depending on how you plan to run it:
 
-* **Go** (for the orchestrator/CLI)
-* **Rust** (for the static analyzer parser)
-* **Python + PyTorch** (for the embedder)
+- **Go** (for the orchestrator/CLI)
+- **Rust** (for the static analyzer parser)
+- **Python + PyTorch** (for the embedder)
 
 ### 2. Initialize in Your Project
 
@@ -38,7 +38,7 @@ eulix analyze
 
 ```
 
-*Depending on your codebase size, the Rust parser moves at roughly 26 million lines per minute, parallelized across your CPU cores.*
+_Depending on your codebase size, the Rust parser moves at roughly 26 million lines per minute, parallelized across your CPU cores._
 
 ### 4. Start Chatting
 
@@ -55,22 +55,20 @@ eulix chat
 
 Because Eulix uses structural retrieval (combining exact symbol lookup, BM25, semantic vectors, and call graph expansion) rather than relying purely on embedding proximity, you can ask deeper architectural questions:
 
-* **Debugging & Call Stacks:**
-> *"What calls foo function, and what breaks if I change its signature?"*
+- **Debugging & Call Stacks:**
 
+  > _"What calls foo function, and what breaks if I change its signature?"_
 
-* **Onboarding:**
-> *"Trace foo request end-to-end through the module."*
+- **Onboarding:**
 
+  > _"Trace foo request end-to-end through the module."_
 
-* **Security & Auditing:**
-> *"Find every caller of foo sensitive authentication method."*
+- **Security & Auditing:**
 
+  > _"Find every caller of foo sensitive authentication method."_
 
-* **Refactoring:**
-> *"Show me the blast radius of modifying foo base class method."*
-
-
+- **Refactoring:**
+  > _"Show me the blast radius of modifying foo base class method."_
 
 ---
 
@@ -78,11 +76,11 @@ Because Eulix uses structural retrieval (combining exact symbol lookup, BM25, se
 
 Eulix is split into three core binaries working together:
 
-| Component | Language | Role |
-| --- | --- | --- |
-| **`eulix`** | Go | The orchestrator: CLI, config, retrieval pipeline, LLM integration, and TUI. |
-| **`eulix_parser`** | Rust | The static analyzer: handles symbols, call graphs, control flow, and complexity metrics. |
-| **`eulix_embed`** | Python | The embedder: transformer models via PyTorch (with CUDA/ROCm support). |
+| Component          | Language | Role                                                                                     |
+| ------------------ | -------- | ---------------------------------------------------------------------------------------- |
+| **`eulix`**        | Go       | The orchestrator: CLI, config, retrieval pipeline, LLM integration, and TUI.             |
+| **`eulix_parser`** | Rust     | The static analyzer: handles symbols, call graphs, control flow, and complexity metrics. |
+| **`eulix_embed`**  | Python   | The embedder: transformer models via PyTorch (with CUDA/ROCm support).                   |
 
 ---
 
@@ -100,8 +98,8 @@ threads = 4 # use it to increase parsing speed
 prismVersion = 2 # Prism is eulix Call graph approximation algorithm, v1 is basic and tested well, v2 adds inheritance tracking and more accurate results
 
 [embeddings]
-model = "microsoft/codebert-base" # model to embedd file(kb.json) prepared by eulix_parser
-dimension = 768 # model dimensions, exists to make sure query and embedding use same model and dim. 
+model = "microsoft/codebert-base" # model to embed file(kb.json) prepared by eulix_parser
+dimension = 768 # model dimensions, exists to make sure query and embedding use same model and dim.
 
 [llm]
 local = false # switch between local or cloud
@@ -128,9 +126,9 @@ change_threshold = 0.10 # triggers analyze pipeline when codebase is changed aft
 force_reanalyze_threshold = 0.30 # force re-analyze when code base is changed significantly
 ```
 
-* **Local-First Privacy:** Your code stays local by default. If you want to connect an external LLM (OpenAI, Anthropic, Gemini, etc.), it's a simple config line switch—entirely opt-in.
-* **Speeding Up Cold Starts:** The initial query can take a few seconds while PyTorch initializes and warms up the cache. To keep retrieval blazing fast (under 50ms), run `eulix_embed serve` as a daemon or fire a quick warm-up query at startup.
-* **Supported Languages:** Python, Go, C, C++, Rust, and TypeScript are fully stable.
+- **Local-First Privacy:** Your code stays local by default. If you want to connect an external LLM (OpenAI, Anthropic, Gemini, etc.), it's a simple config line switch—entirely opt-in.
+- **Speeding Up Cold Starts:** The initial query can take a few seconds while PyTorch initializes and warms up the cache. To keep retrieval blazing fast (under 50ms), run `eulix_embed server` as a daemon or fire a quick warm-up query at startup.
+- **Supported Languages:** Python, Go, C, C++, Rust, and TypeScript are fully stable.
 
 ---
 
@@ -138,5 +136,5 @@ force_reanalyze_threshold = 0.30 # force re-analyze when code base is changed si
 
 Since Eulix is currently in **beta**, your feedback shapes the roadmap directly!
 
-* Found a bug or rough edge? Open an issue on [GitHub](https://github.com/Nurysso/eulix/issues).
-* Want to contribute? Docs contributions, bug reports, and hardware benchmark numbers (especially embedding speeds on different GPUs) are always welcome.
+- Found a bug or rough edge? Open an issue on [GitHub](https://github.com/Nurysso/eulix/issues).
+- Want to contribute? Docs contributions, bug reports, and hardware benchmark numbers (especially embedding speeds on different GPUs) are always welcome.

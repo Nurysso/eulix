@@ -11,7 +11,7 @@ func CountTokens(content, provider string) int {
 	if content == "" {
 		return 0
 	}
-	
+
 	p := strings.ToLower(strings.TrimSpace(provider))
 	switch p {
 	case "openai", "anthropic", "openrouter":
@@ -22,7 +22,7 @@ func CountTokens(content, provider string) int {
 			return len(ids)
 		}
 	}
-	
+
 	// Fallback heuristic: 1 token ~= 4 characters
 	return len(content) / 4
 }

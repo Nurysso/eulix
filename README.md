@@ -248,7 +248,7 @@ The parser is powered by **PRISM**, Eulix's approximate relationship-resolution 
 
 PRISM is designed for retrieval and navigation rather than formal whole-program verification.
 
-> paper comming soon :)
+> paper coming soon :)
 
 ---
 
@@ -576,7 +576,7 @@ Available commands:
 ```text
 embed
 query
-serve
+server
 compare
 ijson-backend
 version
@@ -593,7 +593,7 @@ eulix_embed embed \
   --quantize
 ```
 
-The `serve` command provides a long-lived embedding process so repeated query embeddings don't require repeatedly loading the model.
+The `server` command provides a long-lived embedding process so repeated query embeddings don't require repeatedly loading the model.
 
 ---
 

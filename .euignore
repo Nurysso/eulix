@@ -1,8 +1,8 @@
 # Eulix ignore patterns
-node_modules/
-.git/
-*.test.go
+*.test*
 vendor/
 dist/
-test/
+sample-proj
+callgraph-viz/
+eulix-mcp/
 build/

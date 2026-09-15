@@ -30,7 +30,7 @@
 //!
 //! 2. **Analysis** — Builds a call graph (nodes = callables, edges =
 //!    call relationships) and reverse call graph, resolves cross-file
-//!    call locations using PRISM aproximate precission analysis, detects patterns,
+//!    call locations using PRISM approximate precision analysis, detects patterns,
 //!    identifies entry points, and enumerates external dependencies.
 //!
 //! 3. **Summary Generation** — Produces a high-level summary of the
@@ -258,7 +258,7 @@ fn write_json_streaming<T: serde::Serialize>(
     .map_err(std::io::Error::other)
 }
 
-// No longer used, kept only for future refrence
+// No longer used, kept only for future reference
 #[allow(dead_code)]
 fn write_json_file(path: &Path, json: &str) -> std::io::Result<()> {
     let f = std::fs::File::create(path)?;

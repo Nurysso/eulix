@@ -122,7 +122,7 @@ func Hashes() ([]FileHash, error) {
 
 	if ParserHash != "" && parserFH.SHA256 != ParserHash {
 		return nil, fmt.Errorf(
-			"%w: \ncompiled time issue occured: The eulix_parser binary does not match build manifest.\n"+
+			"%w: \ncompiled time issue occurred: The eulix_parser binary does not match build manifest.\n"+
 				"got sha256=%s\nwant sha256=%s\n"+
 				"this build may have embedded a corrupted or tampered binary and should not be trusted",
 			ErrIntegrityMismatch, parserFH.SHA256, ParserHash,

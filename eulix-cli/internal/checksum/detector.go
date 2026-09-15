@@ -74,7 +74,7 @@ type Result struct {
 	FilesModified int
 }
 
-const analysisVersion = utils.AppVersion // i dont rememeber why this was set to 0.5.3 or what it meant.
+const analysisVersion = utils.AppVersion // i dont remember why this was set to 0.5.3 or what it meant.
 const eulixDirName = ".eulix"
 const checksumFileName = "checksum.json.zst"
 const ignoreFileName = ".euignore"
@@ -250,7 +250,7 @@ func (d *Detector) calculate(stored *Checksum) (*Checksum, error) {
 		dirModTime := info.ModTime().UnixNano()
 
 		// If we already stored a entry for a dir and its mtime matches,
-		// we can assume that its files hasnt changed and reuse the whole subtree
+		// we can assume that its files hasn't changed and reuse the whole subtree
 		if stored != nil {
 			if storedDir, ok := stored.Dirs[relDir]; ok && storedDir.ModTime == dirModTime {
 				reused, reusedLines, reusedCount, ok := reuseSubtree(stored, relDir, storedDir)

@@ -6,7 +6,7 @@
 
 /*
 Package query provides query classification functionality.
-This file is provids utils/helpers for query classification
+This file is provides utils/helpers for query classification
 */
 
 package query

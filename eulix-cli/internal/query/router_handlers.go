@@ -5,7 +5,7 @@
 // Package query provides query classification functionality.
 
 /*
-This file is responsible for handleing/Generating Prompts with CoT.
+This file is responsible for handling/Generating Prompts with CoT.
 */
 package query
 
@@ -62,7 +62,7 @@ func cotHeader(query string, class *Classification, sourceAvailable bool, codeBu
 		fmt.Fprintf(&b, "Key terms        : %v\n", class.Keywords)
 	}
 	fmt.Fprintf(&b, "Query type       : %s  (confidence %.1f%%)\n", class.Type.String(), class.Confidence*100)
-	fmt.Fprintf(&b, "Question you need to anser is  %s\n\n", query)
+	fmt.Fprintf(&b, "Question you need to answer is  %s\n\n", query)
 
 	b.WriteString("=== CHAIN-OF-THOUGHT INSTRUCTIONS ===\n")
 	b.WriteString("Before writing your final answer, reason through the following steps.\n")

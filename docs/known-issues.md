@@ -15,9 +15,9 @@ This document tracks current known issues, bugs, and architectural limitations w
 
 ## Query
 
-- **Small functions are being ignored in retrival**:
+- **Small functions are being ignored in retrieval**:
 
-  This is due to applyBudget is a small helper function and is only used once and mentioned 3 time in the entire (~23k)code base once in defination once in comment and another is when it was called, the retrival managed to get where it was called but coudnt retrival actual implementation
+  This is due to applyBudget is a small helper function and is only used once and mentioned 3 time in the entire (~23k)code base once in definition once in comment and another is when it was called, the retrieval managed to get where it was called but coudln't retrieval actual implementation
 
 ```bash
   [YOU]
@@ -47,7 +47,7 @@ This document tracks current known issues, bugs, and architectural limitations w
   </answer>
 ```
 
-retrival code
+retrieval code
 
 ````go
 ...more code.....

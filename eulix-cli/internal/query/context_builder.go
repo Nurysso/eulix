@@ -98,7 +98,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 
 	cb.debugLog.Log("\n=== NEW QUERY ===")
 	cb.debugLog.Log("Query: %s", query)
-	startRetrival := time.Now()
+	startretrieval := time.Now()
 	intent := cb.classifyQueryIntent(query)
 	trace.Intent = intent
 	cb.debugLog.Log("Intent: %d (specificity: %.2f, confidence: %.2f)",
@@ -185,7 +185,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 		expanded = cb.buildContextWithGraph(candidates, budget.ContextBudget, intent)
 		cb.debugLog.Log("Graph expansion: %d chunks", len(expanded))
 	} else {
-		cb.debugLog.Log("Building context without call graphs as they werent find")
+		cb.debugLog.Log("Building context without call graphs as they weren't find")
 		expanded = cb.buildContextWithoutGraph(candidates, budget.ContextBudget)
 		cb.debugLog.Log("NO CALL GARAPHS: %d Chunks Expanded", len(expanded))
 	}
@@ -234,11 +234,11 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	ctx := cb.assembleContext(selected)
 	trace.TotalTokens = ctx.TotalTokens
 	trace.Duration = time.Since(start)
-	retrivalDuration := time.Since(startRetrival)
+	retrievalDuration := time.Since(startretrieval)
 	cb.debugLog.Log("=== QUERY COMPLETE ===")
 	cb.debugLog.Log("Final context: %d chunks, %d tokens, %d sources",
 		len(ctx.Chunks), ctx.TotalTokens, len(ctx.Sources))
-	cb.debugLog.Log("Retrival Duration: %v\n", retrivalDuration)
+	cb.debugLog.Log("Retrieval Duration: %v\n", retrievalDuration)
 	cb.debugLog.Log("Duration: %v\n", trace.Duration)
 	cb.mu.Lock()
 	cb.lastTrace = trace

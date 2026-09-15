@@ -5,7 +5,7 @@
 // Package cli provides the command-line interface implementation for EULIX.
 
 /*
-This file is responsible for the init command whcih is responsible
+This file is responsible for the init command which is responsible
 for marking the project/folder ready to be used by EULIX
 OFC this can be skipped by manually calling parser and embedder
 */

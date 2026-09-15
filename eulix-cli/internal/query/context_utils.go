@@ -64,7 +64,7 @@ func (cb *ContextBuilder) writeContextToFile(ctx *utils.ContextWindow) error {
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return err
 	}
-	fileName := fmt.Sprintf("retrival_debug_%s.txt", time.Now().Format("20060102_150405"))
+	fileName := fmt.Sprintf("retrieval_debug_%s.txt", time.Now().Format("20060102_150405"))
 	logPath := filepath.Join(logDir, fileName)
 	f, err := os.Create(logPath)
 	if err != nil {

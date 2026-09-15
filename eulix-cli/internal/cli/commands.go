@@ -72,7 +72,7 @@ var installEmbedDeps = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		root, err := a.EulixRoot()
 		if err != nil {
-			log.Fatalf("cant find root dir, %v", err)
+			log.Fatalf("can't find root dir, %v", err)
 		}
 		if err := a.CheckUv(); err != nil {
 			log.Fatalf("Uv not found on system: %v", err)

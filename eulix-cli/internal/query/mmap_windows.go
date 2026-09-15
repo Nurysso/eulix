@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package query manages query routing and retrival for EULIX.
+// Package query manages query routing and retrieval for EULIX.
 
 //go:build windows
 
@@ -63,7 +63,7 @@ func prefetchvirtualmemory(process windows.Handle, count uint32, entries *Win32M
 }
 
 // openSeqyentialWindows opens path with FILE_FLAG_SEQUENTIAL_ONLY so
-// the fs readhead matches access patter. Returns an
+// the fs readhead matches access pattern. Returns an
 // *os.File whose Close() release the underlying Win32 handle.
 func openSeqyentialWindows(path string) (*os.File, error) {
 	pathPtr, err := windows.UTF16PtrFromString(path)

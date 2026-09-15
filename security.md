@@ -157,7 +157,7 @@ Eulix caches query results (Redis/SQL). In shared environments:
 ```bash
 # All local – safest
 eulix analyze
-eulix chat  # uses Ollama/local LLM but can also use Cloud llm dependig upon eulix.toml config
+eulix chat  # uses Ollama/local LLM but can also use Cloud llm depending upon eulix.toml config
 ```
 
 ### For CI/CD Pipelines

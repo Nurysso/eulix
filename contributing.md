@@ -90,12 +90,13 @@ We welcome feature ideas! Please include:
 
 **Current focus areas (help wanted):**
 
-- Incremental parsing (file watching): TOO BIG AND DIFICULT MAYBE IN V2
+- Incremental parsing (file watching): TOO BIG AND DIFFICULT MAYBE IN V2
 - TypeScript/JavaScript support
-- Bugs in context retrival
+- Bugs in context retrieval
 - Better symbol disambiguation (path-based scoring)
 - Data flow analysis (taint tracking)
 - More embedding models (CodeBERT, StarCoder embeddings)
+- Tests across rust,python,go
 
 ### Improving Documentation
 
@@ -158,7 +159,7 @@ docs/
 
 ### Running Tests
 
-> DONT HAVE ALOT OF TESTS
+> DONT HAVE A LOT OF TESTS
 
 ```bash
 # Go tests
@@ -180,38 +181,6 @@ eulix chat
 
 # Check context builder logs
 tail -f .eulix/context_debug.log
-```
-
----
-
-## Project Structure
-
-```
-eulix/
-├── cmd/
-│   └── eulix/           # CLI entrypoint (Go)
-├── internal/
-│   ├── cache/           # Redis/SQL cache
-│   ├── checksum/        # Checksum
-│   ├── cli/             # Command implementations
-│   ├── config/          # Config manager
-│   ├── embeddings/      # Embedder client
-│   ├── llm/             # LLM client abstraction
-│   ├── query/           # Classifier, router, context builder
-│   ├── Tui/             # TUI and text formating in response
-│   └── types/           # Shared types
-├── eulix-parser/        # Rust static analyzer
-│   ├── src/
-│   │    └── kb/         # output json file structrure (needs changes)
-│   │    └── parser/     # Tree-sitter grammars and PRISM code in analyze.rs
-│   │    └── utils/      # File walking with .euignore
-│   └── Cargo.toml
-├── eulix-embed/         # Python embedder
-│   ├── eulix_embed.py
-│   └── requirements.txt
-├── docs/                # Documentation
-├── Makefile
-└── README.md
 ```
 
 ---
@@ -240,7 +209,7 @@ eulix/
 ### Commit Messages
 
 ```
-Just be clear on what the comit is about
+Just be clear on what the commit is about
 ```
 
 **Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`

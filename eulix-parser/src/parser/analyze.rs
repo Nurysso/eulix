@@ -81,7 +81,7 @@ impl Analyzer {
 
         // Skipped entirely (rather than degraded) for huge repos: a
         // partially-built call graph would be misleading, so we'd rather
-        // comit it and say so than ship wrong data.
+        // compmit it and say so than ship wrong data.
         if !is_large {
             // Call sites are resolved to definition IDs up front so that
             // every later stage (graph building, called_by) can key on a

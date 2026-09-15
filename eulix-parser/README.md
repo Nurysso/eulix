@@ -530,7 +530,7 @@ cargo build --release
 
 # Research
 
-Apart from maintaing this codebase i am working on research paper on PRISM, mainly for experience and potential benefit in my masters application.
+Apart from maintaining this codebase i am working on research paper on PRISM, mainly for experience and potential benefit in my masters application.
 
 The central question is:
 

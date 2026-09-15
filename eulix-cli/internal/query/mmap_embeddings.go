@@ -2,9 +2,9 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package query manages query routing and retrival for EULIX.
+// Package query manages query routing and retrieval for EULIX.
 
-// this file exists for experimentation and currenlty isnt used anywhere
+// this file exists for experimentation and currently isn't used anywhere
 // in the code base
 
 // nolint:unused

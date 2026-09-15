@@ -9,7 +9,7 @@
 - **Dual Inference Engines**:
   - **ONNX Runtime (`--engine onnx`)**: Lightweight, high-throughput inference with zero PyTorch overhead and native CPU/CUDA execution.
   - **PyTorch (`--engine torch`)**: Full PyTorch backend supporting CUDA, ROCm/HIP (AMD), and Apple Silicon (MPS).
-- **Persistent Daemon Mode (`serve`)**:
+- **Persistent Daemon Mode (`server`)**:
   - Eliminates model reload latency. Runs as a long-lived stdin/stdout daemon communicating with the Go CLI orchestrator for sub-50ms query embedding.
 - **Fast Single-Pass Streaming**:
   - Employs `ijson` with C-extensions (`libyajl2`) and `orjson` to stream multi-gigabyte knowledge base JSON files with minimal memory overhead.
@@ -119,7 +119,7 @@ uv run main.py query \
 Runs a persistent embedding server used by `eulix chat` to embed queries interactively without process re-initialization.
 
 ```bash
-uv run main.py serve \
+uv run main.py server \
   -m BAAI/bge-base-en-v1.5 \
   --engine onnx \
   --device auto

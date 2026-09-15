@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package query manages query routing, content loading and retrival for EULIX.
+// Package query manages query routing, content loading and retrieval for EULIX.
 
 /*
 Mmap backed json loader, optimised for 2-4GB kb.json
@@ -115,7 +115,7 @@ func decodeJSONFile(path string, v any) error {
 
 // decodeViaReader is the non-mmap fallback. sonicCopy is used because
 // the bufio.Reader is heap-allocated and its buffer is reused across
-// reads, strings that span two reads would otherwise refrence the wrong buffer.
+// reads, strings that span two reads would otherwise reference the wrong buffer.
 func decodeViaReader(path string, v any) error {
 	f, err := os.Open(path)
 	if err != nil {

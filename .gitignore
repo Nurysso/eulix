@@ -1,6 +1,4 @@
 example_project/
-examples/
-scripts/
 *.idea/
 .venv/
 .mypy_cache/
@@ -8,13 +6,11 @@ test_project/
 .ruff_cache/
 __pycache__/
 .pyc/
-eulix-embed/embeddingstestoutputs/
 test/
 build/
 **/target/
 *-bug.*
 .eulix/
-eulix.toml
 callgraph-viz/
 context_debug_*.txt
 debug_embedding_pipeline_*
