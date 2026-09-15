@@ -58,9 +58,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Create mock embedded assets
+        run: |
+          mkdir -p eulix-cli/internal/assets/bins
+          touch eulix-cli/internal/assets/bins/eulix-embed.zip
+          touch eulix-cli/internal/assets/bins/eulix_parser_linux
+          touch eulix-cli/internal/assets/bins/eulix_parser_windows.exe
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: eulix-cli/go.mod
+
       - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.13.2
