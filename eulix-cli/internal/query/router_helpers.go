@@ -464,33 +464,34 @@ func (r *Router) resolveCallGraphEntity(name string) (string, *utils.CallGraphNo
 		return "", nil, false, nil
 	}
 
-	// exact key
+	// Exact node ID match
 	if n, ok := r.cgBuild.Nodes[name]; ok {
 		return name, n, true, nil
 	}
 
-	// simple prefix variants
-	for _, prefix := range []string{"func_", "method_", "class_", "struct_"} {
+	// Simple prefix variants
+	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
+	for _, prefix := range prefixes {
 		key := prefix + name
 		if n, ok := r.cgBuild.Nodes[key]; ok {
 			return key, n, true, nil
 		}
 	}
 
-	// short-name suffix scan (now correctly strips ClassName_ from methods)
-	// Replace tier 3 in resolveCallGraphEntity with this
+	// Short-name and bareID suffix scan
 	lower := strings.ToLower(name)
 
 	var bestKey string
 	var bestNode *utils.CallGraphNode
 	bestScore := -1
-	var ambiguous []string // all keys whose short name starts with `name`
+	var ambiguous []string // all keys matching `name`
 
 	for key, n := range r.cgBuild.Nodes {
 		short := strings.ToLower(callGraphShortName(key))
+		bare := strings.ToLower(bareID(key))
 
-		// Exact short-name match
-		if short == lower {
+		// Exact match against short name or bare ID (e.g. "generate_vectors_streaming" or "Resolver.resolve")
+		if short == lower || bare == lower {
 			score := n.CallCountEstimate
 			if n.NodeType == "function" || n.NodeType == "method" {
 				score += 1000
@@ -504,8 +505,8 @@ func (r *Router) resolveCallGraphEntity(name string) (string, *utils.CallGraphNo
 			continue
 		}
 
-		// Prefix match,"build_call_graph" matches "build_call_graph_v2"
-		if strings.HasPrefix(short, lower) {
+		// Prefix match (e.g., "build_call_graph" matches "build_call_graph_v2")
+		if strings.HasPrefix(short, lower) || strings.HasPrefix(bare, lower) {
 			ambiguous = append(ambiguous, key)
 		}
 	}
@@ -514,7 +515,7 @@ func (r *Router) resolveCallGraphEntity(name string) (string, *utils.CallGraphNo
 		return bestKey, bestNode, true, ambiguous
 	}
 	if len(ambiguous) > 0 {
-		// Only prefix matches, no exact, return best by call count
+		// Only prefix matches; return highest score candidate
 		bestScore = -1
 		for _, key := range ambiguous {
 			n := r.cgBuild.Nodes[key]
@@ -570,23 +571,21 @@ func BuildCallGraphIndex(ref *utils.CallGraphRef) *CallGraphIdx {
 }
 
 // callGraphShortName extracts the bare symbol name from a prefixed/namespaced key.
-// "func_some::path::build_call_graph" → "build_call_graph"
-// "method_MyStruct_do_thing"          → "do_thing" (strips method_ prefix)
+// "func_generate_vectors_streaming::eulix-embed/pipeline/onnx_pipeline.py" → "generate_vectors_streaming"
 func callGraphShortName(key string) string {
-	// Strip namespace separators first (:: for Rust paths)
-	if idx := strings.LastIndex(key, "::"); idx != -1 {
-		key = key[idx+2:]
+	// Strip file path suffix separated by ::
+	if idx := strings.Index(key, "::"); idx != -1 {
+		key = key[:idx]
 	}
 
 	// Strip known type prefixes
-	for _, prefix := range []string{"func_", "method_", "class_"} {
+	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
+	for _, prefix := range prefixes {
 		after, ok := strings.CutPrefix(key, prefix)
 		if !ok {
 			continue
 		}
 		// For methods: "method_ClassName_methodName" → strip "ClassName_" too.
-		// The class name is everything up to the first underscore in the remainder,
-		// but only when another underscore exists (so bare "method_foo" stays "foo").
 		if prefix == "method_" {
 			if idx := strings.Index(after, "_"); idx != -1 {
 				return after[idx+1:] // "Analyzer_build_call_graph" → "build_call_graph"

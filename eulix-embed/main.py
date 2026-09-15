@@ -158,7 +158,7 @@ def main() -> None:
         print(f"{Version}")
         sys.exit(0)
 
-    known_commands = {"embed", "query", "serve", "compare", "ijson-backend", "version"}
+    known_commands = {"embed", "query", "server", "compare", "ijson-backend", "version"}
 
     # If first arg isn't a known subcommand, assume it's meant for
     # `embed` and inject it.
@@ -167,10 +167,10 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if args.command in ("embed", "query", "serve", "compare"):
+    if args.command in ("embed", "query", "server", "compare"):
         check_python_version()
         # Check dependencies BEFORE importing heavy ML libraries
-        if args.command in ("embed", "query", "serve"):
+        if args.command in ("embed", "query", "server"):
             engine = getattr(args, "engine", "onnx")
             check_engine_dependencies(engine)
 
@@ -181,7 +181,7 @@ def main() -> None:
                 cmd_embed(args)
             elif args.command == "query":
                 cmd_query(args)
-            elif args.command == "serve":
+            elif args.command == "server":
                 cmd_serve(args)
         else:
             from cli.commands import cmd_compare

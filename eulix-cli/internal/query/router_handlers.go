@@ -259,12 +259,13 @@ func buildRouterCallGraph(ref *utils.CallGraphRef) *CallGraph {
 	return &CallGraph{Functions: fns}
 }
 
-// bareID strips the node-type prefix that eulix-parser emits.
-// "func_firstSymbolOrExtracted"   → "firstSymbolOrExtracted"
-// "method_Router_handleLocation"  → "Router.handleLocation"
-// "type_KBIndices"                → "KBIndices"
+// bareID strips the node-type prefix and file path that eulix-parser emits.
 func bareID(id string) string {
-	for _, prefix := range []string{"func_", "method_", "type_"} {
+	if i := strings.Index(id, "::"); i != -1 {
+		id = id[:i]
+	}
+	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
+	for _, prefix := range prefixes {
 		if strings.HasPrefix(id, prefix) {
 			s := strings.TrimPrefix(id, prefix)
 			if prefix == "method_" {
@@ -315,6 +316,9 @@ func (r *Router) handleDependency(query string, _ *Classification) (string, erro
 	}
 }
 
+// handleCallGraph renders the two-level call tree with a per-symbol cache.
+// First call for a symbol: O(callers + callees + their neighbours).
+// Subsequent calls: O(1) map lookup + string copy.
 func (r *Router) handleCallGraph(query string, class *Classification) (string, error) {
 	entity := firstSymbolOrExtracted(class, query)
 	if entity == "" {
@@ -356,48 +360,45 @@ func (r *Router) handleCallGraph(query string, class *Classification) (string, e
 			}
 			n := r.cgBuild.Nodes[k]
 			fmt.Fprintf(&b, "  • %s  (fan-in: %d, file: %s)\n",
-				callGraphShortName(k), n.CallCountEstimate, n.File)
+				bareID(k), n.CallCountEstimate, n.File)
 		}
 		b.WriteString("\n")
 	}
 
-	fmt.Fprintf(&b, "Call graph for '%s'\n", resolvedKey)
-	fmt.Fprintf(&b, "File     : %s\n", node.File)
-	fmt.Fprintf(&b, "Type     : %s\n", node.NodeType)
+	fmt.Fprintf(&b, "Call Graph: %s\n", bareID(resolvedKey))
+	fmt.Fprintf(&b, "  File    : %s\n", node.File)
+	fmt.Fprintf(&b, "  Type    : %s\n", node.NodeType)
 	if node.IsEntryPoint {
-		b.WriteString("Role     : entry point\n")
+		b.WriteString("  Role    : entry point\n")
 	}
+	fmt.Fprintf(&b, "  Metrics : Fan-in %d | Fan-out %d\n", len(callers), len(callees))
 
-	b.WriteString("\n┌─ Called by (inbound):\n")
+	b.WriteString("\n┌── Called by (Inbound):\n")
 	if len(callers) == 0 {
-		b.WriteString("│  (none — likely an entry point or exported API)\n")
+		b.WriteString("│   (none — likely an entry point or exported API)\n")
 	} else {
 		for _, callerID := range callers {
-			fmt.Fprintf(&b, "│  ← %s\n", callerID)
+			fmt.Fprintf(&b, "│   ← %s\n", bareID(callerID))
 			for _, gc := range r.cgBuild.CalledBy[callerID] {
-				fmt.Fprintf(&b, "│     ← %s\n", gc)
+				fmt.Fprintf(&b, "│       ← %s\n", bareID(gc))
 			}
 		}
 	}
 
-	b.WriteString("\n└─ Calls (outbound):\n")
+	b.WriteString("└── Calls (Outbound):\n")
 	if len(callees) == 0 {
-		b.WriteString("   (none — leaf function)\n")
+		b.WriteString("    (none — leaf function)\n")
 	} else {
 		for _, callee := range callees {
-			fmt.Fprintf(&b, "   → %s\n", callee)
+			fmt.Fprintf(&b, "    → %s\n", bareID(callee))
 			for _, gc := range r.cgBuild.Calls[callee] {
-				fmt.Fprintf(&b, "      → %s\n", gc)
+				fmt.Fprintf(&b, "        → %s\n", bareID(gc))
 			}
 		}
 	}
 
-	fmt.Fprintf(&b, "\nFan-in : %d\nFan-out: %d\n", len(callers), len(callees))
-	if len(callers) == 0 {
-		b.WriteString("Note: No callers detected — treat as entry point.\n")
-	}
 	if len(callees) > 7 {
-		fmt.Fprintf(&b, "⚠ High fan-out (%d) — consider splitting.\n", len(callees))
+		fmt.Fprintf(&b, "\n⚠ High fan-out (%d) — consider splitting.\n", len(callees))
 	}
 
 	result := b.String()

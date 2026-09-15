@@ -41,6 +41,7 @@ _PROVIDER_ALIASES: dict[str, list[str]] = {
         "CUDAExecutionProvider",
         "ROCMExecutionProvider",
         "MIGraphXExecutionProvider",
+        "CoreMLExecutionProvider",
         "CPUExecutionProvider",
     ],
     "rocm": [
@@ -54,6 +55,8 @@ _PROVIDER_ALIASES: dict[str, list[str]] = {
         "CPUExecutionProvider",
     ],
     "migraphx": ["MIGraphXExecutionProvider", "CPUExecutionProvider"],
+    "mps": ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+    "coreml": ["CoreMLExecutionProvider", "CPUExecutionProvider"],
 }
 
 # Where locally-exported ONNX models get cached (used only when a model
@@ -72,13 +75,14 @@ _ONNX_CANDIDATE_FILES: list[str] = [
 
 
 def _resolve_providers(ort: Any, device: str | None) -> tuple[list[str], str]:
-    """
-    Turn a user-requested device ("cpu" / "cuda" / "rocm" / None) into an
-    ordered list of onnxruntime Execution Providers plus a short label used
-    for batch-size / bucketing heuristics.
+    """Turn a user-requested device ("cpu" / "cuda" / "rocm" / "mps" / None) into an
 
-    When `device` is None, auto-detects the best provider actually present
-    in `ort.get_available_providers()` — CUDA, then ROCm/MIGraphX, then CPU.
+    ordered list of onnxruntime Execution Providers plus a short label used for
+    batch-size / bucketing heuristics.
+
+    When `device` is None, auto-detects the best provider actually present in
+    `ort.get_available_providers()` — CUDA, ROCm/MIGraphX, CoreML (MPS), then
+    CPU.
     """
     available = set(ort.get_available_providers())
 
@@ -106,6 +110,7 @@ def _resolve_providers(ort: Any, device: str | None) -> tuple[list[str], str]:
             "CUDAExecutionProvider": "cuda",
             "ROCMExecutionProvider": "rocm",
             "MIGraphXExecutionProvider": "rocm",
+            "CoreMLExecutionProvider": "mps",
         }.get(active_provider, "cpu")
 
         if label != "cpu":
@@ -119,7 +124,10 @@ def _resolve_providers(ort: Any, device: str | None) -> tuple[list[str], str]:
 
     # --- Auto-detection Order ---
     if "CUDAExecutionProvider" in available:
-        print("  ✓ NVIDIA GPU detected — using CUDAExecutionProvider", file=sys.stderr)
+        print(
+            "  ✓ NVIDIA GPU detected — using CUDAExecutionProvider",
+            file=sys.stderr,
+        )
         return ["CUDAExecutionProvider", "CPUExecutionProvider"], "cuda"
 
     if "ROCMExecutionProvider" in available:
@@ -135,6 +143,13 @@ def _resolve_providers(ort: Any, device: str | None) -> tuple[list[str], str]:
             file=sys.stderr,
         )
         return ["MIGraphXExecutionProvider", "CPUExecutionProvider"], "rocm"
+
+    if "CoreMLExecutionProvider" in available:
+        print(
+            "  ✓ Apple Silicon / macOS GPU detected — using CoreMLExecutionProvider",
+            file=sys.stderr,
+        )
+        return ["CoreMLExecutionProvider", "CPUExecutionProvider"], "mps"
 
     print(
         "ℹ No GPU execution provider available — using CPUExecutionProvider",

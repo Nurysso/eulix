@@ -1,261 +1,823 @@
+# Eulix
+
 <div align="center">
 
 <img src="docs/assets/logo.jpg" alt="Eulix" width="120" />
 
-# Eulix
+### Local-first code navigation for large codebases.
 
-**Turn your codebase into a searchable knowledge base — ask questions, get grounded answers.**
+**Find code. Trace relationships. Understand unfamiliar systems.**
 
 [![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg?style=for-the-badge)](LICENSE)
-[![License: Apache 2.0](https://img.shields.io/badge/eulix--embed-Apache%202.0-blue.svg?style=for-the-badge)](eulix-embed/LICENSE)
+[![eulix-embed](https://img.shields.io/badge/eulix--embed-Apache%202.0-blue.svg?style=for-the-badge)](eulix-embed/LICENSE)
 [![Go](https://img.shields.io/badge/Go-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev)
 [![Rust](https://img.shields.io/badge/Rust-orange?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Python](https://img.shields.io/badge/Python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)](https://www.python.org/)
 
-[Overview](#overview) · [Install](#installation) · [Quickstart](#quickstart) · [CLI Reference](#cli-reference) · [Architecture](#architecture) · [Docs](docs/)
+[Overview](#overview) · [Quickstart](#quickstart) · [How-it-works](#how-it-works) · [Benchmarks](#benchmarks) · [CLI](#cli) · [Architecture](#architecture) · [Docs](#documentation)
 
 </div>
 
 ---
 
-<!-- > **Beta.** Core features are stable and the API is settling — no breaking changes planned for the next few releases. First stable release targeted for late July / early August 2026. [Known issues](docs/known-issues.md) are documented up front; contributions (especially docs) are welcome. -->
+## Overview
+
+Large codebases are hard for a simple reason:
+
+**you usually don't know where the answer is.**
+
+You can grep for a symbol.
+You can jump through an LSP.
+You can search filenames.
+You can ask an LLM.
+
+The hard part is following the relationships between them.
+
+Eulix builds a local representation of your repository containing symbols, relationships, indexes, and optional semantic embeddings. Queries are then routed to the cheapest useful mechanism:
+
+- direct repository data for simple questions
+- structural and lexical retrieval for navigation
+- semantic retrieval when meaning matters
+- graph expansion when relationships matter
+- an LLM when the query actually needs reasoning
+
+The goal is not to make everything an LLM problem.
+
+It's to make the codebase itself searchable, navigable, and useful.
 
 ---
 
-## Overview
+## Why Eulix?
 
-Eulix builds a structured model of your codebase — symbols, call graphs, control flow, and semantic embeddings — then answers questions about it through a multi-layer retrieval pipeline, in well under a second once warm.
+### Local-first
 
-Every answer is grounded in actual code structure, not a nearest-neighbor guess. Retrieval gaps are surfaced explicitly instead of papered over with hallucination.
+Your source code stays on your machine by default.
 
-**Your code never leaves your machine.** Parsing, indexing, and reasoning all run locally by default. Cloud LLMs are supported, but strictly opt-in.
+Local parsing, indexing, retrieval, and embedding are supported. Cloud LLMs are optional.
 
-## Why Eulix
+### Structure-aware
 
-- **Grounded, not guessed.** A structured knowledge base — symbols, call graphs, control flow — comes before any retrieval, so answers are backed by real code structure.
-- **Local-first.** Nothing leaves your machine unless you explicitly configure a cloud provider.
-- **Any LLM.** OpenAI, Anthropic, Gemini, Ollama, LM Studio, or any OpenAI-compatible endpoint — one config line to switch.
-- **Small models, real results.** With accurate retrieval as context, a local 7B model can perform exceptionally well for code understanding tasks
-- **Built for scale.** Designed for multi-million-LOC repos, monorepos, and legacy systems spanning several languages.
+Eulix does more than search text.
 
-## Performance
+It builds information about:
 
-| Component                  | Benchmark                                                                    |
-| -------------------------- | ---------------------------------------------------------------------------- |
-| Parser (Rust, 12 threads)  | **Millions of LOC/min**, parallel parsing with Rayon                         |
-| Embedder (Python, PyTorch) | **~35 min** for 1.5GB of parsed JSON, 768-dim model, CUDA/ROCm accelerated   |
-| Embedding index (mmap)     | **O(1)** lookup via IVF — `vectors.bin` + `embeddings.bin` loaded at runtime |
-| Retrieval (Go, warm)       | **<500ms** end-to-end, no model for very huge corpus 26mLoc reload           |
-| Retrieval (Go, cold)       | **~7.4s** first query — PyTorch init, model load, cache warmup               |
+- functions
+- methods
+- classes
+- symbols
+- files
+- dependencies
+- call relationships
+- project structure
 
-Tested on an AMD Ryzen 5 5600X: 7.4s cold query profile, 95.48% L1 hit rate, IPC 1.26, 16.5B instructions.
+### Hybrid retrieval
 
-> **Cold start is a one-time cost, not your query latency.** Run the embedder as a persistent daemon (`eulix_embed serve`) or fire a dummy warm-up query at startup, and every subsequent query lands in under 50ms.
+Different questions need different search strategies.
 
-## How It Works
+Eulix can combine:
 
-**1. Index your codebase**
+- exact symbol lookup
+- lexical / keyword search
+- semantic search
+- subsystem detection
+- call-graph expansion
+- relevance + diversity re-ranking
 
-```bash
-eulix analyze
+### Not every query needs an LLM
+
+Questions such as:
+
+```text
+Where is X?
+Who calls X?
+What are the project metrics?
+How is X used?
 ```
 
-Three pipelines run over your source:
+can be answered directly from the generated repository data.
 
-1. **Symbol index** — every function, class, variable, and its location
-2. **Call graphs** — inter-procedural call relationships with cross-file resolution
-3. **Semantic embeddings** — per-symbol vectors, written as `embeddings.bin` (tensors) + `vectors.bin` (IVF index for O(1) mmap lookup)
+No model call required.
 
-**2. Ask questions**
+### Built for large repositories
+
+Eulix is designed around the assumption that the repository might be:
+
+- millions of lines
+- tens of thousands of files
+- spread across multiple languages
+- full of old code nobody wants to read line-by-line
+
+---
+
+# Quickstart
+
+```bash
+cd your-project
+
+eulix init
+eulix analyze
+eulix chat
+```
+
+That's the normal workflow.
+
+### What happens during `analyze`?
+
+```text
+source tree
+    |
+    v
+parser
+    |
+    +--> symbols
+    +--> relationships
+    +--> indexes
+    +--> project metadata
+    |
+    v
+embedding pipeline
+    |
+    v
+local retrieval data
+```
+
+Once indexing is complete:
 
 ```bash
 eulix chat
 ```
 
-Every query runs through a four-stage retrieval strategy — exact symbol lookup, BM25 keyword search, semantic vector search, and call graph expansion — then results are re-ranked with MMR, budget-allocated for context, and passed to the LLM with a structured chain-of-thought prompt.
+and start asking questions about the repository.
 
-## Architecture
+---
 
-Three binaries, one pipeline:
+# A quick example
 
-| Binary         | Language | Role                                                                  | License    |
-| -------------- | -------- | --------------------------------------------------------------------- | ---------- |
-| `eulix`        | Go       | Orchestrator — CLI, config, retrieval pipeline, LLM integration, TUI  | GPLv3      |
-| `eulix_parser` | Rust     | Static analyzer — symbols, call graphs, control flow, complexity      | GPLv3      |
-| `eulix_embed`  | Python   | Embedder — transformer models via PyTorch, CUDA/ROCm, bucket sharding | Apache 2.0 |
+Suppose you're dropped into a large codebase and need to understand:
 
-Deeper dives: [system overview](docs/architecture/01-system-overview.md) · [parser internals](docs/architecture/07-parser-internals.md) · [query pipeline](docs/architecture/03-query-pipeline.md) · [query package](docs/query-package.md) · [cache architecture](docs/architecture/05-cache-architecture.md) · [embedder internals](docs/eulix-embed/architecture.md)
+```text
+How does Nova schedule instances with PCI passthrough
+requirements, and which filters participate in the claiming process?
+```
 
-### Supported Languages
+Instead of manually hunting through thousands of files, Eulix can use repository structure and retrieval to surface things such as:
 
-**Stable:** Python · Go · C · C++ · Rust · TypeScript
-**Not Supported:** JavaScript · Perl · PHP · Java
+```text
+nova/nova/scheduler/filters/pci_passthrough_filter.py
+nova/nova/pci/devspec.py
+nova/nova/pci/manager.py
+nova/nova/pci/request.py
+nova/nova/pci/stats.py
+...
+```
 
-### Use Cases
+and follow relevant relationships between them.
 
-- **Onboarding** — understand what a module does without reading every file
-- **Debugging** — trace execution flow and caller/callee chains through unfamiliar code
-- **Refactoring** — see the blast radius of a change before you make it
-- **Security audits** — find every caller of a sensitive function
-- **Architecture review** — map how components actually interact at the call graph level
+The point is not just to find one file.
 
-## Installation
+**The point is to find the path through the code.**
 
-**Requirements**
+---
 
-- Go 1.23+
-- Rust (stable)
-- Python 3.10–3.11
-- [`uv`](https://github.com/astral-sh/uv) (for venv creation and Python version management)
-- [PyTorch](https://pytorch.org/) installed for your platform, before running the installer
+# How It Works
 
-**Linux / macOS**
+Eulix is split into three main components.
+
+```text
+                         +------------------+
+                         |   Codebase       |
+                         +--------+---------+
+                                  |
+                                  v
+                         +------------------+
+                         | eulix_parser     |
+                         | Rust             |
+                         +--------+---------+
+                                  |
+                    +-------------+-------------+
+                    |             |             |
+                    v             v             v
+                 Symbols       Graphs       Indexes
+                    |             |             |
+                    +-------------+-------------+
+                                  |
+                                  v
+                         +------------------+
+                         | eulix_embed      |
+                         | Python           |
+                         +--------+---------+
+                                  |
+                                  v
+                         +------------------+
+                         | Embedding data   |
+                         +--------+---------+
+                                  |
+                                  v
+                         +------------------+
+                         | eulix             |
+                         | Go                |
+                         | query engine      |
+                         +--------+---------+
+                                  |
+                     +------------+------------+
+                     |            |            |
+                     v            v            v
+                  direct      retrieve       LLM
+                  lookup      context      reasoning
+```
+
+## 1. `eulix_parser`
+
+The parser is written in Rust.
+
+It handles:
+
+- source discovery
+- parsing
+- symbol extraction
+- relationship analysis
+- call-graph construction
+- reverse call graphs
+- indexes
+- project metrics
+- entry points
+- dependency analysis
+- pattern detection
+
+The parser is powered by **PRISM**, Eulix's approximate relationship-resolution system for large-scale code navigation.
+
+PRISM is designed for retrieval and navigation rather than formal whole-program verification.
+
+> paper comming soon :)
+
+---
+
+## 2. `eulix_embed`
+
+The embedding pipeline is written in Python.
+
+It currently supports:
+
+- PyTorch
+- ONNX Runtime
+- CPU execution
+- GPU execution
+- streaming embedding generation
+- configurable chunking
+- optional INT8/SQ8 quantization
+- long-lived embedding service mode
+
+Embeddings are written to disk rather than requiring the entire corpus to live in memory.
+
+---
+
+## 3. `eulix`
+
+The main CLI is written in Go.
+
+It handles:
+
+- repository initialization
+- orchestration
+- query routing
+- retrieval
+- context construction
+- LLM integration
+- configuration
+- history
+- validation
+- caching
+- user-facing CLI commands
+
+---
+
+# Query Routing
+
+One of the important parts of Eulix is that **not every query goes through the same pipeline**.
+
+A query is first classified into an intent/category.
+
+For example:
+
+```text
+"Where is foo?"
+        |
+        v
+  Location
+
+"Who calls foo?"
+        |
+        v
+  reverse call graph
+
+"Whare project metrics?"
+        |
+        v
+  project metrics
+
+"How does this subsystem work?"
+        |
+        v
+  retrieval + structural context
+
+"Why does this happen?"
+        |
+        v
+  retrieval + LLM reasoning
+```
+
+This keeps simple questions fast and reserves expensive context construction / model reasoning for questions that actually need it.
+
+---
+
+# Retrieval
+
+For queries that need retrieval, Eulix can combine multiple signals:
+
+```text
+                            query
+                              |
+                    +---------+---------+
+                    | Explicit Anchors  |
+                    |   & Path Gate     |
+                    +---------+---------+
+                              |
+        +---------------------+---------------------+
+        |                     |                     |
+  Symbol / Exact           Lexical               Semantic
+ (kb_exact, grep,        (BM25/Keyword         (IVF Vector Search;
+  exact, partial)       + Symbol Boost)       Skipped if Callers/
+        |                     |              Callees/High Specificity)
+        +---------------------+---------------------+
+                              |
+                    +---------+---------+
+                    | Merge, Deduplicate|
+                    |  & Multi-Boost    |
+                    +---------+---------+
+                              |
+                    +---------+---------+
+                    | Subsystem Signals |
+                    |   & Noise Filter  |
+                    +---------+---------+
+                              |
+                    +---------+---------+
+                    |  Scope & Test-File|
+                    |     Demotion      |
+                    +---------+---------+
+                              |
+                    +---------+---------+
+                    | Exact-First Sort  |
+                    |  & TopK Truncate  |
+                    +---------+---------+
+                              |
+                      scored chunks
+```
+
+The retrieval layer can be tuned through `eulix.toml`.
+
+Important controls include:
+
+- candidate count
+- semantic similarity threshold
+- graph expansion depth
+- graph expansion limits
+- exact anchor limits
+- subsystem boosting
+- cross-root isolation
+- test-file penalties
+- MMR diversity
+- context chunk limits
+- code/AST budget
+
+See the configuration guide for the complete list.
+
+---
+
+# Benchmarks
+
+## eulix_parser
+
+These are current local measurements and are intended as engineering benchmarks, not universal guarantees.
+
+> complete bench can be seen [here](./eulix-parser/README.md#performance)
+
+**Command:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nurysso/eulix/main/install.sh | bash
+eulix_parser --root . --output out/kb.json --threads 12 --verbose --prism 2
 ```
 
-**Windows** _(requires Visual Studio Build Tools, C++ workload, for the Rust linker)_
+## Linux kernel
 
-```powershell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/nurysso/eulix/main/install.ps1" -OutFile "$env:TEMP\install.ps1"
-powershell -ExecutionPolicy Bypass -File "$env:TEMP\install.ps1"
+Parser benchmark on Linux kernel source:
+
+```text
+Files:                33,743
+Failed Files:         0
+Lines of code:        25,200,532
+Functions:            612,250
+Classes:              206,142
+Methods:              3324
+
+Graph nodes:          732,364
+Graph edges:          1,301,640
+
+Parser time:          37.83s
+Analysis time:        6.10s
+complete run:         51.39s
+Peak RSS:             ~7.98 GB
 ```
 
-Full platform-by-platform setup: [docs/installation.md](docs/installation.md)
+This benchmark was run against `58717b2` a local checkout of the Linux kernel.
 
-## Quickstart
+---
+
+## OpenStack
+
+Parser benchmark:
+
+```text
+Files processed:      29,623
+Failed Files:         0
+Lines of code:        6,936,415
+Functions:            46,361
+Classes:              51,520
+Methods:              208,382
+
+Graph nodes:          306,165
+Graph edges:          757,025
+
+Parser time:          7.93s
+Analysis time:        1.91s
+complete run:         12.59s
+Peak RSS:             ~3.16GB
+```
+
+## eulix_embed:
+
+> OpenStack
+
+```text
+Knowledge base:   ~864 MB
+Chunks:           334,569
+Backend:          ONNX Runtime
+Quantization:     SQ8 / INT8
+Time:             ~15 minutes.
+```
+
+Eulix_embed depends upon gpu compute platform and gpu architecture matters heavily for performance.
+As i only have access to AMD Radeon RX 6700 XT time to embed ~850MB(kb.json) was 15 min on nvidia cards or amd cards that officially supports ROCm there should be a signiicant performance gains.
+
+---
+
+## Retrieval example
+
+Repository: OpenStack
+
+Question:
+
+```text
+How does Nova schedule instances with PCI passthrough
+requirements and what filters are applied during the claiming process?
+```
+
+Recent retrieval run:
+
+```text
+Candidates:        625
+Graph expansion:   43 chunks
+Final selected:    15 chunks
+Context budget:    30,000 tokens
+Retrieval time:    ~800 ms
+```
+
+The retrieval surfaced the expected PCI-related scheduler and resource-management code along with supporting helper functions and loosely connected relationships.
+
+Retrieval quality is still being evaluated manually across real repositories. These numbers are not presented as a formal accuracy benchmark.
+
+---
+
+# Supported Languages
+
+Current parser support includes:
+
+```text
+C
+C++
+Go
+Python
+Rust
+TypeScript
+```
+
+JavaScript and Java support are currently in development.
+
+Language support and relationship resolution are still evolving, especially for language features such as dynamic dispatch, reflection, generated code, and other patterns that are difficult to resolve statically.
+
+---
+
+# CLI
+
+```text
+eulix [command]
+```
+
+## Main commands
+
+| Command      | Purpose                                          |
+| ------------ | ------------------------------------------------ |
+| `init`       | Initialize Eulix in the current repository       |
+| `analyze`    | Parse, analyze, and generate repository data     |
+| `parser`     | Access the parser wrapper                        |
+| `embed`      | Run the embedding pipeline                       |
+| `chat`       | Start the interactive interface                  |
+| `query`      | Build retrieval context or answer direct queries |
+| `config`     | Manage Eulix configuration                       |
+| `history`    | Browse previous queries                          |
+| `checksum`   | Update repository checksums                      |
+| `glados`     | Validate knowledge base and embedding state      |
+| `verifyBins` | Verify bundled binary hashes                     |
+| `version`    | Show component versions                          |
+
+Development / diagnostic commands also exist, including `aspirine`.
+
+---
+
+# `eulix_parser`
 
 ```bash
-cd your-project
-eulix init          # initialize eulix in the current directory
-eulix analyze        # parse + embed the codebase, build the knowledge base
-eulix chat           # ask questions, interactively
-```
-
-## CLI Reference
-
-### `eulix` — Go orchestrator
-
-```
-Turn your codebase into a searchable book. Ask questions about your code,
-get accurate answers using local/cloud ML and LLMs.
-```
-
-| Command    | Description                                                                                              |
-| ---------- | -------------------------------------------------------------------------------------------------------- |
-| `init`     | Initialize eulix in the current directory                                                                |
-| `analyze`  | Analyze codebase and generate the knowledge base                                                         |
-| `chat`     | Start the interactive chat interface                                                                     |
-| `query`    | Build a context prompt for LLM queries, or answer non-LLM queries directly                               |
-| `config`   | Manage eulix configuration (LLM provider, model, paths)                                                  |
-| `history`  | Browse past queries interactively                                                                        |
-| `cache`    | Manage cache entries                                                                                     |
-| `checksum` | Generate a checksum without running a full analyze                                                       |
-| `glados`   | Validate the knowledge base and embedding sizes for errors                                               |
-| `embed`    | Run the `eulix_embed` pipeline via the Python venv                                                       |
-| `version`  | Show versions of `eulix`, `eulix_parser`, and `eulix_embed`                                              |
-| `aspirine` | Attempt to repair `embeddings.bin` and the knowledge base — diagnostic/test tooling, not for routine use |
-
-> `aspirine` is a recovery tool for a corrupted knowledge base or embedding file during development and testing. It isn't part of the normal workflow — if you find yourself reaching for it in production, please [open an issue](../../issues).
-
-### `eulix_parser` — Rust static analyzer
-
-```
 eulix_parser [OPTIONS] --root <ROOT> --prism <PRISM>
 ```
 
-| Flag                          | Description                                                         |
-| ----------------------------- | ------------------------------------------------------------------- |
-| `-r, --root <ROOT>`           | Project root directory                                              |
-| `-o, --output <OUTPUT>`       | Output path for the knowledge base [default: `knowledge_base.json`] |
-| `-t, --threads <THREADS>`     | Parallel threads [default: 4]                                       |
-| `-l, --languages <LANGUAGES>` | Languages to parse, comma-separated or `all` [default: all]         |
-| `-p, --prism <1/2>`           | Call graph algorithm version                                        |
-| `--no-analyze`                | Parse only, skip the analysis phase (faster)                        |
-| `--euignore <PATH>`           | Custom `.euignore` file [default: `<root>/.euignore`]               |
-| `-v, --verbose`               | Verbose output                                                      |
-| `-V, --version`               | Print version                                                       |
+Important options:
 
-### `eulix_embed` — Python embedder
-
-```
-eulix_embed <COMMAND> [OPTIONS]
+```text
+-r, --root <ROOT>              Project root
+-o, --output <OUTPUT>          Knowledge base output path
+-t, --threads <THREADS>       Parser threads
+-l, --languages <LANGUAGES>   Languages to parse
+-p, --prism <PRISM>           PRISM version
+    --no-analyze               Skip analysis phase
+    --euignore <PATH>          Custom ignore file
+-v, --verbose                  Verbose output
+-V, --version                  Print version
 ```
 
-| Command         | Description                                                                     |
-| --------------- | ------------------------------------------------------------------------------- |
-| `embed`         | Generate embeddings for a knowledge base (default)                              |
-| `query`         | Embed a single query string, one-shot                                           |
-| `serve`         | Long-lived stdin/stdout embedding server — avoids reloading the model per query |
-| `compare`       | Validate `embeddings.bin` against `vectors.bin`                                 |
-| `ijson-backend` | Report the active `ijson` C-backend                                             |
-| `version`       | Print version information                                                       |
+---
 
-**`embed` options**
+# `eulix_embed`
 
-| Flag                       | Description                                                           |
-| -------------------------- | --------------------------------------------------------------------- |
-| `-k, --kb-path <PATH>`     | Path to knowledge base JSON [default: `knowledge_base.json`]          |
-| `-o, --output <DIR>`       | Output directory [default: `./embeddings`]                            |
-| `-m, --model <NAME>`       | HuggingFace model name                                                |
-| `-d, --device <DEVICE>`    | `cuda` / `mps` / `cpu` [default: auto]                                |
-| `-b, --batch-size <N>`     | Batch size [default: auto]                                            |
-| `--max-chunk <N>`          | Max chunk size in characters [default: 2000]                          |
-| `--quantize`               | SQ8 int8 quantization — 4x smaller `embeddings.bin`, ~1% quality loss |
-| `-rcom, --remove-comments` | Strip comments/docstrings/license headers before embedding            |
-| `--save-json`              | Also write `embeddings.json` (enables graph edge streaming)           |
-| `--debug`                  | Print debug info during the pipeline                                  |
+```bash
+eulix_embed <command>
+```
 
-**`query` options**
+Available commands:
 
-| Flag                 | Description                        |
-| -------------------- | ---------------------------------- |
-| `-q, --query <TEXT>` | Query text to embed                |
-| `-m, --model <NAME>` | HuggingFace model name             |
-| `-f, --format <FMT>` | `json` \| `binary` [default: json] |
+```text
+embed
+query
+serve
+compare
+ijson-backend
+version
+```
 
-**`serve` options**
+Example:
 
-| Flag                    | Description                                          |
-| ----------------------- | ---------------------------------------------------- |
-| `-m, --model <NAME>`    | HuggingFace model name [default: `all-MiniLM-L6-v2`] |
-| `-d, --device <DEVICE>` | `cuda` / `mps` / `cpu` [default: auto]               |
-| `-b, --batch-size <N>`  | Batch size for batched requests [default: auto]      |
+```bash
+eulix_embed embed \
+  --kb-path .eulix/kb.json \
+  --output .eulix/embeddings \
+  --engine onnx \
+  --device auto \
+  --quantize
+```
 
-Supported embedding models: `sentence-transformers/all-MiniLM-L6-v2` · `BAAI/bge-small-en-v1.5` · `BAAI/bge-base-en-v1.5` — see the [model selection guide](docs/models-to-use.md).
+The `serve` command provides a long-lived embedding process so repeated query embeddings don't require repeatedly loading the model.
 
-## Roadmap
+---
 
-- [ ] MCP server — plug Eulix into any editor or agent via Model Context Protocol
-- [ ] Interactive call graph visualization
-- [ ] Architecture-aware documentation generation, grounded in call flow
-- [ ] Code navigation — symbol jump, reference finder, caller/callee explorer
-- [ ] JavaScript and Java support
+# Configuration
 
-## Documentation
+Eulix uses `eulix.toml`.
 
-| Doc                                                              | Description                                                 |
-| ---------------------------------------------------------------- | ----------------------------------------------------------- |
-| [basic introduction and config](docs/About-Eulix.md)             | overview of how to configure and general summary of project |
-| [Architecture Overview](docs/architecture/01-system-overview.md) | System design and data flow                                 |
-| [Parser Internals](docs/architecture/07-parser-internals.md)     | How `eulix_parser` works                                    |
-| [Query Pipeline](docs/architecture/03-query-pipeline.md)         | End-to-end query flow and retrieval                         |
-| [Query Package](docs/query-package.md)                           | Comprehensive query system documentation                    |
-| [Context Builder](docs/architecture/08-context-builder.md)       | Multi-layer retrieval and MMR selection                     |
-| [Classifier](docs/architecture/06-classifier.md)                 | Intent recognition and routing                              |
-| [Cache Architecture](docs/architecture/05-cache-architecture.md) | Caching layer design                                        |
-| [Embedding Pipeline](docs/eulix-embed/architecture.md)           | Embedder internals                                          |
-| [Parser Architecture](docs/eulix-parser/Architecture.md)         | Detailed parser design and implementation                   |
-| [Known Issues](docs/known-issues.md)                             | Current limitations                                         |
-| [Installation Guide](docs/installation.md)                       | Detailed platform setup                                     |
-| [Model Selection](docs/models-to-use.md)                         | Recommended embedding and LLM models                        |
+A minimal configuration looks like:
 
-## Contributing
+```toml
+[project]
+path = "."
 
-Open an issue before submitting a pull request for anything non-trivial — happy to align on approach first. Documentation contributions are especially welcome; several sections are still catching up to the code.
+[parser]
+threads = 12
+prismVersion = 2
 
-## License
+[embeddings]
+model = "BAAI/bge-base-en-v1.5"
+dimension = 768
+engine = "onnx"
 
-- **`eulix`** and **`eulix_parser`** — [GNU General Public License v3.0](LICENSE)
-- **`eulix_embed`** — [Apache License 2.0](eulix-embed/LICENSE)
+[llm]
+local = true
+provider = "ollama"
+model = "llama3.2:3b"
+max_tokens = 8192
+
+[retrievalConfig]
+top_k_candidates = 150
+mmr_diversity_factor = 0.65
+max_graph_expansion_depth = 1
+semantic_min_similarity = 0.15
+max_graph_expansions = 15
+max_exact_anchors = 2
+enable_subsystem_boosting = true
+max_context_chunks = 30
+```
+
+The retrieval layer exposes additional controls for tuning context selection and graph traversal.
+
+Full configuration reference:
+
+[Configuration Guide](eulix-cli/README.md#configuration-reference-eulixtoml)
+
+---
+
+# Local-first by design
+
+Eulix is designed around local execution.
+
+By default:
+
+```text
+your source
+   |
+   v
+parser
+   |
+   v
+indexes / graph / embeddings
+   |
+   v
+local query engine
+```
+
+Cloud LLM providers are supported, but they are explicitly configured by the user.
+
+This distinction matters for proprietary codebases.
+
+**If you send code to a remote model, that code is no longer local.**
+
+Plan accordingly.
+
+---
+
+# Current limitations
+
+Eulix is not a compiler and PRISM is not a formal program-analysis system.
+
+Some relationships can be incomplete or approximate, especially around:
+
+- dynamic dispatch
+- reflection
+- indirect calls
+- generated code
+- language-specific metaprogramming
+- highly dynamic languages
+- incomplete parser coverage
+
+Retrieval quality also depends on:
+
+- repository structure
+- indexing configuration
+- embedding model
+- hardware
+- context limits
+- query type
+
+We would rather document these limitations than hide them behind an LLM.
+
+---
+
+# Research
+
+PRISM is one of the main research components behind Eulix.
+
+The goal is simple:
+
+> **Resolve enough code relationships to make large-scale retrieval useful without requiring prohibitively expensive whole-program analysis.**
+
+PRISM uses a combination of structural information, identity metadata, language-aware heuristics, and approximate relationship resolution.
+
+Research papers and technical notes will be published as the system evolves.
+
+See:
+
+- [PRISM documentation](docs/)
+- [Parser internals](docs/architecture/07-parser-internals.md)
+- [Query pipeline](docs/architecture/03-query-pipeline.md)
+
+---
+
+# Roadmap
+
+The project is evolving around a simple idea:
+
+**one code intelligence layer, multiple ways to use it.**
+
+Planned / in-progress work includes:
+
+- [ ] MCP server
+- [ ] Interactive call-graph visualization
+- [ ] Architecture-aware documentation generation
+- [ ] LSP integration
+- [ ] JavaScript support
+- [ ] Java support
+- [ ] More repository-scale benchmarks
+- [ ] More real-world user stories
+
+---
+
+# Documentation
+
+### Core
+
+- [About Eulix](docs/About-Eulix.md)
+- [Installation](docs/installation.md)
+- [Model Selection](docs/models-to-use.md)
+
+### Architecture
+
+- [System Overview](docs/architecture/01-system-overview.md)
+- [Query Pipeline](docs/architecture/03-query-pipeline.md)
+- [Parser Internals](docs/architecture/07-parser-internals.md)
+- [Context Builder](docs/architecture/08-context-builder.md)
+- [Cache Architecture](docs/architecture/05-cache-architecture.md)
+- [Embedding Pipeline](docs/eulix-embed/architecture.md)
+
+### Research / internals
+
+- [Classifier](docs/architecture/06-classifier.md)
+- [Query Package](docs/query-package.md)
+- [Parser Architecture](docs/eulix-parser/Architecture.md)
+
+### Project health
+
+- [Known Issues](docs/known-issues.md)
+
+---
+
+# Real repositories
+
+Eulix is being tested against real, unpleasant codebases rather than only toy examples.
+
+Current investigations include:
+
+```text
+OpenStack
+Linux kernel
+Go compiler
+FFmpeg
+Gecko / Firefox
+```
+
+More importantly, these are being treated as **engineering stress tests**.
+
+We're interested in:
+
+- what Eulix retrieves correctly
+- where structural analysis breaks
+- which queries are difficult
+- how retrieval behaves as repositories grow
+- how much context is actually useful
+
+---
+
+# Contributing
+
+Eulix is still early.
+
+Issues, benchmarks, documentation improvements, language support, parser work, retrieval experiments, and difficult real-world test cases are all useful.
+
+For non-trivial changes, opening an issue first is appreciated so the approach can be discussed before implementation.
+
+If you work on a large or particularly painful codebase, a great contribution is simply:
+
+> **give us a hard question to answer.**
+
+---
+
+# License
+
+- `eulix` and `eulix_parser` — GNU GPLv3
+- `eulix_embed` — Apache 2.0
+
+See [LICENSE](LICENSE) and [eulix-embed/LICENSE](eulix-embed/LICENSE).
+
+---
+
+<div align="center">
+
+**Eulix**
+
+_Understand the code you didn't write._
+
+</div>

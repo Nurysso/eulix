@@ -12,7 +12,6 @@ This document tracks current known issues, bugs, and architectural limitations w
 ## Embedder
 
 - **ROCm Runtime Warning**: You may see `(null): No such file or directory` at the start of applications. This is a known issue within the ROCm stack where the runtime fails to locate `amdgpu.ids` and incorrectly reports the error path. It does not affect functional performance.
-- **Call Depth Becomes 0**: This occurs when the BFS algorithm fails to locate an entry point or when embedding is restricted to a specific sub-folder of the codebase.
 
 ## Query
 

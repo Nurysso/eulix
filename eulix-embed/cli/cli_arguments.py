@@ -79,17 +79,7 @@ def parse_args() -> argparse.ArgumentParser:
         action="store_true",
         help="SQ8 int8 quantization: 4x smaller embeddings.bin, ~1%% quality loss",
     )
-    ep.add_argument(
-        "--no-comments",
-        action="store_true",
-        help="Remove comments/docstrings/license headers from embedding and vidx bins",
-    )
-    ep.add_argument(
-        "--save-json",
-        action="store_true",
-        help="Also write embeddings.json (enables graph edge streaming)",
-    )
-    ep.add_argument("--debug", action="store_true", help="Print debug info during pipeline")
+    # ep.add_argument("--debug", action="store_true", help="Print debug info during pipeline")
     qp = sub.add_parser("query", help="Generate embedding for a query string (one-shot)")
     qp.add_argument("-q", "--query", default="", metavar="TEXT", help="Query text to embed")
     qp.add_argument(
@@ -114,7 +104,7 @@ def parse_args() -> argparse.ArgumentParser:
         metavar="FMT",
         help="json | binary  [default: json]",
     )
-    sp = sub.add_parser("serve", help="Long-lived stdin/stdout embedding server (avoids model reload)")
+    sp = sub.add_parser("server", help="Long-lived stdin/stdout embedding server (avoids model reload)")
     sp.add_argument(
         "-m",
         "--model",

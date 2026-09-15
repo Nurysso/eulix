@@ -39,6 +39,16 @@ var funcLineNoiseWords = map[string]bool{
 	"index": true, "level": true, "value": true, "state": true,
 }
 
+type searchToken struct {
+	raw        string
+	low        string
+	classMatch string
+	defMatch   string
+	fnMatch    string
+	funcMatch  string
+	typeMatch  string
+}
+
 // ExplicitAnchor describes a user-specified location extracted from the query.
 type ExplicitAnchor struct {
 	File     string
@@ -422,17 +432,27 @@ func (cb *ContextBuilder) grepSymbolSearch(query string, hc *hydrationCache) []S
 		return nil
 	}
 
-	var targetTokens []string
+	// Pre-allocate and compile all strings OUTSIDE the main loop
+	var compiledTokens []searchToken
 	for _, s := range symbols {
 		sLow := strings.ToLower(s)
 		if sLow == "init" || sLow == "setup" || sLow == "self" || sLow == "test" || sLow == "main" {
 			continue
 		}
 		if len(s) >= 3 {
-			targetTokens = append(targetTokens, s)
+			compiledTokens = append(compiledTokens, searchToken{
+				raw:        s,
+				low:        sLow,
+				classMatch: "class " + sLow,
+				defMatch:   "def " + sLow,
+				fnMatch:    "fn " + sLow,
+				funcMatch:  "func " + sLow,
+				typeMatch:  "type " + sLow,
+			})
 		}
 	}
-	if len(targetTokens) == 0 {
+
+	if len(compiledTokens) == 0 {
 		return nil
 	}
 
@@ -440,8 +460,10 @@ func (cb *ContextBuilder) grepSymbolSearch(query string, hc *hydrationCache) []S
 	seen := make(map[string]bool, 32)
 	hydrationBudget := maxContentFallbackHydrations
 
+	// Main loop is allocation-free inside the token iterations
 	for i := range cb.chunks {
 		chunk := &cb.chunks[i]
+
 		fileLow := strings.ToLower(chunk.File)
 		nameLow := strings.ToLower(chunk.Name)
 
@@ -449,25 +471,26 @@ func (cb *ContextBuilder) grepSymbolSearch(query string, hc *hydrationCache) []S
 		var matchDetail string
 		score := 0.0
 
-		for _, tok := range targetTokens {
-			tokLow := strings.ToLower(tok)
-
-			if strings.Contains(fileLow, tokLow) {
+		for _, t := range compiledTokens {
+			if strings.Contains(fileLow, t.low) {
 				score += 150.0
 				matched = true
-				matchDetail = "Grep file path match: " + tok
+				matchDetail = "Grep file path match: " + t.raw
 			}
-			if nameLow == tokLow {
+			if nameLow == t.low {
 				score += 180.0
 				matched = true
 				matchDetail = "Grep exact name: " + chunk.Name
-			} else if strings.Contains(nameLow, tokLow) {
+			} else if strings.Contains(nameLow, t.low) {
 				score += 90.0
 				matched = true
-				matchDetail = "Grep name sub-match: " + tok
+				matchDetail = "Grep name sub-match: " + t.raw
 			}
+
+			// Assuming chunk.Symbols are already lowercased at indexing time.
+			// If not, they should be!
 			for _, sym := range chunk.Symbols {
-				if strings.ToLower(sym) == tokLow {
+				if strings.ToLower(sym) == t.low {
 					score += 160.0
 					matched = true
 					matchDetail = "Grep exact symbol: " + sym
@@ -483,21 +506,21 @@ func (cb *ContextBuilder) grepSymbolSearch(query string, hc *hydrationCache) []S
 				hydrationBudget--
 			}
 
-			for _, tok := range targetTokens {
-				tokLow := strings.ToLower(tok)
-				if strings.Contains(contentLow, "class "+tokLow) ||
-					strings.Contains(contentLow, "def "+tokLow) ||
-					strings.Contains(contentLow, "fn "+tokLow) ||
-					strings.Contains(contentLow, "func "+tokLow) ||
-					strings.Contains(contentLow, "type "+tokLow) {
+			for _, t := range compiledTokens {
+				// Now we are just doing fast substring checks with zero heap allocations
+				if strings.Contains(contentLow, t.classMatch) ||
+					strings.Contains(contentLow, t.defMatch) ||
+					strings.Contains(contentLow, t.fnMatch) ||
+					strings.Contains(contentLow, t.funcMatch) ||
+					strings.Contains(contentLow, t.typeMatch) {
 					score += 200.0
 					matched = true
-					matchDetail = "Grep code definition: " + tok
+					matchDetail = "Grep code definition: " + t.raw
 					break
-				} else if strings.Contains(contentLow, tokLow) {
+				} else if strings.Contains(contentLow, t.low) {
 					score += 60.0
 					matched = true
-					matchDetail = "Grep literal content hit: " + tok
+					matchDetail = "Grep literal content hit: " + t.raw
 					break
 				}
 			}

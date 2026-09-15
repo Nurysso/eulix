@@ -42,9 +42,9 @@ def cmd_embed(args: argparse.Namespace) -> None:
         max_chunk_size=args.max_chunk,
         device=args.device,
         batch_size=args.batch_size,
-        save_json=args.save_json,
+        # save_json=args.save_json,
         quantize=args.quantize,
-        debug=args.debug,
+        # debug=args.debug,
     )
     kb_path = Path(args.kb_path)
     if not kb_path.exists():
