@@ -18,7 +18,7 @@ EULIX_PARSER_PATH="$EULIX_DIR/bin/eulix_parser"
 EULIX_EMBED_PATH="$EULIX_DIR/eulix_embed"
 
 REPO="Nurysso/eulix"
-RELEASE_TAG="v0.8.0"
+RELEASE_TAG="v0.8.1"
 RELEASE_BASE="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
 DOC_URL="https://github.com/${REPO}/blob/main/docs/install.md"
 

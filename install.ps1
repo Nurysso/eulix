@@ -26,7 +26,7 @@ $EulixParserPath  = Join-Path $EulixDir 'bin\eulix_parser.exe'
 $EulixEmbedPath   = Join-Path $EulixDir 'eulix_embed'
 
 $Repo         = 'Nurysso/eulix'
-$ReleaseTag   = 'v0.8.0'
+$ReleaseTag   = 'v0.8.1'
 $ReleaseBase  = "https://github.com/$Repo/releases/download/$ReleaseTag"
 $DocUrl       = "https://github.com/$Repo/blob/main/docs/install.md"
 

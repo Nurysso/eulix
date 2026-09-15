@@ -47,6 +47,24 @@ It's to make the codebase itself searchable, navigable, and useful.
 
 ---
 
+## Installation
+
+### Linux / macOS
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Nurysso/eulix/main/install.sh)
+```
+
+### Windows
+
+> May Requires Visual Studio Build Tools (C++ workload).
+
+```powershell
+irm https://raw.githubusercontent.com/Nurysso/eulix/main/install.ps1 | iex
+```
+
+---
+
 ## Why Eulix?
 
 ### Local-first
