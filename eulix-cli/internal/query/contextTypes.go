@@ -93,36 +93,37 @@ type TypeNode struct {
 	Methods  []string `json:"methods"`
 }
 type ContextBuilder struct {
-	eulixDir      string
-	config        *config.Config
-	llmClient     *llm.Client
-	queryEmbedder QueryEmbedder
-	hasEmbeddings bool
-	embeddings    [][]float32
+	boilerplate *BoilerplateDetector
+	callGraph   map[string][]Relationship
+	callSites   callSiteIndex
+	cgBuild     *CallGraphIdx
+	cgRef       *utils.CallGraphRef
+	chunks      []Chunk
+	config      *config.Config
+	debugLog    *DebugLogger
+	depIdx      *depIndex
 	// embData       *EmbeddingsData
-	chunks        []Chunk
-	callSites     callSiteIndex
+	embeddings    [][]float32
+	eulixDir      string
+	externalDeps  []utils.ExternalDependency
+	hasCallGraph  bool
+	hasEmbeddings bool
+	hasKB         bool
+	hydrateIdx    map[string]map[[2]int]func() string // file -> (start,end) -> content builder
+	invertedIdx   *InvertedIndex                      // non-nil when len(chunks) > invIdxThreshold
+	ivfIndex      *IVFIndex                           // non-nil when len(embeddings) > ivfBuildThreshold
+	kbData        *utils.KnowledgeBaseRef
+	kbIdx         *utils.KBIndices
+	lastTrace     *DebugTrace
+	lazyContent   bool
+	llmClient     *llm.Client
+	mu            sync.Mutex
+	noisePaths    []string
+	queryEmbedder QueryEmbedder
+	sourceRoot    string
+	subsystemTree []*SubsystemNode
 	symbolIndex   map[string][]int
 	vectorMap     map[string]int
-	lazyContent   bool
-	ivfIndex      *IVFIndex      // non-nil when len(embeddings) > ivfBuildThreshold
-	invertedIdx   *InvertedIndex // non-nil when len(chunks) > invIdxThreshold
-	hasKB         bool
-	kbData        *utils.KnowledgeBaseRef
-	hasCallGraph  bool
-	callGraph     map[string][]Relationship
-	cgRef         *utils.CallGraphRef
-	kbIdx         *utils.KBIndices
-	externalDeps  []utils.ExternalDependency
-	depIdx        *depIndex
-	sourceRoot    string
-	debugLog      *DebugLogger
-	mu            sync.Mutex
-	lastTrace     *DebugTrace
-	boilerplate   *BoilerplateDetector
-	hydrateIdx    map[string]map[[2]int]func() string // file -> (start,end) -> content builder
-	subsystemTree []*SubsystemNode
-	noisePaths    []string
 }
 
 type Chunk struct {
@@ -252,12 +253,13 @@ type Relationship struct {
 
 type ScoredChunk struct {
 	Chunk
-	Score        float64
 	Distance     int
 	FromID       string
+	IsExact      bool
 	MatchType    string // "exact", "symbol", "semantic", "keyword", "partial"
 	MatchDetails string
-	IsExact      bool
+	Pinned       bool
+	Score        float64
 }
 
 type EmbeddingChunk struct {

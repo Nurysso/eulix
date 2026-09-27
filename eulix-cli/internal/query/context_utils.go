@@ -56,6 +56,107 @@ func (cb *ContextBuilder) GetLastTrace() *DebugTrace {
 	return cb.lastTrace
 }
 
+// fillRelevance normalizes each candidate's score into roughly [0,1] so the
+// MMR redundancy term (also [0,1]) doesn't get drowned out by 300-point exact
+// hits. Uses log1p so ordering is preserved but outliers don't flatten the rest.
+// Blends in cosine similarity when embeddings are available, and adds a small
+// bonus for chunks in files the query mentioned by name.
+func fillRelevance(cs []mmrCand, qEmb []float32, anchorFiles map[string]bool) {
+	maxLog := 0.0
+	for i := range cs {
+		if l := math.Log1p(math.Max(cs[i].sc.Score, 0)); l > maxLog {
+			maxLog = l
+		}
+	}
+	if maxLog == 0 {
+		maxLog = 1
+	}
+
+	useSem := mmrSemanticWeight > 0 && len(qEmb) > 0
+	var sims []float64
+	var hasSim []bool
+	lo, hi := math.MaxFloat64, -math.MaxFloat64
+	if useSem {
+		sims = make([]float64, len(cs))
+		hasSim = make([]bool, len(cs))
+		for i := range cs {
+			if cs[i].emb == nil {
+				continue
+			}
+			s := float64(dotProduct(qEmb, cs[i].emb))
+			sims[i], hasSim[i] = s, true
+			lo, hi = math.Min(lo, s), math.Max(hi, s)
+		}
+		useSem = hi > lo
+	}
+
+	for i := range cs {
+		rel := math.Log1p(math.Max(cs[i].sc.Score, 0)) / maxLog
+		if useSem && hasSim[i] {
+			sem := (sims[i] - lo) / (hi - lo)
+			rel = (1-mmrSemanticWeight)*rel + mmrSemanticWeight*sem
+		}
+		if anchorFiles[cs[i].sc.File] {
+			rel += anchorFileBonus // additive: the old min(1, x*1.25) capped anchors BELOW everything once scores were >1
+		}
+		cs[i].rel = rel
+	}
+}
+
+func joinContent(a, b string) string {
+	if a == "" && b == "" {
+		return "" // keep "empty" meaning "needs hydration"
+	}
+	return a + "\n" + b
+}
+
+func spliceOverlap(first, second Chunk) string {
+	sl := strings.Split(second.Content, "\n")
+	skip := first.EndLine - second.StartLine + 1
+	if second.Content != "" && len(sl) == second.EndLine-second.StartLine+1 && skip > 0 && skip < len(sl) {
+		return first.Content + "\n" + strings.Join(sl[skip:], "\n")
+	}
+	return first.Content
+}
+
+func unionStrings(a, b []string) []string {
+	out := make([]string, 0, len(a)+len(b))
+	seen := make(map[string]struct{}, len(a)+len(b))
+	for _, list := range [][]string{a, b} {
+		for _, s := range list {
+			if _, ok := seen[s]; !ok {
+				seen[s] = struct{}{}
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+func (cb *ContextBuilder) nonBoilerplate(syms []string) []string {
+	out := make([]string, 0, len(syms))
+	for _, s := range syms {
+		if !cb.isBoilerplateSymbol(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// mmrWatchMatch reports whether the debug watch substring matches any of the
+// identifying fields of a candidate. Previously this only checked File, which
+// meant EULIX_MMR_WATCH=resolve_expression silently matched nothing (method
+// names live in ID and Name, not in the file path). Matches ID, Name, and File.
+// Empty watch string -> always false (watch logging disabled).
+func mmrWatchMatch(id, name, file string) bool {
+	if debugWatchSubstr == "" {
+		return false
+	}
+	return strings.Contains(id, debugWatchSubstr) ||
+		strings.Contains(name, debugWatchSubstr) ||
+		strings.Contains(file, debugWatchSubstr)
+}
+
 // writeContextToFile serializes a ContextWindow to a debug file.
 // Uses timestamp in filename for uniqueness.
 // Intended for offline analysis; not used in production path.
@@ -351,6 +452,16 @@ func splitIdentifierToTokens(s string) []string {
 	return toks
 }
 
+// Helper to prevent unnecessary memory allocations in strings.ToLower
+func hasUpper(s string) bool {
+	for _, r := range s {
+		if unicode.IsUpper(r) {
+			return true
+		}
+	}
+	return false
+}
+
 // isCodeIdentifier returns true if word looks like a source-code identifier
 // rather than plain English. Matches:
 //   - snake_case: contains "_" and length > 3 (load_chunks, KB_INDEX)
@@ -363,23 +474,25 @@ func isCodeIdentifier(w string) bool {
 	if strings.Contains(w, "_") && len(w) > 3 {
 		return true
 	}
-	// camelCase: buildContext, mmrSelect, loadChunksFromKB
+
 	prevLower := false
+	upperCount := 0
+
+	// Single pass for both camelCase and PascalCase/Acronyms
 	for _, r := range w {
-		if unicode.IsUpper(r) && prevLower {
-			return true
+		isUpper := unicode.IsUpper(r)
+		if isUpper {
+			upperCount++
+			// camelCase transition (e.g., aB)
+			if prevLower {
+				return true
+			}
 		}
 		prevLower = unicode.IsLower(r)
 	}
-	// PascalCase with multiple capitals: BuildContext, IVFIndex, KBIndex
-	upperCount := 0
-	for _, r := range w {
-		if unicode.IsUpper(r) {
-			upperCount++
-		}
-	}
-	return upperCount >= 2
 
+	// PascalCase with multiple capitals or acronyms
+	return upperCount >= 2
 }
 
 // extractPotentialSymbols extracts tokens that look like code identifiers from

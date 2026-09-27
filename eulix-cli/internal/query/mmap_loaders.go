@@ -35,16 +35,14 @@ import (
 )
 
 const (
-	// mmapThreshold: files at or above this size uses mmap; smaller files
-	// go through buffered reader. 4MiB is the empirical break-even
-	// point on linux and win11 below that the mmap setup cost
-	// (page-table allocation, page faults on first access) exceeds
-	// the savings from avoiding the extra read() copy
+	// mmapThreshold defines the minimum file size (4 MiB) to use memory mapping (mmap).
+	// Below 4 MiB, setup overhead (page-table allocation, first-access page faults)
+	// exceeds the savings gained by bypassing standard read() copies on Linux and Windows 11.
+	// Smaller files fall back to standard buffered I/O.
 	mmapThreshold = 4 << 20
 
-	// jsonBufSize is the I/O read buffer for the non-mmap path.
-	// 1 MiB minimises syscall frequency on large files without adding
-	// significant heap pressure
+	// jsonBufSize specifies the I/O read buffer size (1 MiB) for the non-mmap fallback path.
+	// This balances minimal syscall frequency on large files against low heap allocation pressure.
 	jsonBufSize = 1 << 20
 )
 

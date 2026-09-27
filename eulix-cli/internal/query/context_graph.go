@@ -230,13 +230,7 @@ outerLoop:
 		}
 	})
 
-	used := 0
-	for i, sc := range result {
-		used += sc.Tokens
-		if used > budget {
-			return result[:i]
-		}
-	}
+	cb.debugLog.Log("Graph expansion: %d candidates going into selection (no pre-truncationl budget=%d enforced downstream)", len(result), budget)
 	return result
 }
 

@@ -183,13 +183,22 @@ func (cb *ContextBuilder) buildSubsystemTree() {
 
 // detectQuerySubsystems scores subsystem nodes against query tokens and returns ranked candidates.
 func detectQuerySubsystems(
+	cb *ContextBuilder,
 	nodes []*SubsystemNode,
 	queryTokens []string,
 ) []subsystemScore {
+	debugLevel3 := os.Getenv("debug") == "3"
 	const subsysCandidateWindow = 20
 
 	if len(nodes) == 0 || len(queryTokens) == 0 {
+		if debugLevel3 && cb != nil {
+			cb.debugLog.Log("[detectQuerySubsystems] Skipped: nodes or queryTokens empty (nodes=%d, tokens=%d)", len(nodes), len(queryTokens))
+		}
 		return nil
+	}
+
+	if debugLevel3 && cb != nil {
+		cb.debugLog.Log("[detectQuerySubsystems] START: queryTokens=%v, scanning %d subsystem nodes", queryTokens, len(nodes))
 	}
 
 	scores := make([]subsystemScore, 0, len(nodes))
@@ -230,21 +239,37 @@ func detectQuerySubsystems(
 	if len(scores) > subsysCandidateWindow {
 		scores = scores[:subsysCandidateWindow]
 	}
+	if debugLevel3 && cb != nil {
+		cb.debugLog.Log("[detectQuerySubsystems] COMPLETE: Detected %d candidate subsystems (window limit=%d)", len(scores), subsysCandidateWindow)
+	}
 	return scores
 }
 
 // filterNoiseSubsystems demotes candidate subsystems matching known noise path prefixes.
-func filterNoiseSubsystems(detected []subsystemScore, noisePaths []string) []subsystemScore {
+func filterNoiseSubsystems(cb *ContextBuilder, detected []subsystemScore, noisePaths []string) []subsystemScore {
+	debugLevel3 := os.Getenv("debug") == "3"
+	if debugLevel3 && cb != nil {
+		cb.debugLog.Log("[filterNoiseSubsystems] START: evaluating %d detected candidates against %d noise paths", len(detected), len(noisePaths))
+	}
+
+	demotedCount := 0
 	for i := range detected {
 		pathLow := strings.ToLower(detected[i].node.Path)
 		for _, np := range noisePaths {
 			if strings.HasPrefix(pathLow, np) {
 				detected[i].score *= 0.15 // Demote score without complete exclusion.
+				demotedCount++
 				break
 			}
 		}
 	}
+
 	sort.Slice(detected, func(i, j int) bool { return detected[i].score > detected[j].score })
+
+	if debugLevel3 && cb != nil {
+		cb.debugLog.Log("[filterNoiseSubsystems] COMPLETE: Demoted %d noise subsystems out of %d candidates", demotedCount, len(detected))
+	}
+
 	return detected
 }
 
@@ -319,7 +344,11 @@ func boostByDetectedSubsystems(
 
 // detectNoisePatterns identifies dense or highly generic directory prefixes to treat as noise paths.
 func (cb *ContextBuilder) detectNoisePatterns() {
+	debugLevel3 := os.Getenv("debug") == "3"
 	if len(cb.subsystemTree) == 0 {
+		if debugLevel3 {
+			cb.debugLog.Log("[detectNoisePatterns] Skipped: subsystem tree is empty")
+		}
 		return
 	}
 
@@ -343,6 +372,10 @@ func (cb *ContextBuilder) detectNoisePatterns() {
 	}
 	p95 := counts[p95idx]
 
+	if debugLevel3 {
+		cb.debugLog.Log("[detectNoisePatterns] START: evaluating %d subsystems (p95 chunk count threshold=%d)",
+			len(cb.subsystemTree), p95)
+	}
 	cb.noisePaths = cb.noisePaths[:0]
 	for _, n := range cb.subsystemTree {
 		if n.TotalChunks < p95 {
@@ -361,6 +394,9 @@ func (cb *ContextBuilder) detectNoisePatterns() {
 			cb.noisePaths = append(cb.noisePaths, strings.ToLower(n.Path))
 			cb.debugLog.Log("Noise path detected: %s (chunks=%d)", n.Path, n.TotalChunks)
 		}
+	}
+	if debugLevel3 {
+		cb.debugLog.Log("[detectNoisePatterns] COMPLETE: identified %d total noise paths", len(cb.noisePaths))
 	}
 }
 

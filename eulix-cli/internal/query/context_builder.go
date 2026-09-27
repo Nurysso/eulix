@@ -91,7 +91,6 @@ func (cb *ContextBuilder) BuildContext(query string) (*utils.ContextWindow, erro
 
 func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int) (*utils.ContextWindow, *DebugTrace, error) {
 	start := time.Now()
-	// var trace *DebugTrace
 	trace := &DebugTrace{Query: query}
 	explicitAnchor := extractExplicitAnchors(query)
 	gate := buildPathGate(explicitAnchor)
@@ -106,9 +105,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	cb.debugLog.Log("Embedder called Query is getting embedded")
 	etime := time.Now()
 	var qEmb []float32
-	skipSemantic := intent.Type == IntentCallers ||
-		intent.Type == IntentCallees ||
-		intent.Specificity > 0.85
+	skipSemantic := intent.Type == IntentCallers || intent.Type == IntentCallees
 	if cb.hasEmbeddings && !skipSemantic {
 		cb.debugLog.Log("hasEmbeddings: %t, skipSemantic: %t", cb.hasEmbeddings, skipSemantic)
 		if emb, err := cb.queryEmbedder.EmbedQueryBinary(query); err == nil {
@@ -134,7 +131,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 		}
 	}
 
-	anchors := cb.exactSymbolSearch(query)
+	anchors := cb.ExactSymbolSearch(query)
 	filteredAnchors := make([]ScoredChunk, 0, len(anchors))
 	for _, a := range anchors {
 		// Only consider high-confidence exact matches that aren't boilerplate symbols
@@ -300,14 +297,30 @@ func (cb *ContextBuilder) candidateLimitForIntent(intent QueryIntent) int {
 }
 
 func mergeWithPriority(anchors, callSites, candidates []ScoredChunk) []ScoredChunk {
-	seen := make(map[string]bool, len(anchors)+len(callSites)+len(candidates))
 	out := make([]ScoredChunk, 0, len(anchors)+len(callSites)+len(candidates))
+	idxOf := make(map[string]int, len(anchors)+len(callSites)+len(candidates))
 
 	add := func(sc ScoredChunk) {
-		if !seen[sc.ID] {
-			seen[sc.ID] = true
-			out = append(out, sc)
+		if i, ok := idxOf[sc.ID]; ok {
+			if sc.Score > out[i].Score {
+				out[i].Score = sc.Score
+			}
+			if sc.IsExact {
+				out[i].IsExact = true
+			}
+			if sc.Pinned { // ← new
+				out[i].Pinned = true
+			}
+			switch {
+			case out[i].MatchDetails == "":
+				out[i].MatchDetails = sc.MatchDetails
+			case sc.MatchDetails != "" && sc.MatchDetails != out[i].MatchDetails:
+				out[i].MatchDetails += "; " + sc.MatchDetails
+			}
+			return
 		}
+		idxOf[sc.ID] = len(out)
+		out = append(out, sc)
 	}
 	for _, sc := range anchors {
 		add(sc)

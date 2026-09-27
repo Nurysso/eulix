@@ -39,6 +39,8 @@ const (
 	PreAllocate        = 320_000
 )
 
+// Binary version from eulix_embed which are written in header of
+// embeddings.bin and vectors.bin
 const (
 	BinaryVersion = uint32(5)
 	MagicBytes    = "EULX"
