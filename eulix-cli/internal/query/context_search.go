@@ -329,7 +329,8 @@ func (cb *ContextBuilder) multiStrategySearch(
 		return res
 	}, 2.0)
 
-	if cb.hasEmbeddings && !skipSemantic && qEmb != nil {
+	skipSemantic := intent.Type == IntentCallers || intent.Type == IntentCallees
+	if cb.hasEmbeddings && qEmb != nil && !skipSemantic {
 		semTopK := int(float64(topK) * (0.2 + 0.5*weights["semantic"]))
 		minimumSimimilarity := float64(0.15)
 		if cb.config.RetrievalConfig.SemanticMinSimilarity > 0 {
