@@ -8,7 +8,7 @@
 // in the code base
 
 // nolint:unused
-package query
+package mmap
 
 import (
 	"encoding/binary"
@@ -84,7 +84,7 @@ func loadEmbeddingsBin(path string) ([][]float32, EmbeddingMeta, error) {
 	}
 
 	// allocate the matrix (hugepage-aligned on Linux, flat on others)
-	matrix := allocEmbeddingMatrix(int(count), int(dim))
+	matrix := AllocEmbeddingMatrix(int(count), int(dim))
 
 	if !quantized {
 		// float32 path: read the entire payload into the flat backing buffer

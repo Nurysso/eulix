@@ -10,7 +10,7 @@ This file is responsible for core classifying logic with 3 layers of query ident
 Pattern -> symbol -> keyword
 */
 
-package query
+package classifier
 
 import (
 	"regexp"
@@ -55,9 +55,26 @@ type Classification struct {
 	Entities     []Entity
 }
 
+// maxQueryLen caps input size for Classify. Inputs exceeding this limit skip
+// heavy pipeline processing (regex matching, symbol extraction) to mitigate
+// CPU exhaustion and high memory allocation under hostile or accidental large inputs.
+// Todo let user change upper bound maybe by env var.
+const maxQueryLen = 16 * 1024 // 16 KB
+
 func (c *Classifier) Classify(query string) *Classification {
 	query = strings.TrimSpace(query)
 	queryLower := strings.ToLower(query)
+
+	// Fall back to a safe default classification if input exceeds length bounds.
+	if len(queryLower) > maxQueryLen {
+		return &Classification{
+			Type:         QueryTypeUnderstanding,
+			Confidence:   0.5,
+			Reasoning:    "Query exceeded maximum length; defaulting to Understanding",
+			NeedsContext: true,
+			Priority:     3,
+		}
+	}
 
 	if result := c.level1PatternMatch(queryLower); result != nil && result.Confidence >= 0.95 {
 		return result
@@ -288,7 +305,7 @@ func (c *Classifier) level2SymbolAnalysis(queryLower string, symbols []string, e
 	keywords := extractKeywords(queryLower)
 
 	// Multiple symbols + comparison keywords
-	if len(symbols) >= 2 && containsAny(queryLower, []string{"difference", "compare", "vs", "versus", "similar"}) {
+	if len(symbols) >= 2 && ContainsAny(queryLower, []string{"difference", "compare", "vs", "versus", "similar"}) {
 		return &Classification{
 			Type:         QueryTypeComparison,
 			Confidence:   0.92,
@@ -303,7 +320,7 @@ func (c *Classifier) level2SymbolAnalysis(queryLower string, symbols []string, e
 
 	// Single symbol queries
 	if len(symbols) == 1 {
-		if containsAny(queryLower, []string{"where", "find", "locate", "show"}) {
+		if ContainsAny(queryLower, []string{"where", "find", "locate", "show"}) {
 			return &Classification{
 				Type:         QueryTypeLocation,
 				Confidence:   0.90,
@@ -316,7 +333,7 @@ func (c *Classifier) level2SymbolAnalysis(queryLower string, symbols []string, e
 			}
 		}
 
-		if containsAny(queryLower, []string{"calls", "uses", "invokes", "called by", "used by"}) {
+		if ContainsAny(queryLower, []string{"calls", "uses", "invokes", "called by", "used by"}) {
 			return &Classification{
 				Type:         QueryTypeUsage,
 				Confidence:   0.90,
@@ -329,7 +346,7 @@ func (c *Classifier) level2SymbolAnalysis(queryLower string, symbols []string, e
 			}
 		}
 
-		if containsAny(queryLower, []string{"example", "how to use", "sample"}) {
+		if ContainsAny(queryLower, []string{"example", "how to use", "sample"}) {
 			return &Classification{
 				Type:         QueryTypeExample,
 				Confidence:   0.90,
@@ -365,7 +382,7 @@ func (c *Classifier) level3KeywordAnalysis(queryLower string, symbols []string, 
 
 	// Check for debug keywords
 	debugKeywords := []string{"debug", "error", "bug", "issue", "problem", "crash", "exception", "not working", "fails"}
-	if containsAny(queryLower, debugKeywords) {
+	if ContainsAny(queryLower, debugKeywords) {
 		return &Classification{
 			Type:         QueryTypeDebug,
 			Confidence:   0.85,
@@ -380,7 +397,7 @@ func (c *Classifier) level3KeywordAnalysis(queryLower string, symbols []string, 
 
 	// Check for performance keywords
 	perfKeywords := []string{"performance", "slow", "optimize", "bottleneck", "efficient", "speed", "memory"}
-	if containsAny(queryLower, perfKeywords) {
+	if ContainsAny(queryLower, perfKeywords) {
 		return &Classification{
 			Type:         QueryTypePerformance,
 			Confidence:   0.85,
@@ -395,7 +412,7 @@ func (c *Classifier) level3KeywordAnalysis(queryLower string, symbols []string, 
 
 	// Check for refactoring keywords
 	refactorKeywords := []string{"refactor", "improve", "clean up", "restructure", "simplify", "better way"}
-	if containsAny(queryLower, refactorKeywords) {
+	if ContainsAny(queryLower, refactorKeywords) {
 		return &Classification{
 			Type:         QueryTypeRefactoring,
 			Confidence:   0.85,
@@ -410,7 +427,7 @@ func (c *Classifier) level3KeywordAnalysis(queryLower string, symbols []string, 
 
 	// Check for testing keywords
 	testKeywords := []string{"test", "unit test", "mock", "coverage", "test case"}
-	if containsAny(queryLower, testKeywords) {
+	if ContainsAny(queryLower, testKeywords) {
 		return &Classification{
 			Type:         QueryTypeTesting,
 			Confidence:   0.85,
@@ -425,7 +442,7 @@ func (c *Classifier) level3KeywordAnalysis(queryLower string, symbols []string, 
 
 	// Check for implementation keywords
 	implKeywords := []string{"implement", "add", "create", "build"}
-	if containsAny(queryLower, implKeywords) {
+	if ContainsAny(queryLower, implKeywords) {
 		return &Classification{
 			Type:         QueryTypeImplementation,
 			Confidence:   0.80,
@@ -440,7 +457,7 @@ func (c *Classifier) level3KeywordAnalysis(queryLower string, symbols []string, 
 
 	// Check for architecture keywords
 	archKeywords := []string{"architecture", "structure", "design", "overview", "system"}
-	if containsAny(queryLower, archKeywords) {
+	if ContainsAny(queryLower, archKeywords) {
 		return &Classification{
 			Type:         QueryTypeArchitecture,
 			Confidence:   0.80,

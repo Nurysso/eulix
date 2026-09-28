@@ -19,7 +19,7 @@ Platform notes:
 	- macOS: MADV_SEQUENTIAL via the UBC; MAP_PRIVATE preferred to keep the working set exclusive.
 */
 
-package query
+package mmap
 
 import (
 	"bufio"
@@ -34,6 +34,12 @@ import (
 	"github.com/bytedance/sonic/option"
 )
 
+// PretouchResult records the outcome of a JIT pretouch operation.
+type PretouchResult struct {
+	Target string
+	Err    error
+}
+
 const (
 	// mmapThreshold defines the minimum file size (4 MiB) to use memory mapping (mmap).
 	// Below 4 MiB, setup overhead (page-table allocation, first-access page faults)
@@ -46,46 +52,74 @@ const (
 	jsonBufSize = 1 << 20
 )
 
+// errFileTooLarge is returned when size would overflow int on 32 bits platform
+var errFileTooLarge = errors.New("file size overflows int on this platform")
+
+// Stores results produced during package init()
+var initPretouchResults []PretouchResult
+
+// sizeFitsInt returns true when size can't be represented as int.
+func SizeOverflows(size int64) bool {
+	const maxInt = int64(^uint(0) >> 1)
+	return size > maxInt
+}
+
+// errFileTooLargeForPath formats the overflow error with path context.
+func ErrFileTooLargeForPath(path string, size int64) error {
+	return fmt.Errorf("%w: %s is %d bytes", errFileTooLarge, path, size)
+}
+
 // sonicCopy is a sonic config that always copies strings out of the input
 // buffer. This is required on the mmap path: the mapped region is unmapped
 // before the caller uses the decoded value, so any decoded string that
 // references the raw bytes directly would become a dangling pointer.
 // CopyString: true adds a small allocation cost but is safe on all paths.
-var sonicCopy = sonic.Config{CopyString: true}.Froze()
+var SonicCopy = sonic.Config{CopyString: true}.Froze()
 
-// errFileTooLarge is returned when size would overflow int on 32 bits platform
-var errFileTooLarge = errors.New("file size overflows int on this platform")
-
-func (cb *ContextBuilder) init() {
-	cb.debugLog.Log("Initializing context: starting JIT pretouching for target Files...")
-
+func init() {
 	targets := []struct {
 		name string
 		typ  reflect.Type
 	}{
-		{"FileData", reflect.TypeOf(utils.FileData{})},
-		{"IndexRef", reflect.TypeOf(utils.IndexRef{})},
-		{"ExternalDependencyRef", reflect.TypeOf(utils.ExternalDependencyRef{})},
+		{"knowledge Base", reflect.TypeOf(utils.KnowledgeBaseRef{})},
+		{"Index", reflect.TypeOf(utils.IndexRef{})},
 		{"CallGraphRef", reflect.TypeOf(utils.CallGraphRef{})},
 	}
 
-	successCount := 0
 	for _, t := range targets {
-		if err := sonic.Pretouch(
+		err := sonic.Pretouch(
 			t.typ,
 			option.WithCompileRecursiveDepth(8),
-		); err != nil {
-			cb.debugLog.Log("Failed to pretouch files %s: %v", t.name, err)
-		} else {
-			cb.debugLog.Log("Successfully pretouched Files: %s", t.name)
-			successCount++
-		}
-	}
+		)
 
-	cb.debugLog.Log("Context initialization Started (%d/%d files pretouched)", successCount, len(targets))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[JIT] Failed to pretouch %s: %v\n", t.name, err)
+		}
+
+		// Collect execution status for deferred logging
+		initPretouchResults = append(initPretouchResults, PretouchResult{
+			Target: t.name,
+			Err:    err,
+		})
+	}
 }
 
-// decodeJSONFile decodes path into v using the fastest available strategy:
+// FlushPretouchLogs passes the recorded init results into any DebugLogger instance.
+func FlushPretouchLogs(logger *utils.DebugLogger) {
+	if logger == nil {
+		return
+	}
+	logger.Log("[JIT] Initializing context: starting JIT pretouching for target Files...")
+	for _, res := range initPretouchResults {
+		if res.Err != nil {
+			logger.Log("[JIT] Pretouch failed for %s: %v", res.Target, res.Err)
+		} else {
+			logger.Log("[JIT] Pretouch succeeded for %s", res.Target)
+		}
+	}
+}
+
+// DecodeJSONFile decodes path into v using the fastest available strategy:
 //
 //	Files ≥ mmapThreshold: mmap + sonic.Unmarshal
 //	Files < mmapThreshold: buffered reader + sonic streaming decoder.
@@ -93,7 +127,7 @@ func (cb *ContextBuilder) init() {
 // Mmap failures fall back transparently to buffered reader. The
 // fallback s intentional and silent at this layer, same os.Open
 // will fail again in the fallback path, surfacing the real cause.
-func decodeJSONFile(path string, v any) error {
+func DecodeJSONFile(path string, v any) error {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -101,8 +135,8 @@ func decodeJSONFile(path string, v any) error {
 
 	size := fi.Size()
 
-	if size >= mmapThreshold && !sizeOverflows(size) {
-		if err := decodeViaMmap(path, size, v); err == nil {
+	if size >= mmapThreshold && !SizeOverflows(size) {
+		if err := DecodeViaMmap(path, size, v); err == nil {
 			return nil
 		}
 		// mmap failed (sandbox, exotic FS, OOM on mapping) fall through.
@@ -120,20 +154,9 @@ func decodeViaReader(path string, v any) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	return sonicCopy.
+	return SonicCopy.
 		NewDecoder(bufio.NewReaderSize(f, jsonBufSize)).
 		Decode(v)
-}
-
-// sizeFitsInt returns true when size can't be represented as int.
-func sizeOverflows(size int64) bool {
-	const maxInt = int64(^uint(0) >> 1)
-	return size > maxInt
-}
-
-// errFileTooLargeForPath formats the overflow error with path context.
-func errFileTooLargeForPath(path string, size int64) error {
-	return fmt.Errorf("%w: %s is %d bytes", errFileTooLarge, path, size)
 }
 
 // openForSequentialRead returns an io.Reader over path, using mmap with
@@ -143,15 +166,15 @@ func errFileTooLargeForPath(path string, size int64) error {
 // in use (this is true even for the buffered-reader fallback,
 // releasing the file handle on cleanup so the caller has a single shutdown path
 // regardless of which backend was used
-func openForSequentialRead(path string) (r io.Reader, cleanup func(), err error) {
+func OpenForSequentialRead(path string) (r io.Reader, cleanup func(), err error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, err
 	}
 	size := fi.Size()
 
-	if size >= mmapThreshold && !sizeOverflows(size) {
-		if r, cleanup, err := mmapForSequentialRead(path, size); err == nil {
+	if size >= mmapThreshold && !SizeOverflows(size) {
+		if r, cleanup, err := MmapForSequentialRead(path, size); err == nil {
 			return r, cleanup, nil
 		}
 		// mmap unsupported or failed — fall through to buffered reader.

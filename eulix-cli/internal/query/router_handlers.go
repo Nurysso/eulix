@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package query provides query classification functionality.
+// Package query provides query c.Classification functionality.
 
 /*
 This file is responsible for handling/Generating Prompts with CoT.
@@ -11,6 +11,7 @@ package query
 
 import (
 	"encoding/json"
+	c "eulix/internal/query/classifier"
 	"eulix/internal/utils"
 	"fmt"
 	"os"
@@ -19,8 +20,20 @@ import (
 	"strings"
 )
 
+type metricsEntry struct {
+	fn   *utils.KBFunction
+	file string
+}
+
+type todoItem struct {
+	file     string
+	line     int
+	text     string
+	priority string
+}
+
 // BuildPromptString composes header + task-specific body + footer.
-func BuildPromptString(query string, class *Classification, sourceAvailable bool, taskBody string, codeBudgetRatio float64) string {
+func BuildPromptString(query string, class *c.Classification, sourceAvailable bool, taskBody string, codeBudgetRatio float64) string {
 	return cotHeader(query, class, sourceAvailable, codeBudgetRatio) +
 		" TASK \n" +
 		taskBody +
@@ -31,7 +44,7 @@ func BuildPromptString(query string, class *Classification, sourceAvailable bool
 // the same way PromptOrAnswer does. Every LLM-calling handler should use
 // this instead of calling BuildPromptString alone, or the retrieved code
 // context never reaches the model.
-func (r *Router) buildFullPromptWithContext(ctx *utils.ContextWindow, query string, class *Classification) string {
+func (r *Router) buildFullPromptWithContext(ctx *utils.ContextWindow, query string, class *c.Classification) string {
 	src := hasSourceCode(ctx)
 	taskBody := getTaskBody(r, query, class)
 	realCodeBudgetRatio := r.config.RetrievalConfig.CodeToAstRatio
@@ -44,7 +57,7 @@ func (r *Router) buildFullPromptWithContext(ctx *utils.ContextWindow, query stri
 // cotHeader builds the universal reasoning preamble injected into every prompt.
 // It instructs the model to separate "what I can see" from "what I infer",
 // and to distinguish source code chunks from metadata-only chunks.
-func cotHeader(query string, class *Classification, sourceAvailable bool, codeBudgetRatio float64) string {
+func cotHeader(query string, class *c.Classification, sourceAvailable bool, codeBudgetRatio float64) string {
 	var b strings.Builder
 	if sourceAvailable {
 		fmt.Fprintf(&b, "You have been given a mix of REAL SOURCE CODE (≈%d%%) and AST metadata\n", int(codeBudgetRatio*100))
@@ -104,7 +117,7 @@ What I CAN help with instead:
 Would you like an architecture or data-flow explanation instead?`, nil
 }
 
-func (r *Router) handleUnderstanding(query string, class *Classification) (string, error) {
+func (r *Router) handleUnderstanding(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -113,7 +126,7 @@ func (r *Router) handleUnderstanding(query string, class *Classification) (strin
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleImplementation(query string, class *Classification) (string, error) {
+func (r *Router) handleImplementation(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -122,7 +135,7 @@ func (r *Router) handleImplementation(query string, class *Classification) (stri
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleArchitecture(query string, class *Classification) (string, error) {
+func (r *Router) handleArchitecture(query string, class *c.Classification) (string, error) {
 
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
@@ -132,7 +145,7 @@ func (r *Router) handleArchitecture(query string, class *Classification) (string
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleDebug(query string, class *Classification) (string, error) {
+func (r *Router) handleDebug(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -141,7 +154,7 @@ func (r *Router) handleDebug(query string, class *Classification) (string, error
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleComparison(query string, class *Classification) (string, error) {
+func (r *Router) handleComparison(query string, class *c.Classification) (string, error) {
 	if len(class.Symbols) < 2 {
 		return "Please specify at least two symbols to compare (e.g., 'compare FooHandler and BarHandler').", nil
 	}
@@ -154,7 +167,7 @@ func (r *Router) handleComparison(query string, class *Classification) (string, 
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleRefactoring(query string, class *Classification) (string, error) {
+func (r *Router) handleRefactoring(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -163,7 +176,7 @@ func (r *Router) handleRefactoring(query string, class *Classification) (string,
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handlePerformance(query string, class *Classification) (string, error) {
+func (r *Router) handlePerformance(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -172,7 +185,7 @@ func (r *Router) handlePerformance(query string, class *Classification) (string,
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleDataFlow(query string, class *Classification) (string, error) {
+func (r *Router) handleDataFlow(query string, class *c.Classification) (string, error) {
 	// Pre-compute the call-chain type trace for symbols in the query
 	var chainInfo strings.Builder
 	for _, sym := range class.Symbols {
@@ -189,7 +202,7 @@ func (r *Router) handleDataFlow(query string, class *Classification) (string, er
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleSecurity(query string, class *Classification) (string, error) {
+func (r *Router) handleSecurity(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -198,7 +211,7 @@ func (r *Router) handleSecurity(query string, class *Classification) (string, er
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleDocumentation(query string, class *Classification) (string, error) {
+func (r *Router) handleDocumentation(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -207,7 +220,7 @@ func (r *Router) handleDocumentation(query string, class *Classification) (strin
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleExample(query string, class *Classification) (string, error) {
+func (r *Router) handleExample(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -216,7 +229,7 @@ func (r *Router) handleExample(query string, class *Classification) (string, err
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleTesting(query string, class *Classification) (string, error) {
+func (r *Router) handleTesting(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -230,14 +243,14 @@ func (r *Router) handleTesting(query string, class *Classification) (string, err
 // handleCallGraph renders the two-level call tree with a per-symbol cache.
 // First call for a symbol: O(callers + callees + their neighbours).
 // Subsequent calls: O(1) map lookup + string copy.
-func buildRouterCallGraph(ref *utils.CallGraphRef) *CallGraph {
+func buildRouterCallGraph(ref *utils.CallGraphRef) *callGraph {
 	if ref == nil {
-		return &CallGraph{Functions: map[string]CGFunction{}}
+		return &callGraph{Functions: map[string]cgFunction{}}
 	}
 
-	fns := make(map[string]CGFunction, len(ref.Nodes))
+	fns := make(map[string]cgFunction, len(ref.Nodes))
 	for _, n := range ref.Nodes {
-		fns[bareID(n.ID)] = CGFunction{Location: n.File}
+		fns[bareID(n.ID)] = cgFunction{Location: n.File}
 	}
 
 	for _, e := range ref.Edges {
@@ -256,7 +269,7 @@ func buildRouterCallGraph(ref *utils.CallGraphRef) *CallGraph {
 		fns[to] = callee
 	}
 
-	return &CallGraph{Functions: fns}
+	return &callGraph{Functions: fns}
 }
 
 // bareID strips the node-type prefix and file path that eulix-parser emits.
@@ -279,22 +292,24 @@ func bareID(id string) string {
 	return id
 }
 
-func (r *Router) handleDependency(query string, _ *Classification) (string, error) {
+func (r *Router) handleDependency(query string, _ *c.Classification) (string, error) {
 	entity := extractDepQueryTerm(query)
 	if entity == "" {
 		return "Could not identify an entity for dependency analysis.", nil
 	}
 
-	if len(r.contextBuilder.GetExternalDeps()) == 0 {
-		if err := r.contextBuilder.loadExternalDeps(); err != nil {
+	deps := getExternalDeps()
+	if len(deps) == 0 {
+		if err := loadExternalDeps("external_deps.json"); err != nil {
 			return "", fmt.Errorf("could not load external deps: %w", err)
 		}
+		deps = getExternalDeps()
 	}
-	deps := r.contextBuilder.GetExternalDeps()
-	idx := r.contextBuilder.GetDepIndex()
 
 	entityLow := strings.ToLower(entity)
 	queryLow := strings.ToLower(query)
+
+	idx := buildDepIndex(deps)
 
 	switch classifyDepIntent(queryLow, entityLow) {
 	case depIntentAll:
@@ -306,8 +321,8 @@ func (r *Router) handleDependency(query string, _ *Classification) (string, erro
 	case depIntentCount:
 		return formatDepCount(deps), nil
 
-	default: // depIntentWhoUses and depIntentLookup share the same matching logic
-		matched := idx.matchDeps(entityLow)
+	default: // depIntentWhoUses and depIntentLookup share matching logic
+		matched := matchDeps(deps, entityLow)
 		if len(matched) == 0 {
 			return fmt.Sprintf("No dependency named '%s' found.\nTip: use 'list dependencies' to see all.", entity), nil
 		}
@@ -319,7 +334,7 @@ func (r *Router) handleDependency(query string, _ *Classification) (string, erro
 // handleCallGraph renders the two-level call tree with a per-symbol cache.
 // First call for a symbol: O(callers + callees + their neighbours).
 // Subsequent calls: O(1) map lookup + string copy.
-func (r *Router) handleCallGraph(query string, class *Classification) (string, error) {
+func (r *Router) handleCallGraph(query string, class *c.Classification) (string, error) {
 	entity := firstSymbolOrExtracted(class, query)
 	if entity == "" {
 		return "Could not identify a symbol for call graph analysis.", nil
@@ -409,7 +424,7 @@ func (r *Router) handleCallGraph(query string, class *Classification) (string, e
 }
 
 // handleMetrics for project-wide summary and per-symbol lookup.
-func (r *Router) handleMetrics(query string, class *Classification) (string, error) {
+func (r *Router) handleMetrics(query string, class *c.Classification) (string, error) {
 	metricsPath := filepath.Join(r.config.Project.Path, ".eulix", "kb_metrics.json")
 
 	data, err := os.ReadFile(metricsPath)
@@ -488,7 +503,7 @@ func (r *Router) handleMetrics(query string, class *Classification) (string, err
 	return b.String(), nil
 }
 
-func (r *Router) handleEntryPoints(_ string, _ *Classification) (string, error) {
+func (r *Router) handleEntryPoints(_ string, _ *c.Classification) (string, error) {
 	entryPath := filepath.Join(r.config.Project.Path, ".eulix", "kb_entry_points.json")
 	data, err := os.ReadFile(entryPath)
 	if err != nil {
@@ -555,7 +570,7 @@ func (r *Router) handleFileStructure(query string) (string, error) {
 	return fmt.Sprintf("File matching '%s' not found in knowledge base.", target), nil
 }
 
-func (r *Router) handleTodosQuery(_ string, _ *Classification) (string, error) {
+func (r *Router) handleTodosQuery(_ string, _ *c.Classification) (string, error) {
 	if r.kb == nil {
 		return "Full KB (kb.json) not loaded — TODO query requires it.", nil
 	}
@@ -615,13 +630,13 @@ func (r *Router) handleTodosQuery(_ string, _ *Classification) (string, error) {
 	return b.String(), nil
 }
 
-func (r *Router) handleLocation(query string, class *Classification) (string, error) {
+func (r *Router) handleLocation(query string, class *c.Classification) (string, error) {
 	if r.kbIndex == nil {
 		return "", fmt.Errorf("kb index unavailable — router was not fully initialized")
 	}
-	r.contextBuilder.debugLog.Log("[DEBUG] kbIndex ptr=%p len(FunctionsByName)=%d\n", r.kbIndex, len(r.kbIndex.FunctionsByName))
+	r.debug.Log("[DEBUG] kbIndex ptr=%p len(FunctionsByName)=%d\n", r.kbIndex, len(r.kbIndex.FunctionsByName))
 	entity := firstSymbolOrExtracted(class, query)
-	r.contextBuilder.debugLog.Log("[DEBUG] handleLocation: entity=%q\n", entity)
+	r.debug.Log("[DEBUG] handleLocation: entity=%q\n", entity)
 	if entity == "" {
 		return "Could not identify a function or class name in the query.", nil
 	}
@@ -667,7 +682,7 @@ func (r *Router) handleLocation(query string, class *Classification) (string, er
 	return b.String(), nil
 }
 
-func (r *Router) handleUsage(query string, class *Classification) (string, error) {
+func (r *Router) handleUsage(query string, class *c.Classification) (string, error) {
 	query = stripCommandPrefix(query, "usage of", "usage", "use", "uses of", "show usage", "find usage")
 	entity := firstSymbolOrExtracted(class, query)
 	if entity == "" {

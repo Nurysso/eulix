@@ -8,76 +8,24 @@
 This file is responsible for the shared types of query package.
 */
 
-package query
+package retrieval
 
 import (
-	"bufio"
-	"os"
 	"sync"
 	"time"
 
-	"eulix/internal/cache"
 	"eulix/internal/config"
 	"eulix/internal/llm"
 	"eulix/internal/utils"
 )
 
-type QueryType int
 type IntentType int
 type callSiteIndex map[string][]int // symbol → []chunkIdx
-
-type Router struct {
-	eulixDir        string
-	config          *config.Config
-	classifier      *Classifier
-	llmClient       *llm.Client
-	cache           *cache.Manager
-	contextBuilder  *ContextBuilder
-	kbIndex         *utils.KBIndices
-	callGraph       *CallGraph
-	kb              *utils.KnowledgeBaseRef
-	Patterns        *utils.PatternInfo
-	cgIdx           *callGraphIndex
-	cgBuild         *CallGraphIdx
-	currentChecksum string
-}
-
-type metricsEntry struct {
-	fn   *utils.KBFunction
-	file string
-}
-
-type callGraphIndex struct {
-	mu    sync.RWMutex
-	cache map[string]string // entity → pre-rendered two-level tree string
-}
 
 type CallGraphIdx struct {
 	Nodes    map[string]*utils.CallGraphNode
 	CalledBy map[string][]string
 	Calls    map[string][]string
-}
-type CGFunction struct {
-	Location string
-	Calls    []string
-	CalledBy []string
-}
-
-type CallGraph struct {
-	Functions map[string]CGFunction
-}
-
-type match struct {
-	name  string
-	score int
-	typ   string
-}
-
-type todoItem struct {
-	file     string
-	line     int
-	text     string
-	priority string
 }
 
 type FunctionNode struct {
@@ -100,9 +48,8 @@ type ContextBuilder struct {
 	cgRef       *utils.CallGraphRef
 	chunks      []Chunk
 	config      *config.Config
-	debugLog    *DebugLogger
-	depIdx      *depIndex
-	// embData       *EmbeddingsData
+	debugLog    *utils.DebugLogger
+	// depIdx        *depIndex
 	embeddings    [][]float32
 	eulixDir      string
 	externalDeps  []utils.ExternalDependency
@@ -138,12 +85,6 @@ type Chunk struct {
 	ClassName  string
 	Name       string
 	Importance float64
-}
-type DebugLogger struct {
-	file   *os.File
-	writer *bufio.Writer
-	mu     sync.Mutex
-	closed bool
 }
 
 // QueryIntent is derived from the raw query before any search begins.

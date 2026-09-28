@@ -11,13 +11,12 @@ Key Responsibilities:
   - Deduplicates and merges candidate scores using strategy-specific boost multipliers
   - Adjusts strategy weights and search paths dynamically based on query intent and corpus scale
 */
-package query
+package retrieval
 
 import (
 	"eulix/internal/utils"
 	"fmt"
 	"math"
-	"os"
 	"regexp"
 	"slices"
 	"sort"
@@ -62,12 +61,6 @@ type scoredIdx struct {
 	idx   int
 	score float64
 }
-
-func isDebugLevel3() bool {
-	return os.Getenv("debug") == "3"
-}
-
-var debugLevel3 = isDebugLevel3()
 
 // cleanSymbols drops tokens shorter than 3 chars and dedupes case-insensitively.
 // Mostly to kill garbage like "s", "q", "x" that extractPotentialSymbols lets through.
@@ -1124,7 +1117,7 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int, hc *
 	return result
 }
 
-func buildCallSiteIndex(cg *utils.CallGraphRef, chunks []Chunk, log *DebugLogger) callSiteIndex {
+func buildCallSiteIndex(cg *utils.CallGraphRef, chunks []Chunk, log *utils.DebugLogger) callSiteIndex {
 	symToChunks := make(map[string][]int, len(chunks))
 	for i, c := range chunks {
 		for _, sym := range c.Symbols {

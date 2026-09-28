@@ -11,12 +11,13 @@ Key Responsibilities:
   - Binary decoding of vector embeddings and mapping tables
   - In-memory index generation (symbol maps, inverted indexes, boilerplate filters)
 */
-package query
+package retrieval
 
 import (
 	"bufio"
 	"encoding/binary"
 	"encoding/json"
+	"eulix/internal/query/retrieval/mmap"
 	"eulix/internal/utils"
 	"fmt"
 	"io"
@@ -35,7 +36,6 @@ const (
 	ivfNClusters       = 256
 	ivfKMeansIter      = 5
 	dfThresholdDefault = 0.30
-	bpMinChunks        = 50
 	PreAllocate        = 320_000
 )
 
@@ -79,22 +79,6 @@ func (cb *ContextBuilder) logFileLoad(name string) func(error) {
 // they benefit from the same mmap-backed streaming-decode behaviour
 // as the ContextBuilder loaders below.
 
-// loadExternalDeps reads and parses kb_external_deps.json
-func (cb *ContextBuilder) loadExternalDeps() error {
-	done := cb.logFileLoad("kb_external_deps.json")
-
-	var FileData utils.ExternalDependencyRef
-	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_external_deps.json"), &FileData)
-
-	done(err)
-	if err != nil {
-		return fmt.Errorf("kb_external_deps: %w", err)
-	}
-	cb.externalDeps = FileData.ExternalDependency
-	cb.depIdx = buildDepIndex(cb.externalDeps)
-	return nil
-}
-
 // loadChunks is the primary loader: streams kb_index.json and
 // kb.json, builds the chunk slice, and populates all derived
 // indices (boilerplate detector, symbol index, inverted index).
@@ -114,7 +98,7 @@ func (cb *ContextBuilder) loadExternalDeps() error {
 func (cb *ContextBuilder) loadChunks() error {
 	done := cb.logFileLoad("kb_index.json")
 	var ref utils.IndexRef
-	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_index.json"), &ref)
+	err := mmap.DecodeJSONFile(filepath.Join(cb.eulixDir, "kb_index.json"), &ref)
 	done(err)
 	if err != nil {
 		return fmt.Errorf("kb_index.json: %w", err)
@@ -145,10 +129,6 @@ func (cb *ContextBuilder) loadChunks() error {
 	return nil
 }
 
-func (cb *ContextBuilder) GetDepIndex() *depIndex {
-	return cb.depIdx
-}
-
 // streamKBChunks opens kb.json with mmap + sequential-read hints
 // and walks the JSON token-by-token, building chunks as each
 // FileData is decoded. The full utils.KnowledgeBaseRef struct is
@@ -175,7 +155,7 @@ func (cb *ContextBuilder) GetDepIndex() *depIndex {
 func (cb *ContextBuilder) streamKBChunks() error {
 	path := filepath.Join(cb.eulixDir, "kb.json")
 
-	r, cleanup, err := openForSequentialRead(path)
+	r, cleanup, err := mmap.OpenForSequentialRead(path)
 	if err != nil {
 		return err
 	}
@@ -220,7 +200,7 @@ func (cb *ContextBuilder) streamKBChunks() error {
 		// decoded strings out before we move to the next
 		// iteration, so the source can be safely reused.
 		var fs utils.FileData
-		if err := sonicCopy.Unmarshal(raw, &fs); err != nil {
+		if err := mmap.SonicCopy.Unmarshal(raw, &fs); err != nil {
 			return fmt.Errorf("decoding FileData for %s: %w ", filePath, err)
 		}
 		cb.addChunksFromFile(filePath, &fs)
@@ -336,7 +316,7 @@ func isIdentBoundary(r rune) bool {
 func (cb *ContextBuilder) loadAndIndexCallGraph() {
 	done := cb.logFileLoad("kb_call_graph.json")
 	var cg utils.CallGraphRef
-	err := decodeJSONFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"), &cg)
+	err := mmap.DecodeJSONFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"), &cg)
 	done(err)
 	if err != nil {
 		cb.hasCallGraph = false
@@ -435,13 +415,13 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	quantized := flag[0] == 1
 
 	// allocate matrix (hugepage-aligned on Linux, flat elsewhere)
-	cb.embeddings = allocEmbeddingMatrix(numEmb, dim)
+	cb.embeddings = mmap.AllocEmbeddingMatrix(numEmb, dim)
 
 	if !quantized {
 		cb.debugLog.Log("Non Quantize embeddings")
 		// Fixed-width float32 records: read entire payload into the
 		// contiguous backing buffer in one shot.
-		// allocEmbeddingMatrix lays out all rows in a single flat allocation,
+		// AllocEmbeddingMatrix lays out all rows in a single flat allocation,
 		// so embeddings[0][:numEmb*dim] covers the whole thing.
 		flat := cb.embeddings[0][:numEmb*dim]
 		if err := binary.Read(br, binary.LittleEndian, flat); err != nil {

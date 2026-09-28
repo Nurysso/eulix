@@ -5,7 +5,7 @@
 // Package query is responsible for query identification,
 // running functions/tools based on query and build context window.
 
-package query
+package retrieval
 
 import (
 	"fmt"
@@ -14,11 +14,15 @@ import (
 	"eulix/internal/config"
 	"eulix/internal/embeddings"
 	"eulix/internal/llm"
+	"eulix/internal/query/retrieval/mmap"
 	"eulix/internal/utils"
 )
 
 // ContextWindowCreator initializes ContextBuilder, loads index artifacts, and sets up search resources.
 func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Client, sourceRoot string) (*ContextBuilder, error) {
+	debugLogger := utils.NewDebugLogger(eulixDir)
+	// Flush stored init pretouch results into context_debug.log immediately
+	mmap.FlushPretouchLogs(debugLogger)
 	cb := &ContextBuilder{
 		eulixDir:      eulixDir,
 		config:        cfg,
@@ -26,11 +30,11 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 		vectorMap:     make(map[string]int),
 		hydrateIdx:    make(map[string]map[[2]int]func() string),
 		sourceRoot:    sourceRoot,
-		debugLog:      NewDebugLogger(eulixDir),
+		debugLog:      debugLogger,
 		subsystemTree: make([]*SubsystemNode, 0, 128),
 		noisePaths:    make([]string, 0, 32),
 	}
-	cb.init()
+
 	cb.debugLog.Log("Initializing ContextBuilder with source root: %s", sourceRoot)
 
 	// Start auto-flush every 5 seconds
@@ -355,4 +359,14 @@ func (cb *ContextBuilder) assembleContext(chunks []Chunk) *utils.ContextWindow {
 		srcList = append(srcList, s)
 	}
 	return &utils.ContextWindow{Chunks: ctxChunks, TotalTokens: totalTokens, Sources: srcList}
+}
+
+// GetKBIndex returns the KB index for router access
+func (cb *ContextBuilder) GetKBIndex() *utils.KBIndices {
+	return cb.kbIdx
+}
+
+// GetCallGraphRef returns the call graph reference for router access
+func (cb *ContextBuilder) GetCallGraphRef() *utils.CallGraphRef {
+	return cb.cgRef
 }

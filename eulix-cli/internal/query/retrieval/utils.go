@@ -10,27 +10,25 @@ RAG (Retrieval-Augmented Generation) system.
 This file contains utility functions for tokenization, text processing, binary
 parsing, debug logging, and math operations used throughout the context builder.
 */
-package query
+package retrieval
 
 import (
-	"bufio"
 	"encoding/json"
 	"eulix/internal/config"
 	"eulix/internal/utils"
 	"fmt"
 	"math"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"strings"
-	"syscall"
 	"time"
 	"unicode"
 
 	"gonum.org/v1/gonum/blas/blas32"
 )
+
+var debugLevel3 = utils.IsDebugLevel3()
 
 // Close cleans up resources used by ContextBuilder
 func (cb *ContextBuilder) Close() error {
@@ -225,123 +223,6 @@ func ApplyPreMMRFloor(candidates []ScoredChunk, cfg *config.RetrievalConfig) []S
 	}
 
 	return filtered
-}
-
-// NewDebugLogger creates a thread-safe debug logger writing to eulixDir/debug/context_debug.log.
-// If file creation fails, returns a silent (no-op) logger rather than panicking.
-func NewDebugLogger(eulixDir string) *DebugLogger {
-	logPath := filepath.Join(eulixDir, "debug", "context_debug.log")
-
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
-		return &DebugLogger{} // silent fallback
-	}
-
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return &DebugLogger{} // silent fallback
-	}
-
-	return &DebugLogger{
-		file:   f,
-		writer: bufio.NewWriterSize(f, 64*1024), // 64KB buffer
-	}
-}
-
-// Log writes a timestamped debug message to the log file.
-// Thread-safe via mutex. Silent fallback if file is nil.
-// Automatically appends newline if not present.
-//
-// Format: [HH:MM:SS] <formatted message>
-func (d *DebugLogger) Log(format string, args ...interface{}) {
-	if d.file == nil || d.closed {
-		return
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	msg := fmt.Sprintf("[%s] ", time.Now().Format("15:04:05.000"))
-	msg += fmt.Sprintf(format, args...)
-	if !strings.HasSuffix(msg, "\n") {
-		msg += "\n"
-	}
-	_, _ = d.file.WriteString(msg)
-	if d.writer.Buffered() > 50*1024 {
-		_ = d.writer.Flush()
-	}
-}
-
-// Flush forces all buffered logs to disk
-func (d *DebugLogger) Flush() {
-	if d.file == nil || d.closed {
-		return
-	}
-
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if d.writer != nil {
-		_ = d.writer.Flush()
-	}
-}
-
-// Close flushes and closes the logger
-func (d *DebugLogger) Close() {
-	if d.file == nil || d.closed {
-		return
-	}
-
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if d.writer != nil {
-		_ = d.writer.Flush()
-	}
-	if d.file != nil {
-		_ = d.file.Close()
-	}
-	d.closed = true
-}
-
-//nolint:unused
-func (cb *ContextBuilder) safeExecute(fn func()) {
-	defer func() {
-		if r := recover(); r != nil {
-			cb.debugLog.Log("PANIC RECOVERED: %v\nStack trace: %s", r, debug.Stack())
-			cb.debugLog.Flush() // Force flush on panic
-			// Re-panic if you want the program to still crash
-			panic(r)
-		}
-	}()
-	fn()
-}
-
-// StartAutoFlush starts a goroutine that periodically flushes logs to disk
-func (d *DebugLogger) StartAutoFlush(interval time.Duration) {
-	if d.file == nil {
-		return
-	}
-
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			d.Flush()
-		}
-	}()
-}
-
-//nolint:unused
-func (cb *ContextBuilder) setupSignalHandler() {
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		cb.debugLog.Log("Received shutdown signal, flushing logs...")
-		cb.debugLog.Close()
-		os.Exit(0)
-	}()
 }
 
 // cosineSimilarity computes normalized dot product of two vectors.

@@ -3,10 +3,11 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-package query
+package retrieval
 
 import (
 	"eulix/internal/query/strip"
+	"eulix/internal/utils"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,7 +28,7 @@ func newFileCache() *fileCache {
 	return &fileCache{files: make(map[string][]string)}
 }
 
-func (fc *fileCache) get(path string, debugLog *DebugLogger) []string {
+func (fc *fileCache) get(path string, debugLog *utils.DebugLogger) []string {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	if lines, ok := fc.files[path]; ok {
@@ -169,7 +170,7 @@ func (cb *ContextBuilder) readSourceLinesFromCache(
 	return extractLines(lines, filePath, startLine, endLine, maxLines, cb.debugLog)
 }
 
-func extractLines(lines []string, filePath string, startLine, endLine, maxLines int, debugLog *DebugLogger) (string, int) {
+func extractLines(lines []string, filePath string, startLine, endLine, maxLines int, debugLog *utils.DebugLogger) (string, int) {
 	if startLine < 1 || startLine > len(lines) {
 		debugLog.Log("Invalid line range for %s: file has %d lines, requested %d-%d",
 			filePath, len(lines), startLine, endLine)

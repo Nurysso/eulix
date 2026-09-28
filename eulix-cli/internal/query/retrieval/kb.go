@@ -11,7 +11,7 @@ Key Responsibilities:
   - Materialization of Chunk objects from KB structures (functions, classes, methods)
   - On-demand content hydration for lazy-loaded chunks in large corpora
 */
-package query
+package retrieval
 
 import (
 	"eulix/internal/utils"

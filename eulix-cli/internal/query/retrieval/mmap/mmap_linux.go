@@ -14,7 +14,7 @@
 	mmap_darwin.go (and any future mmap_*bsd.go) for the other targets.
 */
 
-package query
+package mmap
 
 import (
 	"os"
@@ -67,7 +67,7 @@ func mmapAdvisePlatform(data []byte) {
 	_ = unix.Madvise(data, unix.MADV_HUGEPAGE)
 }
 
-func allocEmbeddingMatrix(n, dim int) [][]float32 {
+func AllocEmbeddingMatrix(n, dim int) [][]float32 {
 	flat := allocHugepageAligned(n * dim)
 	rows := make([][]float32, n)
 	for i := range rows {

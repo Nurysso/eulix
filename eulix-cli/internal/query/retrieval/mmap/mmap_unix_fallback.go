@@ -16,7 +16,7 @@ Generic unix fallback for platforms other
 	to the buffered reader kicks in transparently.
 */
 
-package query
+package mmap
 
 import (
 	"os"
@@ -41,7 +41,7 @@ func mmapAdvisePlatform(data []byte) {
 	_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
 }
 
-func allocEmbeddingMatrix(n, dim int) [][]float32 {
+func AllocEmbeddingMatrix(n, dim int) [][]float32 {
 	flat := make([]float32, n*dim)
 	rows := make([][]float32, n)
 	for i := range rows {

@@ -28,10 +28,11 @@ user processes). Skipped by default.
 Reference: https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-prefetchvirtualmemory
 */
 
-package query
+package mmap
 
 import (
 	"bytes"
+	"eulix/internal/utils"
 	"fmt"
 	"io"
 	"os"
@@ -88,9 +89,9 @@ func openSeqyentialWindows(path string) (*os.File, error) {
 // decodeViaMmap maps path read-only via the Windows file-mapping API and
 // decodes JSON directly from the view.  size must equal fi.Size() for the
 // file — passing it in avoids a redundant stat syscall.
-func decodeViaMmap(path string, size int64, v any) error {
-	if sizeOverflows(size) {
-		return errFileTooLargeForPath(path, size)
+func DecodeViaMmap(path string, size int64, v any) error {
+	if utils.SizeOverflows(size) {
+		return utils.ErrFileTooLargeForPath(path, size)
 	}
 
 	// Use sequential scan open so the FS readhead is tuned
@@ -106,8 +107,8 @@ func decodeViaMmap(path string, size int64, v any) error {
 		return err
 	}
 	size = fi.Size()
-	if sizeOverflows(size) {
-		return errFileTooLargeForPath(path, size)
+	if utils.SizeOverflows(size) {
+		return utils.ErrFileTooLargeForPath(path, size)
 	}
 	if size == 0 {
 		return fmt.Errorf("empty file:%s", path)
@@ -141,12 +142,12 @@ func decodeViaMmap(path string, size int64, v any) error {
 	return sonicCopy.Unmarshal(data, v)
 }
 
-// mmapForSequentialRead Windows supports the io.Reader variant
+// MmapForSequentialRead Windows supports the io.Reader variant
 // returning a bytes.Reader over the mmap'd view, but the
 // caller must use the FILE_FLAG_SEQUENTIAL_ONLY open path to get
 // the FS readahead hint. The returned cleanup releases both the
 // view and the mapping object handle.
-func mmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
+func MmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
 	f, err := openSeqyentialWindows(path)
 	if err != nil {
 		return nil, nil, err
@@ -157,9 +158,9 @@ func mmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
 		return nil, nil, err
 	}
 	size = fi.Size()
-	if sizeOverflows(size) || size == 0 {
+	if utils.SizeOverflows(size) || size == 0 {
 		f.Close()
-		return nil, nil, fmt.Errorf("mmapForSequentialRead: invalid size %d for %s", size, path)
+		return nil, nil, fmt.Errorf("MmapForSequentialRead: invalid size %d for %s", size, path)
 	}
 
 	h, err := windows.CreateFileMapping(
@@ -199,7 +200,7 @@ func mmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
 	}, nil
 }
 
-func allocEmbeddingMatrix(n, dim int) [][]float32 {
+func AllocEmbeddingMatrix(n, dim int) [][]float32 {
 	flat := make([]float32, n*dim)
 	rows := make([][]float32, n)
 	for i := range rows {

@@ -10,6 +10,9 @@ This file is responsible for Helpers used in Query routing.
 package query
 
 import (
+	"encoding/json"
+	"eulix/internal/query/classifier"
+	"eulix/internal/query/retrieval"
 	"eulix/internal/utils"
 	"fmt"
 	"os"
@@ -21,6 +24,11 @@ import (
 )
 
 type language int
+type match struct {
+	name  string
+	score int
+	typ   string
+}
 
 const (
 	langGo language = iota
@@ -52,7 +60,7 @@ func (r *Router) ensureContextBuilder() error {
 	if r.config.Project.DebugConfig {
 		fmt.Printf("[INFO] Initializing context builder with source root: %s\n", sourceRoot)
 	}
-	cb, err := ContextWindowCreator(r.eulixDir, r.config, r.llmClient, sourceRoot)
+	cb, err := retrieval.ContextWindowCreator(r.eulixDir, r.config, r.llmClient, sourceRoot)
 	if err != nil {
 		return fmt.Errorf("failed to initialize context builder: %w", err)
 	}
@@ -72,7 +80,7 @@ func hasSourceCode(ctx *utils.ContextWindow) bool {
 
 // firstSymbolOrExtracted returns the first classified symbol or falls back to
 // heuristic extraction from the raw query string.
-func firstSymbolOrExtracted(class *Classification, query string) string {
+func firstSymbolOrExtracted(class *classifier.Classification, query string) string {
 	// Words that are metrics commands, not actual symbols
 	metricsCommands := map[string]bool{
 		"metrics":    true,
@@ -535,16 +543,16 @@ func (r *Router) resolveCallGraphEntity(name string) (string, *utils.CallGraphNo
 	return "", nil, false, nil
 }
 
-func BuildCallGraphIndex(ref *utils.CallGraphRef) *CallGraphIdx {
+func BuildCallGraphIndex(ref *utils.CallGraphRef) *retrieval.CallGraphIdx {
 	if ref == nil {
-		return &CallGraphIdx{
+		return &retrieval.CallGraphIdx{
 			Nodes:    make(map[string]*utils.CallGraphNode),
 			CalledBy: make(map[string][]string),
 			Calls:    make(map[string][]string),
 		}
 	}
 
-	idx := &CallGraphIdx{
+	idx := &retrieval.CallGraphIdx{
 		Nodes:    make(map[string]*utils.CallGraphNode, len(ref.Nodes)),
 		CalledBy: make(map[string][]string, len(ref.Nodes)),
 		Calls:    make(map[string][]string, len(ref.Nodes)),
@@ -614,8 +622,24 @@ const (
 	depIntentCount                    // how many deps total
 )
 
-func (cb *ContextBuilder) GetExternalDeps() []utils.ExternalDependency {
-	return cb.externalDeps
+var externalDeps []utils.ExternalDependency
+
+func getExternalDeps() []utils.ExternalDependency {
+	return externalDeps
+}
+func loadExternalDeps(filePath string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read deps file: %w", err)
+	}
+
+	var wrapper utils.ExternalDependencyRef
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		return fmt.Errorf("failed to unmarshal JSON: %w", err)
+	}
+
+	externalDeps = wrapper.ExternalDependency
+	return nil
 }
 
 var (
@@ -635,21 +659,21 @@ var (
 )
 
 func classifyDepIntent(queryLow, entityLow string) depIntent {
-	if containsAny(queryLow, depCountPhrases) {
+	if classifier.ContainsAny(queryLow, depCountPhrases) {
 		return depIntentCount
 	}
 
 	broadEntity := entityLow == "all" || entityLow == "list" || entityLow == "project"
-	if broadEntity || containsAny(queryLow, depBroadPhrases) {
+	if broadEntity || classifier.ContainsAny(queryLow, depBroadPhrases) {
 		return depIntentAll
 	}
 
 	// Explicit phrasing beats the filename-shape heuristic — "which files
 	// use X" must win even when X itself contains a "/".
-	if containsAny(queryLow, depWhoUsesPhrases) {
+	if classifier.ContainsAny(queryLow, depWhoUsesPhrases) {
 		return depIntentWhoUses
 	}
-	if containsAny(queryLow, depFilePhrases) || looksLikeFilePath(entityLow) {
+	if classifier.ContainsAny(queryLow, depFilePhrases) || looksLikeFilePath(entityLow) {
 		return depIntentFile
 	}
 
@@ -704,14 +728,59 @@ func buildDepIndex(deps []utils.ExternalDependency) *depIndex {
 	return idx
 }
 
-func (idx *depIndex) matchDeps(term string) []*utils.ExternalDependency {
-	matched := make([]*utils.ExternalDependency, 0, 4)
-	for i := range idx.entries {
-		if idx.entries[i].matches(term) {
-			matched = append(matched, idx.entries[i].dep)
+func matchDeps(deps []utils.ExternalDependency, queryLow string) []utils.ExternalDependency {
+	var matched []utils.ExternalDependency
+	for _, dep := range deps {
+		if strings.Contains(strings.ToLower(dep.Name), queryLow) {
+			matched = append(matched, dep)
 		}
 	}
 	return matched
+}
+
+func formatMatchedDeps(entity string, deps []utils.ExternalDependency) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d dependencies matching '%s':\n\n", len(deps), entity))
+
+	for _, dep := range deps {
+		versionStr := "N/A"
+		if dep.Version != nil {
+			versionStr = *dep.Version
+		}
+
+		sb.WriteString(fmt.Sprintf("• %s (v%s)\n", dep.Name, versionStr))
+		sb.WriteString(fmt.Sprintf("  Source: %s\n", dep.Source))
+		sb.WriteString(fmt.Sprintf("  Import Count: %d\n", dep.ImportCount))
+		if len(dep.UsedBy) > 0 {
+			sb.WriteString(fmt.Sprintf("  Used by (%d files):\n", len(dep.UsedBy)))
+			for _, file := range dep.UsedBy {
+				sb.WriteString(fmt.Sprintf("    - %s\n", file))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	return strings.TrimSpace(sb.String())
+}
+
+func formatAllExternalDeps(deps []utils.ExternalDependency) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Total External Dependencies: %d\n\n", len(deps)))
+
+	for _, dep := range deps {
+		versionStr := "N/A"
+		if dep.Version != nil {
+			versionStr = *dep.Version
+		}
+		sb.WriteString(fmt.Sprintf("• %s (v%s) [%s] - Imported %d times across %d files\n",
+			dep.Name, versionStr, dep.Source, dep.ImportCount, len(dep.UsedBy)))
+	}
+
+	return strings.TrimSpace(sb.String())
+}
+
+func formatDepCount(deps []utils.ExternalDependency) string {
+	return fmt.Sprintf("Total external dependencies tracked: %d", len(deps))
 }
 
 func (e *depEntry) matches(term string) bool {
@@ -764,28 +833,28 @@ func (idx *depIndex) filesMatching(term string) []*utils.ExternalDependency {
 	return matched
 }
 
-func formatDepCount(deps []utils.ExternalDependency) string {
-	bySource := make(map[string]int, 4)
-	for _, d := range deps {
-		src := d.Source
-		if src == "" {
-			src = "unknown"
-		}
-		bySource[src]++
-	}
-	sources := make([]string, 0, len(bySource))
-	for s := range bySource {
-		sources = append(sources, s)
-	}
-	sort.Strings(sources)
+// func formatDepCount(deps []utils.ExternalDependency) string {
+// 	bySource := make(map[string]int, 4)
+// 	for _, d := range deps {
+// 		src := d.Source
+// 		if src == "" {
+// 			src = "unknown"
+// 		}
+// 		bySource[src]++
+// 	}
+// 	sources := make([]string, 0, len(bySource))
+// 	for s := range bySource {
+// 		sources = append(sources, s)
+// 	}
+// 	sort.Strings(sources)
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "Total dependencies: %d\n", len(deps))
-	for _, s := range sources {
-		fmt.Fprintf(&b, "  %s: %d\n", s, bySource[s])
-	}
-	return b.String()
-}
+// 	var b strings.Builder
+// 	fmt.Fprintf(&b, "Total dependencies: %d\n", len(deps))
+// 	for _, s := range sources {
+// 		fmt.Fprintf(&b, "  %s: %d\n", s, bySource[s])
+// 	}
+// 	return b.String()
+// }
 
 func formatFileImports(file string, idx *depIndex) string {
 	matched := idx.filesMatching(file)
@@ -806,85 +875,85 @@ func formatFileImports(file string, idx *depIndex) string {
 	return b.String()
 }
 
-func formatMatchedDeps(query string, deps []*utils.ExternalDependency) string {
-	var b strings.Builder
+// func formatMatchedDeps(query string, deps []*utils.ExternalDependency) string {
+// 	var b strings.Builder
 
-	if len(deps) == 1 {
-		d := deps[0]
-		ver := "(unpinned)"
-		if d.Version != nil {
-			ver = *d.Version
-		}
-		usedBy := make([]string, len(d.UsedBy))
-		copy(usedBy, d.UsedBy)
-		sort.Strings(usedBy)
+// 	if len(deps) == 1 {
+// 		d := deps[0]
+// 		ver := "(unpinned)"
+// 		if d.Version != nil {
+// 			ver = *d.Version
+// 		}
+// 		usedBy := make([]string, len(d.UsedBy))
+// 		copy(usedBy, d.UsedBy)
+// 		sort.Strings(usedBy)
 
-		fmt.Fprintf(&b, "Dependency  : %s\n", d.Name)
-		fmt.Fprintf(&b, "Version     : %s\n", ver)
-		fmt.Fprintf(&b, "Source      : %s\n", d.Source)
-		fmt.Fprintf(&b, "Import count: %d\n", d.ImportCount)
-		fmt.Fprintf(&b, "\nUsed by (%d file(s)):\n", len(usedBy))
-		for _, f := range usedBy {
-			fmt.Fprintf(&b, "  • %s\n", f)
-		}
-		return b.String()
-	}
+// 		fmt.Fprintf(&b, "Dependency  : %s\n", d.Name)
+// 		fmt.Fprintf(&b, "Version     : %s\n", ver)
+// 		fmt.Fprintf(&b, "Source      : %s\n", d.Source)
+// 		fmt.Fprintf(&b, "Import count: %d\n", d.ImportCount)
+// 		fmt.Fprintf(&b, "\nUsed by (%d file(s)):\n", len(usedBy))
+// 		for _, f := range usedBy {
+// 			fmt.Fprintf(&b, "  • %s\n", f)
+// 		}
+// 		return b.String()
+// 	}
 
-	// multiple matches — sort deps alphabetically, files within each dep too
-	fmt.Fprintf(&b, "%d dependencies matched '%s':\n\n", len(deps), query)
-	for _, d := range deps {
-		ver := "(unpinned)"
-		if d.Version != nil {
-			ver = *d.Version
-		}
-		files := make([]string, len(d.UsedBy))
-		copy(files, d.UsedBy)
-		sort.Strings(files)
+// 	// multiple matches — sort deps alphabetically, files within each dep too
+// 	fmt.Fprintf(&b, "%d dependencies matched '%s':\n\n", len(deps), query)
+// 	for _, d := range deps {
+// 		ver := "(unpinned)"
+// 		if d.Version != nil {
+// 			ver = *d.Version
+// 		}
+// 		files := make([]string, len(d.UsedBy))
+// 		copy(files, d.UsedBy)
+// 		sort.Strings(files)
 
-		fmt.Fprintf(&b, "  %-40s  %-12s  %d import(s)\n", d.Name, ver, d.ImportCount)
-		for _, f := range files {
-			fmt.Fprintf(&b, "      • %s\n", f)
-		}
-		b.WriteString("\n")
-	}
-	return b.String()
-}
+// 		fmt.Fprintf(&b, "  %-40s  %-12s  %d import(s)\n", d.Name, ver, d.ImportCount)
+// 		for _, f := range files {
+// 			fmt.Fprintf(&b, "      • %s\n", f)
+// 		}
+// 		b.WriteString("\n")
+// 	}
+// 	return b.String()
+// }
 
-func formatAllExternalDeps(deps []utils.ExternalDependency) string {
-	var b strings.Builder
-	bySource := make(map[string][]utils.ExternalDependency)
-	for _, d := range deps {
-		src := d.Source
-		if src == "" {
-			src = "unknown"
-		}
-		bySource[src] = append(bySource[src], d)
-	}
+// func formatAllExternalDeps(deps []utils.ExternalDependency) string {
+// 	var b strings.Builder
+// 	bySource := make(map[string][]utils.ExternalDependency)
+// 	for _, d := range deps {
+// 		src := d.Source
+// 		if src == "" {
+// 			src = "unknown"
+// 		}
+// 		bySource[src] = append(bySource[src], d)
+// 	}
 
-	sources := make([]string, 0, len(bySource))
-	for s := range bySource {
-		sources = append(sources, s)
-	}
-	sort.Strings(sources)
+// 	sources := make([]string, 0, len(bySource))
+// 	for s := range bySource {
+// 		sources = append(sources, s)
+// 	}
+// 	sort.Strings(sources)
 
-	fmt.Fprintf(&b, "All dependencies (%d total):\n", len(deps))
-	for _, src := range sources {
-		group := bySource[src]
-		// sort deps within each source group
-		sort.Slice(group, func(i, j int) bool {
-			return group[i].Name < group[j].Name
-		})
-		fmt.Fprintf(&b, "\n[%s — %d]\n", src, len(group))
-		for _, d := range group {
-			ver := "(unpinned)"
-			if d.Version != nil {
-				ver = *d.Version
-			}
-			fmt.Fprintf(&b, "  %-40s  %-12s  %d file(s)\n", d.Name, ver, d.ImportCount)
-		}
-	}
-	return b.String()
-}
+// 	fmt.Fprintf(&b, "All dependencies (%d total):\n", len(deps))
+// 	for _, src := range sources {
+// 		group := bySource[src]
+// 		// sort deps within each source group
+// 		sort.Slice(group, func(i, j int) bool {
+// 			return group[i].Name < group[j].Name
+// 		})
+// 		fmt.Fprintf(&b, "\n[%s — %d]\n", src, len(group))
+// 		for _, d := range group {
+// 			ver := "(unpinned)"
+// 			if d.Version != nil {
+// 				ver = *d.Version
+// 			}
+// 			fmt.Fprintf(&b, "  %-40s  %-12s  %d file(s)\n", d.Name, ver, d.ImportCount)
+// 		}
+// 	}
+// 	return b.String()
+// }
 
 var sourceFileExts = []string{
 	".go", ".py", ".rs", ".ts", ".tsx", ".js", ".jsx",

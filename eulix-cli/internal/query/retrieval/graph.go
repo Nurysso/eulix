@@ -4,7 +4,7 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package query provides context window building and query routing for Eulix.
 
-package query
+package retrieval
 
 import (
 	"eulix/internal/utils"

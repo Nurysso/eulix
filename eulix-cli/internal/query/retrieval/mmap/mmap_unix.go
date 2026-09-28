@@ -11,7 +11,7 @@ This file is responsible for mmap on unix based system uses
 MADV_SEQUENTIAL for improved performance
 */
 
-package query
+package mmap
 
 import (
 	"bytes"
@@ -26,9 +26,9 @@ import (
 // The caller passes size from an os.Stat; re-stat the open fd to close
 // the stat-then-mmap TOCTOU window without this a concurrent truncation produces
 // a mapping that extends past EOF and get SIGBUS on the first access.
-func decodeViaMmap(path string, size int64, v any) error {
-	if sizeOverflows(size) {
-		return errFileTooLargeForPath(path, size)
+func DecodeViaMmap(path string, size int64, v any) error {
+	if SizeOverflows(size) {
+		return ErrFileTooLargeForPath(path, size)
 	}
 
 	f, err := os.Open(path)
@@ -44,8 +44,8 @@ func decodeViaMmap(path string, size int64, v any) error {
 		return err
 	}
 	size = fi.Size()
-	if sizeOverflows(size) {
-		return errFileTooLargeForPath(path, size)
+	if SizeOverflows(size) {
+		return ErrFileTooLargeForPath(path, size)
 	}
 	if size == 0 {
 		return fmt.Errorf("empty file: %s", path)
@@ -62,12 +62,12 @@ func decodeViaMmap(path string, size int64, v any) error {
 	// sonicCopy copies all decoded strings out of data before we Munmap.
 	// Using sonic.ConfigDefault (CopyString: false) here would leave decoded
 	// string headers pointing into the now-unmapped region — use-after-free.
-	return sonicCopy.Unmarshal(data, v)
+	return SonicCopy.Unmarshal(data, v)
 }
 
-// mmapForSequentialRead mmaps path read-only and advises the kernel to
+// MmapForSequentialRead mmaps path read-only and advises the kernel to
 // prefetch sequentially (MADV_SEQUENTIAL), matching JSON parse order.
-func mmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
+func MmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
@@ -83,9 +83,9 @@ func mmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
 		size = fi.Size()
 	}
 
-	if sizeOverflows(size) || size == 0 {
+	if SizeOverflows(size) || size == 0 {
 		_ = f.Close()
-		return nil, nil, fmt.Errorf("mmapForSequentialRead: invalid size %d for %s", size, path)
+		return nil, nil, fmt.Errorf("MmapForSequentialRead: invalid size %d for %s", size, path)
 	}
 
 	mmaped, err := mmapPlatform(f, int(size))

@@ -4,7 +4,7 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package query provides repository subsystem detection, tree indexing, and path filtering.
 
-package query
+package retrieval
 
 import (
 	"eulix/internal/config"

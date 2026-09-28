@@ -10,7 +10,7 @@
 Prevents mmap to happen on unsupported os
 */
 
-package query
+package mmap
 
 import (
 	"bufio"
@@ -21,11 +21,11 @@ import (
 
 var errNoMmap = errors.New("mmap not supported on this platform")
 
-func decodeViaMmap(_ string, _ int64, _ any) error {
+func DecodeViaMmap(_ string, _ int64, _ any) error {
 	return errNoMmap
 }
 
-func openForSequentialRead(path string) (io.Reader, func(), error) {
+func OpenForSequentialRead(path string) (io.Reader, func(), error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
@@ -33,7 +33,7 @@ func openForSequentialRead(path string) (io.Reader, func(), error) {
 	return bufio.NewReaderSize(f, jsonBufSize), func() { f.Close() }, nil
 }
 
-func allocEmbeddingMatrix(n, dim int) [][]float32 {
+func AllocEmbeddingMatrix(n, dim int) [][]float32 {
 	flat := make([]float32, n*dim)
 	rows := make([][]float32, n)
 	for i := range rows {

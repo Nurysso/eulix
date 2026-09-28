@@ -15,7 +15,7 @@ mmap_darwin.go macOS mmap flags and madvise hints.
 	working set exclusive no shared cache pollution between
 	processes and rely on MADV_SEQUENTIAL for readahead.
 */
-package query
+package mmap
 
 import (
 	"os"
@@ -50,7 +50,7 @@ func mmapAdvisePlatform(data []byte) {
 	_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
 }
 
-func allocEmbeddingMatrix(n, dim int) [][]float32 {
+func AllocEmbeddingMatrix(n, dim int) [][]float32 {
 	flat := make([]float32, n*dim)
 	rows := make([][]float32, n)
 	for i := range rows {

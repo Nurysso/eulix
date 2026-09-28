@@ -10,7 +10,7 @@ that appear too frequently across code chunks, making them non-distinctive for
 code search and indexing.
 */
 
-package query
+package retrieval
 
 import (
 	"container/heap"
@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 )
+
+const bpMinChunks = 50
 
 // adaptiveDFThreshold scales the document-frequency cutoff with corpus size.
 //

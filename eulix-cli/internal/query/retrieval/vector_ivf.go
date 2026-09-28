@@ -10,7 +10,7 @@ Key Responsibilities:
   - Fast approximate nearest neighbor (ANN) retrieval using centroid probing
   - Cosine similarity candidate re-ranking with brute-force fallback
 */
-package query
+package retrieval
 
 import (
 	"fmt"

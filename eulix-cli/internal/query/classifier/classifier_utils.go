@@ -9,7 +9,7 @@ Package query provides query classification functionality.
 This file is provides utils/helpers for query classification
 */
 
-package query
+package classifier
 
 import (
 	"strings"
@@ -185,7 +185,7 @@ func isCommonWord(word string) bool {
 	return commonWords[word]
 }
 
-func containsAny(text string, keywords []string) bool {
+func ContainsAny(text string, keywords []string) bool {
 	for _, keyword := range keywords {
 		if strings.Contains(text, keyword) {
 			return true

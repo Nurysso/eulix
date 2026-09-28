@@ -12,7 +12,7 @@ Key Responsibilities:
   - Merges adjacent code spans and penalizes same-file redundancy
   - Assembles final context windows within strict token budgets and records chunk traces
 */
-package query
+package retrieval
 
 import (
 	"fmt"
@@ -97,7 +97,9 @@ func (cb *ContextBuilder) mmrSelect(
 		}
 	}
 	if len(candidates) == 0 {
-		cb.debugLog.Log("[MMR-DEBUG] candidates empty after gate: nothing to select")
+		if debugLevel3 {
+			cb.debugLog.Log("[MMR-DEBUG] candidates empty after gate: nothing to select")
+		}
 		return nil
 	}
 
@@ -146,7 +148,9 @@ func (cb *ContextBuilder) mmrSelect(
 		return pinned[i].ID < pinned[j].ID
 	})
 	if len(pinned) > pinnedAnchorTopN {
-		cb.debugLog.Log("[MMR-DEBUG] %d pinned candidates; keeping top %d", len(pinned), pinnedAnchorTopN)
+		if debugLevel3 {
+			cb.debugLog.Log("[MMR-DEBUG] %d pinned candidates; keeping top %d", len(pinned), pinnedAnchorTopN)
+		}
 		pinned = pinned[:pinnedAnchorTopN]
 	}
 
@@ -167,8 +171,10 @@ func (cb *ContextBuilder) mmrSelect(
 	for i := range cs {
 		c := &cs[i]
 		if mmrWatchMatch(c.sc.ID, c.sc.Name, c.sc.File) {
-			cb.debugLog.Log("[MMR-DEBUG] watch candidate present pre-loop: id=%s file=%s lines=%d-%d rawScore=%.1f rel=%.4f",
-				c.sc.ID, c.sc.File, c.sc.StartLine, c.sc.EndLine, c.sc.Score, c.rel)
+			if debugLevel3 {
+				cb.debugLog.Log("[MMR-DEBUG] watch candidate present pre-loop: id=%s file=%s lines=%d-%d rawScore=%.1f rel=%.4f",
+					c.sc.ID, c.sc.File, c.sc.StartLine, c.sc.EndLine, c.sc.Score, c.rel)
+			}
 		}
 	}
 
@@ -201,7 +207,9 @@ func (cb *ContextBuilder) mmrSelect(
 		if k > 0 && tokenSum+cost > budget {
 			ct.Included, ct.ExcludeReason = false, "pinned but exceeds token budget"
 			chunkTraces = append(chunkTraces, ct)
-			cb.debugLog.Log("[MMR-DEBUG] pinned id=%s skipped: cost=%d over budget (%d/%d)", p.ID, cost, tokenSum, budget)
+			if debugLevel3 {
+				cb.debugLog.Log("[MMR-DEBUG] pinned id=%s skipped: cost=%d over budget (%d/%d)", p.ID, cost, tokenSum, budget)
+			}
 			continue
 		}
 		selected = append(selected, p.Chunk)
@@ -209,13 +217,17 @@ func (cb *ContextBuilder) mmrSelect(
 		chunkTraces = append(chunkTraces, ct)
 		pc := mmrCand{sc: p, emb: embOf(p.ID), syms: cb.nonBoilerplate(p.Symbols)}
 		noteSelected(&pc, pinnedRedundancyDamp)
-		cb.debugLog.Log("[MMR-DEBUG] anchor-pinned id=%s file=%s lines=%d-%d score=%.1f",
-			p.ID, p.File, p.StartLine, p.EndLine, p.Score)
+		if debugLevel3 {
+			cb.debugLog.Log("[MMR-DEBUG] anchor-pinned id=%s file=%s lines=%d-%d score=%.1f",
+				p.ID, p.File, p.StartLine, p.EndLine, p.Score)
+		}
 	}
 
 	// main MMR loop
-	cb.debugLog.Log("[MMR-DEBUG] starting loop: %d candidates, maxChunks=%d, budget=%d tokens",
-		len(cs), maxChunks, budget)
+	if debugLevel3 {
+		cb.debugLog.Log("[MMR-DEBUG] starting loop: %d candidates, maxChunks=%d, budget=%d tokens",
+			len(cs), maxChunks, budget)
+	}
 	stop := ""
 	round := 0
 	for len(selected) < maxChunks {
@@ -232,8 +244,10 @@ func (cb *ContextBuilder) mmrSelect(
 			}
 			v := lambda*c.rel - (1.0-lambda)*c.maxRed
 			if mmrWatchMatch(c.sc.ID, c.sc.Name, c.sc.File) {
-				cb.debugLog.Log("[MMR-DEBUG] round=%d watch id=%s file=%s rel=%.4f maxRed=%.4f mmr=%.4f (currentBest=%.4f)",
-					round, c.sc.ID, c.sc.File, c.rel, c.maxRed, v, bestVal)
+				if debugLevel3 {
+					cb.debugLog.Log("[MMR-DEBUG] round=%d watch id=%s file=%s rel=%.4f maxRed=%.4f mmr=%.4f (currentBest=%.4f)",
+						round, c.sc.ID, c.sc.File, c.rel, c.maxRed, v, bestVal)
+				}
 			}
 			if v > bestVal {
 				best, bestVal = i, v
@@ -255,21 +269,27 @@ func (cb *ContextBuilder) mmrSelect(
 		var reason string
 		before := len(selected)
 		selected, idx, cost, reason = addChunk(selected, pick.sc.Chunk, tokenSum, budget, maxChunks)
-		cb.debugLog.Log("[MMR-DEBUG] round=%d winner id=%s file=%s rel=%.4f maxRed=%.4f mmr=%.4f cost=%d tokenSum(before)=%d/%d",
-			round, pick.sc.ID, pick.sc.File, pick.rel, pick.maxRed, bestVal, cost, tokenSum, budget)
+		if debugLevel3 {
+			cb.debugLog.Log("[MMR-DEBUG] round=%d winner id=%s file=%s rel=%.4f maxRed=%.4f mmr=%.4f cost=%d tokenSum(before)=%d/%d",
+				round, pick.sc.ID, pick.sc.File, pick.rel, pick.maxRed, bestVal, cost, tokenSum, budget)
+		}
 		if reason != "" {
 			ct.Included, ct.ExcludeReason = false, reason
 			chunkTraces = append(chunkTraces, ct)
-			cb.debugLog.Log("[MMR-DEBUG] round=%d EXCLUDED id=%s file=%s — %s (cost=%d, tokenSum=%d, budget=%d)",
-				round, pick.sc.ID, pick.sc.File, reason, cost, tokenSum, budget)
+			if debugLevel3 {
+				cb.debugLog.Log("[MMR-DEBUG] round=%d EXCLUDED id=%s file=%s — %s (cost=%d, tokenSum=%d, budget=%d)",
+					round, pick.sc.ID, pick.sc.File, reason, cost, tokenSum, budget)
+			}
 			continue
 		}
 		ct.Included = true
 		if len(selected) == before { // nothing appended => it was merged into an existing chunk
 			ct.Rank = idx + 1
 			ct.ExcludeReason = fmt.Sprintf("merged into #%d", idx+1)
-			cb.debugLog.Log("[MMR-DEBUG] round=%d merged id=%s into selection #%d: file=%s now lines %d-%d",
-				round, pick.sc.ID, idx+1, selected[idx].File, selected[idx].StartLine, selected[idx].EndLine)
+			if debugLevel3 {
+				cb.debugLog.Log("[MMR-DEBUG] round=%d merged id=%s into selection #%d: file=%s now lines %d-%d",
+					round, pick.sc.ID, idx+1, selected[idx].File, selected[idx].StartLine, selected[idx].EndLine)
+			}
 		}
 		tokenSum += cost
 		chunkTraces = append(chunkTraces, ct)
@@ -285,9 +305,10 @@ func (cb *ContextBuilder) mmrSelect(
 			alive++
 		}
 	}
-	cb.debugLog.Log("[MMR-DEBUG] loop stopped: %s (selected=%d, tokens=%d/%d, %d candidates never evaluated)",
-		stop, len(selected), tokenSum, budget, alive)
-
+	if debugLevel3 {
+		cb.debugLog.Log("[MMR-DEBUG] loop stopped: %s (selected=%d, tokens=%d/%d, %d candidates never evaluated)",
+			stop, len(selected), tokenSum, budget, alive)
+	}
 	if debugWatchSubstr != "" {
 		foundInSelected, foundInTraces, stillWaiting := false, false, 0
 		for _, s := range selected {
@@ -298,8 +319,10 @@ func (cb *ContextBuilder) mmrSelect(
 		for _, t := range chunkTraces {
 			if mmrWatchMatch(t.ID, t.ID, t.File) {
 				foundInTraces = true
-				cb.debugLog.Log("[MMR-DEBUG] watch chunk trace: id=%s included=%t reason=%q rank=%d",
-					t.ID, t.Included, t.ExcludeReason, t.Rank)
+				if debugLevel3 {
+					cb.debugLog.Log("[MMR-DEBUG] watch chunk trace: id=%s included=%t reason=%q rank=%d",
+						t.ID, t.Included, t.ExcludeReason, t.Rank)
+				}
 			}
 		}
 		for i := range cs {
@@ -307,13 +330,16 @@ func (cb *ContextBuilder) mmrSelect(
 				stillWaiting++
 			}
 		}
-		cb.debugLog.Log("[MMR-DEBUG] SUMMARY watch=%q selected=%t everWonARound=%t stillInRemainingUnevaluated=%d",
-			debugWatchSubstr, foundInSelected, foundInTraces, stillWaiting)
+		if debugLevel3 {
+			cb.debugLog.Log("[MMR-DEBUG] SUMMARY watch=%q selected=%t everWonARound=%t stillInRemainingUnevaluated=%d",
+				debugWatchSubstr, foundInSelected, foundInTraces, stillWaiting)
+		}
 	}
 
-	cb.debugLog.Log("mmrSelect: embOf hits=%d misses=%d (misses>0 with hasEmbeddings=true may indicate chunk ID / vectorMap ID mismatch)",
-		embHits, embMisses)
-
+	if debugLevel3 {
+		cb.debugLog.Log("mmrSelect: embOf hits=%d misses=%d (misses>0 with hasEmbeddings=true may indicate chunk ID / vectorMap ID mismatch)",
+			embHits, embMisses)
+	}
 	if trace != nil {
 		trace.ChunkTraces = chunkTraces
 	}
