@@ -35,9 +35,9 @@ type Router struct {
 	llmClient       *llm.Client
 	cache           *cache.Manager
 	contextBuilder  *retrieval.ContextBuilder
-	kbIndex         *utils.KBIndices
+	kbIndex         *utils.Indices
 	callGraph       *callGraph
-	kb              *utils.KnowledgeBaseRef
+	kb              *utils.KnowledgeBaseSimplifiedRef
 	Patterns        *utils.PatternInfo
 	cgIdx           *callGraphIndex
 	cgBuild         *retrieval.CallGraphIdx

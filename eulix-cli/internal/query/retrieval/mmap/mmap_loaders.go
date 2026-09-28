@@ -81,8 +81,8 @@ func init() {
 		name string
 		typ  reflect.Type
 	}{
-		{"knowledge Base", reflect.TypeOf(utils.KnowledgeBaseRef{})},
-		{"Index", reflect.TypeOf(utils.IndexRef{})},
+		{"knowledge Base", reflect.TypeOf(utils.KnowledgeBaseSimplifiedRef{})},
+		{"Index", reflect.TypeOf(utils.IndexDataRef{})},
 		{"CallGraphRef", reflect.TypeOf(utils.CallGraphRef{})},
 	}
 

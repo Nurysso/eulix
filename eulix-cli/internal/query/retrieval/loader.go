@@ -97,13 +97,14 @@ func (cb *ContextBuilder) logFileLoad(name string) func(error) {
 // for search use cases.
 func (cb *ContextBuilder) loadChunks() error {
 	done := cb.logFileLoad("kb_index.json")
-	var ref utils.IndexRef
+	var ref utils.IndexDataRef
 	err := mmap.DecodeJSONFile(filepath.Join(cb.eulixDir, "kb_index.json"), &ref)
 	done(err)
 	if err != nil {
 		return fmt.Errorf("kb_index.json: %w", err)
 	}
-	cb.kbIdx = &ref.Indices
+
+	cb.kbIdx = ref.Indices
 	cb.debugLog.Log("kbIdx FunctionsByName len=%d", len(cb.kbIdx.FunctionsByName))
 
 	// lazyContent must be set BEFORE streamKBChunks so addChunksFromFile

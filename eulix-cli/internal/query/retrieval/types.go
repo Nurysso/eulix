@@ -50,17 +50,17 @@ type ContextBuilder struct {
 	config      *config.Config
 	debugLog    *utils.DebugLogger
 	// depIdx        *depIndex
-	embeddings    [][]float32
-	eulixDir      string
-	externalDeps  []utils.ExternalDependency
+	embeddings [][]float32
+	eulixDir   string
+	// externalDeps  []utils.ExternalDependency
 	hasCallGraph  bool
 	hasEmbeddings bool
 	hasKB         bool
 	hydrateIdx    map[string]map[[2]int]func() string // file -> (start,end) -> content builder
 	invertedIdx   *InvertedIndex                      // non-nil when len(chunks) > invIdxThreshold
 	ivfIndex      *IVFIndex                           // non-nil when len(embeddings) > ivfBuildThreshold
-	kbData        *utils.KnowledgeBaseRef
-	kbIdx         *utils.KBIndices
+	kbData        *utils.KnowledgeBaseSimplifiedRef
+	kbIdx         *utils.Indices
 	lastTrace     *DebugTrace
 	lazyContent   bool
 	llmClient     *llm.Client

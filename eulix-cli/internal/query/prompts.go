@@ -96,12 +96,14 @@ Preferred <answer> shape:
 
 	c.QueryTypeImplementation: func(r *Router, query string, class *c.Classification) string {
 		var relevantFiles []string
-		for _, sym := range class.Symbols {
-			if locs, ok := r.kbIndex.FunctionsByName[sym]; ok {
-				relevantFiles = append(relevantFiles, locs...)
-			}
-			if locs, ok := r.kbIndex.TypesByName[sym]; ok {
-				relevantFiles = append(relevantFiles, locs...)
+		if r != nil && r.kbIndex != nil {
+			for _, sym := range class.Symbols {
+				if locs, ok := r.kbIndex.FunctionsByName[sym]; ok {
+					relevantFiles = append(relevantFiles, locs...)
+				}
+				if locs, ok := r.kbIndex.TypesByName[sym]; ok {
+					relevantFiles = append(relevantFiles, locs...)
+				}
 			}
 		}
 		format := `Describe how the implementation works for the queried symbols.

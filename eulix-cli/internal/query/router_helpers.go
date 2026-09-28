@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,11 +32,13 @@ type match struct {
 }
 
 const (
-	langGo language = iota
+	langUnknown language = iota
+	langGo
 	langRust
 	langPython
 	langTS
 	langC // covers C and C++
+	langJava
 )
 
 func (r *Router) SetCurrentChecksum(checksum string) {
@@ -68,6 +71,26 @@ func (r *Router) ensureContextBuilder() error {
 	return nil
 }
 
+// bareID strips the node-type prefix and file path that eulix-parser emits.
+func bareID(id string) string {
+	if i := strings.Index(id, "::"); i != -1 {
+		id = id[:i]
+	}
+	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(id, prefix) {
+			s := strings.TrimPrefix(id, prefix)
+			if prefix == "method_" {
+				if i := strings.Index(s, "_"); i != -1 {
+					return s[:i] + "." + s[i+1:]
+				}
+			}
+			return s
+		}
+	}
+	return id
+}
+
 // hasSourceCode checks whether any context chunk contains an actual code fence.
 func hasSourceCode(ctx *utils.ContextWindow) bool {
 	for _, chunk := range ctx.Chunks {
@@ -88,6 +111,12 @@ func firstSymbolOrExtracted(class *classifier.Classification, query string) stri
 		"overall":    true,
 		"project":    true,
 		"statistics": true,
+		"show":       true,
+		"get":        true,
+		"display":    true,
+		"view":       true,
+		"print":      true,
+		"fetch":      true,
 	}
 
 	if len(class.Symbols) > 0 {
@@ -109,7 +138,7 @@ func firstSymbolOrExtracted(class *classifier.Classification, query string) stri
 
 func formatFileData(path string, fd *utils.FileData) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "File: %s  [%s, %d LOC]\n", path, fd.Language, fd.LOC)
+	fmt.Fprintf(&b, "File: %s  [%s, %d LOC]\n", path, fd.Language, fd.Loc)
 
 	if len(fd.Functions) > 0 {
 		fmt.Fprintf(&b, "\nFunctions (%d):\n", len(fd.Functions))
@@ -155,10 +184,28 @@ func formatFunctionMetrics(fn utils.KBFunction, path string) string {
 
 // Entity extraction
 func extractFilePath(query string) string {
-	// Look for something that looks like a file path: contains / or . with extension
+	// Exclude '.' from punctuation cutset so file extensions and relative paths stay intact
+	punctuationCutset := ",;:!?()[]{}\"'`"
+
 	for _, word := range strings.Fields(query) {
-		if strings.Contains(word, "/") || (strings.Contains(word, ".") && len(word) > 3) {
-			return word
+		cleaned := strings.Trim(word, punctuationCutset)
+		if cleaned == "" {
+			continue
+		}
+
+		// Explicit path separators take precedence regardless of length (e.g. "x/y", "internal/query/core.go")
+		if strings.ContainsAny(cleaned, "/\\") {
+			return cleaned
+		}
+
+		// Non-path words must be longer than 3 characters (skips "a.b", ".go")
+		if len(cleaned) <= 3 {
+			continue
+		}
+
+		// Valid file extension matching a known language (e.g., "main.go")
+		if ext := filepath.Ext(cleaned); ext != "" && detectLang(cleaned) != langUnknown {
+			return cleaned
 		}
 	}
 	return ""
@@ -173,32 +220,82 @@ func extractEntityName(query string) string {
 		"who": true, "calls": true, "uses": true, "used": true,
 		"a": true, "an": true, "this": true, "that": true,
 		"how": true, "can": true, "will": true, "should": true,
+		"explain": true,
 	}
+
+	punctuationCutset := ".,;:!?()[]{}\"'`"
+
+	// Cleaned words slice to avoid trimming repeatedly
+	cleanedWords := make([]string, 0, len(words))
 	for _, w := range words {
+		cleaned := strings.Trim(w, punctuationCutset)
+		if cleaned != "" {
+			cleanedWords = append(cleanedWords, cleaned)
+		}
+	}
+
+	// First pass: look for stop-word filtered words that are likely code symbols
+	for _, w := range cleanedWords {
 		if !stopWords[strings.ToLower(w)] && isLikelySymbol(w) {
 			return w
 		}
 	}
-	for _, w := range words {
+
+	// Second pass: fallback to the first non-stop word
+	for _, w := range cleanedWords {
 		if !stopWords[strings.ToLower(w)] {
 			return w
 		}
 	}
+
 	return ""
 }
 
-func isLikelySymbol(word string) bool {
-	if len(word) > 1 && word[0] >= 'A' && word[0] <= 'Z' {
-		for _, ch := range word[1:] {
-			if ch >= 'a' && ch <= 'z' {
-				return true
-			}
+func isLikelySymbol(w string) bool {
+	if len(w) == 0 {
+		return false
+	}
+
+	// Single-character cases: only "_" is considered a likely symbol
+	if len(w) == 1 {
+		return w == "_"
+	}
+
+	// Contains underscores or dots (e.g. "foo_bar", "pkg.Func")
+	if strings.ContainsAny(w, "_.") {
+		return true
+	}
+
+	// Must consist of valid identifier characters (letters/digits)
+	for i, r := range w {
+		if i == 0 && !unicode.IsLetter(r) && r != '_' {
+			return false
+		}
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+			return false
 		}
 	}
-	return strings.Contains(word, "_")
+
+	hasUpper := false
+	hasLower := false
+	for _, r := range w {
+		if unicode.IsUpper(r) {
+			hasUpper = true
+		}
+		if unicode.IsLower(r) {
+			hasLower = true
+		}
+	}
+
+	// All-caps ("FOO", "HTTP") and all-lowercase ("foo") words are false.
+	// Must be mixed casing (PascalCase like "Foo", camelCase, "HTTPServer").
+	return hasUpper && hasLower
 }
 
 func (r *Router) fuzzySearch(entity string) []string {
+	if r == nil || r.kbIndex == nil {
+		return nil
+	}
 
 	var matches []match
 	low := strings.ToLower(entity)
@@ -213,7 +310,17 @@ func (r *Router) fuzzySearch(entity string) []string {
 			matches = append(matches, match{name, s, "type"})
 		}
 	}
-	sort.Slice(matches, func(i, j int) bool { return matches[i].score > matches[j].score })
+
+	// Primary sort by score (descending), secondary sort by name (ascending)
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].score != matches[j].score {
+			return matches[i].score > matches[j].score
+		}
+		if matches[i].name != matches[j].name {
+			return matches[i].name < matches[j].name
+		}
+		return matches[i].typ < matches[j].typ
+	})
 
 	var out []string
 	for i, m := range matches {
@@ -313,7 +420,7 @@ func extractSignature(filePath string, startLine int) (string, error) {
 }
 
 func detectLang(path string) language {
-	switch filepath.Ext(path) {
+	switch strings.ToLower(filepath.Ext(path)) {
 	case ".go":
 		return langGo
 	case ".rs":
@@ -332,84 +439,58 @@ func detectLang(path string) language {
 // parseSig reads lines starting at idx and collects the full signature
 // up to (but not including) the opening brace / colon / arrow body.
 func parseSig(lines []string, idx int, lang language) (string, error) {
+	if idx >= len(lines) || idx < 0 {
+		return "", nil
+	}
+
 	var collected []string
-	depth := 0 // paren depth for multi-line signatures
+	depth := 0 // paren/bracket depth for multi-line signatures
 
 	for i := idx; i < len(lines) && i < idx+40; i++ {
 		line := lines[i]
 		collected = append(collected, line)
 
-		switch lang {
-		case langPython:
-			// def foo(a: int, b: str = "x") -> None:
-			// collect until we hit the closing ) then the colon
-			for _, ch := range line {
-				switch ch {
-				case '(':
-					depth++
-				case ')':
-					depth--
-				}
+		for _, ch := range line {
+			switch ch {
+			case '(', '[':
+				depth++
+			case ')', ']':
+				depth--
 			}
-			if depth <= 0 && strings.Contains(line, ":") {
-				return formatSig(collected, lang), nil
-			}
+		}
 
-		case langRust:
-			// fn foo(a: i32, b: &str) -> Result<(), Error> {
-			for _, ch := range line {
-				switch ch {
-				case '(':
-					depth++
-				case ')':
-					depth--
+		if depth <= 0 {
+			switch lang {
+			case langPython:
+				// def foo(a: int, b: str = "x") -> None:
+				if strings.Contains(line, ":") {
+					return formatSig(collected, lang), nil
 				}
-			}
-			if depth <= 0 && (strings.Contains(line, "{") || strings.Contains(line, ";")) {
-				return formatSig(collected, lang), nil
-			}
 
-		case langTS:
-			// function foo(a: string, b: number): void {
-			// or arrow: const foo = (a: string): void => {
-			for _, ch := range line {
-				switch ch {
-				case '(':
-					depth++
-				case ')':
-					depth--
+			case langRust:
+				// fn foo(a: i32, b: &str) -> Result<(), Error> {
+				if strings.Contains(line, "{") || strings.Contains(line, ";") {
+					return formatSig(collected, lang), nil
 				}
-			}
-			if depth <= 0 && (strings.Contains(line, "{") || strings.Contains(line, "=>")) {
-				return formatSig(collected, lang), nil
-			}
 
-		case langC:
-			// int foo(int a, const char* b) {
-			for _, ch := range line {
-				switch ch {
-				case '(':
-					depth++
-				case ')':
-					depth--
+			case langTS:
+				// function foo(a: string, b: number): void {
+				// or arrow: const foo = (a: string): void => {
+				if strings.Contains(line, "{") || strings.Contains(line, "=>") {
+					return formatSig(collected, lang), nil
 				}
-			}
-			if depth <= 0 && strings.Contains(line, "{") {
-				return formatSig(collected, lang), nil
-			}
 
-		default: // Go
-			// func (r *Router) Foo(a int, b string) (string, error) {
-			for _, ch := range line {
-				switch ch {
-				case '(':
-					depth++
-				case ')':
-					depth--
+			case langC:
+				// int foo(int a, const char* b) {
+				if strings.Contains(line, "{") {
+					return formatSig(collected, lang), nil
 				}
-			}
-			if depth <= 0 && strings.Contains(line, "{") {
-				return formatSig(collected, lang), nil
+
+			default: // Go
+				// func (r *Router) Foo(a int, b string) (string, error) {
+				if strings.Contains(line, "{") {
+					return formatSig(collected, lang), nil
+				}
 			}
 		}
 	}
@@ -420,22 +501,66 @@ func parseSig(lines []string, idx int, lang language) (string, error) {
 
 // formatSig trims the body and formats the signature block for display.
 func formatSig(lines []string, lang language) string {
-	// Drop everything after the opening brace / colon on the last line
 	if len(lines) == 0 {
 		return ""
 	}
 
-	last := lines[len(lines)-1]
-	var cutAt string
-	switch lang {
-	case langPython:
-		cutAt = ":"
-	default:
-		cutAt = "{"
-	}
+	// Make a shallow copy of lines so we don't mutate input slice
+	lines = append([]string(nil), lines...)
 
-	if i := strings.Index(last, cutAt); i >= 0 {
-		lines[len(lines)-1] = strings.TrimRight(last[:i], " \t")
+	// Compute accumulated paren/bracket/brace depth across lines up to each character
+	// so we accurately locate top-level opening terminators ({ or :).
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+		cutIdx := -1
+
+		// Calculate total depth up to the start of line i
+		lineStartDepth := 0
+		for k := 0; k < i; k++ {
+			for _, ch := range lines[k] {
+				switch ch {
+				case '(', '[':
+					lineStartDepth++
+				case ')', ']':
+					lineStartDepth--
+				}
+			}
+		}
+
+		currentDepth := lineStartDepth
+		if lang == langPython {
+			for j, ch := range line {
+				switch ch {
+				case '(', '{', '[':
+					currentDepth++
+				case ')', '}', ']':
+					currentDepth--
+				case ':':
+					if currentDepth == 0 {
+						cutIdx = j
+					}
+				}
+			}
+		} else {
+			for j, ch := range line {
+				switch ch {
+				case '(', '[':
+					currentDepth++
+				case ')', ']':
+					currentDepth--
+				case '{':
+					if currentDepth == 0 {
+						cutIdx = j
+					}
+				}
+			}
+		}
+
+		if cutIdx >= 0 {
+			lines[i] = strings.TrimRight(line[:cutIdx], " \t")
+			lines = lines[:i+1] // Drop any lines after the signature cutoff
+			break
+		}
 	}
 
 	// Trim trailing blank lines
@@ -455,13 +580,14 @@ func formatSig(lines []string, lang language) string {
 // stripCommandPrefix removes a leading command word/phrase from query
 // so entity extraction sees only the symbol name.
 func stripCommandPrefix(query string, prefixes ...string) string {
-	lower := strings.ToLower(strings.TrimSpace(query))
+	trimmed := strings.TrimSpace(query)
+	lower := strings.ToLower(trimmed)
 	for _, p := range prefixes {
 		if strings.HasPrefix(lower, p+" ") {
-			return strings.TrimSpace(query[len(p):])
+			return strings.TrimSpace(trimmed[len(p):])
 		}
 	}
-	return query
+	return trimmed
 }
 
 // resolveCallGraphEntity tries the bare name, then common prefixes,
@@ -638,7 +764,7 @@ func loadExternalDeps(filePath string) error {
 		return fmt.Errorf("failed to unmarshal JSON: %w", err)
 	}
 
-	externalDeps = wrapper.ExternalDependency
+	externalDeps = wrapper.ExternalDependencies
 	return nil
 }
 
@@ -658,12 +784,16 @@ var (
 	depFilePhrases = []string{"imports in", "what does", "used in", "file imports"}
 )
 
+var depCountRegex = regexp.MustCompile(`(?i)\b(count|how\s+many|total)\b`)
+
 func classifyDepIntent(queryLow, entityLow string) depIntent {
-	if classifier.ContainsAny(queryLow, depCountPhrases) {
+	if depCountRegex.MatchString(queryLow) || strings.Contains(queryLow, "number of") {
 		return depIntentCount
 	}
 
-	broadEntity := entityLow == "all" || entityLow == "list" || entityLow == "project"
+	broadEntity := entityLow == "all" || entityLow == "list" || entityLow == "project" || entityLow == "this" || entityLow == "everything"
+
+	// Only return all dependencies if the entity itself is broad
 	if broadEntity || classifier.ContainsAny(queryLow, depBroadPhrases) {
 		return depIntentAll
 	}
@@ -715,8 +845,7 @@ func buildDepIndex(deps []utils.ExternalDependency) *depIndex {
 			tokens:   strings.FieldsFunc(nameLow, isTokenSep),
 		}
 		for _, f := range d.UsedBy {
-			fl := strings.ToLower(f)
-			idx.byFile[fl] = append(idx.byFile[fl], d)
+			idx.byFile[f] = append(idx.byFile[f], d)
 		}
 	}
 	idx.fileKeys = make([]string, 0, len(idx.byFile))
@@ -726,6 +855,38 @@ func buildDepIndex(deps []utils.ExternalDependency) *depIndex {
 	sort.Strings(idx.fileKeys)
 
 	return idx
+}
+
+func (idx *depIndex) filesMatching(term string) []*utils.ExternalDependency {
+	termLow := strings.ToLower(term)
+	if deps, ok := idx.byFile[term]; ok {
+		return deps
+	}
+	if deps, ok := idx.byFile[termLow]; ok {
+		return deps
+	}
+
+	var matched []*utils.ExternalDependency
+	seen := make(map[*utils.ExternalDependency]bool)
+
+	for _, fk := range idx.fileKeys {
+		if !strings.Contains(strings.ToLower(fk), termLow) {
+			continue
+		}
+		for _, d := range idx.byFile[fk] {
+			// For general directory matching, keep file hits
+			// For file extension queries (starting with '.'), deduplicate unique dependencies
+			if strings.HasPrefix(termLow, ".") {
+				if !seen[d] {
+					seen[d] = true
+					matched = append(matched, d)
+				}
+			} else {
+				matched = append(matched, d)
+			}
+		}
+	}
+	return matched
 }
 
 func matchDeps(deps []utils.ExternalDependency, queryLow string) []utils.ExternalDependency {
@@ -740,21 +901,20 @@ func matchDeps(deps []utils.ExternalDependency, queryLow string) []utils.Externa
 
 func formatMatchedDeps(entity string, deps []utils.ExternalDependency) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d dependencies matching '%s':\n\n", len(deps), entity))
-
+	fmt.Fprintf(&sb, "Found %d dependencies matching '%s':\n\n", len(deps), entity)
 	for _, dep := range deps {
 		versionStr := "N/A"
 		if dep.Version != nil {
 			versionStr = *dep.Version
 		}
 
-		sb.WriteString(fmt.Sprintf("• %s (v%s)\n", dep.Name, versionStr))
-		sb.WriteString(fmt.Sprintf("  Source: %s\n", dep.Source))
-		sb.WriteString(fmt.Sprintf("  Import Count: %d\n", dep.ImportCount))
+		fmt.Fprintf(&sb, "• %s (v%s)\n", dep.Name, versionStr)
+		fmt.Fprintf(&sb, "  Source: %s\n", dep.Source)
+		fmt.Fprintf(&sb, "  Import Count: %d\n", dep.ImportCount)
 		if len(dep.UsedBy) > 0 {
-			sb.WriteString(fmt.Sprintf("  Used by (%d files):\n", len(dep.UsedBy)))
+			fmt.Fprintf(&sb, "  Used by (%d files):\n", len(dep.UsedBy))
 			for _, file := range dep.UsedBy {
-				sb.WriteString(fmt.Sprintf("    - %s\n", file))
+				fmt.Fprintf(&sb, "    - %s\n", file)
 			}
 		}
 		sb.WriteString("\n")
@@ -765,15 +925,15 @@ func formatMatchedDeps(entity string, deps []utils.ExternalDependency) string {
 
 func formatAllExternalDeps(deps []utils.ExternalDependency) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Total External Dependencies: %d\n\n", len(deps)))
+	fmt.Fprintf(&sb, "Total External Dependencies: %d\n\n", len(deps))
 
 	for _, dep := range deps {
 		versionStr := "N/A"
 		if dep.Version != nil {
 			versionStr = *dep.Version
 		}
-		sb.WriteString(fmt.Sprintf("• %s (v%s) [%s] - Imported %d times across %d files\n",
-			dep.Name, versionStr, dep.Source, dep.ImportCount, len(dep.UsedBy)))
+		fmt.Fprintf(&sb, "• %s (v%s) [%s] - Imported %d times across %d files\n",
+			dep.Name, versionStr, dep.Source, dep.ImportCount, len(dep.UsedBy))
 	}
 
 	return strings.TrimSpace(sb.String())
@@ -813,26 +973,6 @@ func (e *depEntry) matches(term string) bool {
 	return false
 }
 
-func (idx *depIndex) filesMatching(term string) []*utils.ExternalDependency {
-	if deps, ok := idx.byFile[term]; ok {
-		return deps
-	}
-	seen := make(map[string]bool)
-	var matched []*utils.ExternalDependency
-	for _, fk := range idx.fileKeys {
-		if !strings.Contains(fk, term) {
-			continue
-		}
-		for _, d := range idx.byFile[fk] {
-			if !seen[d.Name] {
-				seen[d.Name] = true
-				matched = append(matched, d)
-			}
-		}
-	}
-	return matched
-}
-
 // func formatDepCount(deps []utils.ExternalDependency) string {
 // 	bySource := make(map[string]int, 4)
 // 	for _, d := range deps {
@@ -861,16 +1001,36 @@ func formatFileImports(file string, idx *depIndex) string {
 	if len(matched) == 0 {
 		return fmt.Sprintf("No recorded imports found for '%s'.", file)
 	}
-	sort.Slice(matched, func(i, j int) bool { return matched[i].Name < matched[j].Name })
+
+	// Sort deterministically by Name, then Source, then Version
+	sort.Slice(matched, func(i, j int) bool {
+		if matched[i].Name != matched[j].Name {
+			return matched[i].Name < matched[j].Name
+		}
+		if matched[i].Source != matched[j].Source {
+			return matched[i].Source < matched[j].Source
+		}
+		vI, vJ := "", ""
+		if matched[i].Version != nil {
+			vI = *matched[i].Version
+		}
+		if matched[j].Version != nil {
+			vJ = *matched[j].Version
+		}
+		return vI < vJ
+	})
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Imports in '%s' (%d):\n", file, len(matched))
-	for _, d := range matched {
+	for i, d := range matched {
 		ver := "(unpinned)"
-		if d.Version != nil {
-			ver = *d.Version
+		if d.Version != nil && *d.Version != "" {
+			ver = fmt.Sprintf("(v%s)", *d.Version)
 		}
-		fmt.Fprintf(&b, "  • %-40s  %-12s  [%s]\n", d.Name, ver, d.Source)
+		fmt.Fprintf(&b, "\u2022 %s %s [%s]", d.Name, ver, d.Source)
+		if i < len(matched)-1 {
+			b.WriteString("\n")
+		}
 	}
 	return b.String()
 }

@@ -362,7 +362,7 @@ func (cb *ContextBuilder) assembleContext(chunks []Chunk) *utils.ContextWindow {
 }
 
 // GetKBIndex returns the KB index for router access
-func (cb *ContextBuilder) GetKBIndex() *utils.KBIndices {
+func (cb *ContextBuilder) GetKBIndex() *utils.Indices {
 	return cb.kbIdx
 }
 
