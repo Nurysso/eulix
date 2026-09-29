@@ -22,6 +22,119 @@ struct TagRule {
     check_docstring: bool,
 }
 
+// ==== TODO move from regex::Regex to regex::bytes::Regex;
+// static UNSAFE_STRING_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"strcpy|strcat|sprintf|vsprintf|gets|wcscpy|wcscat|_mbscpy"));
+
+// static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
+//     static_regex(r"system\(|popen\(|exec|CreateProcess|ShellExecute|std::system")
+// });
+
+// static MANUAL_MEMORY_RE: LazyLock<Regex> = LazyLock::new(|| {
+//     static_regex(r"malloc|calloc|realloc|free|new\s|new\[|delete\s|delete\[\]")
+// });
+
+// static UNSAFE_INPUT_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"scanf|fscanf|cin\s*>>|gets_s"));
+
+// static MEMORY_OP_RE: LazyLock<Regex> = LazyLock::new(|| {
+//     static_regex(r"memcpy|memmove|memset|std::memcpy|std::memmove|std::memset")
+// });
+
+// static PRIVILEGE_CHANGE_RE: LazyLock<Regex> = LazyLock::new(|| {
+//     static_regex(r"setuid|setgid|seteuid|SetTokenInformation|AdjustTokenPrivileges")
+// });
+
+// static WEAK_RANDOM_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"rand\(\)|random\(\)|std::rand\(\)"));
+
+// static RAW_POINTER_RE: LazyLock<Regex> = LazyLock::new(|| {
+//     static_regex(r"new\s+(?:std::|make_unique|make_shared)\w+|new\s+\w+|delete\s+\w+")
+// });
+
+// static REINTERPRET_CAST_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"reinterpret_cast\s*<"));
+
+// static C_STYLE_CAST_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"\(\s*\w+\s*\)\s*\w+"));
+
+// static EXCEPTION_SAFETY_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"catch\s*\(\.\.\.\)|noexcept\s*\(\s*false\s*\)"));
+
+// static INCLUDE_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r#"^#include\s+[<"]([^>"]+)[>"]"#));
+
+// static TODO_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)"));
+
+// static MACRO_DEFINE_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"(?m)^#define\s+([A-Za-z_]\w*)(?:\([^)]*\))?\s+(.+)$"));
+
+// static TYPEDEF_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"(?m)^\s*typedef\s+(.+?)\s+(\w+)\s*;"));
+
+// static USING_ALIAS_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"(?m)^\s*using\s+(\w+)\s*=\s*(.+?)\s*;"));
+
+// static BIND_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"std::bind\s*\(\s*&?(\w+(?:::?\w+)*)"));
+
+// static MALLOC_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"malloc|calloc|realloc|alloca|new\s|new\["));
+
+// static FREE_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"\bfree\b|\bdelete\b|\bdelete\[\]\b"));
+
+// static THREAD_RE: LazyLock<Regex> = LazyLock::new(|| {
+//     static_regex(r"std::thread|pthread|std::async|std::future|fork|std::jthread")
+// });
+
+// static MUTEX_RE: LazyLock<Regex> = LazyLock::new(|| {
+//     static_regex(
+//         r"std::mutex|std::lock_guard|std::unique_lock|std::shared_lock|std::scoped_lock",
+//     )
+// });
+
+// static SYSCALL_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"syscall|ioctl|fcntl"));
+
+// static STRING_OPS_RE: LazyLock<Regex> = LazyLock::new(|| {
+//     static_regex(r"strcpy|strcat|sprintf|strncpy|std::string::c_str|std::string::data")
+// });
+
+// static SMART_POINTER_RE: LazyLock<Regex> = LazyLock::new(|| {
+//     static_regex(
+//         r"std::unique_ptr|std::shared_ptr|std::weak_ptr|std::make_unique|std::make_shared",
+//     )
+// });
+
+// static TEMPLATE_RE: LazyLock<Regex> = LazyLock::new(|| {
+//     static_regex(r"template\s*<|typename|constexpr|consteval|constinit")
+// });
+
+// static LAMBDA_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"\[\s*[=&\w]*\s*\]\s*\("));
+
+// static NAMESPACE_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"\bnamespace\s+(\w+)"));
+
+// static CLASS_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"\bclass\s+(\w+)"));
+
+// static STRUCT_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"\bstruct\s+(\w+)"));
+
+// static VIRTUAL_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"\bvirtual\b|\boverride\b|\bfinal\b"));
+
+// static RTTI_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"\btypeid\b|\bdynamic_cast\s*<"));
+
+// static OPERATOR_OVERLOAD_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"\boperator\s*[+\-*/%=<>!&|^~\[\]()]+\s*\("));
+
+// static INLINE_ASM_RE: LazyLock<Regex> =
+//     LazyLock::new(|| static_regex(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\("));
+
+// ====
+
+
 static UNSAFE_STRING_RE: LazyLock<Regex> = LazyLock::new(|| {
     #[allow(clippy::expect_used)]
     Regex::new(r"strcpy|strcat|sprintf|vsprintf|gets|wcscpy|wcscat|_mbscpy")

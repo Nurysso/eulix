@@ -1,4 +1,5 @@
 use crate::struc::kb_struct::*;
+use crate::parser::utils::static_regex;
 use regex::bytes::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -18,61 +19,39 @@ struct TagRule {
     check_docstring: bool,
 }
 
-// Security patterns (line-based, mirrors the C detector's approach)
-static EVAL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"\beval\s*\(|new\s+Function\s*\(")
-        .expect("static eval/Function regex pattern is valid")
-});
-static INNERHTML_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"\.innerHTML\s*=|\.outerHTML\s*=|document\.write\s*\(")
-        .expect("static innerHTML regex pattern is valid")
-});
-static DANGEROUS_HTML_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"dangerouslySetInnerHTML")
-        .expect("static dangerouslySetInnerHTML regex pattern is valid")
-});
+static EVAL_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"\beval\s*\(|new\s+Function\s*\("));
+
+static INNERHTML_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"\.innerHTML\s*=|\.outerHTML\s*=|document\.write\s*\("));
+
+static DANGEROUS_HTML_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"dangerouslySetInnerHTML"));
+
 static CHILD_PROCESS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"\bexec\s*\(|\bexecSync\s*\(|\bspawn\s*\(|\bspawnSync\s*\(")
-        .expect("static child_process regex pattern is valid")
+    static_regex(r"\bexec\s*\(|\bexecSync\s*\(|\bspawn\s*\(|\bspawnSync\s*\(")
 });
-static WEAK_RANDOM_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"Math\.random\s*\(\)").expect("static weak random regex pattern is valid")
-});
-static TLS_DISABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED")
-        .expect("static TLS disable regex pattern is valid")
-});
-static PROTO_POLLUTION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"__proto__|Object\.setPrototypeOf")
-        .expect("static prototype pollution regex pattern is valid")
-});
-static CORS_WILDCARD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r#"Access-Control-Allow-Origin['"]?\s*[,:]\s*['"]\*['"]"#)
-        .expect("static CORS wildcard regex pattern is valid")
-});
-static SQL_TEMPLATE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"(?i)(select|insert|update|delete)\s+.*\$\{")
-        .expect("static SQL template-interpolation regex pattern is valid")
-});
-static CLIENT_STORAGE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"localStorage\.|sessionStorage\.")
-        .expect("static client storage regex pattern is valid")
-});
-static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"(?://|/\*)\s*(?i:TODO|FIXME|HACK|XXX)[:\s]*(.*?)(?:\*/|$)")
-        .expect("static TODO comment regex pattern is valid")
-});
+
+static WEAK_RANDOM_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"Math\.random\s*\(\)"));
+
+static TLS_DISABLE_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED"));
+
+static PROTO_POLLUTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"__proto__|Object\.setPrototypeOf"));
+
+static CORS_WILDCARD_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r#"Access-Control-Allow-Origin['"]?\s*[,:]\s*['"]\*['"]"#));
+
+static SQL_TEMPLATE_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"(?i)(select|insert|update|delete)\s+.*\$\{"));
+
+static CLIENT_STORAGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"localStorage\.|sessionStorage\."));
+
+static TODO_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"(?://|/\*)\s*(?i:TODO|FIXME|HACK|XXX)[:\s]*(.*?)(?:\*/|$)"));
 
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![

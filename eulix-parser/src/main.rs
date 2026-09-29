@@ -85,10 +85,12 @@ use crate::struc::kb_struct::KnowledgeBaseSimplifiedRef;
 use crate::struc::kb_struct::Metadata;
 use crate::struc::kb_struct::PatternInfo;
 use crate::struc::kb_struct::PatternsRef;
+use crate::struc::kb_struct::StructureView;
 use parser::analyze::Analyzer;
 use parser::c;
 use parser::cpp;
 use parser::go;
+use parser::java;
 use parser::javascript;
 use parser::language::Language;
 use parser::python;
@@ -488,7 +490,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Build reference wrappers (cheap, zero‑copy)
         let kb_ref = KnowledgeBaseSimplifiedRef {
             metadata: &kb.metadata,
-            structure: &kb.structure,
+            structure: StructureView(&kb.structure),
         };
         let index_ref = IndexDataRef {
             indices: &kb.indices,
@@ -597,7 +599,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let kb_simplified = KnowledgeBaseSimplifiedRef {
             metadata: &kb.metadata,
-            structure: &kb.structure,
+            structure: StructureView(&kb.structure),
         };
 
         write_json_streaming(output_path, &kb_simplified, false)?;
@@ -885,6 +887,7 @@ fn collect_source_files_and_hash(
                 "cpp" | "c++" | "cxx" | "hpp" => Some(Language::Cpp),
                 "python" | "py" => Some(Language::Python),
                 "javascript" | "js" => Some(Language::JavaScript),
+                "java" => Some(Language::Java),
                 "typescript" | "ts" => Some(Language::TypeScript),
                 "go" | "golang" => Some(Language::Go),
                 "rust" | "rs" => Some(Language::Rust),
@@ -989,6 +992,10 @@ fn parse_file(
         }
         Language::Rust => {
             let (_, fd) = rust_parser::parse_file(file_path)?;
+            fd
+        }
+        Language::Java => {
+            let (_, fd) = java::parse_file(file_path)?;
             fd
         }
         _ => return Err(format!("Unsupported language: {:?}", lang).into()),

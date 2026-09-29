@@ -3,8 +3,8 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
+// TODO move from use regex::Regex to regex::bytes::Regex;
 use crate::struc::kb_struct::*;
-// use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

@@ -4,13 +4,88 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 // use rustc_hash::FxHashMap; todo move to FxHashMap instead of HashMap
+use serde::ser::{SerializeMap, SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-// kb.json structure
+
+// borrow the full types, emit only the simplified fields.
+pub struct FileDataSimpleView<'a>(pub &'a FileData);
+pub struct FunctionSimpleView<'a>(pub &'a Function);
+pub struct ClassSimpleView<'a>(pub &'a Class);
+
+impl<'a> Serialize for FunctionSimpleView<'a> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let f = self.0;
+        let mut st = s.serialize_struct("FunctionSimple", 11)?;
+        st.serialize_field("id", &f.id)?;
+        st.serialize_field("name", &f.name)?;
+        st.serialize_field("signature", &f.signature)?;
+        st.serialize_field("params", &f.params)?;
+        st.serialize_field("return_type", &f.return_type)?;
+        st.serialize_field("docstring", &f.docstring)?;
+        st.serialize_field("line_start", &f.line_start)?;
+        st.serialize_field("line_end", &f.line_end)?;
+        st.serialize_field("variables", &f.variables)?;
+        st.serialize_field("complexity", &f.complexity)?;
+        st.serialize_field("importance_score", &f.importance_score)?;
+        st.end()
+    }
+}
+
+struct SeqView<'a, T, V>(&'a [T], fn(&'a T) -> V);
+impl<'a, T, V: Serialize> Serialize for SeqView<'a, T, V> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(self.0.iter().map(|x| (self.1)(x)))
+    }
+}
+
+impl<'a> Serialize for ClassSimpleView<'a> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let c = self.0;
+        let mut st = s.serialize_struct("ClassSimple", 10)?;
+        st.serialize_field("id", &c.id)?;
+        st.serialize_field("name", &c.name)?;
+        st.serialize_field("bases", &c.bases)?;
+        st.serialize_field("docstring", &c.docstring)?;
+        st.serialize_field("line_start", &c.line_start)?;
+        st.serialize_field("line_end", &c.line_end)?;
+        st.serialize_field("methods", &SeqView(&c.methods, FunctionSimpleView))?;
+        st.serialize_field("attributes", &c.attributes)?;
+        st.serialize_field("decorators", &c.decorators)?;
+        st.serialize_field("lang_info", &c.lang_info)?;
+        st.end()
+    }
+}
+
+impl<'a> Serialize for FileDataSimpleView<'a> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let d = self.0;
+        let mut st = s.serialize_struct("FileDataSimple", 6)?;
+        st.serialize_field("language", &d.language)?;
+        st.serialize_field("loc", &d.loc)?;
+        st.serialize_field("imports", &d.imports)?;
+        st.serialize_field("functions", &SeqView(&d.functions, FunctionSimpleView))?;
+        st.serialize_field("classes", &SeqView(&d.classes, ClassSimpleView))?;
+        st.serialize_field("todos", &d.todos)?;
+        st.end()
+    }
+}
+
+pub struct StructureView<'a>(pub &'a HashMap<String, FileData>);
+impl<'a> Serialize for StructureView<'a> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut m = s.serialize_map(Some(self.0.len()))?;
+        for (k, v) in self.0 {
+            m.serialize_entry(k, &FileDataSimpleView(v))?;
+        }
+        m.end()
+    }
+}
+
 #[derive(Serialize)]
 pub struct KnowledgeBaseSimplifiedRef<'a> {
     pub metadata: &'a Metadata,
-    pub structure: &'a HashMap<String, FileData>,
+    pub structure: StructureView<'a>,
 }
 
 // kb_index.json(*_index.json) structure
@@ -387,6 +462,8 @@ pub struct LanguageSpecificInfo {
     pub c: Option<CInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpp: Option<CppInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub java: Option<JavaInfo>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -506,37 +583,69 @@ pub struct JavaScriptInfo {
     pub uses_hoisted_var: bool,
 }
 
-#[expect(dead_code)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum JavaTypeKind {
+    #[default]
+    Class,
+    Interface,
+    Enum,
+    Record,
+    Annotation,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct JavaInfo {
+    pub package: Option<String>,
+    pub access_modifier: Option<String>, // public/private/protected/package-private
+    pub annotations: Vec<String>,        // @Override, @Deprecated, ...
+    pub generic_params: Vec<String>,     // <T, K, V>
+    pub throws: Vec<String>,             // checked exceptions in `throws`
+
+    // Modifiers
     pub is_static: bool,
     pub is_final: bool,
     pub is_abstract: bool,
     pub is_synchronized: bool,
     pub is_native: bool,
+    pub is_strictfp: bool,
     pub is_default_method: bool, // interface default method
+    pub is_sealed: bool,
+    pub is_non_sealed: bool,
+
+    // Method kind
     pub is_constructor: bool,
-    pub access_modifier: Option<String>, // public/private/protected/package-private
-    pub annotations: Vec<String>,        // @Override, @Deprecated, @Autowired, etc.
-    pub throws: Vec<String>,             // checked exceptions in `throws` clause
-    pub generic_params: Vec<String>,     // <T, K, V>
+    pub is_compact_constructor: bool,
+    pub is_interface_method: bool,
+    pub is_varargs: bool,
+    pub is_generic: bool,
+    pub is_override: bool,
+    pub is_deprecated: bool,
+    pub is_test: bool,
+    pub is_getter: bool,
+    pub is_setter: bool,
+
+    // Type info
+    pub type_kind: Option<JavaTypeKind>, // class/interface/enum/record/annotation
     pub extends: Option<String>,
     pub implements: Vec<String>,
-    pub type_kind: Option<String>, // class/interface/enum/record/annotation
-    pub is_functional_interface: bool, // @FunctionalInterface
-    pub is_lambda: bool,
-    pub is_anonymous_class: bool,
+    pub permits: Vec<String>, // sealed types' `permits`
+    pub is_nested: bool,
     pub is_inner_class: bool,
     pub is_static_nested_class: bool,
+    pub is_anonymous_class: bool,
     pub is_record: bool,
-    pub is_sealed: bool,
-    pub permitted_subclasses: Vec<String>, // sealed classes' `permits`
+    pub is_functional_interface: bool,
     pub overrides_equals_hashcode: bool,
-    pub uses_streams: bool, // java.util.stream usage
-    pub uses_try_with_resources: bool,
-    pub is_varargs: bool,
-}
 
+    // Body signals
+    pub is_lambda: bool,
+    pub uses_method_reference: bool,
+    pub uses_streams: bool,
+    pub uses_try_with_resources: bool,
+    pub uses_reflection: bool,
+}
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CInfo {
     pub is_static: bool, // file-scoped linkage

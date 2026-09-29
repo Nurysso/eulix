@@ -4,6 +4,7 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 use crate::struc::kb_struct::*;
+use crate::parser::utils::static_regex;
 use regex::bytes::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -20,11 +21,7 @@ pub struct GoParser {
     embed_patterns: Vec<String>,
 }
 
-static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"(?i)(?://|/\*).*?\bTODO:?\s*(.+?)(?:\*/|$)")
-        .expect("static TODO comment regex pattern is valid")
-});
+static TODO_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"(?i)(?://|/\*).*?\bTODO:?\s*(.+?)(?:\*/|$)"));
 
 impl GoParser {
     pub fn new(source_code: String, file_path: String) -> Self {
@@ -1877,8 +1874,8 @@ func main() {
         );
     }
     #[test]
-fn no_punctuation_leaks_into_local_var_names() {
-    let src = r#"
+    fn no_punctuation_leaks_into_local_var_names() {
+        let src = r#"
 package main
 
 func main() {
@@ -1887,19 +1884,21 @@ func main() {
     _ = Foo; _ = Bar; _ = baz; _ = qux
 }
 "#;
-    let fd = parse(src);
-    let main_fn = fd.functions.iter().find(|f| f.name == "main").unwrap();
-    for v in &main_fn.variables {
-        assert!(
-            v.name.chars().all(|c| c.is_alphanumeric() || c == '_'),
-            "non-identifier char in variable name: {:?}", v.name
-        );
-        assert!(
-            !matches!(v.name.as_str(), "," | "=" | ";" | "(" | ")"),
-            "punctuation leaked into variable names: {:?}", v.name
-        );
+        let fd = parse(src);
+        let main_fn = fd.functions.iter().find(|f| f.name == "main").unwrap();
+        for v in &main_fn.variables {
+            assert!(
+                v.name.chars().all(|c| c.is_alphanumeric() || c == '_'),
+                "non-identifier char in variable name: {:?}",
+                v.name
+            );
+            assert!(
+                !matches!(v.name.as_str(), "," | "=" | ";" | "(" | ")"),
+                "punctuation leaked into variable names: {:?}",
+                v.name
+            );
+        }
     }
-}
 
     // Security regex must catch idiomatic exported Go names like
     // `Password`, `APIKey` (capitalized), not just lowercase.

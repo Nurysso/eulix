@@ -3,10 +3,9 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
+use crate::parser::utils::static_regex;
 use crate::struc::kb_struct::*;
-// use once_cell::sync::Lazy;
 use regex::bytes::Regex;
-// use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str;
@@ -24,92 +23,45 @@ struct TagRule {
     check_docstring: bool,
 }
 
-static UNSAFE_STRING_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"strcpy|strcat|sprintf|vsprintf|gets")
-        .expect("static unsafe string regex pattern is valid")
-});
+static UNSAFE_STRING_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"strcpy|strcat|sprintf|vsprintf|gets"));
 
-static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"system\(|popen\(|exec").expect("static command execution regex pattern is valid")
-});
+static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"system\(|popen\(|exec"));
 
-static MANUAL_MEMORY_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"malloc|calloc|realloc|free").expect("static manual memory regex pattern is valid")
-});
+static MANUAL_MEMORY_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"malloc|calloc|realloc|free"));
 
-static UNSAFE_INPUT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"scanf|fscanf").expect("static unsafe input regex pattern is valid")
-});
+static UNSAFE_INPUT_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"scanf|fscanf"));
 
-static MEMORY_OP_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"memcpy|memmove|memset").expect("static memory operation regex pattern is valid")
-});
+static MEMORY_OP_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"memcpy|memmove|memset"));
 
-static PRIVILEGE_CHANGE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"setuid|setgid|seteuid").expect("static privilege change regex pattern is valid")
-});
+static PRIVILEGE_CHANGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"setuid|setgid|seteuid"));
 
-static WEAK_RANDOM_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"rand\(\)|random\(\)").expect("static weak random regex pattern is valid")
-});
+static WEAK_RANDOM_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"rand\(\)|random\(\)"));
 
-static INCLUDE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r#"^#include\s+[<"]([^>"]+)[>"]"#)
-        .expect("static C include header regex pattern is valid")
-});
+static INCLUDE_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r#"^#include\s+[<"]([^>"]+)[>"]"#));
 
-static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)")
-        .expect("static TODO comment regex pattern is valid")
-});
+static TODO_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)"));
 
-static MACRO_DEFINE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"(?m)^#define\s+([A-Za-z_]\w*)(?:\([^)]*\))?\s+(.+)$")
-        .expect("static macro definition regex pattern is valid")
-});
+static MACRO_DEFINE_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"(?m)^#define\s+([A-Za-z_]\w*)(?:\([^)]*\))?\s+(.+)$"));
 
-static MALLOC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"malloc|calloc|realloc|alloca")
-        .expect("static allocation call regex pattern is valid")
-});
+static MALLOC_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"malloc|calloc|realloc|alloca"));
 
-static FREE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"\bfree\b").expect("static free function call regex pattern is valid")
-});
+static FREE_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"\bfree\b"));
 
-static PTHREAD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"pthread|fork|thread").expect("static concurrency regex pattern is valid")
-});
+static PTHREAD_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"pthread|fork|thread"));
 
-static SYSCALL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"syscall|ioctl|fcntl").expect("static system call regex pattern is valid")
-});
+static SYSCALL_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"syscall|ioctl|fcntl"));
 
-static STRING_OPS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"strcpy|strcat|sprintf|strncpy")
-        .expect("static string operations regex pattern is valid")
-});
+static STRING_OPS_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"strcpy|strcat|sprintf|strncpy"));
 
-static INLINE_ASM_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\(")
-        .expect("static inline assembly regex pattern is valid")
-});
+static INLINE_ASM_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\("));
 
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
