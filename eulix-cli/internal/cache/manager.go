@@ -20,10 +20,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"time"
 
 	"eulix/internal/config"
+	"eulix/internal/utils"
 
 	bolt "go.etcd.io/bbolt"
 	ErrorBolt "go.etcd.io/bbolt/errors"
@@ -60,7 +62,7 @@ func CacheController(cfg *config.Config) (*Manager, error) {
 
 	path := cfg.Cache.Path
 	if path == "" {
-		path = ".eulix/history.db"
+		path = filepath.Join(utils.EulixDir, "history.db")
 	}
 
 	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 2 * time.Second})

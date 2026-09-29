@@ -159,7 +159,7 @@ func mmrWatchMatch(id, name, file string) bool {
 // Uses timestamp in filename for uniqueness.
 // Intended for offline analysis; not used in production path.
 func (cb *ContextBuilder) writeContextToFile(ctx *utils.ContextWindow) error {
-	logDir := filepath.Join(cb.config.Project.Path, ".eulix", "debug", "retrieval")
+	logDir := filepath.Join(cb.config.Project.Path, utils.EulixDir, "debug", "retrieval")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return err
 	}

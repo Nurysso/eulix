@@ -24,9 +24,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -51,42 +51,37 @@ type DirEntry struct {
 	Files   []string `json:"files"`
 	Dirs    []string `json:"dirs"`
 }
-
 type Checksum struct {
 	ProjectPath     string               `json:"project_path"`
 	TotalFiles      int                  `json:"total_files"`
 	TotalLines      int                  `json:"total_lines"`
 	Hash            string               `json:"hash"`
 	Files           map[string]FileEntry `json:"files"`
-	Dirs            map[string]DirEntry  `json:"dirs"`
 	LastAnalyzed    time.Time            `json:"last_analyzed"`
 	AnalysisVersion string               `json:"analysis_version"`
 }
 
-// Result is what Run() returns: the fresh checksum plus a summary of how it
-// compares to whatever was previously stored (if anything).
+// // Result is what Run() returns: the fresh checksum plus a summary of how it
+// // compares to whatever was previously stored (if anything).
 type Result struct {
-	Checksum      *Checksum
-	FirstRun      bool    // true if there was no existing checksum.json.zst
-	ChangedRatio  float64 // fraction (0.0-1.0) of files added/removed/modified
+	Checksum      *Checksum // current state of the project (nil on first run)
+	FirstRun      bool
+	ChangedRatio  float64
 	FilesAdded    int
 	FilesDeleted  int
 	FilesModified int
 }
 
-const analysisVersion = utils.AppVersion // i dont remember why this was set to 0.5.3 or what it meant.
-const eulixDirName = ".eulix"
-const checksumFileName = "checksum.json.zst"
-const ignoreFileName = ".euignore"
-
 type Detector struct {
 	projectPath    string
+	checksumDir    string
 	ignorePatterns []string
+	exts           map[string]bool
 }
 
 // newDetector builds a Detector for the given project root and loads its
 // .euignore patterns. Unexported: callers should go through Run().
-func hashHound(projectPath string) *Detector {
+func newDetector(projectPath string) *Detector {
 	d := &Detector{projectPath: projectPath}
 	d.loadIgnorePatterns()
 	return d
@@ -97,39 +92,31 @@ func hashHound(projectPath string) *Detector {
 // If one exists, it recalculates and compares against the stored version,
 // reporting what percentage of the codebase changed.
 func Run() (*Result, error) {
-	cfg, _ := config.Load()
-
-	projectPath := &cfg.Project.Path
-	d := hashHound(*projectPath)
-
-	stored, loadErr := d.Load()
-	firstRun := loadErr != nil
-
-	current, err := d.calculate(stored)
+	cfg, err := config.Load()
 	if err != nil {
-		return nil, fmt.Errorf("checksum: failed to calculate checksum: %w", err)
+		return nil, fmt.Errorf("checksum: failed to load config: %w", err)
 	}
+	projectPath := cfg.Project.Path
 
-	if err := d.Save(current); err != nil {
-		return nil, fmt.Errorf("checksum: failed to save checksum file: %w", err)
+	d := newDetector(projectPath)
+	// TODO: point this at the directory of the Rust --output if it isn't .eulix
+	d.checksumDir = filepath.Join(projectPath, utils.EulixDir)
+
+	stored, err := d.Load()
+	if err != nil {
+		// No (or unreadable) baseline from the Rust parser: treat as full change.
+		return &Result{FirstRun: true, ChangedRatio: 1.0}, nil
 	}
+	d.exts = extsFromBaseline(stored)
 
-	if firstRun {
-		return &Result{
-			Checksum:      current,
-			FirstRun:      true,
-			ChangedRatio:  1.0,
-			FilesAdded:    current.TotalFiles,
-			FilesDeleted:  0,
-			FilesModified: 0,
-		}, nil
+	current, err := d.scan(stored)
+	if err != nil {
+		return nil, fmt.Errorf("checksum: failed to scan project: %w", err)
 	}
 
 	added, deleted, modified, ratio := compare(stored, current)
-
 	return &Result{
 		Checksum:      current,
-		FirstRun:      false,
 		ChangedRatio:  ratio,
 		FilesAdded:    added,
 		FilesDeleted:  deleted,
@@ -137,53 +124,65 @@ func Run() (*Result, error) {
 	}, nil
 }
 
+func (d *Detector) Load() (*Checksum, error) {
+	raw, err := os.ReadFile(filepath.Join(d.checksumDir, utils.ChecksumFileName))
+	if err != nil {
+		return nil, err
+	}
+	dec, err := zstd.NewReader(nil)
+	if err != nil {
+		return nil, err
+	}
+	defer dec.Close()
+	data, err := dec.DecodeAll(raw, nil)
+	if err != nil {
+		return nil, fmt.Errorf("checksum: failed to decompress: %w", err)
+	}
+	var c Checksum
+	if err := json.Unmarshal(data, &c); err != nil {
+		return nil, fmt.Errorf("checksum: invalid json: %w", err)
+	}
+	return &c, nil
+}
+
+// Only track the extensions Rust actually tracked.
+func extsFromBaseline(stored *Checksum) map[string]bool {
+	set := make(map[string]bool)
+	for p := range stored.Files {
+		base := filepath.Base(p)
+		// A leading-dot-only basename (".gitignore") is not an extension.
+		// Require at least one non-dot char before the final dot.
+		ext := filepath.Ext(p)
+		if ext == "" || ext == base {
+			continue
+		}
+		set[ext] = true
+	}
+	return set
+}
+
 // loadIgnorePatterns reads .euignore file and loads patterns
 func (d *Detector) loadIgnorePatterns() {
-	// Default patterns that are always applied (can't be overridden)
-	defaultPatterns := []string{
-		"node_modules/",
-		".eulix/",
-		"target/",
-		"dist/",
-		"build/",
-		"out/",
-		"bin/",
-		"obj/",
-		"__pycache__/",
-		".venv/",
-		"venv/",
-		".git/",
-		".idea/",
-		".vscode/",
-		".DS_Store",
-		"Thumbs.db",
+	// Keep identical to `ignored_dirs` in the Rust walker.
+	defaults := []string{
+		".git/", ".eulix/", "__pycache__/", ".venv/", "venv/", "env/", ".env/",
+		"node_modules/", ".pytest_cache/", ".mypy_cache/", ".tox/", "dist/",
+		"build/", ".eggs/", ".ipynb_checkpoints/", "target/", "*.egg-info/",
 	}
 
-	// Load user patterns from .euignore
-	userPatterns := []string{}
-	ignorePath := filepath.Join(d.projectPath, ignoreFileName)
-	file, err := os.Open(ignorePath)
-	if err == nil {
-		defer func() {
-			_ = file.Close()
-		}()
-
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
+	var user []string
+	if f, err := os.Open(filepath.Join(d.projectPath, utils.EuignorePath)); err == nil {
+		defer func() { _ = f.Close() }()
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			line := strings.TrimSpace(sc.Text())
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
-			userPatterns = append(userPatterns, line)
-		}
-
-		if err := scanner.Err(); err != nil {
-			fmt.Printf("warning: error reading %s: %v\n", ignorePath, err)
+			user = append(user, line)
 		}
 	}
-
-	// Combine: user patterns first (they take priority), then defaults
-	d.ignorePatterns = append(userPatterns, defaultPatterns...)
+	d.ignorePatterns = append(user, defaults...)
 }
 
 func (d *Detector) shouldIgnore(path string) bool {
@@ -231,178 +230,69 @@ func (d *Detector) shouldIgnore(path string) bool {
 	return false
 }
 
-// calculate walks the project and hashes every source file. It's a full
-// recompute, used both for first-run creation and for producing the
-// "current" snapshot to diff against a stored checksum.
-func (d *Detector) calculate(stored *Checksum) (*Checksum, error) {
+func (d *Detector) scan(stored *Checksum) (*Checksum, error) {
 	files := make(map[string]FileEntry)
-	dirs := make(map[string]DirEntry)
-	totalLines := 0
-	totalFiles := 0
 
-	var walkDir func(absDir, relDir string) (string, error) // returns dir hash
-
-	walkDir = func(absDir, relDir string) (string, error) {
-		info, err := os.Stat(absDir)
+	err := filepath.WalkDir(d.projectPath, func(path string, e fs.DirEntry, err error) error {
+		if path == d.projectPath {
+			return err
+		}
+		skip := func() error {
+			if e != nil && e.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		if err != nil {
-			return "", err
+			return skip()
 		}
-		dirModTime := info.ModTime().UnixNano()
-
-		// If we already stored a entry for a dir and its mtime matches,
-		// we can assume that its files hasn't changed and reuse the whole subtree
-		if stored != nil {
-			if storedDir, ok := stored.Dirs[relDir]; ok && storedDir.ModTime == dirModTime {
-				reused, reusedLines, reusedCount, ok := reuseSubtree(stored, relDir, storedDir)
-				if ok {
-					for p, fe := range reused {
-						files[p] = fe
-					}
-					dirs[relDir] = storedDir
-					totalLines += reusedLines
-					totalFiles += reusedCount
-					return storedDir.Hash, nil
-				}
-			}
+		// Rust's walker skips hidden entries and doesn't follow symlinks.
+		if strings.HasPrefix(e.Name(), ".") || e.Type()&fs.ModeSymlink != 0 {
+			return skip()
+		}
+		if d.shouldIgnore(path) {
+			return skip()
+		}
+		if e.IsDir() || !d.exts[filepath.Ext(e.Name())] {
+			return nil
 		}
 
-		// Fall through: either no stored entry, mtime changed, or reuse
-		// failed a safety check. Do a real (but still shallow) readdir.
-		entries, err := os.ReadDir(absDir)
+		info, err := e.Info()
 		if err != nil {
-			return "", err
+			return nil
+		}
+		rel, err := filepath.Rel(d.projectPath, path)
+		if err != nil {
+			return nil
 		}
 
-		var childFileNames, childDirNames []string
-		hasher := xxh3.New()
-
-		// Collect and sort names first for determinism.
-		type child struct {
-			name  string
-			isDir bool
+		entry := FileEntry{Size: info.Size(), ModTime: info.ModTime().UnixNano()}
+		if old, ok := stored.Files[rel]; ok && old.Size == entry.Size && old.ModTime == entry.ModTime {
+			entry.Hash = old.Hash // unchanged, no need to read the file
+		} else {
+			h, err := hashFile(path)
+			if err != nil {
+				return nil
+			}
+			entry.Hash = h
 		}
-		var children []child
-		for _, e := range entries {
-			absChild := filepath.Join(absDir, e.Name())
-			relChild := filepath.Join(relDir, e.Name())
-			if d.shouldIgnore(absChild) {
-				continue
-			}
-			if e.IsDir() {
-				children = append(children, child{e.Name(), true})
-				_ = relChild
-				continue
-			}
-			if base := e.Name(); len(base) > 0 && base[0] == '.' {
-				continue
-			}
-			if !isSourceFile(filepath.Ext(e.Name())) {
-				continue
-			}
-			children = append(children, child{e.Name(), false})
-		}
-		sort.Slice(children, func(i, j int) bool { return children[i].name < children[j].name })
-
-		for _, c := range children {
-			absChild := filepath.Join(absDir, c.name)
-			relChild := filepath.Join(relDir, c.name)
-			if c.isDir {
-				childHash, err := walkDir(absChild, relChild)
-				if err != nil {
-					continue // best-effort, matches existing error handling
-				}
-				childDirNames = append(childDirNames, c.name)
-				_, _ = hasher.WriteString("D:" + c.name)
-				_, _ = hasher.WriteString(childHash)
-			} else {
-				fi, err := os.Stat(absChild)
-				if err != nil {
-					continue
-				}
-				hash, lines, err := hashFile(absChild)
-				if err != nil {
-					continue
-				}
-				files[relChild] = FileEntry{
-					Hash:    hash,
-					Size:    fi.Size(),
-					ModTime: fi.ModTime().UnixNano(),
-				}
-				totalLines += lines
-				totalFiles++
-				childFileNames = append(childFileNames, c.name)
-				_, _ = hasher.WriteString("F:" + c.name)
-				_, _ = hasher.WriteString(hash)
-			}
-		}
-
-		dirHash := fmt.Sprintf("%016x", hasher.Sum64())
-		dirs[relDir] = DirEntry{
-			Hash:    dirHash,
-			ModTime: dirModTime,
-			Files:   childFileNames,
-			Dirs:    childDirNames,
-		}
-		return dirHash, nil
-	}
-
-	rootHash, err := walkDir(d.projectPath, ".")
+		files[rel] = entry
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	return &Checksum{
-		ProjectPath:     d.projectPath,
-		TotalFiles:      totalFiles,
-		TotalLines:      totalLines,
-		Hash:            rootHash,
-		Files:           files,
-		Dirs:            dirs,
-		LastAnalyzed:    time.Now(),
-		AnalysisVersion: analysisVersion,
+		ProjectPath:  d.projectPath,
+		TotalFiles:   len(files),
+		Files:        files,
+		LastAnalyzed: time.Now(),
 	}, nil
 }
 
-// reuseSubtree reuses stored checksums for a dir if its mtime hasn't changed.
-// Falls back to false on any discrepancy.
-func reuseSubtree(stored *Checksum, relDir string, entry DirEntry) (map[string]FileEntry, int, int, bool) {
-	result := make(map[string]FileEntry)
-	lines := 0
-	count := 0
-
-	for _, fname := range entry.Files {
-		relPath := filepath.Join(relDir, fname)
-		fe, ok := stored.Files[relPath]
-		if !ok {
-			return nil, 0, 0, false
-		}
-		result[relPath] = fe
-		count++
-		// FIXME: need per-file line counts for accurate totals on partial reuse.
-	}
-
-	for _, dname := range entry.Dirs {
-		relSub := filepath.Join(relDir, dname)
-		storedSub, ok := stored.Dirs[relSub]
-		if !ok {
-			return nil, 0, 0, false
-		}
-		subFiles, subLines, subCount, ok := reuseSubtree(stored, relSub, storedSub)
-		if !ok {
-			return nil, 0, 0, false
-		}
-		for p, fe := range subFiles {
-			result[p] = fe
-		}
-		lines += subLines
-		count += subCount
-	}
-
-	return result, lines, count, true
-}
-
 func (d *Detector) eulixDir() string {
-	return filepath.Join(d.projectPath, eulixDirName)
+	return filepath.Join(d.projectPath, utils.EulixDir)
 }
 
 func (d *Detector) Save(checksum *Checksum) error {
@@ -411,7 +301,7 @@ func (d *Detector) Save(checksum *Checksum) error {
 		return err
 	}
 
-	checksumPath := filepath.Join(dir, checksumFileName)
+	checksumPath := filepath.Join(dir, utils.ChecksumFileName)
 	data, err := json.Marshal(checksum)
 	if err != nil {
 		return err
@@ -423,26 +313,6 @@ func (d *Detector) Save(checksum *Checksum) error {
 	}
 
 	return os.WriteFile(checksumPath, compressed, 0644)
-}
-
-func (d *Detector) Load() (*Checksum, error) {
-	checksumPath := filepath.Join(d.eulixDir(), checksumFileName)
-	raw, err := os.ReadFile(checksumPath)
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := decompressZstd(raw)
-	if err != nil {
-		return nil, fmt.Errorf("checksum: failed to decompress checksum data: %w", err)
-	}
-
-	var checksum Checksum
-	if err := json.Unmarshal(data, &checksum); err != nil {
-		return nil, err
-	}
-
-	return &checksum, nil
 }
 
 // compressZstd compresses data using zstd at the default compression level.
@@ -477,102 +347,42 @@ func decompressZstd(data []byte) ([]byte, error) {
 // correctly instead of being able to exceed 1.0 or hide against a stale
 // denominator).
 func compare(stored, current *Checksum) (added, deleted, modified int, ratio float64) {
-	if stored == nil || current == nil {
-		return 0, 0, 0, 1.0
-	}
-
 	for file, entry := range current.Files {
-		storedEntry, exists := stored.Files[file]
-		if !exists {
+		old, ok := stored.Files[file]
+		switch {
+		case !ok:
 			added++
-			continue
-		}
-		// Fast path: identical size+mtime means almost certainly unchanged,
-		// skip trusting the hash comparison to a cheap metadata check first.
-		if storedEntry.Size == entry.Size && storedEntry.ModTime == entry.ModTime {
-			continue
-		}
-		if storedEntry.Hash != entry.Hash {
+		case old.Hash != entry.Hash:
 			modified++
 		}
 	}
-
 	for file := range stored.Files {
-		if _, exists := current.Files[file]; !exists {
+		if _, ok := current.Files[file]; !ok {
 			deleted++
 		}
 	}
 
-	denom := stored.TotalFiles
-	if current.TotalFiles > denom {
-		denom = current.TotalFiles
-	}
+	denom := max(len(stored.Files), len(current.Files))
 	if denom == 0 {
-		return added, deleted, modified, 0.0
+		return added, deleted, modified, 0
 	}
-
-	totalChanges := added + deleted + modified
-	ratio = float64(totalChanges) / float64(denom)
-	if ratio > 1.0 {
-		ratio = 1.0
+	ratio = float64(added+deleted+modified) / float64(denom)
+	if ratio > 1 {
+		ratio = 1
 	}
-	return added, deleted, modified, ratio
+	return
 }
 
-func hashFile(path string) (string, int, error) {
+func hashFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", 0, err
+		return "", err
 	}
-	defer func() {
-		_ = f.Close()
-	}()
+	defer func() { _ = f.Close() }()
 
-	hasher := xxh3.New()
-	lines := 0
-	buf := make([]byte, 64*1024) // larger buffer = fewer syscalls, faster
-
-	for {
-		n, err := f.Read(buf)
-		if n > 0 {
-			_, _ = hasher.Write(buf[:n])
-			for i := 0; i < n; i++ {
-				if buf[i] == '\n' {
-					lines++
-				}
-			}
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", 0, err
-		}
+	h := xxh3.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
 	}
-
-	return fmt.Sprintf("%016x", hasher.Sum64()), lines, nil
-}
-
-func isSourceFile(ext string) bool {
-	sourceExts := map[string]bool{
-		".go":    true,
-		".py":    true,
-		".js":    true,
-		".ts":    true,
-		".tsx":   true,
-		".jsx":   true,
-		".java":  true,
-		".c":     true,
-		".cpp":   true,
-		".h":     true,
-		".hpp":   true,
-		".rs":    true,
-		".rb":    true,
-		".php":   true,
-		".cs":    true,
-		".swift": true,
-		".kt":    true,
-		".scala": true,
-	}
-	return sourceExts[ext]
+	return fmt.Sprintf("%016x", h.Sum64()), nil
 }

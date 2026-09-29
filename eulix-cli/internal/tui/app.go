@@ -26,12 +26,20 @@ import (
 
 type AppState int
 
+type tableAlign int
+
 const (
 	StateIdle AppState = iota
 	StateTyping
 	StateProcessing
 	StateDisplaying
 	StateError
+)
+
+const (
+	alignLeft tableAlign = iota
+	alignCenter
+	alignRight
 )
 
 type Message struct {
@@ -891,14 +899,6 @@ func splitTableRow(line string) []string {
 	}
 	return cells
 }
-
-type tableAlign int
-
-const (
-	alignLeft tableAlign = iota
-	alignCenter
-	alignRight
-)
 
 // parseTableAlignment reads a separator cell like ":---", "---:", ":--:",
 // or "---" and returns the column alignment.

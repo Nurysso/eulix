@@ -22,6 +22,7 @@ import (
 	"eulix/internal/llm"
 	"eulix/internal/query"
 	"eulix/internal/tui"
+	"eulix/internal/utils"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -75,7 +76,7 @@ func startChat() error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	eulixDir := ".eulix"
+	eulixDir := utils.EulixDir
 	kbPath := filepath.Join(eulixDir, "kb.json")
 	if _, err := os.Stat(kbPath); os.IsNotExist(err) {
 		return fmt.Errorf("knowledge base not found. Run 'eulix analyze' first")

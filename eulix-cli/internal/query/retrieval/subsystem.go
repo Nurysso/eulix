@@ -8,6 +8,7 @@ package retrieval
 
 import (
 	"eulix/internal/config"
+	"eulix/internal/utils"
 	"fmt"
 	"math"
 	"os"
@@ -59,8 +60,7 @@ const subsysFinalK = 5
 
 // logSubsystemsToFile writes the constructed subsystem tree nodes to a debug log file.
 func logSubsystemsToFile(nodes []*SubsystemNode) error {
-	eulixDir := ".eulix"
-	logPath := filepath.Join(eulixDir, "debug", "susbstemDebug.log")
+	logPath := filepath.Join(utils.EulixDir, "debug", "susbstemDebug.log")
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open subsystem.log: %w", err)

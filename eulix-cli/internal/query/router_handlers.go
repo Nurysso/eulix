@@ -434,7 +434,7 @@ var projectMetricsKwRegex = regexp.MustCompile(`(?i)\b(project|overall|summary|t
 
 // handleMetrics for project-wide summary and per-symbol lookup.
 func (r *Router) handleMetrics(query string, class *c.Classification) (string, error) {
-	metricsPath := filepath.Join(r.config.Project.Path, ".eulix", "kb_metrics.json")
+	metricsPath := filepath.Join(r.config.Project.Path, utils.EulixDir, "kb_metrics.json")
 
 	data, err := os.ReadFile(metricsPath)
 	if err != nil {
@@ -506,7 +506,7 @@ func (r *Router) handleMetrics(query string, class *c.Classification) (string, e
 }
 
 func (r *Router) handleEntryPoints(_ string, _ *c.Classification) (string, error) {
-	entryPath := filepath.Join(r.config.Project.Path, ".eulix", "kb_entry_points.json")
+	entryPath := filepath.Join(r.config.Project.Path, utils.EulixDir, "kb_entry_points.json")
 	data, err := os.ReadFile(entryPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read entry points at %s: %w", entryPath, err)

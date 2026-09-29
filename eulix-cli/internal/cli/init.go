@@ -21,15 +21,8 @@ import (
 
 	"eulix/internal/cli/setup"
 	"eulix/internal/config"
-
+	"eulix/internal/utils"
 	"github.com/BurntSushi/toml"
-)
-
-const (
-	eulixDir     = ".eulix"
-	euignorePath = ".euignore"
-	configPath   = "eulix.toml"
-	envPath      = ".env"
 )
 
 type initState struct {
@@ -40,11 +33,11 @@ type initState struct {
 
 func checkInitState() initState {
 	s := initState{}
-	_, err := os.Stat(configPath)
+	_, err := os.Stat(utils.ConfigPath)
 	s.hasConfig = err == nil
-	_, err = os.Stat(eulixDir)
+	_, err = os.Stat(utils.EulixDir)
 	s.hasDir = err == nil
-	_, err = os.Stat(euignorePath)
+	_, err = os.Stat(utils.EuignorePath)
 	s.hasEuignore = err == nil
 	return s
 }
@@ -72,13 +65,13 @@ func (s initState) missingTargets() []string {
 func (s initState) missingDescriptions() []string {
 	var m []string
 	if !s.hasConfig {
-		m = append(m, configPath+" (configuration)")
+		m = append(m, utils.ConfigPath+" (configuration)")
 	}
 	if !s.hasDir {
-		m = append(m, eulixDir+"/ (knowledge base directory)")
+		m = append(m, utils.EulixDir+"/ (knowledge base directory)")
 	}
 	if !s.hasEuignore {
-		m = append(m, euignorePath+" (ignore patterns)")
+		m = append(m, utils.EuignorePath+" (ignore patterns)")
 	}
 	return m
 }
@@ -127,10 +120,10 @@ func initializeProject(force bool, targets []string) error {
 	configWritten := false
 
 	if shouldWrite("dir") || !state.hasDir {
-		if err := os.MkdirAll(eulixDir, 0755); err != nil {
-			return fmt.Errorf("failed to create %s: %w", eulixDir, err)
+		if err := os.MkdirAll(utils.EulixDir, 0755); err != nil {
+			return fmt.Errorf("failed to create %s: %w", utils.EulixDir, err)
 		}
-		created = append(created, fmt.Sprintf("  - %-20s (knowledge base directory)", eulixDir+"/"))
+		created = append(created, fmt.Sprintf("  - %-20s (knowledge base directory)", utils.EulixDir+"/"))
 	}
 
 	// .euignore is written immediately so there's a real file for the wizard's
@@ -141,10 +134,10 @@ func initializeProject(force bool, targets []string) error {
 			"dist/\n" +
 			"test/\n" +
 			"build/\n"
-		if err := os.WriteFile(euignorePath, []byte(defaultIgnore), 0644); err != nil {
-			return fmt.Errorf("failed to create %s: %w", euignorePath, err)
+		if err := os.WriteFile(utils.EuignorePath, []byte(defaultIgnore), 0644); err != nil {
+			return fmt.Errorf("failed to create %s: %w", utils.EuignorePath, err)
 		}
-		created = append(created, fmt.Sprintf("  - %-20s (ignore patterns)", euignorePath))
+		created = append(created, fmt.Sprintf("  - %-20s (ignore patterns)", utils.EuignorePath))
 		euignoreWritten = true
 	}
 
@@ -157,10 +150,10 @@ func initializeProject(force bool, targets []string) error {
 	}
 
 	// Interactive wizard for whatever was just (re)created
-	env := setup.LoadEnvFile(envPath)
+	env := setup.LoadEnvFile(utils.EnvPath)
 	if euignoreWritten {
 		fmt.Println()
-		err := setup.RunWizard(setup.BuildEuignoreSteps(euignorePath), cfg, env)
+		err := setup.RunWizard(setup.BuildEuignoreSteps(utils.EuignorePath), cfg, env)
 		if err != nil && !errors.Is(err, setup.ErrWizardCancelled) {
 			return fmt.Errorf("euignore wizard: %w", err)
 		}
@@ -175,18 +168,18 @@ func initializeProject(force bool, targets []string) error {
 		case err != nil:
 			return fmt.Errorf("config wizard: %w", err)
 		default:
-			if err := writeConfig(cfg, configPath); err != nil {
+			if err := writeConfig(cfg, utils.ConfigPath); err != nil {
 				return fmt.Errorf("failed to create config: %w", err)
 			}
-			created = append(created, fmt.Sprintf("  - %-20s (configuration)", configPath))
+			created = append(created, fmt.Sprintf("  - %-20s (configuration)", utils.ConfigPath))
 		}
 	}
 
 	if env.Changed() {
 		if err := env.Save(); err != nil {
-			return fmt.Errorf("failed to write %s: %w", envPath, err)
+			return fmt.Errorf("failed to write %s: %w", utils.EnvPath, err)
 		}
-		created = append(created, fmt.Sprintf("  - %-20s (API keys)", envPath))
+		created = append(created, fmt.Sprintf("  - %-20s (API keys)", utils.EnvPath))
 	}
 
 	// Feedback

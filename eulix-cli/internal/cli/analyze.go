@@ -27,6 +27,7 @@ import (
 	"eulix/internal/checksum"
 	"eulix/internal/config"
 	"eulix/internal/embeddings"
+	"eulix/internal/utils"
 )
 
 func analyzeProject(projectPath string) error {
@@ -58,7 +59,7 @@ func analyzeProject(projectPath string) error {
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	eulixDir := filepath.Join(projectPath, ".eulix")
+	eulixDir := filepath.Join(projectPath, utils.EulixDir)
 
 	fmt.Println("Parsing codebase...")
 	parserBin, err := a.ParserPath()

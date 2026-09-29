@@ -19,8 +19,7 @@ import (
 )
 
 // ContextWindowCreator initializes ContextBuilder, loads index artifacts, and sets up search resources.
-func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Client, sourceRoot string) (*ContextBuilder, error) {
-	debugLogger := utils.NewDebugLogger(eulixDir)
+func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Client, sourceRoot string, debugLogger *utils.DebugLogger) (*ContextBuilder, error) {
 	// Flush stored init pretouch results into context_debug.log immediately
 	mmap.FlushPretouchLogs(debugLogger)
 	cb := &ContextBuilder{

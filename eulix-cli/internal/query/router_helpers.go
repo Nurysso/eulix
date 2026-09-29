@@ -63,7 +63,7 @@ func (r *Router) ensureContextBuilder() error {
 	if r.config.Project.DebugConfig {
 		fmt.Printf("[INFO] Initializing context builder with source root: %s\n", sourceRoot)
 	}
-	cb, err := retrieval.ContextWindowCreator(r.eulixDir, r.config, r.llmClient, sourceRoot)
+	cb, err := retrieval.ContextWindowCreator(r.eulixDir, r.config, r.llmClient, sourceRoot, r.debug)
 	if err != nil {
 		return fmt.Errorf("failed to initialize context builder: %w", err)
 	}

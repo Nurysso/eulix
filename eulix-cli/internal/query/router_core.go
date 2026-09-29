@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"eulix/internal/cache"
 	"eulix/internal/config"
@@ -65,7 +66,10 @@ func QueryTrafficController(
 	llmClient *llm.Client,
 	cacheManager *cache.Manager,
 ) (*Router, error) {
-	cb, err := retrieval.ContextWindowCreator(eulixDir, cfg, llmClient, cfg.Project.Path)
+	debugLogger := utils.NewDebugLogger(eulixDir)
+	mmap.FlushPretouchLogs(debugLogger)         // once
+	debugLogger.StartAutoFlush(5 * time.Second) // once
+	cb, err := retrieval.ContextWindowCreator(eulixDir, cfg, llmClient, cfg.Project.Path, debugLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize context builder: %w", err)
 	}
@@ -73,7 +77,6 @@ func QueryTrafficController(
 	if err != nil {
 		return nil, fmt.Errorf("failed to create classifier: %w", err)
 	}
-	debugLogger := utils.NewDebugLogger(eulixDir)
 
 	// Flush stored init pretouch results into context_debug.log immediately
 	mmap.FlushPretouchLogs(debugLogger)

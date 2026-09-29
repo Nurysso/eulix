@@ -32,7 +32,6 @@ package mmap
 
 import (
 	"bytes"
-	"eulix/internal/utils"
 	"fmt"
 	"io"
 	"os"
@@ -90,8 +89,8 @@ func openSeqyentialWindows(path string) (*os.File, error) {
 // decodes JSON directly from the view.  size must equal fi.Size() for the
 // file — passing it in avoids a redundant stat syscall.
 func DecodeViaMmap(path string, size int64, v any) error {
-	if utils.SizeOverflows(size) {
-		return utils.ErrFileTooLargeForPath(path, size)
+	if SizeOverflows(size) {
+		return ErrFileTooLargeForPath(path, size)
 	}
 
 	// Use sequential scan open so the FS readhead is tuned
@@ -107,8 +106,8 @@ func DecodeViaMmap(path string, size int64, v any) error {
 		return err
 	}
 	size = fi.Size()
-	if utils.SizeOverflows(size) {
-		return utils.ErrFileTooLargeForPath(path, size)
+	if SizeOverflows(size) {
+		return ErrFileTooLargeForPath(path, size)
 	}
 	if size == 0 {
 		return fmt.Errorf("empty file:%s", path)
@@ -139,7 +138,7 @@ func DecodeViaMmap(path string, size int64, v any) error {
 		NumberOfBytes:  uintptr(size),
 	}
 	_ = prefetchvirtualmemory(windows.CurrentProcess(), 1, &memRange, 0)
-	return sonicCopy.Unmarshal(data, v)
+	return SonicCopy.Unmarshal(data, v)
 }
 
 // MmapForSequentialRead Windows supports the io.Reader variant
@@ -158,7 +157,7 @@ func MmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
 		return nil, nil, err
 	}
 	size = fi.Size()
-	if utils.SizeOverflows(size) || size == 0 {
+	if SizeOverflows(size) || size == 0 {
 		f.Close()
 		return nil, nil, fmt.Errorf("MmapForSequentialRead: invalid size %d for %s", size, path)
 	}

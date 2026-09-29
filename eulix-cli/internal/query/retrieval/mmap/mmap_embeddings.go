@@ -12,14 +12,10 @@ package mmap
 
 import (
 	"encoding/binary"
+	"eulix/internal/utils"
 	"fmt"
 	"math"
 	"os"
-)
-
-const (
-	eulxMagic     = "EULX"
-	binaryVersion = 5
 )
 
 type EmbeddingMeta struct {
@@ -40,7 +36,7 @@ func loadEmbeddingsBin(path string) ([][]float32, EmbeddingMeta, error) {
 	if _, err := f.Read(magic); err != nil {
 		return nil, EmbeddingMeta{}, fmt.Errorf("read magic: %w", err)
 	}
-	if string(magic) != eulxMagic {
+	if string(magic) != utils.MagicBytes {
 		return nil, EmbeddingMeta{}, fmt.Errorf("bad magic: %q", magic)
 	}
 
@@ -48,7 +44,7 @@ func loadEmbeddingsBin(path string) ([][]float32, EmbeddingMeta, error) {
 	if err := binary.Read(f, binary.LittleEndian, &version); err != nil {
 		return nil, EmbeddingMeta{}, fmt.Errorf("read version: %w", err)
 	}
-	if version != binaryVersion {
+	if version != utils.BinaryVersion {
 		return nil, EmbeddingMeta{}, fmt.Errorf("unsupported version %d", version)
 	}
 

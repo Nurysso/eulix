@@ -39,13 +39,6 @@ const (
 	PreAllocate        = 320_000
 )
 
-// Binary version from eulix_embed which are written in header of
-// embeddings.bin and vectors.bin
-const (
-	BinaryVersion = uint32(5)
-	MagicBytes    = "EULX"
-)
-
 // logFileLoad wraps a file load with timing + RSS delta logging.
 func (cb *ContextBuilder) logFileLoad(name string) func(error) {
 	var memBefore runtime.MemStats
@@ -373,7 +366,7 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	if _, err := io.ReadFull(br, magic); err != nil {
 		return fmt.Errorf("reading magic: %w", err)
 	}
-	if string(magic) != MagicBytes {
+	if string(magic) != utils.MagicBytes {
 		return fmt.Errorf("wrong magic bytes: %q", magic)
 	}
 
@@ -381,8 +374,8 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	if _, err := io.ReadFull(br, hdr[:4]); err != nil {
 		return fmt.Errorf("reading version: %w", err)
 	}
-	if version := binary.LittleEndian.Uint32(hdr[:4]); version != BinaryVersion {
-		return fmt.Errorf("unsupported embeddings.bin version %d (expected %d)", version, BinaryVersion)
+	if version := binary.LittleEndian.Uint32(hdr[:4]); version != utils.BinaryVersion {
+		return fmt.Errorf("unsupported embeddings.bin version %d (expected %d)", version, utils.BinaryVersion)
 	}
 
 	// model name: uint32 len + UTF-8
@@ -484,7 +477,7 @@ func (cb *ContextBuilder) loadVectorMap() error {
 	off := 0
 
 	// magic
-	if string(data[off:off+4]) != MagicBytes {
+	if string(data[off:off+4]) != utils.MagicBytes {
 		return fmt.Errorf("wrong magic in vectors.bin: %q", data[off:off+4])
 	}
 	off += 4
@@ -493,7 +486,7 @@ func (cb *ContextBuilder) loadVectorMap() error {
 	version := binary.LittleEndian.Uint32(data[off : off+4])
 	off += 4
 	if version != 5 {
-		return fmt.Errorf("unsupported vectors.bin version %d (expected %d)", version, BinaryVersion)
+		return fmt.Errorf("unsupported vectors.bin version %d (expected %d)", version, utils.BinaryVersion)
 	}
 
 	// model name
