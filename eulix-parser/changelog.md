@@ -16,7 +16,7 @@ We identified which fields in kb.json were unnecessary for the downstream worklo
 - Serialization is done through borrowing views (`StructureView`), so no intermediate
   copy of the structure map is allocated. Analysis still runs on the full in-memory
   data; only the written output is simplified.
-- All the grammar files now uses `regex::bytes::Regex` instead of `regex::Regex`.
+- All the grammar files now uses `regex::Regex` instead of `regex::bytes::Regex`.
 - parser/utils.rs created to store common shared functions accross the grammar files.
 
 ### Performance

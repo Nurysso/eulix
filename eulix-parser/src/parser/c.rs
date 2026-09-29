@@ -3,9 +3,9 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::parser::utils::static_regex;
+use crate::parser::utils::{extract_todos, static_regex};
 use crate::struc::kb_struct::*;
-use regex::bytes::Regex;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str;
@@ -42,9 +42,6 @@ static WEAK_RANDOM_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"rand\(\
 
 static INCLUDE_RE: LazyLock<Regex> =
     LazyLock::new(|| static_regex(r#"^#include\s+[<"]([^>"]+)[>"]"#));
-
-static TODO_RE: LazyLock<Regex> =
-    LazyLock::new(|| static_regex(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)"));
 
 static MACRO_DEFINE_RE: LazyLock<Regex> =
     LazyLock::new(|| static_regex(r"(?m)^#define\s+([A-Za-z_]\w*)(?:\([^)]*\))?\s+(.+)$"));
@@ -219,10 +216,11 @@ impl CParser {
     fn pre_scan_macros(src: &str) -> HashMap<String, String> {
         let mut map = HashMap::new();
         // Matches both object-like and function-like macros, handles line continuations
-        for caps in MACRO_DEFINE_RE.captures_iter(src.as_bytes()) {
+        for caps in MACRO_DEFINE_RE.captures_iter(src) {
             if let (Some(m1), Some(m2)) = (caps.get(1), caps.get(2)) {
-                let name = String::from_utf8_lossy(m1.as_bytes()).to_string();
-                let body_str = String::from_utf8_lossy(m2.as_bytes());
+                // m.as_str().to_string()
+                let name = m1.as_str().to_string();
+                let body_str = m2.as_str().to_string();
                 let body = body_str.trim_end_matches('\\').trim().to_string();
                 map.insert(name, body);
             }
@@ -277,7 +275,7 @@ impl CParser {
             functions: self.extract_functions(&root, &self.fn_ptr_map),
             classes: self.extract_structs(&root),
             global_vars: self.extract_global_vars(&root),
-            todos: self.extract_todos(),
+            todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
         })
     }
@@ -342,9 +340,9 @@ impl CParser {
         for child in root.children(&mut cursor) {
             if child.kind() == "preproc_include" {
                 let text = self.get_node_text(&child);
-                if let Some(caps) = INCLUDE_RE.captures(text.as_bytes()) {
+                if let Some(caps) = INCLUDE_RE.captures(&text) {
                     if let Some(m) = caps.get(1) {
-                        let path = String::from_utf8_lossy(m.as_bytes()).to_string();
+                        let path = m.as_str().to_string();
                         let is_system = text.contains('<');
                         imports.push(Import {
                             module: path.clone(),
@@ -1274,42 +1272,10 @@ impl CParser {
     }
 
     //  TODOs / Security
-
-    fn extract_todos(&self) -> Vec<Todo> {
-        self.source_code
-            .lines()
-            .enumerate()
-            .filter_map(|(idx, line)| {
-                TODO_RE.captures(line.as_bytes()).map(|caps| {
-                    let text = caps
-                        .get(1)
-                        .map(|m| String::from_utf8_lossy(m.as_bytes()).trim().to_string())
-                        .unwrap_or_default();
-                    let text_lower = text.to_lowercase();
-
-                    let priority =
-                        if text_lower.contains("critical") || text_lower.contains("urgent") {
-                            "high"
-                        } else if text_lower.contains("minor") {
-                            "low"
-                        } else {
-                            "medium"
-                        };
-
-                    Todo {
-                        line: idx + 1,
-                        text,
-                        priority: priority.to_string(),
-                    }
-                })
-            })
-            .collect()
-    }
-
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
         for (idx, line) in self.source_code.lines().enumerate() {
-            let line_bytes = line.as_bytes();
+            let line_bytes = line;
             for pattern in SECURITY_PATTERNS.iter() {
                 if pattern.regex.is_match(line_bytes) {
                     notes.push(SecurityNote {
@@ -1363,32 +1329,32 @@ impl CParser {
         // Check function calls for patterns
         let calls_str = calls.iter().map(|c| c.callee.as_str()).collect::<Vec<_>>();
         let calls_joined = calls_str.join(" ");
-        let calls_bytes = calls_joined.as_bytes();
+        let calls_bytes = calls_joined;
 
-        if MALLOC_RE.is_match(calls_bytes) {
+        if MALLOC_RE.is_match(&calls_bytes) {
             tags.push("allocates-memory".to_string());
             tags.push("memory-management".to_string());
         }
-        if INLINE_ASM_RE.is_match(body_text.as_bytes()) {
+        if INLINE_ASM_RE.is_match(body_text) {
             tags.push("inline-asm".to_string());
             tags.push("unsafe".to_string());
         }
 
-        if FREE_RE.is_match(calls_bytes) {
+        if FREE_RE.is_match(&calls_bytes) {
             tags.push("frees-memory".to_string());
             tags.push("memory-management".to_string());
         }
 
-        if PTHREAD_RE.is_match(calls_bytes) {
+        if PTHREAD_RE.is_match(&calls_bytes) {
             tags.push("concurrent".to_string());
             tags.push("threading".to_string());
         }
 
-        if SYSCALL_RE.is_match(calls_bytes) {
+        if SYSCALL_RE.is_match(&calls_bytes) {
             tags.push("system-call".to_string());
         }
 
-        if STRING_OPS_RE.is_match(calls_bytes) {
+        if STRING_OPS_RE.is_match(&calls_bytes) {
             tags.push("string-operations".to_string());
         }
 

@@ -1,6 +1,6 @@
+use crate::parser::utils::{extract_todos, static_regex};
 use crate::struc::kb_struct::*;
-use crate::parser::utils::static_regex;
-use regex::bytes::Regex;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str;
@@ -28,12 +28,10 @@ static INNERHTML_RE: LazyLock<Regex> =
 static DANGEROUS_HTML_RE: LazyLock<Regex> =
     LazyLock::new(|| static_regex(r"dangerouslySetInnerHTML"));
 
-static CHILD_PROCESS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    static_regex(r"\bexec\s*\(|\bexecSync\s*\(|\bspawn\s*\(|\bspawnSync\s*\(")
-});
+static CHILD_PROCESS_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"\bexec\s*\(|\bexecSync\s*\(|\bspawn\s*\(|\bspawnSync\s*\("));
 
-static WEAK_RANDOM_RE: LazyLock<Regex> =
-    LazyLock::new(|| static_regex(r"Math\.random\s*\(\)"));
+static WEAK_RANDOM_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"Math\.random\s*\(\)"));
 
 static TLS_DISABLE_RE: LazyLock<Regex> =
     LazyLock::new(|| static_regex(r"rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED"));
@@ -49,9 +47,6 @@ static SQL_TEMPLATE_RE: LazyLock<Regex> =
 
 static CLIENT_STORAGE_RE: LazyLock<Regex> =
     LazyLock::new(|| static_regex(r"localStorage\.|sessionStorage\."));
-
-static TODO_RE: LazyLock<Regex> =
-    LazyLock::new(|| static_regex(r"(?://|/\*)\s*(?i:TODO|FIXME|HACK|XXX)[:\s]*(.*?)(?:\*/|$)"));
 
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
@@ -265,7 +260,7 @@ impl JsParser {
             functions: self.extract_top_level_functions(&root),
             classes: self.extract_classes(&root),
             global_vars: self.extract_global_vars(&root),
-            todos: self.extract_todos(),
+todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
         })
     }
@@ -1240,39 +1235,10 @@ impl JsParser {
         String::new()
     }
 
-    fn extract_todos(&self) -> Vec<Todo> {
-        self.source_code
-            .lines()
-            .enumerate()
-            .filter_map(|(idx, line)| {
-                TODO_RE.captures(line.as_bytes()).map(|caps| {
-                    let text = caps
-                        .get(1)
-                        .map(|m| String::from_utf8_lossy(m.as_bytes()).trim().to_string())
-                        .unwrap_or_default();
-                    let text_lower = text.to_lowercase();
-                    let priority =
-                        if text_lower.contains("critical") || text_lower.contains("urgent") {
-                            "high"
-                        } else if text_lower.contains("minor") {
-                            "low"
-                        } else {
-                            "medium"
-                        };
-                    Todo {
-                        line: idx + 1,
-                        text,
-                        priority: priority.to_string(),
-                    }
-                })
-            })
-            .collect()
-    }
-
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
         for (idx, line) in self.source_code.lines().enumerate() {
-            let line_bytes = line.as_bytes();
+            let line_bytes = line;
             for pattern in SECURITY_PATTERNS.iter() {
                 if pattern.regex.is_match(line_bytes) {
                     notes.push(SecurityNote {
@@ -1460,7 +1426,7 @@ impl JsParser {
         if calls_joined.contains("useEffect") || calls_joined.contains("useLayoutEffect") {
             tags.push("side-effects".to_string());
         }
-        if EVAL_RE.is_match(body_text.as_bytes()) {
+        if EVAL_RE.is_match(body_text) {
             tags.push("unsafe".to_string());
         }
         if name_lower.starts_with("test") || name_lower.starts_with("it_") {

@@ -3,12 +3,11 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
+use crate::parser::utils::extract_todos;
 use crate::struc::kb_struct::*;
-use crate::parser::utils::static_regex;
-use regex::bytes::Regex;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
 
 pub struct GoParser {
@@ -20,8 +19,6 @@ pub struct GoParser {
     uses_cgo: bool,
     embed_patterns: Vec<String>,
 }
-
-static TODO_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"(?i)(?://|/\*).*?\bTODO:?\s*(.+?)(?:\*/|$)"));
 
 impl GoParser {
     pub fn new(source_code: String, file_path: String) -> Self {
@@ -94,7 +91,7 @@ impl GoParser {
             functions,
             classes,
             global_vars: self.extract_global_vars(&root),
-            todos: self.extract_todos(),
+            todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
         })
     }
@@ -1417,36 +1414,6 @@ impl GoParser {
         complexity
     }
 
-    fn extract_todos(&self) -> Vec<Todo> {
-        self.source_code
-            .lines()
-            .enumerate()
-            .filter_map(|(idx, line)| {
-                TODO_RE.captures(line.as_bytes()).and_then(|caps| {
-                    caps.get(1).map(|m| {
-                        let text = String::from_utf8_lossy(m.as_bytes()).trim().to_string();
-                        let text_lower = text.to_lowercase();
-
-                        let priority =
-                            if text_lower.contains("critical") || text_lower.contains("urgent") {
-                                "high"
-                            } else if text_lower.contains("minor") {
-                                "low"
-                            } else {
-                                "medium"
-                            };
-
-                        Todo {
-                            line: idx + 1,
-                            text,
-                            priority: priority.to_string(),
-                        }
-                    })
-                })
-            })
-            .collect()
-    }
-
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
 
@@ -1473,7 +1440,7 @@ impl GoParser {
         for (pattern, note_type, description) in patterns {
             if let Ok(re) = Regex::new(pattern) {
                 for (idx, line) in self.source_code.lines().enumerate() {
-                    let line_bytes = line.as_bytes();
+                    let line_bytes = line;
                     if re.is_match(line_bytes) {
                         notes.push(SecurityNote {
                             note_type: note_type.to_string(),
@@ -1712,10 +1679,10 @@ impl GoParser {
     }
 
     fn get_node_text(&self, node: &Node) -> String {
-        node.utf8_text(self.source_code.as_bytes())
-            .unwrap_or("")
-            .to_string()
-    }
+    node.utf8_text(self.source_code.as_bytes())
+        .unwrap_or("")
+        .to_string()
+}
 }
 
 /// Entry point called from main.rs

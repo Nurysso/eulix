@@ -3,9 +3,9 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::parser::utils::static_regex;
+use crate::parser::utils::{extract_todos, static_regex};
 use crate::struc::kb_struct::*;
-use regex::bytes::Regex;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str;
@@ -60,8 +60,6 @@ static PATH_TRAVERSAL_RE: LazyLock<Regex> =
     LazyLock::new(|| static_regex(r"new File\(.*(getParameter|request\.)"));
 static NATIVE_CODE_RE: LazyLock<Regex> =
     LazyLock::new(|| static_regex(r"System\.loadLibrary\(|System\.load\("));
-static TODO_RE: LazyLock<Regex> =
-    LazyLock::new(|| static_regex(r"(?://|/\*)\s*(?:TODO|FIXME|XXX)[:\s]*(.*?)(?:\*/\s*)?$"));
 
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
@@ -295,7 +293,7 @@ impl JavaParser {
             functions: vec![],
             classes,
             global_vars: vec![],
-            todos: self.extract_todos(),
+            todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
         })
     }
@@ -1542,41 +1540,11 @@ impl JavaParser {
         score.clamp(0.0, 1.0)
     }
 
-    fn extract_todos(&self) -> Vec<Todo> {
-        self.source_code
-            .lines()
-            .enumerate()
-            .filter_map(|(idx, line)| {
-                TODO_RE.captures(line.as_bytes()).map(|caps| {
-                    let text = caps
-                        .get(1)
-                        .map(|m| String::from_utf8_lossy(m.as_bytes()).trim().to_string())
-                        .unwrap_or_default();
-                    let text_lower = text.to_lowercase();
-                    let priority =
-                        if text_lower.contains("critical") || text_lower.contains("urgent") {
-                            "high"
-                        } else if text_lower.contains("minor") {
-                            "low"
-                        } else {
-                            "medium"
-                        };
-                    Todo {
-                        line: idx + 1,
-                        text,
-                        priority: priority.to_string(),
-                    }
-                })
-            })
-            .collect()
-    }
-
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
         for (idx, line) in self.source_code.lines().enumerate() {
-            let line_bytes = line.as_bytes();
             for pattern in SECURITY_PATTERNS.iter() {
-                if pattern.regex.is_match(line_bytes) {
+                if pattern.regex.is_match(line) {
                     notes.push(SecurityNote {
                         note_type: pattern.note_type.to_string(),
                         line: idx + 1,
