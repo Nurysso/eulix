@@ -3,7 +3,7 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::parser::utils::{static_regex,extract_todos};
+use crate::parser::utils::{extract_todos, static_regex};
 use crate::struc::kb_struct::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -26,9 +26,11 @@ static UNWRAP_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"unwrap\(\)")
 
 static EXPECT_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"expect\("));
 
-static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"Command::new|std::process::Command"));
+static COMMAND_EXEC_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"Command::new|std::process::Command"));
 
-static RAW_POINTER_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"from_raw_parts|from_raw_parts_mut"));
+static RAW_POINTER_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"from_raw_parts|from_raw_parts_mut"));
 
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![

@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package embeddings provides the command-line interface implementation for EULIX.
+// Package tui provides terminal UI components, layouts, and views for the CLI.
 
 // Main TUI model: chat transcript, input box, and markdown-ish response formatting.
 package tui

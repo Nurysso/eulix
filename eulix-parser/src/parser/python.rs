@@ -3,7 +3,7 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::parser::utils::{static_regex,extract_todos};
+use crate::parser::utils::{extract_todos, static_regex};
 use crate::struc::kb_struct::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -18,9 +18,11 @@ struct SecurityPattern {
 }
 
 // Regex Patterns compiled once at first use
-static FROM_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"from\s+(\S+)\s+import\s+(.+)"));
+static FROM_IMPORT_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"from\s+(\S+)\s+import\s+(.+)"));
 
-static ATTRIBUTE_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"(\w+)\s*:\s*([^=]+)(?:=\s*(.+))?"));
+static ATTRIBUTE_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"(\w+)\s*:\s*([^=]+)(?:=\s*(.+))?"));
 
 static PASSWORD_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"password"));
 
@@ -34,8 +36,8 @@ static DYNAMIC_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"__im
 
 static PICKLE_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"pickle\.load"));
 
-static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"subprocess|os\.system|os\.popen")
-);
+static COMMAND_EXEC_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"subprocess|os\.system|os\.popen"));
 
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![

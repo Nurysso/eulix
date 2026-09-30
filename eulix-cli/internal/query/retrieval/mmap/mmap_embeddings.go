@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package query manages query routing and retrieval for EULIX.
+// Package mmap hold os specific mmap helper code.
 
 // this file exists for experimentation and currently isn't used anywhere
 // in the code base

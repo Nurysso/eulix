@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package embeddings provides the command-line interface implementation for EULIX.
+// Package retrieval provides context window Creation for Eulix's RAG system.
 
 /*
 This file identifies common/non-distinctive symbols (like "ctx", "err", "i", "j")

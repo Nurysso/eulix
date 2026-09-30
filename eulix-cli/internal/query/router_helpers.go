@@ -768,6 +768,7 @@ func loadExternalDeps(filePath string) error {
 	return nil
 }
 
+// nolint: unused
 var (
 	depCountPhrases = []string{"how many", "count", "total", "number of"}
 	depBroadPhrases = []string{

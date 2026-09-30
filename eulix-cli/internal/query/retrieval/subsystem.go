@@ -2,7 +2,9 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package query provides repository subsystem detection, tree indexing, and path filtering.
+// Package retrieval provides context window Creation for Eulix's RAG system.
+
+// This file auto detects subsystem of the repo
 
 package retrieval
 

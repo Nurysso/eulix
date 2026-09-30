@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package embeddings provides the command-line interface implementation for EULIX.
+// Package classifier deterministically categorizes incoming queries to streamline CoT routing and short-circuit non-LLM requests.
 
 /*
 Package query provides query classification functionality.

@@ -2,7 +2,9 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package query provides context window building and query routing for Eulix.
+// Package retrieval provides context window Creation for Eulix's RAG system.
+
+// This files handles classification of query intent in context window allowing us better control of weight in budget allocation.
 
 package retrieval
 

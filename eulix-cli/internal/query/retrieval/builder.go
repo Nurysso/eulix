@@ -2,8 +2,9 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package query is responsible for query identification,
-// running functions/tools based on query and build context window.
+// Package retrieval provides context window Creation for Eulix's RAG system.
+
+// This files inistializes contextBuilder functions/tools based on query and build context window.
 
 package retrieval
 

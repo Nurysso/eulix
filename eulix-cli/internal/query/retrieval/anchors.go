@@ -1,3 +1,15 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package retrieval provides context window Creation for Eulix's RAG system.
+
+/*
+This file identifies common/non-distinctive symbols (like "ctx", "err", "i", "j")
+that appear too frequently across code chunks, making them non-distinctive for
+code search and indexing.
+*/
+
 package retrieval
 
 import (

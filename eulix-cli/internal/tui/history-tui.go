@@ -2,6 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package tui provides terminal UI components, layouts, and views for the CLI.
 
 // History browser: list + detail views over the query/response history log.
 package tui

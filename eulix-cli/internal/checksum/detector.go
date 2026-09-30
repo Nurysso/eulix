@@ -331,6 +331,7 @@ func compressZstd(data []byte) ([]byte, error) {
 }
 
 // decompressZstd reverses compressZstd.
+// nolint: unused
 func decompressZstd(data []byte) ([]byte, error) {
 	decoder, err := zstd.NewReader(nil)
 	if err != nil {

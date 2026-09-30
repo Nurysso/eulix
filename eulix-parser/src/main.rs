@@ -675,7 +675,7 @@ fn parse_directory(
     }
 
     let (files, project_hash) =
-        collect_source_files_and_hash(&path, languages, euignore.as_deref(), verbose, &write_dir)?;
+        collect_source_files_and_hash(&path, languages, euignore.as_deref(), verbose, write_dir)?;
 
     println!("      • Number of source files to process: {}", files.len());
     let vec_memory_bytes = files.capacity() * std::mem::size_of::<PathBuf>();

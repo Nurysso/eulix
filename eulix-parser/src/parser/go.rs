@@ -1679,10 +1679,10 @@ impl GoParser {
     }
 
     fn get_node_text(&self, node: &Node) -> String {
-    node.utf8_text(self.source_code.as_bytes())
-        .unwrap_or("")
-        .to_string()
-}
+        node.utf8_text(self.source_code.as_bytes())
+            .unwrap_or("")
+            .to_string()
+    }
 }
 
 /// Entry point called from main.rs
@@ -1977,10 +1977,11 @@ package main
 
 // see TODO below about retries
 // todo: fix this later
+/* ToDo: handle edge case in block comment */
 func F() {}
 "#;
         let fd = parse(src);
-        assert_eq!(fd.todos.len(), 2, "todos found: {:?}", fd.todos);
+        assert_eq!(fd.todos.len(), 3, "todos found: {:?}", fd.todos);
     }
 
     // Docstring must not absorb a comment separated by a blank

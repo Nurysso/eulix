@@ -4,7 +4,7 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 /*
-Package query provides context window building and query routing for Eulix's RAG system.
+Package retrieval provides context window Creation for Eulix's RAG system.
 
 Key Responsibilities:
   - Orchestrates multi-strategy retrieval (KB exact, partial identifier, keyword, and vector search)

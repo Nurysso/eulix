@@ -3,7 +3,7 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::parser::utils::{static_regex,extract_todos};
+use crate::parser::utils::{extract_todos, static_regex};
 use crate::struc::kb_struct::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};

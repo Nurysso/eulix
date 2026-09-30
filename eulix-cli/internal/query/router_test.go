@@ -1,3 +1,13 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package query manages query routing for EULIX.
+
+/*
+Package query implements query routing, intent classification, and LLM prompt assembly for Eulix.
+*/
+
 package query
 
 import (
@@ -154,6 +164,7 @@ func mustNotPanic(t *testing.T, name string, fn func()) {
 	fn()
 }
 
+// nolint: unused
 func assertStable(t *testing.T, name string, runs int, fn func() string) {
 	t.Helper()
 	first := fn()

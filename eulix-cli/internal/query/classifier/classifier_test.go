@@ -1,6 +1,9 @@
 //  Copyright (C) 2026 Dawood Khan
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package classifier deterministically categorizes incoming queries to streamline CoT routing and short-circuit non-LLM requests.
+
 package classifier
 
 import (

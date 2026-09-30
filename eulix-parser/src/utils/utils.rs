@@ -1,3 +1,4 @@
+#![allow(clippy::module_inception)]
 use std::path::{Path, PathBuf};
 
 /// "test1/kb.json" -> "test1"

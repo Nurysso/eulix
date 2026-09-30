@@ -260,7 +260,7 @@ impl JsParser {
             functions: self.extract_top_level_functions(&root),
             classes: self.extract_classes(&root),
             global_vars: self.extract_global_vars(&root),
-todos: extract_todos(&self.source_code),
+            todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
         })
     }

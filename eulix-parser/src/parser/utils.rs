@@ -1,15 +1,15 @@
+use crate::struc::kb_struct::*;
 use regex::Regex;
 use std::sync::LazyLock;
-use crate::struc::kb_struct::*;
 
 #[allow(clippy::expect_used)] // patterns are compile-time literals; failure = programmer bug at first use
 pub fn static_regex(pattern: &str) -> Regex {
     Regex::new(pattern).expect("static regex pattern must be valid")
 }
 
-static TODO_RE: LazyLock<Regex> =
-    LazyLock::new(|| static_regex(r"(?://|/\*)\s*(?:TODO|FIXME|XXX)[:\s]*(.*?)(?:\*/\s*)?$"));
-
+static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
+    static_regex(r"(?i)(?://|/\*).*?\b(?:TODO|FIXME|XXX)\b[:\s]*(.*?)(?:\*/\s*)?$")
+});
 pub fn extract_todos(source_code: &str) -> Vec<Todo> {
     source_code
         .lines()

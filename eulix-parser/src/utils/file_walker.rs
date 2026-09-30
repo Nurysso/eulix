@@ -315,17 +315,23 @@ mod tests {
     fn test_walk_and_project_hash() -> Result<()> {
         let temp_dir = TempDir::new()?;
         let root = temp_dir.path();
+
         fs::create_dir_all(root.join("src"))?;
         fs::write(root.join("src/lib.rs"), "pub fn hello() {}")?;
 
+        let write_dir = temp_dir.path().join(".cache");
+        fs::create_dir_all(&write_dir)?;
+
         let walker = FileWalker::new(root.to_path_buf());
-        let (files, hash) = walker
-            .walk_and_project_hash(|p| p.extension().and_then(|e| e.to_str()) == Some("rs"))?;
+        let (files, hash) = walker.walk_and_project_hash(
+            |p| p.extension().and_then(|e| e.to_str()) == Some("rs"),
+            &write_dir,
+        )?;
 
         assert_eq!(files.len(), 1);
         assert!(files[0].ends_with("src/lib.rs"));
         assert!(!hash.is_empty());
-        assert_eq!(hash.len(), 16); // Hex-encoded u64 xxh3 digest
+        assert_eq!(hash.len(), 16);
         Ok(())
     }
 

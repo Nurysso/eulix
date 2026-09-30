@@ -3,6 +3,12 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
+/*
+Package retrieval provides context window Creation for Eulix's RAG system.
+
+ This file manages hydration of chunks and getting source code from repo
+*/
+
 package retrieval
 
 import (

@@ -4,8 +4,7 @@
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
 /*
-Package query provides the context window builder and query routing for Eulix's
-RAG (Retrieval-Augmented Generation) system.
+Package retrieval provides context window Creation for Eulix's RAG system.
 
 This file contains utility functions for tokenization, text processing, binary
 parsing, debug logging, and math operations used throughout the context builder.
