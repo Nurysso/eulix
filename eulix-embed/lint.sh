@@ -1,6 +1,6 @@
 #!/bin/bash
 # lint.sh - Eulix_embed linting script
-# usage just ./lint.sh or use env vars
+# usage: ./lint.sh or use env vars
 # LINT_TIMEOUT=10m MAX_LINE_LENGTH=100 PYTHON_VERSION=3.11 ./lint.sh <DIR>
 
 set +e
@@ -80,50 +80,33 @@ echo -e "  Python : ${BOLD}${PYTHON_VERSION}${NC}"
 echo -e "  Max len: ${BOLD}${MAX_LINE_LENGTH}${NC}"
 echo ""
 
-# 1. Black Formatting
-print_header "📐  Formatting"
+# 1. Ruff — Lint (replaces flake8, isort, pyupgrade, bugbear, etc.)
+print_header "🎨  Lint (ruff)"
 
-if command_exists black; then
-    run_linter "black" "black \
+if command_exists ruff; then
+    run_linter "ruff-check" "ruff check ${DIRS} \
         --line-length=${MAX_LINE_LENGTH} \
         --target-version=py${PYTHON_VERSION//./} \
-        --exclude='(\.venv|venv)' \
-        ${DIRS}"
+        --output-format=concise"
 else
-    skip_linter "black" "pip install black"
+    skip_linter "ruff" "pip install ruff"
 fi
 
-# 2. isort Import Sorting
-if command_exists isort; then
-    run_linter "isort" "isort --check-only --diff \
-        --profile black \
+# 2. Ruff — Format check (replaces black --check)
+if command_exists ruff; then
+    run_linter "ruff-format" "ruff format ${DIRS} \
         --line-length=${MAX_LINE_LENGTH} \
-        --skip .venv --skip venv \
-        --color \
-        ${DIRS}"
+        --target-version=py${PYTHON_VERSION//./} \
+        --check \
+        --diff"
 else
-    skip_linter "isort" "pip install isort"
+    skip_linter "ruff-format" "pip install ruff"
 fi
 
-# 3. Flake8 — Style & Complexity
-print_header "🎨  Style & Complexity"
+# 3. Radon — Cyclomatic Complexity
+print_header "🧮  Complexity"
 
-if command_exists flake8; then
-    run_linter "flake8" "flake8 ${DIRS} \
-        --max-line-length=${MAX_LINE_LENGTH} \
-        --max-complexity=15 \
-        --exclude=.venv,venv \
-        --select=E,W,F,C90 \
-        --extend-ignore=W503,E203,E266,E402,E721,E741,C901 \
-        --count \
-        --statistics"
-else
-    skip_linter "flake8" "pip install flake8"
-fi
-
-# 4. Radon — Cyclomatic Complexity
 if command_exists radon; then
-    # Report functions/methods rated C or worse; non-zero exit when any found
     run_linter "radon" "radon cc ${DIRS} \
         --total-average \
         --show-complexity \
@@ -134,7 +117,7 @@ else
     skip_linter "radon" "pip install radon"
 fi
 
-# 5. Mypy — Type Checking
+# 4. Mypy — Type Checking
 print_header "📝  Type Checking"
 
 if command_exists mypy; then
@@ -155,7 +138,7 @@ else
     skip_linter "mypy" "pip install mypy"
 fi
 
-# 6. Bandit — Security
+# 5. Bandit — Security
 print_header "🔒  Security"
 
 if command_exists bandit; then
@@ -169,7 +152,7 @@ else
     skip_linter "bandit" "pip install bandit"
 fi
 
-# 7. Codespell — Spelling
+# 6. Codespell — Spelling
 print_header "📖  Spelling"
 
 if command_exists codespell; then

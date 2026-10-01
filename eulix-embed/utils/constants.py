@@ -9,19 +9,19 @@ import sys
 from typing import Any
 
 try:
-    import ijson.backends.python  # noqa: F401  (always available, pure Python)
+    import ijson.backends.python
 except ImportError:
     pass
 try:
-    import ijson.backends.yajl2_c  # noqa: F401  (fast C backend, if compiled)
+    import ijson.backends.yajl2_c
 except ImportError:
     pass
 try:
-    import ijson.backends.yajl2_cffi  # noqa: F401
+    import ijson.backends.yajl2_cffi
 except ImportError:
     pass
 try:
-    import ijson.backends.yajl2  # noqa: F401
+    import ijson.backends.yajl2
 except ImportError:
     pass
 
