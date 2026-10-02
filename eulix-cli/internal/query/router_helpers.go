@@ -11,9 +11,6 @@ package query
 
 import (
 	"encoding/json"
-	"eulix/internal/query/classifier"
-	"eulix/internal/query/retrieval"
-	"eulix/internal/utils"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,14 +19,20 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"eulix/internal/query/classifier"
+	"eulix/internal/query/retrieval"
+	"eulix/internal/utils"
 )
 
-type language int
-type match struct {
-	name  string
-	score int
-	typ   string
-}
+type (
+	language int
+	match    struct {
+		name  string
+		score int
+		typ   string
+	}
+)
 
 const (
 	langUnknown language = iota
@@ -60,9 +63,9 @@ func (r *Router) ensureContextBuilder() error {
 	if _, err := os.Stat(sourceRoot); os.IsNotExist(err) {
 		return fmt.Errorf("source root does not exist: %s", sourceRoot)
 	}
-	if r.config.Project.DebugConfig {
-		// fmt.Printf("[INFO] Initializing context builder with source root: %s\n", sourceRoot)
-	}
+	//if r.config.Project.DebugConfig {
+	// fmt.Printf("[INFO] Initializing context builder with source root: %s\n", sourceRoot)
+	//}
 	cb, err := retrieval.ContextWindowCreator(r.eulixDir, r.config, r.llmClient, sourceRoot, r.debug)
 	if err != nil {
 		return fmt.Errorf("failed to initialize context builder: %w", err)
@@ -769,6 +772,7 @@ var externalDeps []utils.ExternalDependency
 func getExternalDeps() []utils.ExternalDependency {
 	return externalDeps
 }
+
 func loadExternalDeps(filePath string) error {
 	data, err := os.ReadFile(filePath)
 	if err != nil {

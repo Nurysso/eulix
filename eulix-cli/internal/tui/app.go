@@ -514,7 +514,7 @@ func (m Model) View() string {
 	if m.showReasoning {
 		reasoningStatus = "reasoning shown"
 	}
-	b.WriteString(titleBarStyle.Width(m.width).Render("◆ EULIX  —  AI CODEBASE ASSISTANT"))
+	b.WriteString(titleBarStyle.Width(m.width).Render("◆ EULIX  —  LOCAL-FIRST CODE INTELLIGENCE"))
 	b.WriteByte('\n')
 	b.WriteString(subtitleStyle.Width(m.width).Render(
 		fmt.Sprintf("state: %s  •  messages: %d  •  %s  •  %s",
@@ -865,12 +865,11 @@ func isBlockquote(trimmed string) bool {
 // returns the indent depth, the bullet text and the item content.
 func parseListItem(line string) (indent int, bullet, content string, ok bool) {
 	for _, r := range line {
-		if r == ' ' {
+		switch r {
+		case ' ':
 			indent++
-		} else if r == '\t' {
+		case '\t':
 			indent += 4
-		} else {
-			break
 		}
 	}
 	t := strings.TrimSpace(line)
