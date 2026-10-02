@@ -2,8 +2,9 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer mnae (Nurysso) contact - nurysso [at] proton.me
+
+// Package checksum handles project-level source file hashing and change detection.
 /*
-Package checksum handles project-level source file hashing and change detection.
 It walks the configured project directory, hashes each source file with xxh3,
 and produces a combined project hash used by eulix to detect whether
 re-analysis is needed.
@@ -16,7 +17,6 @@ Run() is the single entry point: it loads config itself, creates the
 checksum file on first run, or compares against the stored checksum on
 subsequent runs and reports the percentage of the codebase that changed.
 */
-
 package checksum
 
 import (
@@ -61,8 +61,8 @@ type Checksum struct {
 	AnalysisVersion string               `json:"analysis_version"`
 }
 
-// // Result is what Run() returns: the fresh checksum plus a summary of how it
-// // compares to whatever was previously stored (if anything).
+// Result is what Run() returns: the fresh checksum plus a summary of how it
+// compares to whatever was previously stored (if anything).
 type Result struct {
 	Checksum      *Checksum // current state of the project (nil on first run)
 	FirstRun      bool
@@ -173,6 +173,7 @@ func (d *Detector) loadIgnorePatterns() {
 	var user []string
 	if f, err := os.Open(filepath.Join(d.projectPath, utils.EuignorePath)); err == nil {
 		defer func() { _ = f.Close() }()
+
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
 			line := strings.TrimSpace(sc.Text())
@@ -180,6 +181,11 @@ func (d *Detector) loadIgnorePatterns() {
 				continue
 			}
 			user = append(user, line)
+		}
+
+		// Check for read errors after scanning finishes
+		if err := sc.Err(); err != nil {
+			fmt.Println("reading euignore file: %w", err)
 		}
 	}
 	d.ignorePatterns = append(user, defaults...)
@@ -297,7 +303,7 @@ func (d *Detector) eulixDir() string {
 
 func (d *Detector) Save(checksum *Checksum) error {
 	dir := d.eulixDir()
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
@@ -312,7 +318,7 @@ func (d *Detector) Save(checksum *Checksum) error {
 		return fmt.Errorf("checksum: failed to compress checksum data: %w", err)
 	}
 
-	return os.WriteFile(checksumPath, compressed, 0644)
+	return os.WriteFile(checksumPath, compressed, 0o644)
 }
 
 // compressZstd compresses data using zstd at the default compression level.

@@ -14,7 +14,6 @@ Key Responsibilities:
 package retrieval
 
 import (
-	"eulix/internal/utils"
 	"fmt"
 	"math"
 	"regexp"
@@ -22,6 +21,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"eulix/internal/utils"
 )
 
 const fileExtPattern = `c|h|cc|cpp|cxx|hpp|hh|go|rs|py|ts|tsx|js|jsx|sh|bash|yaml|yml|json|md|toml|proto|java|kt|rb|php|cs|dts|dtsi`
@@ -272,20 +273,18 @@ func (cb *ContextBuilder) multiStrategySearch(
 		grepTopK = 400
 	}
 	cb.debugLog.Log("[Step 2.2] Executing grep strategy (grepTopK=%d)", grepTopK)
-	// FIX 3: Pass pre-cleaned symbols so grepSymbolSearch doesn't re-extract
+	// Pass pre-cleaned symbols so grepSymbolSearch doesn't re-extract
 	// and doesn't see single-char noise tokens or garbage dotted fragments.
 	run("grep", func() []ScoredChunk {
 		return cb.grepSymbolSearchWithSymbols(querySymbolsExpanded, hc, grepTopK)
 	}, 3.0)
 
 	cb.debugLog.Log("[Step 2.3] Executing exact strategy")
-	// FIX 4: Pass pre-cleaned symbols.
 	run("exact", func() []ScoredChunk {
 		return cb.exactSymbolSearchWithSymbols(querySymbolsExpanded)
 	}, 2.0)
 
 	cb.debugLog.Log("[Step 2.4] Executing partial strategy")
-	// FIX 5: Pass pre-cleaned symbols.
 	run("partial", func() []ScoredChunk {
 		return cb.partialIdentifierMatchWithSymbols(querySymbolsExpanded)
 	}, 1.5)
@@ -299,7 +298,7 @@ func (cb *ContextBuilder) multiStrategySearch(
 		} else {
 			res = cb.keywordSearch(query, kwTopK, hc)
 		}
-		// FIX 6: Use pre-cleaned, min-length-3 symbols only for keyword post-processing.
+		// Use pre-cleaned, min-length-3 symbols only for keyword post-processing.
 		// Previously used raw syms which included single-char tokens like "s", "f", "m"
 		// causing spurious +25 score bumps on nearly every chunk.
 		for i := range res {
@@ -560,7 +559,7 @@ func (cb *ContextBuilder) grepSymbolSearchWithSymbols(symbols []string, hc *hydr
 		fileLow := strings.ToLower(chunk.File)
 		nameLow := strings.ToLower(chunk.Name)
 
-		// FIX 7: file path component matching — split on "/" and "." so that
+		// file path component matching — split on "/" and "." so that
 		// "sql" only matches a chunk whose path has "sql" as a whole component,
 		// not as a substring of e.g. "mysql" or "postgresql".
 		fileComponents := strings.FieldsFunc(fileLow, func(r rune) bool {
@@ -578,7 +577,7 @@ func (cb *ContextBuilder) grepSymbolSearchWithSymbols(symbols []string, hc *hydr
 		matchDetails := make([]string, 0, 2)
 
 		for _, t := range compiledTokens {
-			// File component match (FIX 7): token must be a full path component.
+			// File component match : token must be a full path component.
 			if fileComponentSet[t.low] {
 				if fileScore == 0 {
 					fileScore = 150.0
@@ -586,7 +585,7 @@ func (cb *ContextBuilder) grepSymbolSearchWithSymbols(symbols []string, hc *hydr
 				}
 			}
 
-			// Name match: exact beats sub-match. FIX 8: pick best, don't stack.
+			// Name match: exact beats sub-match. pick best, don't stack.
 			if nameLow == t.low {
 				if nameScore < 180.0 {
 					nameScore = 180.0
@@ -598,7 +597,7 @@ func (cb *ContextBuilder) grepSymbolSearchWithSymbols(symbols []string, hc *hydr
 				matchDetails = append(matchDetails, "name~"+t.raw)
 			}
 
-			// Symbol list match. FIX 8: pick best, don't stack.
+			// Symbol list match. pick best, don't stack.
 			for _, sym := range chunk.Symbols {
 				if strings.ToLower(sym) == t.low {
 					if symbolScore < 160.0 {
@@ -662,7 +661,7 @@ func (cb *ContextBuilder) grepSymbolSearchWithSymbols(symbols []string, hc *hydr
 	return scored
 }
 
-// grepSymbolSearch is kept for callers outside the package it(future update)
+// GrepSymbolSearch is kept for callers outside the package it(future update)
 func (cb *ContextBuilder) GrepSymbolSearch(query string, hc *hydrationCache, topK int) []ScoredChunk {
 	raw := extractPotentialSymbols(query)
 	symbols := splitDottedSymbols(cleanSymbols(raw))
@@ -841,7 +840,7 @@ func (cb *ContextBuilder) partialIdentifierMatchWithSymbols(qTokens []string) []
 	return scored
 }
 
-// partialIdentifierMatch is kept for callers outside the package(future update).
+// PartialIdentifierMatch is kept for callers outside the package(future update).
 //
 //nolint:unused
 func (cb *ContextBuilder) PartialIdentifierMatch(query string) []ScoredChunk {
