@@ -2,12 +2,11 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Eulix installer for Windows 11 (64-bit).
+    Eulix installer for Windows 10/11 (64-bit).
 .DESCRIPTION
-    Downloads the latest Eulix release binary, verifies its checksum,
-    installs it, sets up a Python venv via uv, and triggers first-run
-    self-extraction of the embedded parser + eulix_embed.
-    Written by AI as i dont know windows or ps
+    Downloads the latest Eulix release binary and vizEulize.html UI,
+    verifies their checksums, installs them, sets up a Python venv via uv,
+    and triggers first-run self-extraction of the embedded parser + eulix_embed.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -19,14 +18,16 @@ function Warn    { param([string]$Msg) Write-Host "[WARN]  " -ForegroundColor Ye
 function Die     { param([string]$Msg) Write-Host "[ERROR] " -ForegroundColor Red     -NoNewline; Write-Host $Msg; exit 1 }
 
 # Paths
-$InstallDir       = Join-Path $env:LOCALAPPDATA 'Eulix\bin'
-$EulixDir         = Join-Path $env:USERPROFILE  '.Eulix'
-$EulixVenv        = Join-Path $EulixDir '.venv'
-$EulixParserPath  = Join-Path $EulixDir 'bin\eulix_parser.exe'
-$EulixEmbedPath   = Join-Path $EulixDir 'eulix_embed'
+$InstallDir        = Join-Path $env:LOCALAPPDATA 'Eulix\bin'
+$EulixDir          = Join-Path $env:USERPROFILE  '.Eulix'
+$EulixBinDir       = Join-Path $EulixDir 'bin'
+$EulixVenv         = Join-Path $EulixDir '.venv'
+$EulixParserPath   = Join-Path $EulixBinDir 'eulix_parser.exe'
+$EulixEmbedPath    = Join-Path $EulixDir 'eulix_embed'
+$VizEulizeHtmlPath = Join-Path $EulixBinDir 'vizEulize.html'
 
 $Repo         = 'Nurysso/eulix'
-$ReleaseTag   = 'v0.8.1'
+$ReleaseTag   = 'v0.8.2'
 $ReleaseBase  = "https://github.com/$Repo/releases/download/$ReleaseTag"
 $DocUrl       = "https://github.com/$Repo/blob/main/docs/install.md"
 
@@ -34,7 +35,7 @@ $IsUv       = $false
 $GpuVariant = ''
 $AssetName  = ''
 
-# OS / architecture check (Windows 11, 64-bit only)
+# OS / architecture check (Windows 10/11, 64-bit only)
 function Check-OS {
     Info "Detecting operating system..."
 
@@ -139,12 +140,33 @@ function Setup-Venv {
     Success "Virtual environment created at $EulixVenv."
 }
 
-# Download the release binary, verify checksum, install it
+# Helper to look up checksums resiliently against directory prefixes in checksums.txt
+function Get-Checksum {
+    param(
+        [string]$TargetFilename,
+        [string]$ChecksumsFile
+    )
+
+    $escaped = [regex]::Escape($TargetFilename)
+    # Matches lines ending in '/filename' or '\filename' or ' filename'
+    $match = Select-String -Path $ChecksumsFile -Pattern "(?:^|[\/\s\\])$escaped$" | Select-Object -First 1
+    if ($match) {
+        return ($match.Line -split '\s+')[0].Trim()
+    }
+    return $null
+}
+
+# Download the release binary and vizEulize.html, verify checksums, install them
 function Download-Binary {
     $script:AssetName = "eulix-windows-amd64-onnx-$GpuVariant.exe"
+    $htmlAssetName   = "vizEulize.html"
+
     $assetUrl        = "$ReleaseBase/$AssetName"
+    $htmlUrl         = "$ReleaseBase/$htmlAssetName"
     $checksumsUrl    = "$ReleaseBase/checksums.txt"
+
     $tmpBin          = Join-Path $env:TEMP $AssetName
+    $tmpHtml         = Join-Path $env:TEMP $htmlAssetName
     $tmpChecksums    = Join-Path $env:TEMP 'eulix_checksums.txt'
 
     Info "Downloading $AssetName ($ReleaseTag)..."
@@ -154,6 +176,13 @@ function Download-Binary {
         Die "Failed to download $assetUrl`: $_"
     }
 
+    Info "Downloading $htmlAssetName ($ReleaseTag)..."
+    try {
+        Invoke-WebRequest -Uri $htmlUrl -OutFile$tmpHtml -UseBasicParsing
+    } catch {
+        Die "Failed to download $htmlUrl`: $_"
+    }
+
     Info "Downloading checksums.txt for verification..."
     try {
         Invoke-WebRequest -Uri $checksumsUrl -OutFile $tmpChecksums -UseBasicParsing
@@ -161,56 +190,75 @@ function Download-Binary {
         Die "Failed to download $checksumsUrl`: $_"
     }
 
-    Info "Verifying checksum..."
-    $checksumLine = Select-String -Path $tmpChecksums -Pattern ([regex]::Escape($AssetName)) | Select-Object -First 1
-    if (-not $checksumLine) {
-        Warn "Could not find $AssetName in checksums.txt - skipping verification."
+    Info "Verifying checksums..."
+
+    # Verify binary checksum
+    $expectedBin = Get-Checksum -TargetFilename $AssetName -ChecksumsFile$tmpChecksums
+    if (-not $expectedBin) {
+        Warn "Could not find $AssetName in checksums.txt - skipping binary verification."
     } else {
-        $expected = ($checksumLine.Line -split '\s+')[0]
-        $actual   = (Get-FileHash -Path $tmpBin -Algorithm SHA256).Hash.ToLower()
-        if ($expected.ToLower() -ne $actual) {
-            Remove-Item -Force $tmpBin, $tmpChecksums -ErrorAction SilentlyContinue
-            Die "Checksum mismatch for $AssetName! Expected $expected, got $actual."
+        $actualBin = (Get-FileHash -Path$tmpBin -Algorithm SHA256).Hash.ToLower()
+        if ($expectedBin.ToLower() -ne$actualBin) {
+            Remove-Item -Force $tmpBin, $tmpHtml,$tmpChecksums -ErrorAction SilentlyContinue
+            Die "Checksum mismatch for $AssetName! Expected $expectedBin, got$actualBin."
         }
-        Success "Checksum verified."
+        Success "Binary checksum verified."
     }
+
+    # Verify vizEulize.html checksum (matches 'vizEulize/vizEulize.html' in checksums.txt)
+    $expectedHtml = Get-Checksum -TargetFilename $htmlAssetName -ChecksumsFile$tmpChecksums
+    if (-not $expectedHtml) {
+        Warn "Could not find $htmlAssetName in checksums.txt - skipping HTML verification."
+    } else {
+        $actualHtml = (Get-FileHash -Path$tmpHtml -Algorithm SHA256).Hash.ToLower()
+        if ($expectedHtml.ToLower() -ne$actualHtml) {
+            Remove-Item -Force $tmpBin, $tmpHtml,$tmpChecksums -ErrorAction SilentlyContinue
+            Die "Checksum mismatch for $htmlAssetName! Expected $expectedHtml, got$actualHtml."
+        }
+        Success "vizEulize.html checksum verified."
+    }
+
     Remove-Item -Force $tmpChecksums -ErrorAction SilentlyContinue
 
+    # Install CLI binary
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    $destPath = Join-Path $InstallDir 'eulix.exe'
-    Move-Item -Force -Path $tmpBin -Destination $destPath
+    $destPath = Join-Path$InstallDir 'eulix.exe'
+    Move-Item -Force -Path $tmpBin -Destination$destPath
     Success "Installed binary -> $destPath"
+
+    # Install vizEulize.html into %USERPROFILE%\.Eulix\bin\
+    New-Item -ItemType Directory -Force -Path $EulixBinDir | Out-Null
+    Move-Item -Force -Path $tmpHtml -Destination$VizEulizeHtmlPath
+    Success "Installed UI webapp -> $VizEulizeHtmlPath"
 }
 
 # Trigger first-run self-extraction (unpacks embedded parser + eulix_embed)
 function Run-FirstLaunchSetup {
     Info "Running first-launch setup (self-extracts parser + eulix_embed, installs deps)..."
-    $exePath = Join-Path $InstallDir 'eulix.exe'
-    $logPath = Join-Path $env:TEMP 'eulix_first_run.log'
+    $exePath = Join-Path$InstallDir 'eulix.exe'
+    $logPath = Join-Path$env:TEMP 'eulix_first_run.log'
 
     try {
-        & $exePath --help *> $logPath
+        & $exePath --help *>$logPath
         Success "First-launch setup complete."
     } catch {
         Warn "First-run setup exited with an error - check $logPath for details."
     }
 }
 
-# PATH setup (persist to user PATH via setx, plus current session)
+# PATH setup (persist to user PATH via Environment API, plus current session)
 function Ensure-Path {
     $userPath = [System.Environment]::GetEnvironmentVariable('Path', 'User')
     if ($userPath -notlike "*$InstallDir*") {
         Warn "$InstallDir is not in your PATH."
         $add = Read-Host "Add it to your user PATH now? [Y/n]"
-        if ($add -eq '' -or $add -match '^[Yy]') {
-            $newPath = if ($userPath) { "$userPath;$InstallDir" } else { $InstallDir }
-            [System.Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-            $env:Path = "$env:Path;$InstallDir"
+        if ($add -eq '' -or $add -match '^[Yy]') {$newPath = if ($userPath) { "$userPath;$InstallDir" } else { $InstallDir }
+            [System.Environment]::SetEnvironmentVariable('Path', $newPath, 'User')$env:Path = "$env:Path;$InstallDir"
             Success "Added $InstallDir to your user PATH. Restart your terminal to pick it up in new sessions."
         } else {
             Write-Host ""
             Write-Host "  Add this manually via System Properties > Environment Variables, or run:" -ForegroundColor Yellow
-            Write-Host "    setx PATH `"`$env:Path;$InstallDir`""
+            Write-Host "    setx PATH `"$env:Path;$InstallDir`""
             Write-Host ""
         }
     } else {
@@ -241,6 +289,7 @@ function Main {
     Write-Host "  Venv          : $EulixVenv"
     Write-Host "  eulix_parser  : $EulixParserPath"
     Write-Host "  eulix_embed   : $EulixEmbedPath"
+    Write-Host "  vizEulize.html: $VizEulizeHtmlPath"
     Write-Host "  Run           : eulix --help"
     Write-Host ""
 }

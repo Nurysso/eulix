@@ -13,12 +13,14 @@ die()     { echo -e "${RED}[ERROR]${RESET} $*" >&2; exit 1; }
 # Paths
 INSTALL_DIR="$HOME/.local/bin"
 EULIX_DIR="$HOME/.Eulix"
+EULIX_BIN_DIR="$EULIX_DIR/bin"
 EULIX_VENV="$EULIX_DIR/.venv"
-EULIX_PARSER_PATH="$EULIX_DIR/bin/eulix_parser"
+EULIX_PARSER_PATH="$EULIX_BIN_DIR/eulix_parser"
 EULIX_EMBED_PATH="$EULIX_DIR/eulix_embed"
+VIZEULIZE_HTML_PATH="$EULIX_BIN_DIR/vizEulize.html"
 
 REPO="Nurysso/eulix"
-RELEASE_TAG="v0.8.1"
+RELEASE_TAG="v0.8.2"
 RELEASE_BASE="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
 DOC_URL="https://github.com/${REPO}/blob/main/docs/install.md"
 
@@ -126,41 +128,84 @@ setup_venv() {
     success "Virtual environment created at $EULIX_VENV."
 }
 
-# Download the release binary for the chosen OS/GPU variant, verify checksum, install it
+# Helper function to get expected SHA256 checksum regardless of directory prefixes in checksums.txt
+get_checksum() {
+    local target_filename="$1"
+    local checksums_file="$2"
+
+    # Matches lines ending in '/filename' or ' filename'
+    awk -v fn="$target_filename" '
+        $2 ~ "(^|/)" fn "$" { print $1; exit }
+    ' "$checksums_file"
+}
+
+# Download the release binary for the chosen OS/GPU variant and vizEulize.html, verify checksums, install them
 download_binary() {
     ASSET_NAME="eulix-linux-amd64-onnx-${GPU_VARIANT}"
+    local html_asset_name="vizEulize.html"
+
     local asset_url="${RELEASE_BASE}/${ASSET_NAME}"
+    local html_url="${RELEASE_BASE}/${html_asset_name}"
     local checksums_url="${RELEASE_BASE}/checksums.txt"
+
     local tmp_bin="/tmp/${ASSET_NAME}"
+    local tmp_html="/tmp/${html_asset_name}"
     local tmp_checksums="/tmp/eulix_checksums.txt"
 
     info "Downloading ${ASSET_NAME} (${RELEASE_TAG})..."
     curl -fL --progress-bar "$asset_url" -o "$tmp_bin" \
         || die "Failed to download $asset_url"
 
+    info "Downloading ${html_asset_name} (${RELEASE_TAG})..."
+    curl -fL --progress-bar "$html_url" -o "$tmp_html" \
+        || die "Failed to download $html_url"
+
     info "Downloading checksums.txt for verification..."
     curl -fL -sS "$checksums_url" -o "$tmp_checksums" \
         || die "Failed to download $checksums_url"
 
-    info "Verifying checksum..."
-    local expected actual
-    expected="$(grep "  *${ASSET_NAME}\$" "$tmp_checksums" | awk '{print $1}')"
-    if [[ -z "$expected" ]]; then
-        warn "Could not find ${ASSET_NAME} in checksums.txt — skipping verification."
+    info "Verifying checksums..."
+
+    # Verify binary checksum
+    local expected_bin actual_bin
+    expected_bin="$(get_checksum "$ASSET_NAME" "$tmp_checksums")"
+    if [[ -z "$expected_bin" ]]; then
+        warn "Could not find ${ASSET_NAME} in checksums.txt — skipping binary verification."
     else
-        actual="$(sha256sum "$tmp_bin" | awk '{print $1}')"
-        if [[ "$expected" != "$actual" ]]; then
-            rm -f "$tmp_bin" "$tmp_checksums"
-            die "Checksum mismatch for ${ASSET_NAME}! Expected ${expected}, got ${actual}."
+        actual_bin="$(sha256sum "$tmp_bin" | awk '{print $1}')"
+        if [[ "$expected_bin" != "$actual_bin" ]]; then
+            rm -f "$tmp_bin" "$tmp_html" "$tmp_checksums"
+            die "Checksum mismatch for ${ASSET_NAME}! Expected ${expected_bin}, got ${actual_bin}."
         fi
-        success "Checksum verified."
+        success "Binary checksum verified."
     fi
+
+    # Verify vizEulize.html checksum (matches 'vizEulize/vizEulize.html' in checksums.txt)
+    local expected_html actual_html
+    expected_html="$(get_checksum "$html_asset_name" "$tmp_checksums")"
+    if [[ -z "$expected_html" ]]; then
+        warn "Could not find ${html_asset_name} in checksums.txt — skipping HTML verification."
+    else
+        actual_html="$(sha256sum "$tmp_html" | awk '{print $1}')"
+        if [[ "$expected_html" != "$actual_html" ]]; then
+            rm -f "$tmp_bin" "$tmp_html" "$tmp_checksums"
+            die "Checksum mismatch for ${html_asset_name}! Expected ${expected_html}, got ${actual_html}."
+        fi
+        success "vizEulize.html checksum verified."
+    fi
+
     rm -f "$tmp_checksums"
 
+    # Install CLI binary
     mkdir -p "$INSTALL_DIR"
     chmod +x "$tmp_bin"
     mv "$tmp_bin" "$INSTALL_DIR/eulix"
     success "Installed binary → $INSTALL_DIR/eulix"
+
+    # Install vizEulize.html into ~/.Eulix/bin/
+    mkdir -p "$EULIX_BIN_DIR"
+    mv "$tmp_html" "$VIZEULIZE_HTML_PATH"
+    success "Installed UI webapp → $VIZEULIZE_HTML_PATH"
 }
 
 # Trigger first-run self-extraction (unpacks embedded parser + eulix_embed, sets up venv deps)
@@ -202,6 +247,7 @@ main() {
     echo -e "  Venv          : ${BOLD}$EULIX_VENV${RESET}"
     echo -e "  eulix_parser  : ${BOLD}$EULIX_PARSER_PATH${RESET}"
     echo -e "  eulix_embed   : ${BOLD}$EULIX_EMBED_PATH${RESET}"
+    echo -e "  vizEulize.html: ${BOLD}$VIZEULIZE_HTML_PATH${RESET}"
     echo -e "  Run           : ${BOLD}eulix --help${RESET}\n"
 
     if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then

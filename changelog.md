@@ -1,6 +1,11 @@
 # Changelog
 
-**_[Unreleased]_** - VizEulize Call Graph Visualization Tool Added
+## Eulix_embed v0.4.1 (2026-10-02)
+
+- Linter fixes and lint.sh uses ruff for most of the lints
+- compare command that was used for verfication of few entries from embeddings.bin and vectors.bin can now verfiy entire of embeddings.bin and vectors.bin
+
+## **_[Unreleased]_** - VizEulize Call Graph Visualization Tool Added
 
 - **Local JSON File Loading:** Implemented client-side parsing for `kb_call_graph.json` and optional `kb_index.json` files via drag-and-drop or file selector, ensuring zero external data uploads.
 - **Node Filtering Controls:** Added category and tag filtering dropdowns ("All categories", "All tags") to scope down large graph views.
