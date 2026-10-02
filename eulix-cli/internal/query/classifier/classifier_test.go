@@ -464,6 +464,7 @@ var level1Known = []struct {
 	{"debug this thing", QueryTypeDebug},
 	{"security audit needed", QueryTypeSecurity},
 	{"how does foo work", QueryTypeUnderstanding},
+	{"how are call graphs build", QueryTypeUnderstanding},
 	{"call graph for foo", QueryTypeCallGraph},
 	{"entry points", QueryTypeEntryPoints},
 	{"usage foo", QueryTypeUsage},

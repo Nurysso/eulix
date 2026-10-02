@@ -96,7 +96,7 @@ func QuerySheriff(kbIndexPath string) (*Classifier, error) {
 		todosPattern:          regexp.MustCompile(`(?i)\b(todos?|fixmes?|hacks?|security\s+notes?|technical\s+debt)\b`),
 		metricsPattern:        regexp.MustCompile(`(?i)\b(complexit(y|ies)|metrics?|loc|lines\s+of\s+code|importan(ce|t)|hotspots?)\b`),
 		usagePrefixPattern:    regexp.MustCompile(`(?i)^(usage|use|uses\s+of|show\s+usage|find\s+usage|usage\s+of)\s+\S+`),
-		understandingPattern:  regexp.MustCompile(`(?i)^(how\s+does\s+\w+\s+(works?|authenticate|set|process)|explain\s+\w+|what\s+does\s+\w+\s+do|how\s+is\s+\w+\s+used)\b`),
+		understandingPattern:  regexp.MustCompile(`(?i)^(how\s+(does|do|is|are)\s+[\w\s]+\s+(works?|built|build|generated|created|constructed|process|used)|explain\s+[\w\s]+|what\s+does\s+[\w\s]+\s+do|how\s+(is|are)\s+[\w\s]+\s+(used|built|created|generated))\b`),
 		symbolPattern:         regexp.MustCompile(`[A-Z][a-zA-Z0-9]*(?:[A-Z][a-zA-Z0-9]*)*|_?[a-z][a-zA-Z0-9_]{2,}`),
 		validSymbols:          make(map[string]bool),
 		validTypes:            make(map[string]bool),

@@ -67,30 +67,36 @@ func QueryTrafficController(
 	cacheManager *cache.Manager,
 ) (*Router, error) {
 	debugLogger := utils.NewDebugLogger(eulixDir)
-	mmap.FlushPretouchLogs(debugLogger)         // once
 	debugLogger.StartAutoFlush(5 * time.Second) // once
-	cb, err := retrieval.ContextWindowCreator(eulixDir, cfg, llmClient, cfg.Project.Path, debugLogger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize context builder: %w", err)
-	}
+
 	classifier, err := classifier.QuerySheriff(filepath.Join(eulixDir, "kb_index.json"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create classifier: %w", err)
 	}
 
-	// Flush stored init pretouch results into context_debug.log immediately
-	mmap.FlushPretouchLogs(debugLogger)
+	var kbIndex *utils.Indices
+	var indexRef utils.IndexDataRef
+	if err := mmap.DecodeJSONFile(filepath.Join(eulixDir, "kb_index.json"), &indexRef); err == nil {
+		kbIndex = indexRef.Indices
+	}
+
+	var callGraphRef *utils.CallGraphRef
+	var cgRef utils.CallGraphRef
+	if err := mmap.DecodeJSONFile(filepath.Join(eulixDir, "kb_call_graph.json"), &cgRef); err == nil {
+		callGraphRef = &cgRef
+	}
+
 	return &Router{
 		eulixDir:       eulixDir,
 		config:         cfg,
 		classifier:     classifier,
 		llmClient:      llmClient,
 		cache:          cacheManager,
-		contextBuilder: cb,
-		kbIndex:        cb.GetKBIndex(),
-		callGraph:      buildRouterCallGraph(cb.GetCallGraphRef()),
+		contextBuilder: nil, // lazy loaded via ensureContextBuilder()
+		kbIndex:        kbIndex,
+		callGraph:      buildRouterCallGraph(callGraphRef),
 		cgIdx:          &callGraphIndex{cache: make(map[string]string)},
-		cgBuild:        BuildCallGraphIndex(cb.GetCallGraphRef()),
+		cgBuild:        BuildCallGraphIndex(callGraphRef),
 		debug:          debugLogger,
 	}, nil
 }

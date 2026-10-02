@@ -61,13 +61,22 @@ func (r *Router) ensureContextBuilder() error {
 		return fmt.Errorf("source root does not exist: %s", sourceRoot)
 	}
 	if r.config.Project.DebugConfig {
-		fmt.Printf("[INFO] Initializing context builder with source root: %s\n", sourceRoot)
+		// fmt.Printf("[INFO] Initializing context builder with source root: %s\n", sourceRoot)
 	}
 	cb, err := retrieval.ContextWindowCreator(r.eulixDir, r.config, r.llmClient, sourceRoot, r.debug)
 	if err != nil {
 		return fmt.Errorf("failed to initialize context builder: %w", err)
 	}
 	r.contextBuilder = cb
+	if r.kbIndex == nil {
+		r.kbIndex = cb.GetKBIndex()
+	}
+	if r.callGraph == nil {
+		r.callGraph = buildRouterCallGraph(cb.GetCallGraphRef())
+	}
+	if r.cgBuild == nil {
+		r.cgBuild = BuildCallGraphIndex(cb.GetCallGraphRef())
+	}
 	return nil
 }
 
@@ -214,13 +223,20 @@ func extractFilePath(query string) string {
 func extractEntityName(query string) string {
 	words := strings.Fields(query)
 	stopWords := map[string]bool{
-		"where": true, "is": true, "the": true, "function": true,
+		"where": true, "is": true, "are": true, "was": true, "were": true,
+		"be": true, "been": true, "being": true, "the": true, "function": true,
 		"class": true, "method": true, "type": true, "find": true,
-		"locate": true, "what": true, "does": true, "do": true,
-		"who": true, "calls": true, "uses": true, "used": true,
-		"a": true, "an": true, "this": true, "that": true,
-		"how": true, "can": true, "will": true, "should": true,
-		"explain": true,
+		"locate": true, "what": true, "does": true, "do": true, "did": true,
+		"who": true, "calls": true, "call": true, "uses": true, "used": true,
+		"use": true, "using": true, "a": true, "an": true, "this": true,
+		"that": true, "these": true, "those": true, "how": true, "can": true,
+		"will": true, "should": true, "would": true, "could": true,
+		"explain": true, "graph": true, "graphs": true, "tree": true,
+		"trees": true, "build": true, "built": true, "building": true,
+		"create": true, "created": true, "creating": true, "generate": true,
+		"generated": true, "generating": true, "make": true, "made": true,
+		"making": true, "show": true, "display": true, "get": true,
+		"list": true, "view": true, "print": true, "fetch": true,
 	}
 
 	punctuationCutset := ".,;:!?()[]{}\"'`"
