@@ -1,0 +1,372 @@
+//  Copyright (C) 2026 Dawood Khan
+//  SPDX-License-Identifier: GPL-3.0-or-later
+
+// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Package retrieval provides context window Creation for Eulix's RAG system.
+
+// This files inistializes contextBuilder functions/tools based on query and build context window.
+
+package retrieval
+
+import (
+	"fmt"
+	"time"
+
+	"eulix/internal/config"
+	"eulix/internal/embeddings"
+	"eulix/internal/llm"
+	"eulix/internal/query/retrieval/mmap"
+	"eulix/internal/utils"
+)
+
+// ContextWindowCreator initializes ContextBuilder, loads index artifacts, and sets up search resources.
+func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Client, sourceRoot string, debugLogger *utils.DebugLogger) (*ContextBuilder, error) {
+	// Flush stored init pretouch results into context_debug.log immediately
+	mmap.FlushPretouchLogs(debugLogger)
+	cb := &ContextBuilder{
+		eulixDir:      eulixDir,
+		config:        cfg,
+		llmClient:     llmClient,
+		vectorMap:     make(map[string]int),
+		hydrateIdx:    make(map[string]map[[2]int]func() string),
+		sourceRoot:    sourceRoot,
+		debugLog:      debugLogger,
+		subsystemTree: make([]*SubsystemNode, 0, 128),
+		noisePaths:    make([]string, 0, 32),
+	}
+
+	cb.debugLog.Log("Initializing ContextBuilder with source root: %s", sourceRoot)
+
+	// Start auto-flush every 5 seconds
+	cb.debugLog.StartAutoFlush(5 * time.Second)
+
+	queryEmbedder, err := embeddings.VectorWeaver(cfg.Embeddings.Model, cfg.Embeddings.Debug)
+	if err != nil {
+		cb.debugLog.Log("Failed to initialize embedder: %v", err)
+		cb.debugLog.Close()
+		return nil, fmt.Errorf("failed to initialize embedder: %w", err)
+	}
+	cb.queryEmbedder = queryEmbedder
+
+	if err := cb.loadChunks(); err != nil {
+		cb.debugLog.Log("Failed to load chunks: %v", err)
+		cb.debugLog.Close()
+		return nil, fmt.Errorf("failed to load chunks from KB: %w", err)
+	}
+
+	if err := cb.loadEmbeddings(); err != nil {
+		cb.debugLog.Log("Embeddings not loaded: %v", err)
+		cb.hasEmbeddings = false
+	} else {
+		cb.hasEmbeddings = true
+		cb.debugLog.Log("Loaded %d embeddings", len(cb.embeddings))
+	}
+
+	if err := cb.loadVectorMap(); err != nil {
+		cb.debugLog.Log("Vector map not loaded: %v", err)
+		cb.vectorMap = make(map[string]int)
+	} else {
+		cb.debugLog.Log("Loaded %d vector mappings", len(cb.vectorMap))
+	}
+
+	cb.loadAndIndexCallGraph()
+	cb.hasKB = true
+	cb.debugLog.Log("CONTEXT-BUILDER INITIALIZED: %d chunks, %d subsystem nodes, %d noise paths",
+		len(cb.chunks), len(cb.subsystemTree), len(cb.noisePaths))
+	return cb, nil
+}
+
+// BuildContext constructs the ContextWindow for the target query.
+func (cb *ContextBuilder) BuildContext(query string) (*utils.ContextWindow, error) {
+	maxLines := cb.config.Project.MaxLines
+	ctx, _, err := cb.buildContextInternal(query, maxLines)
+	if err != nil {
+		return nil, err
+	}
+
+	if cb.config.Project.DebugConfig {
+		if err := cb.writeContextToFile(ctx); err != nil {
+			fmt.Printf("failed to write debug context: %v\n", err)
+		}
+	}
+
+	return ctx, nil
+}
+
+func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int) (*utils.ContextWindow, *DebugTrace, error) {
+	start := time.Now()
+	trace := &DebugTrace{Query: query}
+	explicitAnchor := extractExplicitAnchors(query)
+	gate := buildPathGate(explicitAnchor)
+
+	cb.debugLog.Log("\n=== NEW QUERY ===")
+	cb.debugLog.Log("Query: %s", query)
+	startretrieval := time.Now()
+	intent := cb.classifyQueryIntent(query)
+	trace.Intent = intent
+	cb.debugLog.Log("Intent: %d (specificity: %.2f, confidence: %.2f)",
+		intent.Type, intent.Specificity, intent.Confidence)
+	cb.debugLog.Log("Embedder called Query is getting embedded")
+	etime := time.Now()
+	var qEmb []float32
+	skipSemantic := intent.Type == IntentCallers || intent.Type == IntentCallees
+	if cb.hasEmbeddings && !skipSemantic {
+		cb.debugLog.Log("hasEmbeddings: %t, skipSemantic: %t", cb.hasEmbeddings, skipSemantic)
+		if emb, err := cb.queryEmbedder.EmbedQueryBinary(query); err == nil {
+			//Normalize(emb)
+			qEmb = emb
+		} else {
+			errMsg := "query embedding failed: " + err.Error()
+			trace.Warnings = append(trace.Warnings, errMsg)
+			cb.debugLog.Log("ERROR: %s", errMsg)
+		}
+	}
+	elapsed := time.Since(etime)
+	cb.debugLog.Log("Embedder took %d ms to run", elapsed.Milliseconds())
+	budget := cb.allocateBudget(query, intent)
+	trace.Budget = budget
+	cb.debugLog.Log("Budget: %d tokens for context (total: %d)",
+		budget.ContextBudget, budget.MaxTokens)
+
+	anchorFiles := make(map[string]bool)
+	for _, ea := range explicitAnchor {
+		if ea.File != "" {
+			anchorFiles[ea.File] = true
+		}
+	}
+
+	anchors := cb.ExactSymbolSearch(query)
+	filteredAnchors := make([]ScoredChunk, 0, len(anchors))
+	for _, a := range anchors {
+		// Only consider high-confidence exact matches that aren't boilerplate symbols
+		if a.Score >= 90.0 && !cb.isBoilerplateSymbol(a.Name) {
+			filteredAnchors = append(filteredAnchors, a)
+		}
+	}
+	maxAnchors := cb.config.RetrievalConfig.MaxExactAnchors
+	if maxAnchors <= 0 {
+		maxAnchors = 2
+	}
+	if len(filteredAnchors) > maxAnchors {
+		filteredAnchors = filteredAnchors[:maxAnchors]
+	}
+	for _, a := range filteredAnchors {
+		anchorFiles[a.File] = true
+	}
+	cb.debugLog.Log("Found %d exact anchors", len(filteredAnchors))
+
+	var callSiteResults []ScoredChunk
+	if intent.Type == IntentCallers || intent.Type == IntentCallees {
+		callSiteResults = cb.findCallSites(query, intent)
+		cb.debugLog.Log("Found %d call sites", len(callSiteResults))
+	}
+
+	candidateLimit := cb.candidateLimitForIntent(intent)
+	candidates := cb.multiStrategySearch(query, candidateLimit, intent, budget.StrategyWeights, trace, qEmb)
+	trace.TotalCandidates = len(candidates)
+	cb.debugLog.Log("Multi-strategy search: %d candidates", len(candidates))
+
+	// Filter weak candidates before graph expansion/MMR to prevent vendor
+	// boilerplate matching single tokens from consuming budget.
+	// Anchors and call-site results are exempt (already high-confidence).
+	preFloorCount := len(candidates)
+	candidates = ApplyPreMMRFloor(candidates, &cb.config.RetrievalConfig)
+	if preFloorCount != len(candidates) {
+		cb.debugLog.Log("Pre-MMR floor: %d → %d candidates (ratio=%.2f)",
+			preFloorCount, len(candidates), cb.config.RetrievalConfig.PreMMRScoreFloorRatio)
+		trace.Warnings = append(trace.Warnings,
+			fmt.Sprintf("pre-MMR floor filtered %d → %d candidates", preFloorCount, len(candidates)))
+	}
+
+	candidates = mergeWithPriority(anchors, callSiteResults, candidates)
+	cb.debugLog.Log("After merge: %d candidates", len(candidates))
+
+	var expanded []ScoredChunk
+	if cb.hasCallGraph {
+		expanded = cb.buildContextWithGraph(candidates, budget.ContextBudget, intent)
+		cb.debugLog.Log("Graph expansion: %d chunks", len(expanded))
+	} else {
+		cb.debugLog.Log("Building context without call graphs as they weren't find")
+		expanded = cb.buildContextWithoutGraph(candidates, budget.ContextBudget)
+		cb.debugLog.Log("NO CALL GARAPHS: %d Chunks Expanded", len(expanded))
+	}
+
+	var selected []Chunk
+	if cb.hasEmbeddings {
+		trace.SelectionMethod = "mmr"
+		cb.debugLog.Log("hasEmbeddings: %t going for mmrSelect search", cb.hasEmbeddings)
+		selected = cb.mmrSelect(expanded, budget.ContextBudget, qEmb, anchorFiles, trace, gate)
+	} else {
+		trace.SelectionMethod = "greedy"
+		cb.debugLog.Log("hasEmbeddings: %t going for greedy search", cb.hasEmbeddings)
+		if gate.active {
+			filtered := make([]ScoredChunk, 0, len(expanded))
+			for _, sc := range expanded {
+				if gate.Pass(sc.File) {
+					sc.Score *= gate.Boost(sc.File)
+					filtered = append(filtered, sc)
+				}
+			}
+			cb.debugLog.Log("Gate filtered greedy candidates: %d → %d",
+				len(expanded), len(filtered))
+			expanded = filtered
+		}
+		selected = cb.selectChunks(expanded, budget.ContextBudget)
+		for i, c := range selected {
+			trace.ChunkTraces = append(trace.ChunkTraces, ChunkTrace{
+				ID:       c.ID,
+				File:     c.File,
+				Lines:    [2]int{c.StartLine, c.EndLine},
+				Tokens:   c.Tokens,
+				Rank:     i + 1,
+				Included: true,
+			})
+		}
+	}
+	cb.debugLog.Log("Selected %d chunks via %s", len(selected), trace.SelectionMethod)
+
+	if cb.lazyContent {
+		cb.hydrateContent(selected)
+		cb.debugLog.Log("Hydrated KB content for %d chunks", len(selected))
+	}
+
+	selected = cb.hydrateSourceCode(selected, budget.ContextBudget, maxLinesDefault)
+
+	ctx := cb.assembleContext(selected)
+	trace.TotalTokens = ctx.TotalTokens
+	trace.Duration = time.Since(start)
+	retrievalDuration := time.Since(startretrieval)
+	cb.debugLog.Log("=== QUERY COMPLETE ===")
+	cb.debugLog.Log("Final context: %d chunks, %d tokens, %d sources",
+		len(ctx.Chunks), ctx.TotalTokens, len(ctx.Sources))
+	cb.debugLog.Log("Retrieval Duration: %v\n", retrievalDuration)
+	cb.debugLog.Log("Duration: %v\n", trace.Duration)
+	cb.mu.Lock()
+	cb.lastTrace = trace
+	cb.mu.Unlock()
+	return ctx, trace, nil
+}
+
+// candidateLimitForIntent sets these limit values by default, used to limit candidates in context window.
+// Callers/Callees (>0.9): 82
+// Concept/Flow (<=0.8):  247
+// Fallback (<=0.5):       300
+// Fallback (<=0.8):       202
+// Default (>0.8):         150
+func (cb *ContextBuilder) candidateLimitForIntent(intent QueryIntent) int {
+	scale := 1.0
+	n := len(cb.chunks)
+	switch {
+	case n > 500_000:
+		scale = 4.0
+	case n > 100_000:
+		scale = 2.5
+	case n > 50_000:
+		scale = 1.5
+	}
+
+	base := cb.config.RetrievalConfig.TopKCandidates
+	if base <= 0 {
+		base = 150
+	}
+
+	switch {
+	case intent.Type == IntentCallers || intent.Type == IntentCallees:
+		if intent.Specificity > 0.9 {
+			base = int(float64(base) * 0.55)
+		}
+	case intent.Type == IntentConcept || intent.Type == IntentFlow:
+		if intent.Specificity <= 0.8 {
+			base = int(float64(base) * 1.65)
+		}
+	case intent.Specificity <= 0.5:
+		base = int(float64(base) * 2.0)
+	case intent.Specificity <= 0.8:
+		base = int(float64(base) * 1.35)
+	default:
+		// Keeps unscaled base for high-specificity general queries (> 0.8)
+		base = int(float64(base) * 1.0)
+	}
+
+	if base < 10 {
+		base = 10
+	}
+
+	limit := int(float64(base) * scale)
+	maxCap := max(1000, cb.config.RetrievalConfig.TopKCandidates*4)
+	if limit > maxCap {
+		limit = maxCap
+	}
+	return limit
+}
+
+func mergeWithPriority(anchors, callSites, candidates []ScoredChunk) []ScoredChunk {
+	out := make([]ScoredChunk, 0, len(anchors)+len(callSites)+len(candidates))
+	idxOf := make(map[string]int, len(anchors)+len(callSites)+len(candidates))
+
+	add := func(sc ScoredChunk) {
+		if i, ok := idxOf[sc.ID]; ok {
+			if sc.Score > out[i].Score {
+				out[i].Score = sc.Score
+			}
+			if sc.IsExact {
+				out[i].IsExact = true
+			}
+			if sc.Pinned { // ← new
+				out[i].Pinned = true
+			}
+			switch {
+			case out[i].MatchDetails == "":
+				out[i].MatchDetails = sc.MatchDetails
+			case sc.MatchDetails != "" && sc.MatchDetails != out[i].MatchDetails:
+				out[i].MatchDetails += "; " + sc.MatchDetails
+			}
+			return
+		}
+		idxOf[sc.ID] = len(out)
+		out = append(out, sc)
+	}
+	for _, sc := range anchors {
+		add(sc)
+	}
+	for _, sc := range callSites {
+		add(sc)
+	}
+	for _, sc := range candidates {
+		add(sc)
+	}
+	return out
+}
+
+func (cb *ContextBuilder) assembleContext(chunks []Chunk) *utils.ContextWindow {
+	totalTokens := 0
+	sources := make(map[string]bool, len(chunks))
+	ctxChunks := make([]utils.ContextChunk, len(chunks))
+	for i, c := range chunks {
+		totalTokens += c.Tokens + 20
+		sources[c.File] = true
+		ctxChunks[i] = utils.ContextChunk{
+			File:       c.File,
+			StartLine:  c.StartLine,
+			EndLine:    c.EndLine,
+			Content:    c.Content,
+			Importance: c.Importance,
+			Tokens:     c.Tokens,
+		}
+	}
+	srcList := make([]string, 0, len(sources))
+	for s := range sources {
+		srcList = append(srcList, s)
+	}
+	return &utils.ContextWindow{Chunks: ctxChunks, TotalTokens: totalTokens, Sources: srcList}
+}
+
+// GetKBIndex returns the KB index for router access
+func (cb *ContextBuilder) GetKBIndex() *utils.Indices {
+	return cb.kbIdx
+}
+
+// GetCallGraphRef returns the call graph reference for router access
+func (cb *ContextBuilder) GetCallGraphRef() *utils.CallGraphRef {
+	return cb.cgRef
+}

@@ -11,6 +11,7 @@ This file is have helpers for cli stuff
 package cli
 
 import (
+	"eulix/internal/utils"
 	"fmt"
 	"os"
 	"os/exec"
@@ -51,7 +52,7 @@ func runSubCommand(name string, arg string) (string, error) {
 	return string(out), nil
 }
 
-var projectMarkerFiles = []string{".eulix", ".euignore"}
+var projectMarkerFiles = []string{utils.EulixDir, ".euignore"}
 
 func findProjectRoot(startDir string) (string, error) {
 	abs, err := filepath.Abs(startDir)

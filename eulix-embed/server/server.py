@@ -92,9 +92,9 @@ def cmd_serve(args: argparse.Namespace) -> None:
     try:
         cls = EmbeddingGeneratorTorch if args.engine == "torch" else EmbeddingGeneratorOnnx
         gen = cls(model_name=args.model, device=args.device, batch_size=args.batch_size)
-    except Exception as exc:
-        # Report failure on stdout too a parent process spawning
-        # needs a structured reason, not just a nonzero exit code.
+    except Exception as exc:  # noqa: BLE001 — surface *any* load failure to the parent over stdout
+        # Report failure on stdout too; a parent process spawning
+        # us needs a structured reason, not just a nonzero exit code.
         _write({"ready": False, "error": f"model load failed: {exc}"})
         log.error("model load failed: %s\n%s", exc, traceback.format_exc())
         sys.exit(1)
@@ -195,7 +195,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
             except (ValueError, TypeError) as exc:
                 _write({"error": str(exc)})
                 log.warning("bad request: %s", exc)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — a long-lived server must never die on one bad request
                 _write({"error": f"internal error: {exc}"})
                 log.error("request failed: %s\n%s", exc, traceback.format_exc())
 

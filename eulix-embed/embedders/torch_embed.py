@@ -112,7 +112,7 @@ class EmbeddingGeneratorTorch:  # pylint: disable=too-many-instance-attributes
                     )
                 except ImportError as e:
                     raise ImportError(
-                        "Jina v2 models require sentence-transformers.\n" "Install: pip install sentence-transformers"
+                        "Jina v2 models require sentence-transformers.\nInstall: pip install sentence-transformers"
                     ) from e
             else:
                 self._use_st = False
@@ -133,8 +133,7 @@ class EmbeddingGeneratorTorch:  # pylint: disable=too-many-instance-attributes
                     self.model.eval()
                 except (OSError, ValueError, RuntimeError, TypeError) as e:
                     raise RuntimeError(
-                        f"\033[1;31;40m Failed to load model weights for '{model_name}'.\n\033[0m"
-                        f"Original error: {e}"
+                        f"\033[1;31;40m Failed to load model weights for '{model_name}'.\n\033[0mOriginal error: {e}"
                     ) from e
             # Probe the model's actual output dimension by running a single
             # dummy input through it. We can't trust a hardcoded dimension
@@ -253,7 +252,7 @@ class EmbeddingGeneratorTorch:  # pylint: disable=too-many-instance-attributes
         # np = self._np
         tqdm = self._tqdm
         total = len(chunks)
-        print(f" Processing {total} chunks (batch={self.batch_size}," f" bucketing={self.use_bucketing})...")
+        print(f" Processing {total} chunks (batch={self.batch_size}, bucketing={self.use_bucketing})...")
         t0 = time.time()
 
         is_jina = "jina" in self.model_name.lower()

@@ -352,7 +352,7 @@ class EmbeddingGeneratorOnnx:
                     repo_id=model_name,
                     filename="tokenizer.json",
                 )  # nosec B615
-                self.tokenizer: "tokenizers.Tokenizer" = tklib.Tokenizer.from_file(tokenizer_json_path)
+                self.tokenizer: tokenizers.Tokenizer = tklib.Tokenizer.from_file(tokenizer_json_path)
                 # Match transformers' default padding/truncation behaviour:
                 #   - pad to the longest sequence in the batch (overridden per
                 #     call when fixed_len is set for bucketed inference)
@@ -414,8 +414,7 @@ class EmbeddingGeneratorOnnx:
                 self.session = _load_session(onnx_path)
             except (OSError, RuntimeError, ValueError) as e:
                 raise RuntimeError(
-                    f"\033[1;31;40m Failed to load ONNX model weights for '{model_name}'.\n\033[0m"
-                    f"Original error: {e}"
+                    f"\033[1;31;40m Failed to load ONNX model weights for '{model_name}'.\n\033[0mOriginal error: {e}"
                 )
 
             self._input_names = {i.name for i in self.session.get_inputs()}
@@ -613,7 +612,7 @@ class EmbeddingGeneratorOnnx:
         """
         tqdm = self._tqdm
         total = len(chunks)
-        print(f" Processing {total} chunks " f"(batch={self.batch_size}, bucketing={self.use_bucketing})...")
+        print(f" Processing {total} chunks (batch={self.batch_size}, bucketing={self.use_bucketing})...")
         t0 = time.time()
 
         is_jina = "jina" in self.model_name.lower()

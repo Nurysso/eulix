@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"eulix/internal/config"
+	"eulix/internal/utils"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -74,12 +75,12 @@ type wizardModel struct {
 var ErrWizardCancelled = errors.New("wizard cancelled by user")
 
 var (
-	promptStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	promptStyle   = lipgloss.NewStyle().Bold(true).Foreground(utils.PrimaryColor)
 	helpStyle     = lipgloss.NewStyle().Faint(true)
-	cursorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
-	selectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
-	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	statusStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
+	cursorStyle   = lipgloss.NewStyle().Foreground(utils.SecondaryColor).Bold(true)
+	selectedStyle = lipgloss.NewStyle().Foreground(utils.QuoteColor).Bold(true)
+	errStyle      = lipgloss.NewStyle().Foreground(utils.ErrorColor).Italic(true)
+	statusStyle   = lipgloss.NewStyle().Foreground(utils.HighlightColor).Italic(true)
 	footerStyle   = lipgloss.NewStyle().Faint(true)
 )
 
@@ -333,23 +334,23 @@ func (m *wizardModel) renderTextInput() string {
 // RunWizard drives a set of steps to completion, mutating cfg/env as the
 // user answers. Pressing esc/ctrl+c at any point stops the wizard early
 // without losing answers already applied.
-func RunWizard(steps []Step, cfg *config.Config, env *EnvFile) error {
+func RunWizard(steps []Step, cfg *config.Config, env *EnvFile) (Answers, error) {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
 	final, err := tea.NewProgram(newWizard(steps, cfg, env)).Run()
 	if err != nil {
-		return fmt.Errorf("wizard failed: %w", err)
+		return nil, fmt.Errorf("wizard failed: %w", err)
 	}
 	model, ok := final.(*wizardModel)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if model.err != nil {
-		return model.err
+		return model.answers, model.err
 	}
 	if model.cancelled {
-		return ErrWizardCancelled
+		return model.answers, ErrWizardCancelled
 	}
-	return nil
+	return model.answers, nil
 }

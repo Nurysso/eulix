@@ -36,6 +36,37 @@ var (
 	answerTagRe    = regexp.MustCompile(`(?is)<\s*answer\s*>(.*?)<\s*/\s*answer\s*>`)
 )
 
+var KnownExtensions = map[string]bool{
+	".go":    true,
+	".py":    true,
+	".js":    true,
+	".ts":    true,
+	".jsx":   true,
+	".tsx":   true,
+	".java":  true,
+	".c":     true,
+	".cpp":   true,
+	".h":     true,
+	".hpp":   true,
+	".rs":    true,
+	".rb":    true,
+	".php":   true,
+	".cs":    true,
+	".swift": true,
+	".kt":    true,
+	".json":  true,
+	".yaml":  true,
+	".yml":   true,
+	".toml":  true,
+	".md":    true,
+	".xml":   true,
+	".txt":   true,
+	".sh":    true,
+	".sql":   true,
+	".html":  true,
+	".css":   true,
+}
+
 // SplitReasoningAndAnswer pulls a <reasoning>/<thinking> block and an
 // <answer> block out of a raw model response. If there's no <answer> tag
 // at all, the whole response (minus any reasoning block) is treated as

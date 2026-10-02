@@ -207,7 +207,7 @@ func resolveProvider(l config.LLMConfig) string {
 
 func (c *Client) LlmResponse(prompt string) (string, error) {
 	if c.config.Project.DebugConfig {
-		logDir := filepath.Join(c.config.Project.Path, ".eulix")
+		logDir := filepath.Join(c.config.Project.Path, utils.EulixDir, "debug")
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			return "", fmt.Errorf("failed to create debug directory: %w", err)
 		}

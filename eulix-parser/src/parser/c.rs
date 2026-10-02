@@ -3,10 +3,9 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
+use crate::parser::utils::{extract_todos, static_regex};
 use crate::struc::kb_struct::*;
-// use once_cell::sync::Lazy;
-use regex::bytes::Regex;
-// use regex::Regex;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str;
@@ -24,92 +23,42 @@ struct TagRule {
     check_docstring: bool,
 }
 
-static UNSAFE_STRING_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"strcpy|strcat|sprintf|vsprintf|gets")
-        .expect("static unsafe string regex pattern is valid")
-});
+static UNSAFE_STRING_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"strcpy|strcat|sprintf|vsprintf|gets"));
 
-static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"system\(|popen\(|exec").expect("static command execution regex pattern is valid")
-});
+static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"system\(|popen\(|exec"));
 
-static MANUAL_MEMORY_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"malloc|calloc|realloc|free").expect("static manual memory regex pattern is valid")
-});
+static MANUAL_MEMORY_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"malloc|calloc|realloc|free"));
 
-static UNSAFE_INPUT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"scanf|fscanf").expect("static unsafe input regex pattern is valid")
-});
+static UNSAFE_INPUT_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"scanf|fscanf"));
 
-static MEMORY_OP_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"memcpy|memmove|memset").expect("static memory operation regex pattern is valid")
-});
+static MEMORY_OP_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"memcpy|memmove|memset"));
 
-static PRIVILEGE_CHANGE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"setuid|setgid|seteuid").expect("static privilege change regex pattern is valid")
-});
+static PRIVILEGE_CHANGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"setuid|setgid|seteuid"));
 
-static WEAK_RANDOM_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"rand\(\)|random\(\)").expect("static weak random regex pattern is valid")
-});
+static WEAK_RANDOM_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"rand\(\)|random\(\)"));
 
-static INCLUDE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r#"^#include\s+[<"]([^>"]+)[>"]"#)
-        .expect("static C include header regex pattern is valid")
-});
+static INCLUDE_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r#"^#include\s+[<"]([^>"]+)[>"]"#));
 
-static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"(?://|/\*)\s*TODO:?\s*(.+?)(?:\*/|$)")
-        .expect("static TODO comment regex pattern is valid")
-});
+static MACRO_DEFINE_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"(?m)^#define\s+([A-Za-z_]\w*)(?:\([^)]*\))?\s+(.+)$"));
 
-static MACRO_DEFINE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"(?m)^#define\s+([A-Za-z_]\w*)(?:\([^)]*\))?\s+(.+)$")
-        .expect("static macro definition regex pattern is valid")
-});
+static MALLOC_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"malloc|calloc|realloc|alloca"));
 
-static MALLOC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"malloc|calloc|realloc|alloca")
-        .expect("static allocation call regex pattern is valid")
-});
+static FREE_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"\bfree\b"));
 
-static FREE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"\bfree\b").expect("static free function call regex pattern is valid")
-});
+static PTHREAD_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"pthread|fork|thread"));
 
-static PTHREAD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"pthread|fork|thread").expect("static concurrency regex pattern is valid")
-});
+static SYSCALL_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"syscall|ioctl|fcntl"));
 
-static SYSCALL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"syscall|ioctl|fcntl").expect("static system call regex pattern is valid")
-});
+static STRING_OPS_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"strcpy|strcat|sprintf|strncpy"));
 
-static STRING_OPS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"strcpy|strcat|sprintf|strncpy")
-        .expect("static string operations regex pattern is valid")
-});
-
-static INLINE_ASM_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\(")
-        .expect("static inline assembly regex pattern is valid")
-});
+static INLINE_ASM_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"\b(asm|__asm__|__asm)\s*(volatile\s*|goto\s*)?\("));
 
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
@@ -267,10 +216,11 @@ impl CParser {
     fn pre_scan_macros(src: &str) -> HashMap<String, String> {
         let mut map = HashMap::new();
         // Matches both object-like and function-like macros, handles line continuations
-        for caps in MACRO_DEFINE_RE.captures_iter(src.as_bytes()) {
+        for caps in MACRO_DEFINE_RE.captures_iter(src) {
             if let (Some(m1), Some(m2)) = (caps.get(1), caps.get(2)) {
-                let name = String::from_utf8_lossy(m1.as_bytes()).to_string();
-                let body_str = String::from_utf8_lossy(m2.as_bytes());
+                // m.as_str().to_string()
+                let name = m1.as_str().to_string();
+                let body_str = m2.as_str().to_string();
                 let body = body_str.trim_end_matches('\\').trim().to_string();
                 map.insert(name, body);
             }
@@ -325,7 +275,7 @@ impl CParser {
             functions: self.extract_functions(&root, &self.fn_ptr_map),
             classes: self.extract_structs(&root),
             global_vars: self.extract_global_vars(&root),
-            todos: self.extract_todos(),
+            todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
         })
     }
@@ -390,9 +340,9 @@ impl CParser {
         for child in root.children(&mut cursor) {
             if child.kind() == "preproc_include" {
                 let text = self.get_node_text(&child);
-                if let Some(caps) = INCLUDE_RE.captures(text.as_bytes()) {
+                if let Some(caps) = INCLUDE_RE.captures(&text) {
                     if let Some(m) = caps.get(1) {
-                        let path = String::from_utf8_lossy(m.as_bytes()).to_string();
+                        let path = m.as_str().to_string();
                         let is_system = text.contains('<');
                         imports.push(Import {
                             module: path.clone(),
@@ -1322,42 +1272,10 @@ impl CParser {
     }
 
     //  TODOs / Security
-
-    fn extract_todos(&self) -> Vec<Todo> {
-        self.source_code
-            .lines()
-            .enumerate()
-            .filter_map(|(idx, line)| {
-                TODO_RE.captures(line.as_bytes()).map(|caps| {
-                    let text = caps
-                        .get(1)
-                        .map(|m| String::from_utf8_lossy(m.as_bytes()).trim().to_string())
-                        .unwrap_or_default();
-                    let text_lower = text.to_lowercase();
-
-                    let priority =
-                        if text_lower.contains("critical") || text_lower.contains("urgent") {
-                            "high"
-                        } else if text_lower.contains("minor") {
-                            "low"
-                        } else {
-                            "medium"
-                        };
-
-                    Todo {
-                        line: idx + 1,
-                        text,
-                        priority: priority.to_string(),
-                    }
-                })
-            })
-            .collect()
-    }
-
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
         for (idx, line) in self.source_code.lines().enumerate() {
-            let line_bytes = line.as_bytes();
+            let line_bytes = line;
             for pattern in SECURITY_PATTERNS.iter() {
                 if pattern.regex.is_match(line_bytes) {
                     notes.push(SecurityNote {
@@ -1411,32 +1329,32 @@ impl CParser {
         // Check function calls for patterns
         let calls_str = calls.iter().map(|c| c.callee.as_str()).collect::<Vec<_>>();
         let calls_joined = calls_str.join(" ");
-        let calls_bytes = calls_joined.as_bytes();
+        let calls_bytes = calls_joined;
 
-        if MALLOC_RE.is_match(calls_bytes) {
+        if MALLOC_RE.is_match(&calls_bytes) {
             tags.push("allocates-memory".to_string());
             tags.push("memory-management".to_string());
         }
-        if INLINE_ASM_RE.is_match(body_text.as_bytes()) {
+        if INLINE_ASM_RE.is_match(body_text) {
             tags.push("inline-asm".to_string());
             tags.push("unsafe".to_string());
         }
 
-        if FREE_RE.is_match(calls_bytes) {
+        if FREE_RE.is_match(&calls_bytes) {
             tags.push("frees-memory".to_string());
             tags.push("memory-management".to_string());
         }
 
-        if PTHREAD_RE.is_match(calls_bytes) {
+        if PTHREAD_RE.is_match(&calls_bytes) {
             tags.push("concurrent".to_string());
             tags.push("threading".to_string());
         }
 
-        if SYSCALL_RE.is_match(calls_bytes) {
+        if SYSCALL_RE.is_match(&calls_bytes) {
             tags.push("system-call".to_string());
         }
 
-        if STRING_OPS_RE.is_match(calls_bytes) {
+        if STRING_OPS_RE.is_match(&calls_bytes) {
             tags.push("string-operations".to_string());
         }
 

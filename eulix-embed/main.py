@@ -128,7 +128,7 @@ def check_engine_dependencies(engine: str) -> None:
     if engine == "onnx":
         try:
             import onnxruntime  # noqa: F401
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — any import failure (missing DLL, ABI mismatch, provider init) must fall back to the friendly hint below
             print(
                 f"❌ ERROR: 'onnxruntime' is installed but failed to load: {e}",
                 file=sys.stderr,

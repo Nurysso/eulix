@@ -57,18 +57,6 @@ import (
 //go:embed bins/eulix-embed.zip
 var EmbedZip embed.FS
 
-const (
-	embedZipPath        = "bins/eulix-embed.zip"
-	eulixDirName        = ".Eulix"
-	parserSubDir        = "bin"
-	scriptsSubDir       = "eulix_embed"
-	venvSubDir          = ".venv"
-	requiredPythonMajor = 3
-	requiredPythonMinor = 11
-	hashNameParser      = "eulix_parser"
-	hashNameEmbedDir    = "eulix_embed"
-)
-
 // -ldflags "-X eulix/internal/assets.ParserHash=<sha256>" hash for verification of parser bin, skip if empty
 var ParserHash string
 var embed_requirements = "onnx-amd.txt"
@@ -118,7 +106,7 @@ func Hashes() ([]FileHash, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read embedded parser binary: %w", err)
 	}
-	parserFH := hashOf(hashNameParser, parserBytes)
+	parserFH := hashOf(utils.HashNameParser, parserBytes)
 
 	if ParserHash != "" && parserFH.SHA256 != ParserHash {
 		return nil, fmt.Errorf(
@@ -130,9 +118,9 @@ func Hashes() ([]FileHash, error) {
 	}
 	out = append(out, parserFH)
 
-	zipBytes, err := EmbedZip.ReadFile(embedZipPath)
+	zipBytes, err := EmbedZip.ReadFile(utils.EmbedZipPath)
 	if err != nil {
-		return nil, fmt.Errorf("read embedded zip %q: %w", embedZipPath, err)
+		return nil, fmt.Errorf("read embedded zip %q: %w", utils.EmbedZipPath, err)
 	}
 	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
 	if err != nil {
@@ -160,7 +148,7 @@ func Hashes() ([]FileHash, error) {
 	}
 	sort.Slice(fileHashes, func(i, j int) bool { return fileHashes[i].Name < fileHashes[j].Name })
 
-	out = append(out, combinedHash(hashNameEmbedDir, fileHashes))
+	out = append(out, combinedHash(utils.HashNameEmbedDir, fileHashes))
 	out = append(out, fileHashes...)
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -196,11 +184,11 @@ func parserHash() (FileHash, error) {
 		return FileHash{}, err
 	}
 	for _, h := range all {
-		if h.Name == hashNameParser {
+		if h.Name == utils.HashNameParser {
 			return h, nil
 		}
 	}
-	return FileHash{}, fmt.Errorf("internal error: %q hash missing", hashNameParser)
+	return FileHash{}, fmt.Errorf("internal error: %q hash missing", utils.HashNameParser)
 }
 
 func hashOf(name string, content []byte) FileHash {
@@ -237,7 +225,7 @@ func EulixRoot() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("could not determine home directory: %w", err)
 	}
-	return filepath.Join(homeDir, eulixDirName), nil
+	return filepath.Join(homeDir, utils.EulixGlobalDir), nil
 }
 
 // ExtractAll unpacks embedded binaries and scripts to $HOME/.Eulix idempotently.
@@ -251,8 +239,8 @@ func ExtractAll() (string, error) {
 		return "", err
 	}
 
-	parserDir := filepath.Join(root, parserSubDir)
-	scriptsDir := filepath.Join(root, scriptsSubDir)
+	parserDir := filepath.Join(root, utils.ParserSubDir)
+	scriptsDir := filepath.Join(root, utils.ScriptsSubDir)
 
 	if err := os.MkdirAll(parserDir, 0755); err != nil {
 		return "", fmt.Errorf("create parser dir: %w", err)
@@ -282,7 +270,7 @@ func ParserPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, parserSubDir, name), nil
+	return filepath.Join(root, utils.ParserSubDir, name), nil
 }
 
 // EmbedScriptsDir returns the on-disk directory that the eulix_embed Python
@@ -292,7 +280,7 @@ func EmbedScriptsDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, scriptsSubDir), nil
+	return filepath.Join(root, utils.ScriptsSubDir), nil
 }
 
 // extractParser writes the embedded, OS-specific parser binary into dir,
@@ -320,9 +308,9 @@ func extractParser(dir string) error {
 // archive directly into dir as eulix_embed's contents. If every entry in the
 // archive shares one common top-level directory.
 func extractEmbedZip(dir string) error {
-	zipBytes, err := EmbedZip.ReadFile(embedZipPath)
+	zipBytes, err := EmbedZip.ReadFile(utils.EmbedZipPath)
 	if err != nil {
-		return fmt.Errorf("read embedded zip %q: %w", embedZipPath, err)
+		return fmt.Errorf("read embedded zip %q: %w", utils.EmbedZipPath, err)
 	}
 
 	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
@@ -431,8 +419,8 @@ func hasDotDotPrefix(rel string) bool {
 // VerifyOrExtract ensures binary and script assets exist under root and verifies their hashes.
 // eulix_parser binary hash mismatch = fatal; script changes = ok
 func VerifyOrExtract(root string) error {
-	parserDir := filepath.Join(root, parserSubDir)
-	scriptsDir := filepath.Join(root, scriptsSubDir)
+	parserDir := filepath.Join(root, utils.ParserSubDir)
+	scriptsDir := filepath.Join(root, utils.ScriptsSubDir)
 
 	_, parserName, err := parserBinaryBytes()
 	if err != nil {
@@ -522,13 +510,13 @@ func CheckUv() error {
 
 // CheckVenv confirms $HOME/.Eulix/.venv exists and reports Python 3.11.
 func CheckVenv(root string) error {
-	venvPath := filepath.Join(root, venvSubDir)
+	venvPath := filepath.Join(root, utils.VenvSubDir)
 
 	info, err := os.Stat(venvPath)
 	if err != nil || !info.IsDir() {
 		return fmt.Errorf(
 			"no virtual environment found at %[1]v. Run `uv venv --python %[2]v.%[3]v %[1]v` in that location and try again",
-			venvPath, requiredPythonMajor, requiredPythonMinor,
+			venvPath, utils.RequiredPythonMajor, utils.RequiredPythonMinor,
 		)
 	}
 
@@ -537,7 +525,7 @@ func CheckVenv(root string) error {
 		return fmt.Errorf("could not determine Python version in %q: %w", venvPath, err)
 	}
 
-	wantPrefix := fmt.Sprintf("%d.%d", requiredPythonMajor, requiredPythonMinor)
+	wantPrefix := fmt.Sprintf("%d.%d", utils.RequiredPythonMajor, utils.RequiredPythonMinor)
 	if !strings.HasPrefix(version, wantPrefix) {
 		return fmt.Errorf(
 			"virtual environment at %q uses Python %s, but Python %s is required. "+
@@ -574,8 +562,8 @@ func PrintReqFileCmd() (string, error) {
 		return "", fmt.Errorf("eulix: %w", err)
 	}
 
-	basePath := filepath.Join(root, scriptsSubDir, "requiremenents", "requirements.base.txt")
-	reqPath := filepath.Join(root, scriptsSubDir, "requiremenents", embed_requirements)
+	basePath := filepath.Join(root, utils.ScriptsSubDir, "requiremenents", "requirements.base.txt")
+	reqPath := filepath.Join(root, utils.ScriptsSubDir, "requiremenents", embed_requirements)
 
 	baseData, err := os.ReadFile(basePath)
 	if err != nil {
@@ -601,9 +589,9 @@ func PrintReqFileCmd() (string, error) {
 // InstallEmbedDeps runs `uv pip install`, which uses uv to install the
 // eulix_embed scripts' dependencies into the venv.
 func InstallEmbedDeps(root string) error {
-	venvPath := filepath.Join(root, venvSubDir)
+	venvPath := filepath.Join(root, utils.VenvSubDir)
 
-	reqFilePath := filepath.Join(root, scriptsSubDir, "requiremenents", embed_requirements)
+	reqFilePath := filepath.Join(root, utils.ScriptsSubDir, "requiremenents", embed_requirements)
 
 	cmdArgs := []string{
 		"pip", "install",

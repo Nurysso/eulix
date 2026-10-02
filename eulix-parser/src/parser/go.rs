@@ -3,11 +3,11 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
+use crate::parser::utils::extract_todos;
 use crate::struc::kb_struct::*;
-use regex::bytes::Regex;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
 
 pub struct GoParser {
@@ -19,12 +19,6 @@ pub struct GoParser {
     uses_cgo: bool,
     embed_patterns: Vec<String>,
 }
-
-static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"(?i)(?://|/\*).*?\bTODO:?\s*(.+?)(?:\*/|$)")
-        .expect("static TODO comment regex pattern is valid")
-});
 
 impl GoParser {
     pub fn new(source_code: String, file_path: String) -> Self {
@@ -97,7 +91,7 @@ impl GoParser {
             functions,
             classes,
             global_vars: self.extract_global_vars(&root),
-            todos: self.extract_todos(),
+            todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
         })
     }
@@ -1420,36 +1414,6 @@ impl GoParser {
         complexity
     }
 
-    fn extract_todos(&self) -> Vec<Todo> {
-        self.source_code
-            .lines()
-            .enumerate()
-            .filter_map(|(idx, line)| {
-                TODO_RE.captures(line.as_bytes()).and_then(|caps| {
-                    caps.get(1).map(|m| {
-                        let text = String::from_utf8_lossy(m.as_bytes()).trim().to_string();
-                        let text_lower = text.to_lowercase();
-
-                        let priority =
-                            if text_lower.contains("critical") || text_lower.contains("urgent") {
-                                "high"
-                            } else if text_lower.contains("minor") {
-                                "low"
-                            } else {
-                                "medium"
-                            };
-
-                        Todo {
-                            line: idx + 1,
-                            text,
-                            priority: priority.to_string(),
-                        }
-                    })
-                })
-            })
-            .collect()
-    }
-
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
 
@@ -1476,7 +1440,7 @@ impl GoParser {
         for (pattern, note_type, description) in patterns {
             if let Ok(re) = Regex::new(pattern) {
                 for (idx, line) in self.source_code.lines().enumerate() {
-                    let line_bytes = line.as_bytes();
+                    let line_bytes = line;
                     if re.is_match(line_bytes) {
                         notes.push(SecurityNote {
                             note_type: note_type.to_string(),
@@ -1877,8 +1841,8 @@ func main() {
         );
     }
     #[test]
-fn no_punctuation_leaks_into_local_var_names() {
-    let src = r#"
+    fn no_punctuation_leaks_into_local_var_names() {
+        let src = r#"
 package main
 
 func main() {
@@ -1887,19 +1851,21 @@ func main() {
     _ = Foo; _ = Bar; _ = baz; _ = qux
 }
 "#;
-    let fd = parse(src);
-    let main_fn = fd.functions.iter().find(|f| f.name == "main").unwrap();
-    for v in &main_fn.variables {
-        assert!(
-            v.name.chars().all(|c| c.is_alphanumeric() || c == '_'),
-            "non-identifier char in variable name: {:?}", v.name
-        );
-        assert!(
-            !matches!(v.name.as_str(), "," | "=" | ";" | "(" | ")"),
-            "punctuation leaked into variable names: {:?}", v.name
-        );
+        let fd = parse(src);
+        let main_fn = fd.functions.iter().find(|f| f.name == "main").unwrap();
+        for v in &main_fn.variables {
+            assert!(
+                v.name.chars().all(|c| c.is_alphanumeric() || c == '_'),
+                "non-identifier char in variable name: {:?}",
+                v.name
+            );
+            assert!(
+                !matches!(v.name.as_str(), "," | "=" | ";" | "(" | ")"),
+                "punctuation leaked into variable names: {:?}",
+                v.name
+            );
+        }
     }
-}
 
     // Security regex must catch idiomatic exported Go names like
     // `Password`, `APIKey` (capitalized), not just lowercase.
@@ -2011,10 +1977,11 @@ package main
 
 // see TODO below about retries
 // todo: fix this later
+/* ToDo: handle edge case in block comment */
 func F() {}
 "#;
         let fd = parse(src);
-        assert_eq!(fd.todos.len(), 2, "todos found: {:?}", fd.todos);
+        assert_eq!(fd.todos.len(), 3, "todos found: {:?}", fd.todos);
     }
 
     // Docstring must not absorb a comment separated by a blank

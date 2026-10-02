@@ -1,3 +1,4 @@
 -r requirements.base.txt
 torch
 torchvision
+sentence-transformers

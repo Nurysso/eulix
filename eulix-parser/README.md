@@ -1,5 +1,9 @@
 # Eulix Parser
 
+> Despite the name, Eulix Parser is closer to a static code analysis and indexing engine than a traditional parser.
+
+_It started as a parser, but has evolved into a repository analysis engine that builds structured representations of a codebase, including symbols, relationships, call graphs, language-specific metadata, architectural patterns, importance signals, metrics, and indexes._
+
 `eulix_parser` is the Rust analysis engine behind Eulix.
 
 It takes a source tree and turns it into structured code data: files, symbols, relationships, call graphs, project metrics, entry points, dependencies, and other metadata used by Eulix's retrieval and navigation layers.
@@ -13,32 +17,51 @@ Built with Rust + Tree-sitter, it is designed for large, mixed-language reposito
 ## What it does
 
 ```text
-source tree
-    |
-    v
-file discovery
-    |
-    v
+    source tree
+        ⮟
+    file discovery
+        ⮟
 Tree-sitter parsing
-    |
-    +--> functions / methods
-    +--> classes / structs / traits / interfaces
-    +--> imports / dependencies
-    +--> symbols and source locations
-    |
-    v
-relationship analysis
-    |
-    +--> call graph
-    +--> reverse call graph
-    +--> inheritance / type relationships
-    +--> entry points
-    |
-    v
-indexes + metrics + project metadata
-    |
-    v
+        |
+        ├── functions / methods
+        ├── classes / structs / traits / interfaces
+        ├── imports / dependencies
+        ├── symbols and source locations
+        ⮟
+    relationship analysis
+        |
+        ├── call graph
+        ├── reverse call graph
+        ├── inheritance / type relationships
+        ├── entry points
+        ⮟
+        indexes + metrics + project metadata
+        ⮟
 structured JSON knowledge base
+```
+
+This is what happens in a general term
+
+```text
+    code Base
+        ⮟
+      parse
+        ⮟
+    AST / symbols
+        ⮟
+    relationships / call graph
+        ⮟
+    language-specific analysis
+        ⮟
+    security/TODO patterns
+        ⮟
+    function tagging
+        ⮟
+    importance scoring
+        ⮟
+    complexity metrics
+        ⮟
+    indexes / KB
 ```
 
 The parser is useful outside the full [eulix_cli](../eulix-cli/) too. Its output is structured data that can be consumed by retrieval systems, analysis tools, RAG pipelines, research tooling?? maybe, or other programs.
@@ -68,7 +91,7 @@ Current stable parser targets:
 - Rust
 - TypeScript / TSX
 
-JavaScript / JSX and Java support exists but are in active development.
+> JavaScript / JSX and Java support exists but are in active development.
 
 ---
 
@@ -92,9 +115,7 @@ PRISM exists for one reason:
 > **Recover useful code relationships without making whole-program analysis prohibitively expensive.**
 
 Depending on the selected version, PRISM uses symbol metadata, scope information, class information, inheritance relationships, and language-aware heuristics to connect call sites to likely definitions.
-
 This is **retrieval-oriented analysis**, not a formal compiler or proof system.
-
 That distinction matters.
 
 PRISM is designed to give Eulix useful structural context for navigation and retrieval at repository scale, while accepting that dynamic dispatch, reflection, generated code, and other language features can make perfect resolution impossible.
@@ -102,7 +123,6 @@ PRISM is designed to give Eulix useful structural context for navigation and ret
 #### PRISM v1
 
 The simpler, high-throughput relationship path.
-
 Useful when you want:
 
 - fast symbol-based resolution
@@ -112,7 +132,6 @@ Useful when you want:
 #### PRISM v2
 
 The more scope-aware relationship path.
-
 It keeps more information about:
 
 - modules / files
@@ -123,99 +142,74 @@ It keeps more information about:
 
 This allows common ambiguous relationships to be resolved more accurately than a simple global-name lookup.
 
-See the PRISM research and parser architecture documentation for implementation details.
+See the PRISM [research](https://dawood.page/comming-soon) and parser [architecture documentation](../docs/eulix-parser/Architecture.md) for implementation details.
 
 ---
 
 ## Performance
 
-The parser is built to scale across files using parallel workers.
+The parser is built to process repository-scale codebases using parallel workers and to perform structural analysis in the same pass rather than repeatedly rediscovering repository information.
+Eulix Parser `v0.7.7` large repository benchmark
 
-Recent repository-scale measurements:
-
-**Command:**
+Run on an AMD Ryzen 5 5600X with 12 parser threads and PRISM v2:
 
 ```bash
-eulix_parser --root . --output out/kb.json --threads 12 --verbose --prism 2
+eulix_parser --root linux -o test/kb.json --threads 12 --verbose --prism 2
+
+Files discovered / parsed: 59,242
+Lines of code: 35,810,828
+Functions: 612,250
+Classes: 206,142
+Methods: 3,324
+
+Parse time: 37.98s
+Relationship + index analysis: 6.57s
+Summary + metrics: 0.35s
+Output generation: ~4.08s
+Parser-reported total: 48.98s
+
+PRISM: v2
+Graph nodes: 732,364
+Graph edges: 1,301,641
+
+Maximum RSS: ~8.32 GB
+User CPU time: 346.68s
+System CPU time: 20.54s
+CPU utilization: 694%
+
+Filesystem input blocks: 897,312
+Filesystem output blocks: 2,900,712
+Major page faults: 13
+Minor page faults: 1,639,639
+
+/usr/bin/time elapsed: 52.85s
 ```
 
-### Linux kernel
+The benchmark successfully parsed 59,242 files with zero skipped and zero failed files while constructing the repository's structural representations and analysis artifacts.
 
-Local benchmark:
+Output size
+`v0.7.7` also substantially reduces the main knowledge-base representation compared with `v0.7.6`:
 
-```text
-Files:                33,743
-Failed Files:         0
-Lines of code:        25,200,532
-Functions:            612,250
-Classes:              206,142
-Methods:              3324
+- Artifacts v0.7.7
 
-Graph nodes:          732,364
-Graph edges:          1,301,640
-
-Parser time:          37.83s
-Analysis time:        6.10s
-complete run:         51.39s
-Peak RSS:             ~7.98 GB
-Threads:              12
-PRISM:                v2
-Output Written:       ~5.41 GB JSON
-
-Elapsed (Wall):       0:55.10 (55.10 sec)
-User CPU Time:        349.69 sec
-Sys CPU Time:         17.20 sec
-CPU Usage:            665%
-
-Voluntary Switches:   52,301
-Involuntary Switches: 59,368
-
-Major (I/O) Faults:   9
-Minor Faults:         1,238,154
-File Inputs:          769,664
-File Outputs:         5,674,576
+```go
+kb.json:               673,063.99 KB (~673 MB)
+kb_index.json:         389,107.86 KB
+kb_summary.json:       2,921.43 KB
+kb_call_graph.json:    372,749.91 KB
+kb_metrics.json:       4.58 KB
+kb_entry_points.json:  34.75 KB
+kb_external_deps.json: 12,408.44 KB
+kb_patterns.json:      0.13 KB
 ```
 
-### OpenStack
+The main kb.json went from 2,060,391.87 KB (~2.06 GB) in v0.7.6 to 673,063.99 KB (~673 MB) in v0.7.7 — a 67.3% reduction.
 
-Local benchmark:
+This reduction targets the serialized representation rather than replacing the parser's rich in-memory structures. The parser can keep the information needed during analysis while writing a more compact representation for downstream consumers.
 
-```text
-Files processed:      29,623
-Failed Files:         0
-Lines of code:        6,936,415
-Functions:            46,361
-Classes:              51,520
-Methods:              208,382
+The smaller representation also reduces filesystem output from 5,676,432 blocks to 2,900,712 blocks, while output-generation time dropped from roughly 6.89s to 4.08s in the compared runs.
 
-Graph nodes:          306,165
-Graph edges:          757,025
-
-Parser time:          7.93s
-Analysis time:        1.91s
-complete run:         12.59s
-Peak RSS:             ~3.16GB
-Threads:              12
-PRISM:                v2
-Output Written:       ~1.2 GB
-
-Elapsed (Wall):       0:13.59 (13.59 sec)
-User CPU Time:        84.98 sec
-Sys CPU Time:         2.97 sec
-CPU Usage:            646%
-
-Voluntary Switches:   22,292
-Involuntary Switches: 11,677
-
-Major (I/O) Faults:   3
-Minor Faults:         85,476
-File Inputs:          330,376
-File Outputs:         2,439,776
-```
-
-These are perf are ran on my pc(amd 5600x cpu) and not universal performance guarantees. Hardware, storage, repository layout, thread count, parser version, and euignore configuration all these factors affects results.
-
----
+The exact benchmark numbers depend on hardware, storage, repository layout, thread count, parser version, and .euignore configuration. They are measurements from a local AMD Ryzen 5 5600X system, not universal performance guarantees.
 
 ## Why Rust?
 
@@ -228,11 +222,8 @@ The parser spends most of its time doing work that benefits from:
 - low runtime overhead
 
 Parallel file processing is built with Rayon.
-
 The parser also uses optimized memory and I/O paths where useful, including `mimalloc`, memory mapping, and platform-aware file access.
-
 The goal is not benchmark theater.
-
 The goal is to make repository-scale analysis cheap enough that Eulix can actually rebuild or refresh its view of a large codebase.
 
 ---
@@ -247,8 +238,9 @@ The goal is to make repository-scale analysis cheap enough that Eulix can actual
 | Python           | `.py`, `.pyw`, `.pyi`                 | Stable         |
 | Rust             | `.rs`                                 | Stable         |
 | TypeScript / TSX | `.ts`, `.tsx`, `.mts`, `.cts`         | Stable         |
-| JavaScript / JSX | `.js`, `.mjs`, `.cjs`, `.jsx`         | In development |
-| Java             | `.java`                               | In development |
+| JavaScript / JSX | `.js`, `.mjs`, `.cjs`, `.jsx`         | Needs testing  |
+| Java             | `.java`                               | Needs testing  |
+| Ruby             | `.rb`                                 | In development |
 
 Language support is not just syntax support. Some language features make relationship analysis substantially harder than parsing alone, including dynamic dispatch, reflection, generated code, macros, and runtime metaprogramming.
 
@@ -301,43 +293,43 @@ eulix_parser [OPTIONS] --root <ROOT> --prism <PRISM>
 
 ```bash
 ./target/release/eulix_parser \
-  --root /path/to/project \
-  --prism 2 \
-  --output .eulix/kb.json \
-  --threads 12 \
-  --verbose
+--root /path/to/project \
+--prism 2 \
+--output .eulix/kb.json \
+--threads 12 \
+--verbose
 ```
 
 ### Faster relationship analysis with PRISM v1
 
 ```bash
 ./target/release/eulix_parser \
-  --root /path/to/project \
-  --prism 1 \
-  --output .eulix/kb.json \
-  --threads 12 \
-  --verbose
+--root /path/to/project \
+--prism 1 \
+--output .eulix/kb.json \
+--threads 12 \
+--verbose
 ```
 
 ### Parse selected languages
 
 ```bash
 ./target/release/eulix_parser \
-  --root /path/to/project \
-  --languages rust,go \
-  --prism 2 \
-  --output out/kb.json
+--root /path/to/project \
+--languages rust,go \
+--prism 2 \
+--output out/kb.json
 ```
 
 ### Parse without analysis
 
 ```bash
 ./target/release/eulix_parser \
-  --root /path/to/huge-repo \
-  --languages all \
-  --prism 1 \
-  --no-analyze \
-  --output out/kb.json
+--root /path/to/huge-repo \
+--languages all \
+--prism 1 \
+--no-analyze \
+--output out/kb.json
 ```
 
 `--no-analyze` is useful when you only need the parsed knowledge base and want to skip call-graph and related analysis work.
@@ -369,13 +361,9 @@ The generated call graph is intended to answer questions such as:
 
 ```text
 Who calls this function?
-
 What does this function call?
-
 What functions are connected to this subsystem?
-
 Where does this execution path continue?
-
 Which files participate in this flow?
 ```
 
@@ -416,43 +404,77 @@ vendor/
 
 At a high level:
 
-```text
-                    Repository
-                         |
-                         v
-                 +---------------+
-                 | File Walker   |
-                 +-------+-------+
-                         |
-                         v
-                 +---------------+
-                 | Tree-sitter   |
-                 | AST parsing   |
-                 +-------+-------+
-                         |
-             +-----------+-----------+
-             |           |           |
-             v           v           v
-          Symbols     Metadata    Source info
-             |           |           |
-             +-----------+-----------+
-                         |
-                         v
-                 +---------------+
-                 |    PRISM      |
-                 | relationships |
-                 +-------+-------+
-                         |
-             +-----------+-----------+
-             |           |           |
-             v           v           v
-        Call Graph     Indexes     Metrics
-             |           |           |
-             +-----------+-----------+
-                         |
-                         v
-                  JSON artifacts
-```
+                         Repository
+                             🡓
+                      +--------------+
+                      | File Walker  |
+                      +------+-------+
+                             🡓
+                      +--------------+
+                      | Tree-sitter  |
+                      | AST parsing  |
+                      +------+-------+
+                             |
+               +-------------+-------------+
+               🡓             🡓             🡓
+           Symbols       Metadata     Source info
+               |             |             |
+               +-------------+-------------+
+                             🡓
+                  +----------------------+
+                  | Repository Analysis  |
+                  |                      |
+                  | PRISM relationships  |
+                  | Call graphs          |
+                  | Language analysis    |
+                  | Pattern detection    |
+                  | Importance / tags    |
+                  | Complexity metrics   |
+                  | Entry points         |
+                  | Dependencies         |
+                  +----------+-----------+
+                             |
+               +-------------+-------------+
+               🡓             🡓             🡓
+          Call Graph      Indexes       Metrics
+               |             |             |
+               +-------------+-------------+
+                             🡓
+                  JSON knowledge artifacts
+
+The important distinction is that Tree-sitter is the syntax foundation, not the complete analysis system. Eulix adds repository-specific and language-specific analysis on top of the syntax tree and materializes the results into specialized artifacts.
+
+The downstream Eulix query engine can then use those artifacts without reparsing the repository for every question.
+
+            +-------+--------+
+            |  File Walker   |
+            +-------+-------+
+                     🡓
+             +---------------+
+             | Tree-sitter   |
+             | AST parsing   |
+             +-------+-------+
+
+
+         +------------+------------+
+         🡓           🡓           🡓
+      Symbols     Metadata    Source info
+         |            |            |
+         +------------+------------+
+                     |
+                     v
+             +---------------+
+             |    PRISM      |
+             | relationships |
+             +-------+-------+
+                     |
+         +-----------+-----------+
+         🡓           🡓         🡓
+    Call Graph     Indexes     Metrics
+         |           |           |
+         +-----------+-----------+
+                     🡓
+              JSON artifacts
 
 The downstream Eulix query engine can then use those artifacts without reparsing the repository for every question.
 
@@ -464,8 +486,8 @@ The parser can identify selected code and architectural signals that are useful 
 
 Depending on the language and available metadata, this can include:
 
-- security-sensitive patterns
-- TODOs
+=- TODOs
+
 - entry points
 - dependency information
 - architectural conventions
@@ -543,17 +565,17 @@ The intent is not to compete with a compiler's type system.
 The intent is to make repository-scale code navigation better.
 
 > [!IMPORTANT]
-> In future releases i will be focusing on smaller kb.json file cause its too huge and not every struct is used in retrieval, the plan is to have 2 modes detailed(current implementation) for static analysis? maybe, and a less verbose version for retrieval in [eulix_cli](../eulix-cli/)
+> In future release will be related to better grammar file, support for more languages
+> and ability switch between less verbose knowledgebase and the older denser knowledgebase
 
 ---
 
 # Related projects
 
-| Project        | Purpose                                                                  |
-| -------------- | ------------------------------------------------------------------------ |
-| `eulix`        | Main CLI, query routing, retrieval, context building and LLM integration |
-| `eulix_parser` | Repository parsing and structural analysis                               |
-| `eulix_embed`  | Local embedding generation and embedding storage                         |
+| Project                       | Purpose                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| [eulix_cli](../eulix-cli/)    | Main CLI, query routing, retrieval, context building and LLM integration |
+| [eulix_embed](../eulix-embed) | Local embedding generation and embedding storage                         |
 
 ---
 

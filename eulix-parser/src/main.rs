@@ -85,10 +85,12 @@ use crate::struc::kb_struct::KnowledgeBaseSimplifiedRef;
 use crate::struc::kb_struct::Metadata;
 use crate::struc::kb_struct::PatternInfo;
 use crate::struc::kb_struct::PatternsRef;
+use crate::struc::kb_struct::StructureView;
 use parser::analyze::Analyzer;
 use parser::c;
 use parser::cpp;
 use parser::go;
+use parser::java;
 use parser::javascript;
 use parser::language::Language;
 use parser::python;
@@ -97,6 +99,7 @@ use parser::typescript;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use utils::file_walker::FileWalker;
+use utils::utils::output_dir;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -325,7 +328,7 @@ struct Args {
     #[arg(short, long)]
     root: String,
 
-    /// Output file for knowledge base
+    /// Output directory with file name for knowledge base
     #[arg(short, long, default_value = "knowledge_base.json")]
     output: String,
 
@@ -373,7 +376,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(args.threads)
         .build_global()?;
-
+    let write_dir = output_dir(&args.output);
     let start_time = Instant::now();
 
     if args.verbose {
@@ -383,7 +386,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!();
         println!("Project Root:    {}", args.root);
         println!("Threads:         {}", args.threads);
-        println!("Output:          {}", args.output);
+        println!("Output:          {}", write_dir.display());
         println!("Languages:       {}", args.languages);
         println!("Skip Analysis:   {}", args.no_analyze);
         println!("PRISM Version:   {}", args.prism);
@@ -406,6 +409,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.verbose,
         version,
         bin_hash,
+        &write_dir,
     )?;
     let metadata = kb.metadata.clone();
 
@@ -470,7 +474,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Set up output paths
         let output_path = Path::new(&args.output);
-        let output_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
+        let output_dir = &write_dir;
         fs::create_dir_all(output_dir)?;
 
         let base_name = output_path
@@ -488,7 +492,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Build reference wrappers (cheap, zero‑copy)
         let kb_ref = KnowledgeBaseSimplifiedRef {
             metadata: &kb.metadata,
-            structure: &kb.structure,
+            structure: StructureView(&kb.structure),
         };
         let index_ref = IndexDataRef {
             indices: &kb.indices,
@@ -597,7 +601,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let kb_simplified = KnowledgeBaseSimplifiedRef {
             metadata: &kb.metadata,
-            structure: &kb.structure,
+            structure: StructureView(&kb.structure),
         };
 
         write_json_streaming(output_path, &kb_simplified, false)?;
@@ -657,6 +661,7 @@ fn parse_directory(
     verbose: bool,
     version: &str,
     git_hash: &str,
+    write_dir: &Path,
 ) -> Result<(KnowledgeBase, ParseStats), Box<dyn std::error::Error>> {
     let path = PathBuf::from(dir);
     let euignore = euignore_path.map(PathBuf::from).or_else(|| {
@@ -670,7 +675,7 @@ fn parse_directory(
     }
 
     let (files, project_hash) =
-        collect_source_files_and_hash(&path, languages, euignore.as_deref(), verbose)?;
+        collect_source_files_and_hash(&path, languages, euignore.as_deref(), verbose, write_dir)?;
 
     println!("      • Number of source files to process: {}", files.len());
     let vec_memory_bytes = files.capacity() * std::mem::size_of::<PathBuf>();
@@ -865,6 +870,7 @@ fn collect_source_files_and_hash(
     languages: &str,
     euignore_path: Option<&Path>,
     verbose: bool,
+    write_dir: &Path,
 ) -> Result<(Vec<PathBuf>, String), Box<dyn std::error::Error>> {
     let lang_filters: Vec<Language> = if languages == "all" {
         vec![
@@ -885,6 +891,7 @@ fn collect_source_files_and_hash(
                 "cpp" | "c++" | "cxx" | "hpp" => Some(Language::Cpp),
                 "python" | "py" => Some(Language::Python),
                 "javascript" | "js" => Some(Language::JavaScript),
+                "java" => Some(Language::Java),
                 "typescript" | "ts" => Some(Language::TypeScript),
                 "go" | "golang" => Some(Language::Go),
                 "rust" | "rs" => Some(Language::Rust),
@@ -915,12 +922,15 @@ fn collect_source_files_and_hash(
         FileWalker::new(root.to_path_buf())
     };
 
-    let (mut all_files, project_hash) = walker.walk_and_project_hash(|path| {
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| ext_set.contains(e))
-            .unwrap_or(false)
-    })?;
+    let (mut all_files, project_hash) = walker.walk_and_project_hash(
+        |path| {
+            path.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| ext_set.contains(e))
+                .unwrap_or(false)
+        },
+        write_dir,
+    )?;
 
     if verbose {
         println!("      • Found {} parseable files", all_files.len());
@@ -989,6 +999,10 @@ fn parse_file(
         }
         Language::Rust => {
             let (_, fd) = rust_parser::parse_file(file_path)?;
+            fd
+        }
+        Language::Java => {
+            let (_, fd) = java::parse_file(file_path)?;
             fd
         }
         _ => return Err(format!("Unsupported language: {:?}", lang).into()),

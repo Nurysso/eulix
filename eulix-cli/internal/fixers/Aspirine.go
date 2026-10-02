@@ -11,6 +11,7 @@ package fixers
 
 import (
 	"encoding/binary"
+	"eulix/internal/utils"
 	"fmt"
 	"math"
 	"os"
@@ -28,7 +29,7 @@ type AspirineOptions struct {
 // kb.json / kb_index.json, and repairs header corruption when possible.
 func Aspirine(eulixDir string, opts AspirineOptions) error {
 	if eulixDir == "" {
-		eulixDir = ".eulix"
+		eulixDir = utils.EulixDir
 	}
 
 	if _, err := os.Stat(eulixDir); os.IsNotExist(err) {

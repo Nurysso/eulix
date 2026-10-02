@@ -10,22 +10,24 @@
 # This file is responsible for managing what args do
 
 import argparse
-import random
 import struct as _struct
 import sys
 from pathlib import Path
 
-from data_io.binary import (
-    FastEmbeddingsReader,
-    load_vectors_bin,
-)
+from data_io.binary import load_vectors_bin
+from data_io.compare_adv import get_embedding_header_info
 from embedders.onnx_embed import EmbeddingGeneratorOnnx
 from embedders.torch_embed import EmbeddingGeneratorTorch
 from pipeline.onnx_pipeline import EmbeddingPipelineOnnx
 from pipeline.torch_pipeline import EmbeddingPipelineTorch
 from utils.json_util import json_dumps
 
-from .compare import _verify_at_offset, check_duplicate_ids
+from .compare import (
+    check_duplicate_ids,
+    find_norm_outliers,
+    fmt_idx,
+    verify_all_embeddings,
+)
 
 
 # cmd_embed handles embed arg and switching of engine
@@ -88,83 +90,96 @@ def cmd_query(args: argparse.Namespace) -> None:
 # cmd_compare handles comparison of embeddings.bin and vectors.bin,
 # it is used to check whether generated files are correct or not
 def cmd_compare(args: argparse.Namespace) -> None:
-    print("==================================================================")
-    print("          COMPARING embeddings.bin ↔ vectors.bin                  ")
-    print("==================================================================\n")
-    emb_path = Path(args.emb)
-    vec_path = Path(args.vec)
+    """Full verification of embeddings.bin <-> vectors.bin (every record, mmap-based)."""
+    print("=" * 66)
+    print("          COMPARING embeddings.bin ↔ vectors.bin (FULL SCAN)      ")
+    print("=" * 66 + "\n")
 
-    print("[1/3] CHECKING FOR DUPLICATE IDs")
+    emb_path, vec_path = Path(args.emb), Path(args.vec)
+    failures = 0
+
+    # [1/3] duplicates / integrity
+    print("[1/3] CHECKING FOR DUPLICATE IDs & FILE INTEGRITY")
     print("  • Checking vectors.bin...")
     vec_dupes = check_duplicate_ids(vec_path)
+    failures += len(vec_dupes)
     print("  • Checking embeddings.bin...")
     check_duplicate_ids(emb_path)
 
+    # [2/3] metadata alignment
     print("\n[2/3] LOADING INDEX & METADATA")
     vec_model, vec_ids = load_vectors_bin(vec_path)
-    total_entries = len(vec_ids)
+    total = len(vec_ids)
+    info = get_embedding_header_info(emb_path)
 
-    with FastEmbeddingsReader(emb_path) as reader:
-        print("uses FastEmbeddingsReader")
-        print(f"  • vectors.bin    : {total_entries} IDs (model: '{vec_model}')")
-        print(
-            f"  • embeddings.bin : {reader.count} entries, dim={reader.dimension}, "
-            f"quantized={reader.quantized} (model: '{reader.model_name}')"
-        )
+    print(f"  • vectors.bin    : {total} IDs (model: '{vec_model}')")
+    print(
+        f"  • embeddings.bin : {info['count']} entries, dim={info['dim']}, "
+        f"quantized={info['quantized']} (model: '{info['model_name']}')"
+    )
 
-        # Alignment Checks
-        if vec_model != reader.model_name:
-            print("  ⚠️  [MISMATCH] Model names differ!")
+    if vec_model != info["model_name"]:
+        print("  ⚠️  [MISMATCH] Model names differ!")
+        failures += 1
+    else:
+        print("  ✓ Model names match.")
+
+    if info["count"] != total:
+        print(f"  ⚠️  [MISMATCH] Count mismatch: vectors.bin has {total}, embeddings.bin has {info['count']}")
+        failures += 1
+    else:
+        print("  ✓ Total entry counts match.")
+
+    empty_ids = [i for i, s in enumerate(vec_ids) if not s]
+    if empty_ids:
+        print(f"  ⚠️  {len(empty_ids)} empty IDs in vectors.bin (first at index {empty_ids[0]})")
+        failures += 1
+
+    # [3/3] full scan
+    print(f"\n[3/3] FULL SCAN OF ALL {info['count']} EMBEDDING RECORDS (mmap, chunked)")
+    try:
+        res = verify_all_embeddings(emb_path, info, workers=getattr(args, "workers", None))
+    except ValueError as e:
+        print(f"  ⚠️  [FAIL] {e}")
+        failures += 1
+        res = None
+
+    if res is not None and info["count"] > 0:
+        n = info["count"]
+        gb = n * info["entry_bytes"] / 1e9
+        rate = gb / res["seconds"] if res["seconds"] > 0 else float("inf")
+        print(f"  • Scanned {n} records ({gb:.2f} GB) in {res['seconds']:.2f}s ({rate:.2f} GB/s)")
+        print(f"  • L2 norm: min={res['norm_min']:.4f}  mean={res['norm_mean']:.4f}  max={res['norm_max']:.4f}")
+
+        if len(res["bad"]):
+            failures += len(res["bad"])
+            bad_str = fmt_idx(res["bad"], vec_ids)
+            print(f"  ⚠️  [FAIL] {len(res['bad'])} records with NaN/Inf (or invalid scale): {bad_str}")
         else:
-            print("  ✓ Model names match.")
+            print("  ✓ All records finite and well-formed.")
 
-        if reader.count != total_entries:
-            print(
-                f"  ⚠️  [MISMATCH] Count mismatch: vectors.bin has {total_entries}, "
-                f"embeddings.bin has {reader.count}"
-            )
+        if len(res["zero"]):
+            failures += len(res["zero"])
+            print(f"  ⚠️  [FAIL] {len(res['zero'])} all-zero vectors: {fmt_idx(res['zero'], vec_ids)}")
         else:
-            print("  ✓ Total entry counts match.")
+            print("  ✓ No all-zero vectors.")
 
-        if total_entries < 9:
-            print("\n[WARNING] At least 9 entries required for spot check sampling. Skipping step 3.")
-            return
+        tol = getattr(args, "unit_norm", None)
+        if tol is not None:
+            out = find_norm_outliers(res["mm"], info["quantized"], 1.0, float(tol))
+            if len(out):
+                failures += len(out)
+                print(f"  ⚠️  [FAIL] {len(out)} vectors with |norm-1| > {tol}: {fmt_idx(out, vec_ids)}")
+            else:
+                print(f"  ✓ All vectors have unit norm within ±{tol}.")
 
-        print("\n[3/3] MAPPING FILE OFFSETS & SPOT CHECKING")
+    print("\n" + "=" * 66)
+    status = "PASSED" if failures == 0 else f"FAILED ({failures} issue(s))"
+    print(f"SUMMARY: {status} | Records scanned: {info['count']} | Duplicates in vectors.bin: {len(vec_dupes)}")
+    print("=" * 66)
 
-        # Pick 3 head, 3 random mid, 3 tail indices
-        rng = random.SystemRandom()
-        head_indices = [0, 1, 2]
-        tail_indices = [total_entries - 3, total_entries - 2, total_entries - 1]
-        mid_indices = sorted(rng.sample(range(3, total_entries - 3), 3))
-        sample_targets = [
-            ("FIRST 3", head_indices),
-            ("RANDOM MID 3", mid_indices),
-            ("LAST 3", tail_indices),
-        ]
-
-        passed = 0
-        total_checks = 0
-
-        for group_label, indices in sample_targets:
-            print(f"\n  --- Category: {group_label} ---")
-            for idx in indices:
-                total_checks += 1
-                expected_id = vec_ids[idx]
-
-                # Compute exact byte offset mathematically (O(1))
-                target_offset = reader.header_size + (idx * reader.record_size)
-
-                ok, msg = _verify_at_offset(reader, idx, expected_id)
-
-                status = "[OK]" if ok else "[FAIL]"
-                print(f"  Index {idx:5d} @ Offset {target_offset:8d} | {status} {msg}")
-                if ok:
-                    passed += 1
-
-        print("\n==================================================================")
-        print(f"SUMMARY: Spot Checks Passed: {passed}/{total_checks} | " f"Duplicates in vectors.bin: {len(vec_dupes)}")
-        print("==================================================================")
+    if failures:
+        raise SystemExit(1)
 
 
 # Checks ijson backend

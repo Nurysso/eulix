@@ -66,7 +66,7 @@ type RetrievalConfig struct {
 	CodeToAstRatio          float64 `toml:"code_to_ast_ratio"`          // How much code with respect to ast will be there in context window.
 	ApplyCrossRootIsolation bool    `toml:"apply_cross_root_isolation"` // Toggles whether we care about crossing project boundaries at all.
 	CrossRootPenalty        float32 `toml:"cross_root_penalty"`         // Multiplier applied to candidates outside the primary root (e.g., 0.3 = soft penalty, 0.01 = strict).
-	PreMMRScoreFloorRatio   float32 `toml:"pre_mmr_score_floor_ratio"`  // Minimum relative score required to survive pre-MMR pruning (e.g., 0.05 = drops candidates < 5% of max score).
+	PreMMRScoreFloorRatio   float64 `toml:"pre_mmr_score_floor_ratio"`  // Minimum relative score required to survive pre-MMR pruning (e.g., 0.05 = drops candidates < 5% of max score).
 	TopKCandidates          int     `toml:"top_k_candidates"`           // How many raw vector hits to pull before applying graph expansion and MMR pruning.
 	MMRDiversityFactor      float32 `toml:"mmr_diversity_factor"`       // Balances MMR relevance vs. diversity (0.0 = max diversity, 1.0 = max relevance).
 	MaxGraphExpansionDepth  int     `toml:"max_graph_expansion_depth"`  // How many hops to traverse in your Rust call-graph (1 = direct deps, 2 = transitive deps).
@@ -236,7 +236,7 @@ func DefaultConfig() *Config {
 			CrossRootPenalty:        0.32,
 			PreMMRScoreFloorRatio:   0.05,
 			TopKCandidates:          150,
-			MMRDiversityFactor:      0.65,
+			MMRDiversityFactor:      0.85,
 			MaxGraphExpansionDepth:  1,
 			SemanticMinSimilarity:   0.15,
 			MaxGraphExpansions:      15,

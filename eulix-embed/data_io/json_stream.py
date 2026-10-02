@@ -59,7 +59,6 @@ def stream_kb(path: Path) -> Generator:
 
     with open(path, "rb") as fh:
         for prefix, event, value in ijson.parse(fh, use_float=True):
-
             #  top-level key
             if prefix == "" and event == "map_key":
                 top_key = value

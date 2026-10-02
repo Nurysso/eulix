@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-// Package query provides query classification functionality.
+// Package query provides query c.Classification functionality.
 
 /*
 This file is responsible for handling/Generating Prompts with CoT.
@@ -11,16 +11,31 @@ package query
 
 import (
 	"encoding/json"
+	c "eulix/internal/query/classifier"
 	"eulix/internal/utils"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
 
+type metricsEntry struct {
+	fn   *utils.KBFunction
+	file string
+}
+
+type todoItem struct {
+	file     string
+	line     int
+	text     string
+	priority string
+}
+
 // BuildPromptString composes header + task-specific body + footer.
-func BuildPromptString(query string, class *Classification, sourceAvailable bool, taskBody string, codeBudgetRatio float64) string {
+func BuildPromptString(query string, class *c.Classification, sourceAvailable bool, taskBody string, codeBudgetRatio float64) string {
 	return cotHeader(query, class, sourceAvailable, codeBudgetRatio) +
 		" TASK \n" +
 		taskBody +
@@ -31,7 +46,7 @@ func BuildPromptString(query string, class *Classification, sourceAvailable bool
 // the same way PromptOrAnswer does. Every LLM-calling handler should use
 // this instead of calling BuildPromptString alone, or the retrieved code
 // context never reaches the model.
-func (r *Router) buildFullPromptWithContext(ctx *utils.ContextWindow, query string, class *Classification) string {
+func (r *Router) buildFullPromptWithContext(ctx *utils.ContextWindow, query string, class *c.Classification) string {
 	src := hasSourceCode(ctx)
 	taskBody := getTaskBody(r, query, class)
 	realCodeBudgetRatio := r.config.RetrievalConfig.CodeToAstRatio
@@ -44,10 +59,10 @@ func (r *Router) buildFullPromptWithContext(ctx *utils.ContextWindow, query stri
 // cotHeader builds the universal reasoning preamble injected into every prompt.
 // It instructs the model to separate "what I can see" from "what I infer",
 // and to distinguish source code chunks from metadata-only chunks.
-func cotHeader(query string, class *Classification, sourceAvailable bool, codeBudgetRatio float64) string {
+func cotHeader(query string, class *c.Classification, sourceAvailable bool, codeBudgetRatio float64) string {
 	var b strings.Builder
 	if sourceAvailable {
-		fmt.Fprintf(&b, "You have been given a mix of REAL SOURCE CODE (≈%d%%) and AST metadata\n", int(codeBudgetRatio*100))
+		fmt.Fprintf(&b, "You have been given a mix of REAL SOURCE CODE (≈%d%%) and AST metadata\n", int(math.Round(codeBudgetRatio*100)))
 		b.WriteString("(file paths, line ranges, signatures, call edges) for the remaining symbols.\n")
 		b.WriteString("Treat source blocks as ground truth. Treat metadata as structural hints only.\n")
 	} else {
@@ -104,7 +119,7 @@ What I CAN help with instead:
 Would you like an architecture or data-flow explanation instead?`, nil
 }
 
-func (r *Router) handleUnderstanding(query string, class *Classification) (string, error) {
+func (r *Router) handleUnderstanding(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -113,7 +128,7 @@ func (r *Router) handleUnderstanding(query string, class *Classification) (strin
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleImplementation(query string, class *Classification) (string, error) {
+func (r *Router) handleImplementation(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -122,7 +137,7 @@ func (r *Router) handleImplementation(query string, class *Classification) (stri
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleArchitecture(query string, class *Classification) (string, error) {
+func (r *Router) handleArchitecture(query string, class *c.Classification) (string, error) {
 
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
@@ -132,7 +147,7 @@ func (r *Router) handleArchitecture(query string, class *Classification) (string
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleDebug(query string, class *Classification) (string, error) {
+func (r *Router) handleDebug(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -141,7 +156,7 @@ func (r *Router) handleDebug(query string, class *Classification) (string, error
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleComparison(query string, class *Classification) (string, error) {
+func (r *Router) handleComparison(query string, class *c.Classification) (string, error) {
 	if len(class.Symbols) < 2 {
 		return "Please specify at least two symbols to compare (e.g., 'compare FooHandler and BarHandler').", nil
 	}
@@ -154,7 +169,7 @@ func (r *Router) handleComparison(query string, class *Classification) (string, 
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleRefactoring(query string, class *Classification) (string, error) {
+func (r *Router) handleRefactoring(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -163,7 +178,7 @@ func (r *Router) handleRefactoring(query string, class *Classification) (string,
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handlePerformance(query string, class *Classification) (string, error) {
+func (r *Router) handlePerformance(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -172,7 +187,7 @@ func (r *Router) handlePerformance(query string, class *Classification) (string,
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleDataFlow(query string, class *Classification) (string, error) {
+func (r *Router) handleDataFlow(query string, class *c.Classification) (string, error) {
 	// Pre-compute the call-chain type trace for symbols in the query
 	var chainInfo strings.Builder
 	for _, sym := range class.Symbols {
@@ -189,7 +204,7 @@ func (r *Router) handleDataFlow(query string, class *Classification) (string, er
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleSecurity(query string, class *Classification) (string, error) {
+func (r *Router) handleSecurity(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -198,7 +213,7 @@ func (r *Router) handleSecurity(query string, class *Classification) (string, er
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleDocumentation(query string, class *Classification) (string, error) {
+func (r *Router) handleDocumentation(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -207,7 +222,7 @@ func (r *Router) handleDocumentation(query string, class *Classification) (strin
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleExample(query string, class *Classification) (string, error) {
+func (r *Router) handleExample(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -216,7 +231,7 @@ func (r *Router) handleExample(query string, class *Classification) (string, err
 	return r.llmClient.LlmResponse(fullPrompt)
 }
 
-func (r *Router) handleTesting(query string, class *Classification) (string, error) {
+func (r *Router) handleTesting(query string, class *c.Classification) (string, error) {
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
@@ -230,14 +245,14 @@ func (r *Router) handleTesting(query string, class *Classification) (string, err
 // handleCallGraph renders the two-level call tree with a per-symbol cache.
 // First call for a symbol: O(callers + callees + their neighbours).
 // Subsequent calls: O(1) map lookup + string copy.
-func buildRouterCallGraph(ref *utils.CallGraphRef) *CallGraph {
+func buildRouterCallGraph(ref *utils.CallGraphRef) *callGraph {
 	if ref == nil {
-		return &CallGraph{Functions: map[string]CGFunction{}}
+		return &callGraph{Functions: map[string]cgFunction{}}
 	}
 
-	fns := make(map[string]CGFunction, len(ref.Nodes))
+	fns := make(map[string]cgFunction, len(ref.Nodes))
 	for _, n := range ref.Nodes {
-		fns[bareID(n.ID)] = CGFunction{Location: n.File}
+		fns[bareID(n.ID)] = cgFunction{Location: n.File}
 	}
 
 	for _, e := range ref.Edges {
@@ -256,47 +271,39 @@ func buildRouterCallGraph(ref *utils.CallGraphRef) *CallGraph {
 		fns[to] = callee
 	}
 
-	return &CallGraph{Functions: fns}
+	// Deduplicate Calls and CalledBy slices for each function
+	for id, fn := range fns {
+		fn.Calls = dedupStrings(fn.Calls)
+		fn.CalledBy = dedupStrings(fn.CalledBy)
+		fns[id] = fn
+	}
+
+	return &callGraph{Functions: fns}
 }
 
-// bareID strips the node-type prefix and file path that eulix-parser emits.
-func bareID(id string) string {
-	if i := strings.Index(id, "::"); i != -1 {
-		id = id[:i]
-	}
-	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(id, prefix) {
-			s := strings.TrimPrefix(id, prefix)
-			if prefix == "method_" {
-				if i := strings.Index(s, "_"); i != -1 {
-					return s[:i] + "." + s[i+1:]
-				}
-			}
-			return s
-		}
-	}
-	return id
-}
-
-func (r *Router) handleDependency(query string, _ *Classification) (string, error) {
+func (r *Router) handleDependency(query string, _ *c.Classification) (string, error) {
 	entity := extractDepQueryTerm(query)
-	if entity == "" {
-		return "Could not identify an entity for dependency analysis.", nil
-	}
-
-	if len(r.contextBuilder.GetExternalDeps()) == 0 {
-		if err := r.contextBuilder.loadExternalDeps(); err != nil {
-			return "", fmt.Errorf("could not load external deps: %w", err)
-		}
-	}
-	deps := r.contextBuilder.GetExternalDeps()
-	idx := r.contextBuilder.GetDepIndex()
-
 	entityLow := strings.ToLower(entity)
 	queryLow := strings.ToLower(query)
 
-	switch classifyDepIntent(queryLow, entityLow) {
+	intent := classifyDepIntent(queryLow, entityLow)
+
+	// Intents requiring a specific target entity
+	if entity == "" && (intent == depIntentLookup || intent == depIntentWhoUses || intent == depIntentFile) {
+		return "Could not identify an entity for dependency analysis.", nil
+	}
+
+	deps := getExternalDeps()
+	if len(deps) == 0 {
+		if err := loadExternalDeps("external_deps.json"); err != nil {
+			return "", fmt.Errorf("could not load external deps: %w", err)
+		}
+		deps = getExternalDeps()
+	}
+
+	idx := buildDepIndex(deps)
+
+	switch intent {
 	case depIntentAll:
 		return formatAllExternalDeps(deps), nil
 
@@ -306,8 +313,8 @@ func (r *Router) handleDependency(query string, _ *Classification) (string, erro
 	case depIntentCount:
 		return formatDepCount(deps), nil
 
-	default: // depIntentWhoUses and depIntentLookup share the same matching logic
-		matched := idx.matchDeps(entityLow)
+	default: // depIntentWhoUses and depIntentLookup share matching logic
+		matched := matchDeps(deps, entityLow)
 		if len(matched) == 0 {
 			return fmt.Sprintf("No dependency named '%s' found.\nTip: use 'list dependencies' to see all.", entity), nil
 		}
@@ -319,7 +326,7 @@ func (r *Router) handleDependency(query string, _ *Classification) (string, erro
 // handleCallGraph renders the two-level call tree with a per-symbol cache.
 // First call for a symbol: O(callers + callees + their neighbours).
 // Subsequent calls: O(1) map lookup + string copy.
-func (r *Router) handleCallGraph(query string, class *Classification) (string, error) {
+func (r *Router) handleCallGraph(query string, class *c.Classification) (string, error) {
 	entity := firstSymbolOrExtracted(class, query)
 	if entity == "" {
 		return "Could not identify a symbol for call graph analysis.", nil
@@ -337,87 +344,104 @@ func (r *Router) handleCallGraph(query string, class *Classification) (string, e
 		return fmt.Sprintf("'%s' not found in call graph.", entity), nil
 	}
 
+	// Lookup core body from cache or render it if cache miss
+	var body string
 	r.cgIdx.mu.RLock()
-	if s, hit := r.cgIdx.cache[resolvedKey]; hit {
-		r.cgIdx.mu.RUnlock()
-		return s, nil
-	}
+	cached, hit := r.cgIdx.cache[resolvedKey]
 	r.cgIdx.mu.RUnlock()
 
-	callers := r.cgBuild.CalledBy[resolvedKey]
-	callees := r.cgBuild.Calls[resolvedKey]
-
-	var b strings.Builder
-	b.Grow(2048)
-
-	// Ambiguity note goes first in the output
-	if len(ambiguous) > 1 {
-		fmt.Fprintf(&b, "Note: '%s' matched %d symbols. Showing highest-traffic one. Others:\n",
-			entity, len(ambiguous))
-		for _, k := range ambiguous {
-			if k == resolvedKey {
-				continue
-			}
-			n := r.cgBuild.Nodes[k]
-			fmt.Fprintf(&b, "  • %s  (fan-in: %d, file: %s)\n",
-				bareID(k), n.CallCountEstimate, n.File)
-		}
-		b.WriteString("\n")
-	}
-
-	fmt.Fprintf(&b, "Call Graph: %s\n", bareID(resolvedKey))
-	fmt.Fprintf(&b, "  File    : %s\n", node.File)
-	fmt.Fprintf(&b, "  Type    : %s\n", node.NodeType)
-	if node.IsEntryPoint {
-		b.WriteString("  Role    : entry point\n")
-	}
-	fmt.Fprintf(&b, "  Metrics : Fan-in %d | Fan-out %d\n", len(callers), len(callees))
-
-	b.WriteString("\n┌── Called by (Inbound):\n")
-	if len(callers) == 0 {
-		b.WriteString("│   (none — likely an entry point or exported API)\n")
+	if hit {
+		body = cached
 	} else {
-		for _, callerID := range callers {
-			fmt.Fprintf(&b, "│   ← %s\n", bareID(callerID))
-			for _, gc := range r.cgBuild.CalledBy[callerID] {
-				fmt.Fprintf(&b, "│       ← %s\n", bareID(gc))
+		callers := r.cgBuild.CalledBy[resolvedKey]
+		callees := r.cgBuild.Calls[resolvedKey]
+
+		var b strings.Builder
+		b.Grow(2048)
+
+		fmt.Fprintf(&b, "Call Graph: %s\n", bareID(resolvedKey))
+		fmt.Fprintf(&b, "  File    : %s\n", node.File)
+		fmt.Fprintf(&b, "  Type    : %s\n", node.NodeType)
+		if node.IsEntryPoint {
+			b.WriteString("  Role    : entry point\n")
+		}
+		fmt.Fprintf(&b, "  Metrics : Fan-in %d | Fan-out %d\n", len(callers), len(callees))
+
+		b.WriteString("\n┌── Called by (Inbound):\n")
+		if len(callers) == 0 {
+			b.WriteString("│   (none — likely an entry point or exported API)\n")
+		} else {
+			for _, callerID := range callers {
+				fmt.Fprintf(&b, "│   ← %s\n", bareID(callerID))
+				for _, gc := range r.cgBuild.CalledBy[callerID] {
+					fmt.Fprintf(&b, "│       ← %s\n", bareID(gc))
+				}
 			}
 		}
-	}
 
-	b.WriteString("└── Calls (Outbound):\n")
-	if len(callees) == 0 {
-		b.WriteString("    (none — leaf function)\n")
-	} else {
-		for _, callee := range callees {
-			fmt.Fprintf(&b, "    → %s\n", bareID(callee))
-			for _, gc := range r.cgBuild.Calls[callee] {
-				fmt.Fprintf(&b, "        → %s\n", bareID(gc))
+		b.WriteString("└── Calls (Outbound):\n")
+		if len(callees) == 0 {
+			b.WriteString("    (none — leaf function)\n")
+		} else {
+			for _, callee := range callees {
+				fmt.Fprintf(&b, "    → %s\n", bareID(callee))
+				for _, gc := range r.cgBuild.Calls[callee] {
+					fmt.Fprintf(&b, "        → %s\n", bareID(gc))
+				}
 			}
 		}
+
+		if len(callees) > 7 {
+			fmt.Fprintf(&b, "\n⚠ High fan-out (%d) — consider splitting.\n", len(callees))
+		}
+
+		body = b.String()
+		r.cgIdx.mu.Lock()
+		r.cgIdx.cache[resolvedKey] = body
+		r.cgIdx.mu.Unlock()
 	}
 
-	if len(callees) > 7 {
-		fmt.Fprintf(&b, "\n⚠ High fan-out (%d) — consider splitting.\n", len(callees))
+	// Build the final response, prepending ambiguity note dynamically if present
+	if len(ambiguous) <= 1 {
+		return body, nil
 	}
 
-	result := b.String()
-	r.cgIdx.mu.Lock()
-	r.cgIdx.cache[resolvedKey] = result
-	r.cgIdx.mu.Unlock()
-	return result, nil
+	// Sort ambiguous keys deterministically
+	sortedAmbiguous := append([]string(nil), ambiguous...)
+	sort.Strings(sortedAmbiguous)
+
+	var result strings.Builder
+	result.Grow(len(body) + 256)
+
+	fmt.Fprintf(&result, "Note: '%s' matched %d symbols. Showing highest-traffic one. Others:\n",
+		entity, len(sortedAmbiguous))
+	for _, k := range sortedAmbiguous {
+		if k == resolvedKey {
+			continue
+		}
+		n := r.cgBuild.Nodes[k]
+		fmt.Fprintf(&result, "  • %s  (fan-in: %d, file: %s)\n",
+			bareID(k), n.CallCountEstimate, n.File)
+	}
+	result.WriteString("\n")
+	result.WriteString(body)
+
+	return result.String(), nil
 }
 
+// Match standalone project-level keywords using word boundaries
+var projectMetricsKwRegex = regexp.MustCompile(`(?i)\b(project|overall|summary|total|all\s+functions)\b`)
+
 // handleMetrics for project-wide summary and per-symbol lookup.
-func (r *Router) handleMetrics(query string, class *Classification) (string, error) {
-	metricsPath := filepath.Join(r.config.Project.Path, ".eulix", "kb_metrics.json")
+func (r *Router) handleMetrics(query string, class *c.Classification) (string, error) {
+	metricsPath := filepath.Join(r.config.Project.Path, utils.EulixDir, "kb_metrics.json")
 
 	data, err := os.ReadFile(metricsPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read metrics file at %s: %w", metricsPath, err)
 	}
 
-	var ref utils.MetricsRef
+	var ref utils.MetricsReport
 	if err := json.Unmarshal(data, &ref); err != nil {
 		return "", fmt.Errorf("failed to parse metrics JSON: %w", err)
 	}
@@ -426,7 +450,6 @@ func (r *Router) handleMetrics(query string, class *Classification) (string, err
 	var topComplex []metricsEntry
 
 	for _, fn := range ref.TopComplexFunctions {
-		// Allocate a local copy to safely take its address
 		kbFn := utils.KBFunction{
 			Name:            fn.Name,
 			LineStart:       fn.LineStart,
@@ -444,16 +467,10 @@ func (r *Router) handleMetrics(query string, class *Classification) (string, err
 		topComplex = append(topComplex, entry)
 	}
 
-	// Parse the query intent
-	lowerQuery := strings.ToLower(query)
-	isProjectMetrics := strings.Contains(lowerQuery, "project") ||
-		strings.Contains(lowerQuery, "overall") ||
-		strings.Contains(lowerQuery, "summary") ||
-		strings.Contains(lowerQuery, "total") ||
-		strings.Contains(lowerQuery, "all functions") ||
-		len(class.Symbols) == 0
-
 	entity := firstSymbolOrExtracted(class, query)
+
+	// Summary keywords outrank isolated symbol extractions, and queries without explicit symbols default to project metrics.
+	isProjectMetrics := projectMetricsKwRegex.MatchString(query) || len(class.Symbols) == 0
 
 	if entity != "" && !isProjectMetrics {
 		if e, ok := byName[entity]; ok {
@@ -461,19 +478,19 @@ func (r *Router) handleMetrics(query string, class *Classification) (string, err
 		}
 		return fmt.Sprintf("'%s' not found in metrics index.", entity), nil
 	}
+
 	var b strings.Builder
 	meta := ref.Metadata
 
 	fmt.Fprintf(&b, "Project metrics: %s\n\n", meta.ProjectName)
 	fmt.Fprintf(&b, "  Files       : %d\n", meta.TotalFiles)
-	fmt.Fprintf(&b, "  Total LOC   : %d\n", meta.TotalLOC)
+	fmt.Fprintf(&b, "  Total LOC   : %d\n", meta.TotalLoc)
 	fmt.Fprintf(&b, "  Functions   : %d\n", meta.TotalFunctions)
 	fmt.Fprintf(&b, "  Languages   : %s\n", strings.Join(meta.Languages, ", "))
 	fmt.Fprintf(&b, "  Parsed at   : %s\n\n", meta.ParsedAt)
 
 	b.WriteString("Top 10 most complex functions:\n")
 
-	// Safely boundary-check slice sizing
 	limit := len(topComplex)
 	if limit > 10 {
 		limit = 10
@@ -488,8 +505,8 @@ func (r *Router) handleMetrics(query string, class *Classification) (string, err
 	return b.String(), nil
 }
 
-func (r *Router) handleEntryPoints(_ string, _ *Classification) (string, error) {
-	entryPath := filepath.Join(r.config.Project.Path, ".eulix", "kb_entry_points.json")
+func (r *Router) handleEntryPoints(_ string, _ *c.Classification) (string, error) {
+	entryPath := filepath.Join(r.config.Project.Path, utils.EulixDir, "kb_entry_points.json")
 	data, err := os.ReadFile(entryPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read entry points at %s: %w", entryPath, err)
@@ -499,17 +516,29 @@ func (r *Router) handleEntryPoints(_ string, _ *Classification) (string, error) 
 	if err := json.Unmarshal(data, &ref); err != nil {
 		return "", fmt.Errorf("failed to parse kb_entry_points.json: %w", err)
 	}
-	// TODO: uncomment when level based debugger
-	// log.Printf("[DEBUG] entry points loaded: %d entries, raw: %s", len(ref.EntryPoint), string(data[:min(200, len(data))]))
+
 	var b strings.Builder
 	b.WriteString("Entry points \n")
 
 	byType := make(map[string][]utils.EntryPoint)
-	for _, ep := range ref.EntryPoint {
+	for _, ep := range ref.EntryPoints {
 		byType[ep.EntryType] = append(byType[ep.EntryType], ep)
 	}
 
-	for epType, eps := range byType {
+	// Sort group keys deterministically
+	var keys []string
+	for epType := range byType {
+		keys = append(keys, epType)
+	}
+	sort.Strings(keys)
+
+	for _, epType := range keys {
+		eps := byType[epType]
+		// Sort entry points within each type deterministically
+		sort.Slice(eps, func(i, j int) bool {
+			return eps[i].Handler < eps[j].Handler
+		})
+
 		fmt.Fprintf(&b, "── %s ──\n", strings.ToUpper(epType))
 		for _, ep := range eps {
 			if ep.Path != nil {
@@ -532,30 +561,39 @@ func (r *Router) handleFileStructure(query string) (string, error) {
 		return "Full KB (kb.json) not loaded — file structure query requires it.", nil
 	}
 
+	// Extract file path keys and sort them deterministically
+	paths := make([]string, 0, len(r.kb.Structure))
+	for path := range r.kb.Structure {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
 	// Try to extract a filename from the query
 	target := extractFilePath(query)
 	if target == "" {
 		// List all files
 		var b strings.Builder
 		fmt.Fprintf(&b, "Project: %s  (%d files, %d LOC)\n\n",
-			r.kb.Metadata.ProjectName, r.kb.Metadata.TotalFiles, r.kb.Metadata.TotalLOC)
-		for path, fd := range r.kb.Structure {
+			r.kb.Metadata.ProjectName, r.kb.Metadata.TotalFiles, r.kb.Metadata.TotalLoc)
+		for _, path := range paths {
+			fd := r.kb.Structure[path]
 			fmt.Fprintf(&b, "  %s  [%s, %d LOC, %d fns, %d classes]\n",
-				path, fd.Language, fd.LOC, len(fd.Functions), len(fd.Classes))
+				path, fd.Language, fd.Loc, len(fd.Functions), len(fd.Classes))
 		}
 		return b.String(), nil
 	}
 
 	// Find matching file (partial path match)
-	for path, fd := range r.kb.Structure {
+	for _, path := range paths {
 		if strings.Contains(path, target) {
+			fd := r.kb.Structure[path]
 			return formatFileData(path, &fd), nil
 		}
 	}
 	return fmt.Sprintf("File matching '%s' not found in knowledge base.", target), nil
 }
 
-func (r *Router) handleTodosQuery(_ string, _ *Classification) (string, error) {
+func (r *Router) handleTodosQuery(_ string, _ *c.Classification) (string, error) {
 	if r.kb == nil {
 		return "Full KB (kb.json) not loaded — TODO query requires it.", nil
 	}
@@ -566,7 +604,15 @@ func (r *Router) handleTodosQuery(_ string, _ *Classification) (string, error) {
 		line                 int
 	}
 
-	for path, fd := range r.kb.Structure {
+	// Sort paths deterministically
+	paths := make([]string, 0, len(r.kb.Structure))
+	for path := range r.kb.Structure {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	for _, path := range paths {
+		fd := r.kb.Structure[path]
 		for _, td := range fd.Todos {
 			item := todoItem{path, td.Line, td.Text, td.Priority}
 			switch td.Priority {
@@ -615,13 +661,13 @@ func (r *Router) handleTodosQuery(_ string, _ *Classification) (string, error) {
 	return b.String(), nil
 }
 
-func (r *Router) handleLocation(query string, class *Classification) (string, error) {
+func (r *Router) handleLocation(query string, class *c.Classification) (string, error) {
 	if r.kbIndex == nil {
 		return "", fmt.Errorf("kb index unavailable — router was not fully initialized")
 	}
-	r.contextBuilder.debugLog.Log("[DEBUG] kbIndex ptr=%p len(FunctionsByName)=%d\n", r.kbIndex, len(r.kbIndex.FunctionsByName))
+	r.debug.Log("[DEBUG] kbIndex ptr=%p len(FunctionsByName)=%d\n", r.kbIndex, len(r.kbIndex.FunctionsByName))
 	entity := firstSymbolOrExtracted(class, query)
-	r.contextBuilder.debugLog.Log("[DEBUG] handleLocation: entity=%q\n", entity)
+	r.debug.Log("[DEBUG] handleLocation: entity=%q\n", entity)
 	if entity == "" {
 		return "Could not identify a function or class name in the query.", nil
 	}
@@ -667,7 +713,7 @@ func (r *Router) handleLocation(query string, class *Classification) (string, er
 	return b.String(), nil
 }
 
-func (r *Router) handleUsage(query string, class *Classification) (string, error) {
+func (r *Router) handleUsage(query string, class *c.Classification) (string, error) {
 	query = stripCommandPrefix(query, "usage of", "usage", "use", "uses of", "show usage", "find usage")
 	entity := firstSymbolOrExtracted(class, query)
 	if entity == "" {

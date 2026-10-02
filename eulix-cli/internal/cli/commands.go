@@ -19,10 +19,8 @@ import (
 
 	a "eulix/internal/assets"
 	"eulix/internal/cache"
-	"eulix/internal/checksum"
 	"eulix/internal/config"
 	"eulix/internal/embeddings"
-	"eulix/internal/fixers"
 	"eulix/internal/llm"
 	"eulix/internal/query"
 	"eulix/internal/utils"
@@ -82,6 +80,7 @@ var installEmbedDeps = &cobra.Command{
 		}
 	},
 }
+
 var analyzeCmd = &cobra.Command{
 	Use:   "analyze",
 	Short: "Analyze codebase and generate knowledge base",
@@ -119,35 +118,7 @@ var checksumCmd = &cobra.Command{
 		return checkInitialized()
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := checksum.Run()
-		if err != nil {
-			return fmt.Errorf("checksum operation failed: %w", err)
-		}
-
-		// Show detailed information
-		fmt.Printf("Project: %s\n", result.Checksum.ProjectPath)
-		fmt.Printf("Total files: %d\n", result.Checksum.TotalFiles)
-		fmt.Printf("Total lines: %d\n", result.Checksum.TotalLines)
-		fmt.Printf("Checksum: %s\n", result.Checksum.Hash)
-		fmt.Printf("Last analyzed: %s\n", result.Checksum.LastAnalyzed.Format("2006-01-02 15:04:05"))
-		fmt.Printf("Analysis version: %s\n", result.Checksum.AnalysisVersion)
-
-		if result.FirstRun {
-			fmt.Println("\n✓ New checksum created")
-		} else {
-			fmt.Printf("\nChanges from previous run:\n")
-			fmt.Printf("  • Added: %d files\n", result.FilesAdded)
-			fmt.Printf("  • Deleted: %d files\n", result.FilesDeleted)
-			fmt.Printf("  • Modified: %d files\n", result.FilesModified)
-			fmt.Printf("  • Change ratio: %.1f%%\n", result.ChangedRatio*100)
-
-			if result.ChangedRatio == 0 {
-				fmt.Println("✓ No changes detected")
-			}
-		}
-
-		fmt.Printf("\n     ✓ Checksum saved to .eulix/checksum.json.zst\n")
-
+		fmt.Println("OOPS!! \nThe Checksum command is depriciated :(")
 		return nil
 	},
 }
@@ -270,7 +241,6 @@ var queryCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 			return
 		}
-		eulixDir := ".eulix"
 		// checksum check (todo)
 
 		llmClient, err := llm.MouthClient(cfg)
@@ -280,7 +250,7 @@ var queryCmd = &cobra.Command{
 		}
 		cacheManager, _ := cache.CacheController(cfg)
 
-		router, err := query.QueryTrafficController(eulixDir, cfg, llmClient, cacheManager)
+		router, err := query.QueryTrafficController(utils.EulixDir, cfg, llmClient, cacheManager)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to init router: %v\n", err)
 			return
@@ -293,7 +263,7 @@ var queryCmd = &cobra.Command{
 			return
 		}
 		if cfg.Project.DebugConfig {
-			if err := writeQueryDebugLog(eulixDir, userQuery, result); err != nil {
+			if err := writeQueryDebugLog(utils.EulixDir, userQuery, result); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to write query debug log: %v\n", err)
 			}
 		}
@@ -303,60 +273,22 @@ var queryCmd = &cobra.Command{
 
 var glaDOSCmd = &cobra.Command{
 	Use:   "glados [directory]",
-	Short: "Checks for errors in knowledge base and embeddings size",
+	Short: "[Depriciated] Checks for errors in knowledge base and embeddings size",
 	Args:  cobra.MaximumNArgs(1),
-	PreRunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
-			if _, err := requireProjectRoot(); err != nil {
-				return err
-			}
-		}
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Println("OOPS!! \nThe glados command is depriciated :(")
 		return nil
-	},
-	Run: func(cmd *cobra.Command, args []string) {
-		eulixDir := ".eulix"
-		if len(args) > 0 {
-			eulixDir = args[0]
-		}
-
-		if err := fixers.GLaDOS(eulixDir); err != nil {
-			fmt.Fprintf(os.Stderr, "holy [moooo]... Even Doctor failed\n")
-			os.Exit(1)
-		}
 	},
 }
 
 var aspirineCmd = &cobra.Command{
 	Use:   "aspirine [directory]",
-	Short: "tries to fix embedings.bin and kb MEANT TO BE USED IN TEST",
-	Long:  "Tries to fixes corrupted or mismatched embeddings by rebuilding the binary file from JSON",
+	Short: "[Depriciated] tries to fix embedings.bin and kb MEANT TO BE USED IN TEST",
+	Long:  "[Depriciated] Tries to fixes corrupted or mismatched embeddings by rebuilding the binary file from JSON",
 	Args:  cobra.MaximumNArgs(1),
-	PreRunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
-			if _, err := requireProjectRoot(); err != nil {
-				return err
-			}
-		}
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Println("OOPS!! \nThe aspirine command is depriciated :(")
 		return nil
-	},
-	Run: func(cmd *cobra.Command, args []string) {
-		eulixDir := ".eulix"
-		if len(args) > 0 {
-			eulixDir = args[0]
-		}
-
-		noBackup, _ := cmd.Flags().GetBool("no-backup")
-		force, _ := cmd.Flags().GetBool("force")
-
-		opts := fixers.AspirineOptions{
-			NoBackup: noBackup,
-			Force:    force,
-		}
-
-		if err := fixers.Aspirine(eulixDir, opts); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to rebuild embeddings: %v\n", err)
-			os.Exit(1)
-		}
 	},
 }
 

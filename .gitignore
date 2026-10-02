@@ -14,7 +14,9 @@ build/
 callgraph-viz/
 context_debug_*.txt
 debug_embedding_pipeline_*
-deb*
+coverage.html
+coverage.out
+coverage/
 diff*
 profile_*
 .env

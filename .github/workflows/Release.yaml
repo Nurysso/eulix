@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # Allows manual triggering
 
 env:
-  GO_VERSION: '1.26'
+  GO_VERSION: '1.27'
   RUST_VERSION: 'stable'
 
 jobs:

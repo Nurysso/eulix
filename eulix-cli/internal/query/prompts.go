@@ -26,6 +26,7 @@ by taskBodies, so no individual query type needs to repeat them.
 package query
 
 import (
+	c "eulix/internal/query/classifier"
 	"fmt"
 	"strings"
 )
@@ -74,8 +75,8 @@ const citationContract = `HONESTY CONTRACT:
 // call-graph excerpts, etc.), hence the function signature. Bodies here
 // should return ONLY the task-specific content the shared header,
 // language note, and confidence legend are added once by getTaskBody.
-var taskBodies = map[QueryType]func(r *Router, query string, class *Classification) string{
-	QueryTypeUnderstanding: func(r *Router, query string, class *Classification) string {
+var taskBodies = map[c.QueryType]func(r *Router, query string, class *c.Classification) string{
+	c.QueryTypeUnderstanding: func(r *Router, query string, class *c.Classification) string {
 		return `Explain what the queried code does and why it exists.
 
 Reasoning steps:
@@ -93,14 +94,16 @@ Preferred <answer> shape:
 `
 	},
 
-	QueryTypeImplementation: func(r *Router, query string, class *Classification) string {
+	c.QueryTypeImplementation: func(r *Router, query string, class *c.Classification) string {
 		var relevantFiles []string
-		for _, sym := range class.Symbols {
-			if locs, ok := r.kbIndex.FunctionsByName[sym]; ok {
-				relevantFiles = append(relevantFiles, locs...)
-			}
-			if locs, ok := r.kbIndex.TypesByName[sym]; ok {
-				relevantFiles = append(relevantFiles, locs...)
+		if r != nil && r.kbIndex != nil {
+			for _, sym := range class.Symbols {
+				if locs, ok := r.kbIndex.FunctionsByName[sym]; ok {
+					relevantFiles = append(relevantFiles, locs...)
+				}
+				if locs, ok := r.kbIndex.TypesByName[sym]; ok {
+					relevantFiles = append(relevantFiles, locs...)
+				}
 			}
 		}
 		format := `Describe how the implementation works for the queried symbols.
@@ -116,7 +119,7 @@ d) Note which implementation details are invisible because the source wasn't ret
 		return fmt.Sprintf(format, relevantFiles)
 	},
 
-	QueryTypeArchitecture: func(r *Router, query string, class *Classification) string {
+	c.QueryTypeArchitecture: func(r *Router, query string, class *c.Classification) string {
 		var cgSummary strings.Builder
 		for _, sym := range class.Symbols {
 			if fn, ok := r.callGraph.Functions[sym]; ok {
@@ -151,7 +154,7 @@ e) List structural facts you CANNOT determine (e.g., runtime wiring, dependency-
 		return fmt.Sprintf(format, cgSummary.String())
 	},
 
-	QueryTypeDebug: func(r *Router, query string, class *Classification) string {
+	c.QueryTypeDebug: func(r *Router, query string, class *c.Classification) string {
 		return `Investigate the reported problem using available evidence.
 
 Reasoning steps:
@@ -166,7 +169,7 @@ e) VERDICT: apply the confidence legend to each hypothesis.
 `
 	},
 
-	QueryTypeComparison: func(r *Router, query string, class *Classification) string {
+	c.QueryTypeComparison: func(r *Router, query string, class *c.Classification) string {
 		if len(class.Symbols) < 2 {
 			return `Not enough symbols were provided to perform a comparison.
 
@@ -191,7 +194,7 @@ e) SUMMARY TABLE: a markdown table: Dimension | SymbolA | SymbolB | Confidence.
 		return fmt.Sprintf(format, class.Symbols)
 	},
 
-	QueryTypeRefactoring: func(r *Router, query string, class *Classification) string {
+	c.QueryTypeRefactoring: func(r *Router, query string, class *c.Classification) string {
 		return `Identify refactoring opportunities grounded in the available evidence.
 
 Reasoning steps:
@@ -216,7 +219,7 @@ d) PRIORITISED RECOMMENDATIONS: rank by impact (high/med/low). For each: what to
 `
 	},
 
-	QueryTypePerformance: func(r *Router, query string, class *Classification) string {
+	c.QueryTypePerformance: func(r *Router, query string, class *c.Classification) string {
 		return `Analyse performance characteristics using available evidence.
 
 Reasoning steps:
@@ -231,7 +234,7 @@ e) VERDICT PER FINDING: apply the confidence legend.
 `
 	},
 
-	QueryTypeDataFlow: func(r *Router, query string, class *Classification) string {
+	c.QueryTypeDataFlow: func(r *Router, query string, class *c.Classification) string {
 		var chainInfo strings.Builder
 		for _, sym := range class.Symbols {
 			if fn, ok := r.callGraph.Functions[sym]; ok {
@@ -256,7 +259,7 @@ Show the full trace as a numbered pipeline inside <answer>, then explain each st
 		return fmt.Sprintf(format, chainInfo.String())
 	},
 
-	QueryTypeSecurity: func(r *Router, query string, class *Classification) string {
+	c.QueryTypeSecurity: func(r *Router, query string, class *c.Classification) string {
 		return `Perform a security-focused review using only the evidence retrieved for this query.
 
 Reasoning steps:
@@ -273,7 +276,7 @@ f) VERDICT PER FINDING: apply the confidence legend.
 `
 	},
 
-	QueryTypeDocumentation: func(r *Router, query string, class *Classification) string {
+	c.QueryTypeDocumentation: func(r *Router, query string, class *c.Classification) string {
 		return `Generate documentation for the queried symbols.
 
 Reasoning steps:
@@ -297,7 +300,7 @@ e) Note preconditions/postconditions visible in the signature (e.g., a non-nulla
 `
 	},
 
-	QueryTypeExample: func(r *Router, query string, class *Classification) string {
+	c.QueryTypeExample: func(r *Router, query string, class *c.Classification) string {
 		return `Show how to use the queried symbols correctly.
 
 Reasoning steps:
@@ -312,7 +315,7 @@ d) Highlight non-obvious requirements visible in the signature (e.g., a context/
 `
 	},
 
-	QueryTypeTesting: func(r *Router, query string, class *Classification) string {
+	c.QueryTypeTesting: func(r *Router, query string, class *c.Classification) string {
 		format := `Generate a testing strategy for: %s
 
 Reasoning steps:
@@ -333,10 +336,10 @@ Format each test case as: TestName_Scenario / input description / expected outco
 // chain-of-thought header, the language-agnostic grounding note, and the
 // shared confidence legend, followed by the task-specific reasoning steps.
 // Falls back to the Understanding body if no mapping exists.
-func getTaskBody(r *Router, query string, class *Classification) string {
+func getTaskBody(r *Router, query string, class *c.Classification) string {
 	fn, ok := taskBodies[class.Type]
 	if !ok {
-		fn = taskBodies[QueryTypeUnderstanding]
+		fn = taskBodies[c.QueryTypeUnderstanding]
 	}
 	return languageAgnosticNote + "\n" + confidenceLegend + "\n" + fn(r, query, class)
 }

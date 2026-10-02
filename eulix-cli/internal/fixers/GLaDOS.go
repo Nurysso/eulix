@@ -160,7 +160,7 @@ func GLaDOS(eulixDir string) error {
 		fmt.Printf("   ✓ Loaded KB for project: %s\n", kb.Metadata.ProjectName)
 		fmt.Printf("      Languages:  %v\n", kb.Metadata.Languages)
 		fmt.Printf("      Files:      %d (structure entries: %d)\n", kb.Metadata.TotalFiles, len(kb.Structure))
-		fmt.Printf("      LOC:        %d\n", kb.Metadata.TotalLOC)
+		fmt.Printf("      LOC:        %d\n", kb.Metadata.TotalLoc)
 		fmt.Printf("      Functions:  %d   Classes: %d   Methods: %d\n",
 			kb.Metadata.TotalFunctions, kb.Metadata.TotalClasses, kb.Metadata.TotalMethods)
 	}
@@ -245,12 +245,12 @@ func GLaDOS(eulixDir string) error {
 	return nil
 }
 
-func loadKB(path string) (*utils.KnowledgeBaseRef, error) {
+func loadKB(path string) (*utils.KnowledgeBaseSimplifiedRef, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var kb utils.KnowledgeBaseRef
+	var kb utils.KnowledgeBaseSimplifiedRef
 	if err := json.Unmarshal(data, &kb); err != nil {
 		return nil, err
 	}
@@ -274,7 +274,7 @@ func checkIndex(path string) (funcCount, typeCount int, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	var idx utils.IndexRef
+	var idx utils.IndexDataRef
 	if err := json.Unmarshal(data, &idx); err != nil {
 		return 0, 0, err
 	}

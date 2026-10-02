@@ -3,12 +3,13 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::kb_struct::*;
-use once_cell::sync::Lazy as LazyLock;
-use regex::bytes::Regex;
+use crate::parser::utils::{extract_todos, static_regex};
+use crate::struc::kb_struct::*;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str;
+use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
 
 struct SecurityPattern {
@@ -22,49 +23,43 @@ struct TagRule {
     check_docstring: bool,
 }
 
-static SQL_INJECTION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"createStatement\(|executeQuery\(|executeUpdate\(")
-        .expect("static sql injection regex pattern is valid")
-});
-static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"Runtime\.getRuntime\(\)\.exec\(|new ProcessBuilder\(")
-        .expect("static command execution regex pattern is valid")
-});
-static DESERIALIZATION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"ObjectInputStream|readObject\(|readUnshared\(")
-        .expect("static deserialization regex pattern is valid")
-});
+struct TagInput<'a> {
+    name: &'a str,
+    docstring: &'a str,
+    calls: &'a [FunctionCall],
+    return_type: &'a str,
+    body_text: &'a str,
+    modinfo: &'a ModifierInfo,
+    is_ctor: bool,
+    annotations: &'a [String],
+    params: &'a [Parameter],
+}
+
+static SQL_INJECTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"createStatement\(|executeQuery\(|executeUpdate\("));
+
+static COMMAND_EXEC_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"Runtime\.getRuntime\(\)\.exec\(|new ProcessBuilder\("));
+static DESERIALIZATION_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"ObjectInputStream|readObject\(|readUnshared\("));
 static XXE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"DocumentBuilderFactory|SAXParserFactory|XMLInputFactory|TransformerFactory")
-        .expect("static XXE regex pattern is valid")
+    static_regex(r"DocumentBuilderFactory|SAXParserFactory|XMLInputFactory|TransformerFactory")
 });
-static WEAK_CRYPTO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)getInstance\(\s*"(DES|RC4|MD5|SHA1)"|/ECB/"#)
-        .expect("static weak crypto regex pattern is valid")
-});
-static WEAK_RANDOM_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"Math\.random\(\)|new Random\(").expect("static weak random regex pattern is valid")
-});
-static HARDCODED_CREDENTIAL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)(password|passwd|secret|api[_-]?key)\s*=\s*"[^"]+""#)
-        .expect("static hardcoded credential regex pattern is valid")
-});
+static WEAK_CRYPTO_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r#"(?i)getInstance\(\s*"(DES|RC4|MD5|SHA1)"|/ECB/"#));
+static WEAK_RANDOM_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"Math\.random\(\)|new Random\("));
+static HARDCODED_CREDENTIAL_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r#"(?i)(password|passwd|secret|api[_-]?key)\s*=\s*"[^"]+""#));
 static TRUST_MANAGER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"TrustManager|checkClientTrusted|checkServerTrusted|HostnameVerifier")
-        .expect("static trust manager regex pattern is valid")
+    static_regex(r"TrustManager|checkClientTrusted|checkServerTrusted|HostnameVerifier")
 });
-static REFLECTION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"setAccessible\(\s*true\s*\)|Class\.forName\(")
-        .expect("static reflection regex pattern is valid")
-});
-static PATH_TRAVERSAL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"new File\(.*(getParameter|request\.)")
-        .expect("static path traversal regex pattern is valid")
-});
-static NATIVE_CODE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"System\.loadLibrary\(|System\.load\(")
-        .expect("static native code regex pattern is valid")
-});
+static REFLECTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"setAccessible\(\s*true\s*\)|Class\.forName\("));
+static PATH_TRAVERSAL_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"new File\(.*(getParameter|request\.)"));
+static NATIVE_CODE_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"System\.loadLibrary\(|System\.load\("));
 
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
@@ -124,11 +119,6 @@ static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
             description: "Loads native code",
         },
     ]
-});
-
-static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?://|/\*)\s*(?:TODO|FIXME|XXX)[:\s]*(.*?)(?:\*/\s*)?$")
-        .expect("static TODO comment regex pattern is valid")
 });
 
 static TAG_RULES: LazyLock<Vec<TagRule>> = LazyLock::new(|| {
@@ -237,7 +227,8 @@ static TAG_RULES: LazyLock<Vec<TagRule>> = LazyLock::new(|| {
 /// returned borrow is tied only to `node`'s lifetime, not to `&self`.
 fn find_child_by_kind<'a>(node: &Node<'a>, kind: &str) -> Option<Node<'a>> {
     let mut cursor = node.walk();
-    node.children(&mut cursor).find(|c| c.kind() == kind)
+    let x = node.children(&mut cursor).find(|c| c.kind() == kind);
+    x
 }
 
 #[derive(Default)]
@@ -302,7 +293,7 @@ impl JavaParser {
             functions: vec![],
             classes,
             global_vars: vec![],
-            todos: self.extract_todos(),
+            todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
         })
     }
@@ -443,9 +434,11 @@ impl JavaParser {
 
     fn first_named_child_text(&self, node: &Node) -> Option<String> {
         let mut cursor = node.walk();
-        node.named_children(&mut cursor)
+        let x = node
+            .named_children(&mut cursor)
             .next()
-            .map(|c| self.get_node_text(&c))
+            .map(|c| self.get_node_text(&c));
+        x
     }
 
     fn extract_javadoc(&self, node: &Node) -> String {
@@ -876,17 +869,17 @@ impl JavaParser {
             .map(|b| self.contains_kind(b, "try_with_resources_statement"))
             .unwrap_or(false);
 
-        let tags = self.auto_tag_method(
-            &name,
-            &docstring,
-            &calls,
-            &return_type,
-            &body_text,
-            &modinfo,
+        let tags = self.auto_tag_method(&TagInput {
+            name: &name,
+            docstring: &docstring,
+            calls: &calls,
+            return_type: &return_type,
+            body_text: &body_text,
+            modinfo: &modinfo,
             is_ctor,
-            &annotations,
-            &params,
-        );
+            annotations: &annotations,
+            params: &params,
+        });
         let is_override = annotations.iter().any(|a| a == "@Override");
         let is_deprecated = annotations.iter().any(|a| a == "@Deprecated");
         let is_test = annotations.iter().any(|a| {
@@ -932,12 +925,12 @@ impl JavaParser {
             is_getter,
             is_setter,
             package: self.package_name.clone(),
-            uses_lambda,
+            is_lambda: uses_lambda,
             uses_method_reference,
             uses_try_with_resources,
             uses_reflection: body_text.contains("setAccessible")
                 || body_text.contains("Class.forName"),
-            uses_stream_api: body_text.contains(".stream()") || body_text.contains("Collectors."),
+            uses_streams: body_text.contains(".stream()") || body_text.contains("Collectors."),
             ..Default::default()
         };
 
@@ -1316,7 +1309,7 @@ impl JavaParser {
                 let mut tc = child.walk();
                 if let Some(expr) = child.named_children(&mut tc).next() {
                     return Some(self.get_node_text(&expr));
-                }
+                };
             }
             if let Some(v) = self.find_thrown_type(&child) {
                 return Some(v);
@@ -1405,7 +1398,7 @@ impl JavaParser {
                     if !raises.contains(&text) {
                         raises.push(text);
                     }
-                }
+                };
             }
             "catch_formal_parameter" => {
                 if let Some(t) = find_child_by_kind(node, "catch_type") {
@@ -1452,18 +1445,19 @@ impl JavaParser {
         1 + count(node)
     }
 
-    fn auto_tag_method(
-        &self,
-        name: &str,
-        docstring: &str,
-        calls: &[FunctionCall],
-        return_type: &str,
-        body_text: &str,
-        modinfo: &ModifierInfo,
-        is_ctor: bool,
-        annotations: &[String],
-        params: &[Parameter],
-    ) -> Vec<String> {
+    fn auto_tag_method(&self, input: &TagInput) -> Vec<String> {
+        let TagInput {
+            name,
+            docstring,
+            calls,
+            return_type,
+            body_text,
+            modinfo,
+            is_ctor,
+            annotations,
+            params,
+        } = *input;
+
         let mut tags = Vec::new();
         let name_lower = name.to_lowercase();
         let doc_lower = docstring.to_lowercase();
@@ -1546,41 +1540,11 @@ impl JavaParser {
         score.clamp(0.0, 1.0)
     }
 
-    fn extract_todos(&self) -> Vec<Todo> {
-        self.source_code
-            .lines()
-            .enumerate()
-            .filter_map(|(idx, line)| {
-                TODO_RE.captures(line.as_bytes()).map(|caps| {
-                    let text = caps
-                        .get(1)
-                        .map(|m| String::from_utf8_lossy(m.as_bytes()).trim().to_string())
-                        .unwrap_or_default();
-                    let text_lower = text.to_lowercase();
-                    let priority =
-                        if text_lower.contains("critical") || text_lower.contains("urgent") {
-                            "high"
-                        } else if text_lower.contains("minor") {
-                            "low"
-                        } else {
-                            "medium"
-                        };
-                    Todo {
-                        line: idx + 1,
-                        text,
-                        priority: priority.to_string(),
-                    }
-                })
-            })
-            .collect()
-    }
-
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
         let mut notes = Vec::new();
         for (idx, line) in self.source_code.lines().enumerate() {
-            let line_bytes = line.as_bytes();
             for pattern in SECURITY_PATTERNS.iter() {
-                if pattern.regex.is_match(line_bytes) {
+                if pattern.regex.is_match(line) {
                     notes.push(SecurityNote {
                         note_type: pattern.note_type.to_string(),
                         line: idx + 1,

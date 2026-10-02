@@ -3,8 +3,7 @@
 
 // Maintainer mnae (Nurysso) contact - nurysso [at] proton.me
 
-// package setup contains code related to init flow of eulix
-
+// Package setup contains code related to init flow of eulix
 package setup
 
 import (
@@ -31,6 +30,9 @@ func LoadEnvFile(path string) *EnvFile {
 		key, value, ok := parseEnvLine(line)
 		if !ok {
 			continue
+		}
+		if _, exists := envFile.values[key]; !exists {
+			envFile.keyOrder = append(envFile.keyOrder, key)
 		}
 		envFile.values[key] = value
 		envFile.keyOrder = append(envFile.keyOrder, key)
@@ -75,6 +77,9 @@ func (envFile *EnvFile) Save() error {
 	if !envFile.changed {
 		return nil
 	}
+	// Explicitly secure permissions even if the file pre-existed
+	_ = os.Chmod(envFile.path, 0o600)
+
 	var builder strings.Builder
 	writtenKeys := make(map[string]bool, len(envFile.values))
 	for _, key := range envFile.keyOrder {
@@ -85,7 +90,7 @@ func (envFile *EnvFile) Save() error {
 		fmt.Fprintf(&builder, "%s=%s\n", key, envFile.values[key])
 	}
 	writeUnorderedKeys(&builder, envFile.values, writtenKeys)
-	return os.WriteFile(envFile.path, []byte(builder.String()), 0600)
+	return os.WriteFile(envFile.path, []byte(builder.String()), 0o600)
 }
 
 func writeUnorderedKeys(builder *strings.Builder, values map[string]string, writtenKeys map[string]bool) {

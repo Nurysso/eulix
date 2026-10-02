@@ -3,8 +3,8 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
+use crate::parser::utils::{extract_todos, static_regex};
 use crate::struc::kb_struct::*;
-// use once_cell::sync::LazyLock;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -18,61 +18,26 @@ struct SecurityPattern {
 }
 
 // Regex Patterns compiled once at first use
-static FROM_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"from\s+(\S+)\s+import\s+(.+)")
-        .expect("static Python from-import declaration regex pattern is valid")
-});
+static FROM_IMPORT_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"from\s+(\S+)\s+import\s+(.+)"));
 
-static ATTRIBUTE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"(\w+)\s*:\s*([^=]+)(?:=\s*(.+))?")
-        .expect("static type-annotated attribute assignment regex pattern is valid")
-});
+static ATTRIBUTE_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"(\w+)\s*:\s*([^=]+)(?:=\s*(.+))?"));
 
-static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"#\s*TODO:?\s*(.+)")
-        .expect("static Python TODO comment extraction regex pattern is valid")
-});
+static PASSWORD_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"password"));
 
-static PASSWORD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"password").expect("static hardcoded password detection regex pattern is valid")
-});
+static SENSITIVE_DATA_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"secret|api_key|token"));
 
-static SENSITIVE_DATA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"secret|api_key|token")
-        .expect("static sensitive credential keyword regex pattern is valid")
-});
+static EVAL_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"eval\("));
 
-static EVAL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"eval\(").expect("static dynamic eval execution regex pattern is valid")
-});
+static EXEC_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"exec\("));
 
-static EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"exec\(").expect("static dynamic exec statement regex pattern is valid")
-});
+static DYNAMIC_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"__import__"));
 
-static DYNAMIC_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"__import__").expect("static dynamic import invocation regex pattern is valid")
-});
+static PICKLE_RE: LazyLock<Regex> = LazyLock::new(|| static_regex(r"pickle\.load"));
 
-static PICKLE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"pickle\.load")
-        .expect("static insecure pickle deserialization regex pattern is valid")
-});
-
-static COMMAND_EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    #[allow(clippy::expect_used)]
-    Regex::new(r"subprocess|os\.system|os\.popen")
-        .expect("static system command execution invocation regex pattern is valid")
-});
+static COMMAND_EXEC_RE: LazyLock<Regex> =
+    LazyLock::new(|| static_regex(r"subprocess|os\.system|os\.popen"));
 
 static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     vec![
@@ -158,7 +123,7 @@ impl PythonParser {
             functions: self.extract_functions(&root),
             classes: self.extract_classes(&root),
             global_vars: self.extract_global_vars(&root),
-            todos: self.extract_todos(),
+            todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
         })
     }
@@ -1218,36 +1183,6 @@ impl PythonParser {
 
         complexity += count_complexity_nodes(node);
         complexity
-    }
-
-    fn extract_todos(&self) -> Vec<Todo> {
-        self.source_code
-            .lines()
-            .enumerate()
-            .filter_map(|(idx, line)| {
-                TODO_RE.captures(line).and_then(|caps| {
-                    caps.get(1).map(|m| {
-                        let text = m.as_str().trim().to_string();
-                        let text_lower = text.to_lowercase();
-
-                        let priority =
-                            if text_lower.contains("critical") || text_lower.contains("urgent") {
-                                "high"
-                            } else if text_lower.contains("minor") {
-                                "low"
-                            } else {
-                                "medium"
-                            };
-
-                        Todo {
-                            line: idx + 1,
-                            text,
-                            priority: priority.to_string(),
-                        }
-                    })
-                })
-            })
-            .collect()
     }
 
     fn detect_security_patterns(&self) -> Vec<SecurityNote> {
