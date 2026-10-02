@@ -13,18 +13,18 @@ verbose = true
 [embeddings]
 model = "BAAI/bge-base-en-v1.5"
 dimension = 768
-engine = "onnx"
+engine = "torch"
 debug = false
 
 [llm]
 local = true
 provider = "ollama"
-model = "qwen2.5-coder:7b"
+model = "deepseek-r1:14b"
 api_key = ""
 max_tokens = 8192
 temperature = 0.7
 baseURL = "http://localhost:11434"
-endpoint = "/v1/chat/completions"
+endpoint = ""
 
 [retrievalConfig]
 code_to_ast_ratio = 0.85
