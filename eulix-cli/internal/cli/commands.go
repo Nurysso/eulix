@@ -80,6 +80,7 @@ var installEmbedDeps = &cobra.Command{
 		}
 	},
 }
+
 var analyzeCmd = &cobra.Command{
 	Use:   "analyze",
 	Short: "Analyze codebase and generate knowledge base",

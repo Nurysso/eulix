@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"eulix/internal/cache"
+	"eulix/internal/utils"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -42,9 +43,9 @@ func (i cacheItem) Title() string {
 		query = query[:57] + "..."
 	}
 
-	hasReasoning := lipgloss.NewStyle().Foreground(mutedColor).Render("·")
+	hasReasoning := lipgloss.NewStyle().Foreground(utils.MutedColor).Render("·")
 	if i.entry.Reasoning != "" {
-		hasReasoning = lipgloss.NewStyle().Foreground(highlightColor).Render("◈")
+		hasReasoning = lipgloss.NewStyle().Foreground(utils.HighlightColor).Render("◈")
 	}
 
 	return fmt.Sprintf("%s  [%d] %s", hasReasoning, i.entry.ID, query)
@@ -55,7 +56,8 @@ func (i cacheItem) Description() string {
 	if len(answerPreview) > 72 {
 		answerPreview = answerPreview[:69] + "..."
 	}
-	return fmt.Sprintf("%s  •  %s",
+	return fmt.Sprintf(
+		"%s  •  %s",
 		i.entry.CreatedAt.Format("2006-01-02 15:04"),
 		answerPreview,
 	)
@@ -70,16 +72,16 @@ func themedDelegate() list.DefaultDelegate {
 	d := list.NewDefaultDelegate()
 
 	d.Styles.SelectedTitle = d.Styles.SelectedTitle.
-		Foreground(primaryColor).
-		BorderForeground(primaryColor).
+		Foreground(utils.PrimaryColor).
+		BorderForeground(utils.PrimaryColor).
 		Bold(true)
 	d.Styles.SelectedDesc = d.Styles.SelectedDesc.
-		Foreground(highlightColor).
-		BorderForeground(primaryColor)
-	d.Styles.NormalTitle = d.Styles.NormalTitle.Foreground(textColor)
-	d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(mutedColor)
-	d.Styles.DimmedTitle = d.Styles.DimmedTitle.Foreground(mutedColor)
-	d.Styles.DimmedDesc = d.Styles.DimmedDesc.Foreground(mutedColor)
+		Foreground(utils.HighlightColor).
+		BorderForeground(utils.PrimaryColor)
+	d.Styles.NormalTitle = d.Styles.NormalTitle.Foreground(utils.TextColor)
+	d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(utils.MutedColor)
+	d.Styles.DimmedTitle = d.Styles.DimmedTitle.Foreground(utils.MutedColor)
+	d.Styles.DimmedDesc = d.Styles.DimmedDesc.Foreground(utils.MutedColor)
 
 	return d
 }
@@ -94,8 +96,8 @@ func HistoryView(entries []cache.CacheEntry, manager *cache.Manager) CacheViewer
 	l.Title = "◆ Eulix Query History"
 	l.Styles.Title = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(textColor).
-		Background(secondaryColor).
+		Foreground(utils.TextColor).
+		Background(utils.SecondaryColor).
 		Padding(0, 2)
 	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(true)
@@ -177,7 +179,7 @@ func (m CacheViewerModel) renderListView() string {
 
 	listStyle := lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
+		BorderForeground(utils.BorderColor).
 		Padding(0, 1)
 	b.WriteString(listStyle.Render(m.list.View()))
 	b.WriteString("\n")
@@ -196,14 +198,14 @@ func (m CacheViewerModel) renderListView() string {
 func (m CacheViewerModel) renderDetailView() string {
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(textColor).
-		Background(secondaryColor).
+		Foreground(utils.TextColor).
+		Background(utils.SecondaryColor).
 		Padding(0, 2).
 		Width(m.width - 2)
 
 	contentStyle := lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
+		BorderForeground(utils.BorderColor).
 		Padding(1, 2).
 		Width(m.width - 4)
 
@@ -232,10 +234,10 @@ func (m CacheViewerModel) renderDetail() string {
 
 	entry := m.entries[m.selected]
 
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(primaryColor)
-	valueStyle := lipgloss.NewStyle().Foreground(textColor)
-	metaStyle := lipgloss.NewStyle().Foreground(mutedColor)
-	dimStyle := lipgloss.NewStyle().Foreground(mutedColor).Italic(true)
+	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(utils.PrimaryColor)
+	valueStyle := lipgloss.NewStyle().Foreground(utils.TextColor)
+	metaStyle := lipgloss.NewStyle().Foreground(utils.MutedColor)
+	dimStyle := lipgloss.NewStyle().Foreground(utils.MutedColor).Italic(true)
 
 	wrapWidth := m.width - 8
 	if wrapWidth < 30 {

@@ -99,7 +99,7 @@ func formatPatternList(patterns []string) string {
 // appendEuignorePatterns splits the user's comma-separated answer and
 // appends each non-empty pattern to the .euignore file, one per line.
 func appendEuignorePatterns(path, answer string) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to update %s: %w", path, err)
 	}
@@ -130,7 +130,7 @@ func BuildConfigSteps() []Step {
 				if answer != "Yes" {
 					return nil
 				}
-				return []Step{threadsStep(), llmModeStep()}
+				return []Step{threadsStep(), llmModeStep(), runAnalysisStep()}
 			},
 		},
 	}
@@ -172,10 +172,19 @@ func llmModeStep() Step {
 		},
 		Next: func(answer string, a Answers) []Step {
 			if answer == "Local" {
-				return []Step{localModelStep(), baseURLStep(), endpointStep()}
+				return []Step{localModelStep(), baseURLStep()}
 			}
 			return []Step{providerStep()}
 		},
+	}
+}
+
+func runAnalysisStep() Step {
+	return Step{
+		Key:    "run_analysis",
+		Kind:   StepConfirm,
+		Prompt: "Do you want to run analysis now?",
+		Help:   "Analyzes your codebase immediately after setup finishes.",
 	}
 }
 
@@ -213,18 +222,18 @@ func baseURLStep() Step {
 }
 
 // endpointStep asks for the chat completions path on the local server.
-func endpointStep() Step {
-	return Step{
-		Key:     "llm_endpoint",
-		Kind:    StepText,
-		Prompt:  "Endpoint path",
-		Default: "/v1/chat/completions",
-		Apply: func(answer string, cfg *config.Config, env *EnvFile) error {
-			cfg.LLM.Endpoint = answer
-			return nil
-		},
-	}
-}
+// func endpointStep() Step {
+// 	return Step{
+// 		Key:     "llm_endpoint",
+// 		Kind:    StepText,
+// 		Prompt:  "Endpoint path",
+// 		Default: "/v1/chat/completions",
+// 		Apply: func(answer string, cfg *config.Config, env *EnvFile) error {
+// 			cfg.LLM.Endpoint = answer
+// 			return nil
+// 		},
+// 	}
+// }
 
 // providerStep asks which remote provider to use. Its Next() pulls in
 // the model and API-key steps, passing the chosen provider along so

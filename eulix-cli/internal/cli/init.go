@@ -22,6 +22,7 @@ import (
 	"eulix/internal/cli/setup"
 	"eulix/internal/config"
 	"eulix/internal/utils"
+
 	"github.com/BurntSushi/toml"
 )
 
@@ -120,7 +121,7 @@ func initializeProject(force bool, targets []string) error {
 	configWritten := false
 
 	if shouldWrite("dir") || !state.hasDir {
-		if err := os.MkdirAll(utils.EulixDir, 0755); err != nil {
+		if err := os.MkdirAll(utils.EulixDir, 0o755); err != nil {
 			return fmt.Errorf("failed to create %s: %w", utils.EulixDir, err)
 		}
 		created = append(created, fmt.Sprintf("  - %-20s (knowledge base directory)", utils.EulixDir+"/"))
@@ -134,7 +135,7 @@ func initializeProject(force bool, targets []string) error {
 			"dist/\n" +
 			"test/\n" +
 			"build/\n"
-		if err := os.WriteFile(utils.EuignorePath, []byte(defaultIgnore), 0644); err != nil {
+		if err := os.WriteFile(utils.EuignorePath, []byte(defaultIgnore), 0o644); err != nil {
 			return fmt.Errorf("failed to create %s: %w", utils.EuignorePath, err)
 		}
 		created = append(created, fmt.Sprintf("  - %-20s (ignore patterns)", utils.EuignorePath))
@@ -153,15 +154,17 @@ func initializeProject(force bool, targets []string) error {
 	env := setup.LoadEnvFile(utils.EnvPath)
 	if euignoreWritten {
 		fmt.Println()
-		err := setup.RunWizard(setup.BuildEuignoreSteps(utils.EuignorePath), cfg, env)
+		_, err := setup.RunWizard(setup.BuildEuignoreSteps(utils.EuignorePath), cfg, env)
 		if err != nil && !errors.Is(err, setup.ErrWizardCancelled) {
 			return fmt.Errorf("euignore wizard: %w", err)
 		}
 	}
 
+	var answers setup.Answers
 	if configWritten {
 		fmt.Println()
-		err := setup.RunWizard(setup.BuildConfigSteps(), cfg, env)
+		var err error
+		answers, err = setup.RunWizard(setup.BuildConfigSteps(), cfg, env)
 		switch {
 		case errors.Is(err, setup.ErrWizardCancelled):
 			fmt.Println("\neulix.toml was not written (wizard cancelled).")
@@ -195,10 +198,20 @@ func initializeProject(force bool, targets []string) error {
 			fmt.Println(c)
 		}
 	}
-	fmt.Println("\nNext steps:")
-	fmt.Println("  1. Review eulix.toml / .euignore if you skipped the wizard")
-	fmt.Println("  2. Run 'eulix analyze' to analyze your codebase")
-	fmt.Println("  3. Run 'eulix chat' to start querying")
+
+	// Run analysis if the user confirmed "Yes" during the wizard
+	if answers["run_analysis"] == "Yes" {
+		fmt.Println("\nRunning codebase analysis...")
+		if err := analyzeProject(cfg.Project.Path); err != nil {
+			return fmt.Errorf("analysis failed: %w", err)
+		}
+	} else {
+		fmt.Println("\nNext steps:")
+		fmt.Println("  1. Review eulix.toml / .euignore if you skipped the wizard")
+		fmt.Println("  2. Run 'eulix analyze' to analyze your codebase")
+		fmt.Println("  3. Run 'eulix chat' to start querying")
+	}
+
 	return nil
 }
 
@@ -212,5 +225,5 @@ func writeConfig(cfg *config.Config, dst string) error {
 	if err := enc.Encode(cfg); err != nil {
 		return fmt.Errorf("failed to encode config: %w", err)
 	}
-	return os.WriteFile(dst, buf.Bytes(), 0644)
+	return os.WriteFile(dst, buf.Bytes(), 0o644)
 }
