@@ -1,5 +1,84 @@
 # Changelog
 
+**_[Unreleased]_** - VizEulize Call Graph Visualization Tool Added
+
+- **Local JSON File Loading:** Implemented client-side parsing for `kb_call_graph.json` and optional `kb_index.json` files via drag-and-drop or file selector, ensuring zero external data uploads.
+- **Node Filtering Controls:** Added category and tag filtering dropdowns ("All categories", "All tags") to scope down large graph views.
+- **Directional Traversal Toggle:** Added options to filter and highlight relationships by call direction (both ways, callees →, ← callers).
+- **Depth/Hop Traversal Limits:** Added depth selection controls (1, 2, 3) to restrict neighborhood expansions.
+- **Interactive Graph Canvas:**
+  - Integrated pan/drag and scroll-to-zoom viewport controls.
+  - Added click interactions for displaying node detail panels.
+  - Added double-click interaction to isolate and focus on a node's immediate neighborhood.
+- **Default View Logic:** Automated initial render to highlight the most-connected nodes upon dataset load.
+- **Reset Controls:** Added a "Reset view" button to restore default layout, zoom, and active filters.
+
+## Eulix CLI 0.8.2 - 2026-09-29
+
+### Features (`6c5f9d4`)
+
+- **hydration**: Updated the hydration algorithm within retrieval for improved performance and data processing.
+- **checksum**: Updated `checksum` package to read directly from `eulix_parser` output instead of generating `checksum.json.zst`.
+- **config**: Moved project-wide configuration constants into `utils/constants`.
+- **tui**: TUI has been improved and bugs fix #68
+
+### Performance & Parser Improvements
+
+- **retrieval / parser** (`81294c30`): Updated parser to output smaller files for retrieval. This resulted in:
+  - Faster retrieval speed without any loss in accuracy.
+  - Reduced peak RAM/RSS usage when loading files into memory.
+- **query**(`acef602`): Skipped semantic search optimizations for `callers` and `callees` intent queries.
+
+### Refactoring & Cleanups
+
+- **query**(`087a0f5`): Broken down monolithic query package into smaller, maintainable modules.
+- **query**(`1e9a67f`): Rewrote MMR, added anchor pinning, and performed symbol cleanup.
+- **kbstruct**(`63f6164`): Synced `kbstruct.go` to be a direct 1:1 match with the `eulix_parser` struct.
+- **deprecations**(`6c5f9d4`): Deprecated `glados` and `aspirine` modules.
+
+### Tests
+
+- **query**(`63f6164`): Added test suites for classifier and router components.
+
+## Eulix_parser v0.7.7 (2026-9-28)
+
+### Summary
+
+We identified which fields in kb.json were unnecessary for the downstream workload and dropped them during the file writing phase. Modeling the storage reduction on the Linux kernel codebase (~35M LOC) yielded a predicted size of ~650 MB, which closely matched our measured output of 658 MB (673,063 KB).
+
+### Changed
+
+- **Simplified `kb.json` output.** The knowledge base now serializes a slimmed-down
+  view of each file (`FileDataSimple`, `FunctionSimple`, `ClassSimple`) instead of the
+  full parsed structures. Fields that were rarely used downstream are no longer written:
+  `calls`, `called_by`, `control_flow`, `exceptions`, `is_async`, `tags`, and
+  function-level `decorators` / `lang_info`.
+- Serialization is done through borrowing views (`StructureView`), so no intermediate
+  copy of the structure map is allocated. Analysis still runs on the full in-memory
+  data; only the written output is simplified.
+- All the grammar files now uses `regex::Regex` instead of `regex::bytes::Regex`.
+- parser/utils.rs created to store common shared functions accross the grammar files.
+
+### Performance
+
+- `kb.json` size on the large benchmark codebase: **2.06 GB -> 0.67 GB (-67.3%)**.
+- Filesystem write volume: 5,676,432 -> 2,900,712 blocks (**-48.9%**).
+- Output phase (Phase 4): ~6.89s -> ~4.08s (**-2.81s**).
+- Total wall-clock: 49.99s -> 48.98s (-1.01s).
+- Peak RSS: 8.51 GB -> 8.32 GB (-2.2%).
+
+### Unchanged
+
+- `kb_index.json`, `kb_summary.json`, `kb_call_graph.json`, `kb_external_deps.json`,
+  `kb_metrics.json`, `kb_entry_points.json`, and `kb_patterns.json` are the same size
+  as before. Call relationships remain available through `kb_call_graph.json`.
+
+### Notes
+
+- Any downstream consumer previously relying on calls, called_by, control_flow, exceptions, is_async, or tags in kb.json must now ingest kb_call_graph.json or update its parsing logic.
+
+- Minor page faults increased (829k → 1.64M) and read blocks rose slightly (710k → 897k) during Phase 1 caching churn, but neither impacted overall runtime.
+
 ## Eulix v0.7.2 (2026-06-28)
 
 ### Retrieval Quality
