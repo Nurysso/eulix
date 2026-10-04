@@ -141,7 +141,7 @@ When `eulix init` runs, it generates `eulix.toml`. All options fall back to sens
 
 ```toml
 [project]
-  path = "."                    # Root path of project to analyze
+  path = "/home/user/foo"       # This is absolute path of repo in file System so copying eulix.toml in a different project or moving root will cause issue
   Max_Lines = 100               # Max lines of real code hydrated per chunk
   DebugConfig = false           # Enable writing detailed query traces to .eulix/debug/
 
@@ -161,7 +161,7 @@ When `eulix init` runs, it generates `eulix.toml`. All options fall back to sens
   model = "llama3.2:3b"         # Target LLM model name
   api_key = ""                  # API key (or set via environment variable)
   max_tokens = 8192             # Maximum tokens for context + generation
-  temperature = 0.7             # Sampling temperature (0.0 to 2.0)
+  temperature = 0.2             # Sampling temperature (0.0 to 2.0)
   baseURL = "http://localhost:11434" # Base URL for API calls
   endpoint = ""                 # Optional custom completion endpoint
 
