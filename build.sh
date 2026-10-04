@@ -83,7 +83,7 @@ print_info "eulix_parser_windows.exe:  ${HASH_WINDOWS}"
 
 # Create eulix-embed.zip
 print_info "Creating eulix-embed.zip..."
-zip -r eulix-embed.zip eulix-embed/ -x "*/.venv/*" "*/.mypy_cache/*" "*/.git/*" "*/__pycache__/*" "*.pyc" ".codespell-ignore"
+zip -r eulix-embed.zip eulix-embed/ -x "*/.venv/*" "*/.ruff_cache/*" "*/.pytest_cache/*" "*/.mypy_cache/*" "*/.git/*" "*/__pycache__/*" "*.pyc" ".codespell-ignore"
 
 cp eulix-embed.zip eulix-cli/internal/assets/bins/eulix-embed.zip
 
