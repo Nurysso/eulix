@@ -3,8 +3,9 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::parser::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex};
 use crate::struc::kb_struct::*;
+use crate::utils::syntax;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -256,7 +257,7 @@ impl CParser {
     pub fn parse(&mut self) -> Result<FileData, String> {
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_c::language())
+            .set_language(&tree_sitter_c::LANGUAGE.into())
             .map_err(|e| format!("Failed to load C grammar: {}", e))?;
 
         let tree = parser
@@ -277,6 +278,7 @@ impl CParser {
             global_vars: self.extract_global_vars(&root),
             todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
+            syntax: syntax::inspect(&tree),
         })
     }
 

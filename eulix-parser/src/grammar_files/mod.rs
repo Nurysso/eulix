@@ -2,7 +2,6 @@
 //  SPDX-License-Identifier: GPL-3.0-or-later
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
-pub mod analyze;
 pub mod c;
 pub mod cpp;
 pub mod go;

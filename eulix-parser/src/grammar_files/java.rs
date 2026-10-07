@@ -3,8 +3,10 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::parser::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex};
+
 use crate::struc::kb_struct::*;
+use crate::utils::syntax;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -276,7 +278,7 @@ impl JavaParser {
     pub fn parse(&mut self) -> Result<FileData, String> {
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_java::language())
+            .set_language(&tree_sitter_java::LANGUAGE.into())
             .map_err(|e| format!("Failed to load Java grammar: {}", e))?;
         let tree = parser
             .parse(&self.source_code, None)
@@ -295,6 +297,7 @@ impl JavaParser {
             global_vars: vec![],
             todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
+            syntax: syntax::inspect(&tree),
         })
     }
 
@@ -601,7 +604,7 @@ impl JavaParser {
             attributes,
             decorators,
             lang_info: LanguageSpecificInfo {
-                java: Some(java_info),
+                java: Some(Box::new(java_info)),
                 ..Default::default()
             },
         })
@@ -954,7 +957,7 @@ impl JavaParser {
             tags,
             importance_score,
             lang_info: LanguageSpecificInfo {
-                java: Some(java_info),
+                java: Some(Box::new(java_info)),
                 ..Default::default()
             },
         })

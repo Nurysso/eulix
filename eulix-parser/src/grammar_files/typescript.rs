@@ -3,8 +3,10 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::parser::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex};
+
 use crate::struc::kb_struct::*;
+use crate::utils::syntax;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -97,7 +99,7 @@ impl TypeScriptParser {
     pub fn parse(&self) -> Result<FileData, String> {
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_typescript::language_typescript())
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .map_err(|e| format!("Failed to load TypeScript grammar: {}", e))?;
 
         let tree = parser
@@ -115,6 +117,7 @@ impl TypeScriptParser {
             global_vars: self.extract_global_vars(&root),
             todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
+            syntax: syntax::inspect(&tree),
         })
     }
     /// Builds a file-qualified ID for a top-level function or method.
