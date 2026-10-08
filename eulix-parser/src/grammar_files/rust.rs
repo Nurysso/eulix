@@ -3,8 +3,10 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::parser::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex};
+
 use crate::struc::kb_struct::*;
+use crate::utils::syntax;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -120,7 +122,7 @@ impl RustParser {
     pub fn parse(&self) -> Result<FileData, String> {
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_rust::language())
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
             .map_err(|e| format!("Failed to load Rust grammar: {}", e))?;
 
         let tree = parser
@@ -138,6 +140,7 @@ impl RustParser {
             global_vars: self.extract_global_vars(&root),
             todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
+            syntax: syntax::inspect(&tree),
         })
     }
 
@@ -498,7 +501,7 @@ impl RustParser {
             tags,
             importance_score,
             lang_info: LanguageSpecificInfo {
-                rust: Some(rust_info),
+                rust: Some(Box::new(rust_info)),
                 ..Default::default()
             },
         })
@@ -686,7 +689,7 @@ impl RustParser {
             attributes,
             decorators: vec![],
             lang_info: LanguageSpecificInfo {
-                rust: Some(rust_info),
+                rust: Some(Box::new(rust_info)),
                 ..Default::default()
             },
         })
@@ -735,7 +738,7 @@ impl RustParser {
             attributes,
             decorators: vec![],
             lang_info: LanguageSpecificInfo {
-                rust: Some(rust_info),
+                rust: Some(Box::new(rust_info)),
                 ..Default::default()
             },
         })
@@ -771,7 +774,7 @@ impl RustParser {
             attributes,
             decorators: vec![],
             lang_info: LanguageSpecificInfo {
-                rust: Some(rust_info),
+                rust: Some(Box::new(rust_info)),
                 ..Default::default()
             },
         })
@@ -840,7 +843,7 @@ impl RustParser {
             attributes: vec![],
             decorators: vec![],
             lang_info: LanguageSpecificInfo {
-                rust: Some(rust_info),
+                rust: Some(Box::new(rust_info)),
                 ..Default::default()
             },
         })

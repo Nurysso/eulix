@@ -3,8 +3,10 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::parser::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex};
+
 use crate::struc::kb_struct::*;
+use crate::utils::syntax;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -107,7 +109,7 @@ impl PythonParser {
     pub fn parse(&self) -> Result<FileData, String> {
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_python::language())
+            .set_language(&tree_sitter_python::LANGUAGE.into())
             .map_err(|e| format!("Failed to load Python grammar: {}", e))?;
 
         let tree = parser
@@ -125,6 +127,7 @@ impl PythonParser {
             global_vars: self.extract_global_vars(&root),
             todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
+            syntax: syntax::inspect(&tree),
         })
     }
 
@@ -323,7 +326,7 @@ impl PythonParser {
             tags,
             importance_score,
             lang_info: LanguageSpecificInfo {
-                python: Some(python_info),
+                python: Some(Box::new(python_info)),
                 ..Default::default()
             },
         })
@@ -928,7 +931,7 @@ impl PythonParser {
             attributes,
             decorators,
             lang_info: LanguageSpecificInfo {
-                python: Some(PythonInfo::default()),
+                python: Some(Box::new(PythonInfo::default())),
                 ..Default::default()
             },
         })

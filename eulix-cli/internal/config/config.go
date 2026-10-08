@@ -34,7 +34,6 @@ type ProjectConfig struct {
 	Path        string `toml:"path"`
 	MaxLines    int    `toml:"Max_Lines"`
 	DebugConfig bool   `toml:"DebugConfig"`
-	// EmbedIs     string `toml:"embedIs"`
 }
 
 type ParserConfig struct {
@@ -226,7 +225,7 @@ func DefaultConfig() *Config {
 			Provider:    "ollama",
 			Model:       "llama3.2:3b",
 			MaxTokens:   8192,
-			Temperature: 0.7,
+			Temperature: 0.2,
 			BaseURL:     "http://localhost:11434",
 			Endpoint:    "",
 		},

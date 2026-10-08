@@ -10,12 +10,19 @@ by eulix and serves as a entry point for the project
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	a "eulix/internal/assets"
 	"eulix/internal/cache"
@@ -26,6 +33,11 @@ import (
 	"eulix/internal/utils"
 
 	"github.com/spf13/cobra"
+)
+
+var (
+	graphPath string
+	indexPath string
 )
 
 var rootCmd = &cobra.Command{
@@ -120,6 +132,89 @@ var checksumCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("OOPS!! \nThe Checksum command is depriciated :(")
 		return nil
+	},
+}
+
+var vizEulizeCMD = &cobra.Command{
+	Use:   "vizEulize",
+	Short: "Opens web application to view call graphs",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("could not determine home directory: %w", err)
+		}
+
+		htmlPath := filepath.Join(home, ".Eulix", "bin", "vizEulize.html")
+		if _, err := os.Stat(htmlPath); err != nil {
+			return fmt.Errorf("could not find vizEulize.html at %s: %w", htmlPath, err)
+		}
+
+		// Fallback defaults to .eulix directory files if not specified via flags
+		if graphPath == "" {
+			graphPath = filepath.Join(".eulix", "kb_call_graph.json")
+		}
+		if indexPath == "" {
+			indexPath = filepath.Join(".eulix", "kb_index.json")
+		}
+
+		// Verify files exist
+		if _, err := os.Stat(graphPath); err != nil {
+			return fmt.Errorf("call graph file missing: %w (run 'eulix analyze' first)", err)
+		}
+
+		mux := http.NewServeMux()
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/" {
+				http.NotFound(w, r)
+				return
+			}
+			http.ServeFile(w, r, htmlPath)
+		})
+
+		mux.HandleFunc("/data/call_graph.json", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			http.ServeFile(w, r, graphPath)
+		})
+
+		if _, err := os.Stat(indexPath); err == nil {
+			mux.HandleFunc("/data/index.json", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				http.ServeFile(w, r, indexPath)
+			})
+		}
+
+		// Bind local server port
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return fmt.Errorf("could not start server listener: %w", err)
+		}
+
+		serverURL := fmt.Sprintf("http://%s/", ln.Addr().String())
+		srv := &http.Server{Handler: mux}
+
+		// Run HTTP server in background thread
+		go func() {
+			if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				fmt.Fprintf(os.Stderr, "vizEulize server error: %v\n", err)
+			}
+		}()
+
+		// Open default browser
+		if err := openInBrowser(serverURL); err != nil {
+			fmt.Printf("Server running at %s, but failed to open browser automatically.\n", serverURL)
+		} else {
+			fmt.Printf("Launched vizEulize at %s\n", serverURL)
+		}
+
+		// Wait briefly to allow initial request connections before returning CLI control back to user
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		fmt.Println("Serving call graph. Press Ctrl+C to stop.")
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return srv.Shutdown(sctx)
 	},
 }
 
@@ -539,6 +634,7 @@ func setupCacheCommands() {
 
 func registerCommands() {
 	rootCmd.AddCommand(
+		vizEulizeCMD,
 		versionCMD,
 		checksumCmd,
 		initCmd,
@@ -556,4 +652,9 @@ func registerCommands() {
 		embedCMD,
 		parserCMD,
 	)
+}
+
+func init() {
+	vizEulizeCMD.Flags().StringVar(&graphPath, "graph", "", "path to *_call_graph.json")
+	vizEulizeCMD.Flags().StringVar(&indexPath, "index", "", "path to *_index.json")
 }

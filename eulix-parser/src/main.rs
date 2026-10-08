@@ -8,16 +8,20 @@
 //! A fast, multi-threaded source code parser that builds a structured
 //! knowledge base from large codebases.
 //!
+//! Tho the name is *parser* its more of analysis enginge designed for RAGs
+//!
 //! ## Supported Languages
 //!
-//! | Language   | Extensions              |
-//! |------------|-------------------------|
-//! | C          | `.c`                    |
+//! | Language   | Extensions                            |
+//! |------------|---------------------------------------|
+//! | C          | `.c`, `.h`                            |
 //! | C++        | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` |
-//! | Python     | `.py`                   |
-//! | Rust       | `.rs`                   |
-//! | TypeScript | `.ts`                   |
-//! | Go         | `.go`                   |
+//! | Python     | `.py`                                 |
+//! | Rust       | `.rs`                                 |
+//! | TypeScript | `.ts`                                 |
+//! | Go         | `.go`                                 |
+//! | JavaScript | `.js`                                 |
+//! |java        | `java`                                |
 //!
 //! ## Pipeline
 //!
@@ -54,276 +58,51 @@
 //! ## Performance
 //!
 //! Parsing is parallelised across all available threads with Rayon.
-//! On a 12-thread run against ~37k files (26M LOC), typical wall time
+//! On a 12-thread run against ~37k files (35M LOC), typical wall time
 //! is ~46s for parsing and ~5s for analysis.
-//! For codebases exceeding ~10k files, `--no-analyze` is recommended
-//! if only the raw parse output is needed.
+//!
+//! ## Limitations
+//! - The goal is build good ast and call graphs to be used in RAGs so a pre-compiler or IR is out of goals
+//!   and cause of this macro expansion in c,cpp or other languages are limited.
+//! - eulix_parser depends upon tree-sitter@latest so a newer version of language sysntax will result in partial
+//!   parse and not a complete failure
 
-use clap::Parser;
-use indicatif::{ProgressBar, ProgressStyle};
-use libc as _;
-use mimalloc::MiMalloc;
-use rayon::prelude::*;
-use std::fs;
-use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
-use std::time::Instant;
-mod parser;
+mod analyze;
+mod grammar_files;
+mod memory;
+pub mod os_io;
+mod output;
+mod parse;
+mod report;
+mod spill;
+mod stats;
 mod struc;
 mod utils;
 
-use crate::struc::kb_struct::CallGraph;
-use crate::struc::kb_struct::CallGraphRef;
-use crate::struc::kb_struct::DependencyGraph;
-use crate::struc::kb_struct::EntryPointsRef;
-use crate::struc::kb_struct::ExternalDepsRef;
-use crate::struc::kb_struct::FileData;
-use crate::struc::kb_struct::IndexDataRef;
-use crate::struc::kb_struct::Indices;
-use crate::struc::kb_struct::KnowledgeBase;
-use crate::struc::kb_struct::KnowledgeBaseSimplifiedRef;
-use crate::struc::kb_struct::Metadata;
-use crate::struc::kb_struct::PatternInfo;
-use crate::struc::kb_struct::PatternsRef;
-use crate::struc::kb_struct::StructureView;
-use parser::analyze::Analyzer;
-use parser::c;
-use parser::cpp;
-use parser::go;
-use parser::java;
-use parser::javascript;
-use parser::language::Language;
-use parser::python;
-use parser::rust as rust_parser;
-use parser::typescript;
-use rustc_hash::FxHashMap;
-use rustc_hash::FxHashSet;
-use utils::file_walker::FileWalker;
-use utils::utils::output_dir;
+use clap::Parser;
+use std::fs;
+use std::path::Path;
+use std::time::Instant;
+
+use crate::memory::{default_thread_count, max_rss_mb};
+use crate::output::{write_json_streaming, write_kb_from_spill};
+use crate::parse::directory::parse_directory;
+use crate::report::{field_report, print_final_summary, write_parse_report};
+use crate::struc::kb_struct::{
+    CallGraphRef, EntryPointsRef, ExternalDepsRef, IndexViewRef, PatternsRef,
+};
+use crate::utils::utils::output_dir;
 
 #[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+static ALLOC: rpmalloc::RpMalloc = rpmalloc::RpMalloc;
 
-#[cfg(target_os = "linux")]
-mod os_io {
-    use std::fs::File;
-    use std::os::unix::io::AsRawFd;
-    use std::path::Path;
-
-    const MIN_PREFETCH_SIZE: u64 = 1024 * 1024; // 1MB
-    const MIN_CACHE_EVICT_SIZE: u64 = 10 * 1024 * 1024; // 10MB
-
-    pub fn prefetch(path: &Path) {
-        if let Ok(metadata) = std::fs::metadata(path) {
-            if metadata.len() > MIN_PREFETCH_SIZE {
-                if let Ok(f) = std::fs::File::open(path) {
-                    let fd = f.as_raw_fd();
-                    let size = metadata.len().min(16 * 1024 * 1024);
-                    #[allow(unsafe_code)]
-                    unsafe {
-                        libc::readahead(fd, 0, size as usize);
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn hint_read_sequential(f: &File) {
-        let fd = f.as_raw_fd();
-        #[allow(unsafe_code)]
-        unsafe {
-            libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_SEQUENTIAL);
-        }
-    }
-
-    // Evict large files from cache after parsing to free memory
-    pub fn done_with_file(f: &File) {
-        if let Ok(metadata) = f.metadata() {
-            if metadata.len() > MIN_CACHE_EVICT_SIZE {
-                let fd = f.as_raw_fd();
-                #[allow(unsafe_code)]
-                unsafe {
-                    libc::posix_fadvise(fd, 0, 0, libc::POSIX_FADV_DONTNEED);
-                }
-            }
-        }
-    }
-
-    // No-op for writes - let kernel handle it
-    #[allow(dead_code)]
-    pub fn flush_output(_f: &File) {}
-
-    #[allow(dead_code)]
-    pub fn hint_write_sequential(_f: &File) {
-        // Intentionally empty - writes don't need read hints
-    }
-    #[allow(dead_code)]
-    pub fn flush_and_drop(f: &std::fs::File) {
-        if let Ok(metadata) = f.metadata() {
-            if metadata.len() > MIN_CACHE_EVICT_SIZE {
-                use std::os::unix::io::AsRawFd;
-                #[allow(unsafe_code)]
-                unsafe {
-                    libc::posix_fadvise(f.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
-                }
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-mod os_io {
-    use std::fs::File;
-    use std::os::unix::io::AsRawFd;
-    use std::path::Path;
-
-    pub fn prefetch(_path: &Path) {}
-
-    pub fn hint_read_sequential(f: &File) {
-        let fd = f.as_raw_fd();
-        unsafe {
-            libc::fcntl(fd, libc::F_RDAHEAD, 1);
-            libc::fcntl(fd, libc::F_NOCACHE, 1);
-        }
-    }
-
-    pub fn done_with_file(_f: &File) {}
-
-    pub fn flush_output(_f: &File) {}
-
-    pub fn hint_write_sequential(_f: &File) {}
-
-    pub fn flush_and_drop(_f: &std::fs::File) {}
-}
-
-#[cfg(target_os = "windows")]
-mod os_io {
-    use std::fs::File;
-    use std::path::Path;
-
-    pub fn prefetch(_path: &Path) {}
-
-    pub fn hint_read_sequential(_f: &File) {}
-
-    pub fn done_with_file(_f: &File) {}
-
-    pub fn flush_output(_f: &File) {}
-
-    pub fn hint_write_sequential(_f: &File) {}
-
-    pub fn flush_and_drop(_f: &std::fs::File) {}
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-mod os_io {
-    use std::fs::File;
-    use std::path::Path;
-
-    pub fn prefetch(_path: &Path) {}
-    pub fn hint_read_sequential(_f: &File) {}
-    pub fn done_with_file(_f: &File) {}
-    pub fn flush_output(_f: &File) {}
-    pub fn hint_write_sequential(_f: &File) {}
-    pub fn flush_and_drop(_f: &std::fs::File) {}
-}
-
-// Opens a source file with the OS-optimal flags for sequential one-pass reads.
-fn open_source_file(path: &Path) -> std::io::Result<std::fs::File> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(0x0800_0000) // FILE_FLAG_SEQUENTIAL_SCAN
-            .open(path)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let f = std::fs::File::open(path)?;
-        os_io::hint_read_sequential(&f);
-        Ok(f)
-    }
-}
-
-fn write_json_streaming<T: serde::Serialize>(
-    path: &Path,
-    value: &T,
-    pretty: bool,
-) -> std::io::Result<()> {
-    let file = std::fs::File::create(path)?;
-    // Use 256 KB buffer instead of default 8 KB
-    let writer = BufWriter::with_capacity(256 * 1024, file);
-    if pretty {
-        serde_json::to_writer_pretty(writer, value)
-    } else {
-        serde_json::to_writer(writer, value)
-    }
-    .map_err(std::io::Error::other)
-}
-
-// No longer used, kept only for future reference
-#[allow(dead_code)]
-fn write_json_file(path: &Path, json: &str) -> std::io::Result<()> {
-    let f = std::fs::File::create(path)?;
-    let len = json.len();
-    let buffer_size = if len > 100 * 1024 * 1024 {
-        8 * 1024 * 1024
-    } else if len > 10 * 1024 * 1024 {
-        2 * 1024 * 1024
-    } else {
-        512 * 1024
-    };
-    let mut w = BufWriter::with_capacity(buffer_size, f);
-    w.write_all(json.as_bytes())?;
-    w.flush()?;
-    Ok(())
-}
-
-fn default_thread_count() -> usize {
-    #[cfg(feature = "num_cpus")]
-    {
-        num_cpus::get_physical().max(1)
-    }
-    #[cfg(not(feature = "num_cpus"))]
-    {
-        4
-    }
-}
-#[derive(Debug, Clone)]
-struct ParseStats {
-    parsed: Vec<String>,
-    skipped: Vec<String>,
-    failed: Vec<(String, String)>,
-}
-
-impl ParseStats {
-    fn new() -> Self {
-        Self {
-            parsed: Vec::new(),
-            skipped: Vec::new(),
-            failed: Vec::new(),
-        }
-    }
-}
-
-fn validate_prism_input(val: &str) -> Result<u8, String> {
-    let n: u8 = val
-        .parse()
-        .map_err(|_| "Value must be a number".to_string())?;
-    if n == 1 || n == 2 {
-        Ok(n)
-    } else {
-        Err("can only accept 1 or 2".to_string())
-    }
-}
 #[derive(Parser, Debug)]
 #[command(
     name = "eulix_parser",
     version = env!("CARGO_PKG_VERSION"),
-    // disable_version_flag = true,
-    about = "Fast multi-language code parser"
+    about = "Fast multi-language code analysis enginge"
 )]
-struct Args {
+pub struct Args {
     /// Project root directory
     #[arg(short, long)]
     root: String,
@@ -355,9 +134,29 @@ struct Args {
     /// switches prism algorithm version check docs to see what each version does
     #[arg(short, long, value_parser = validate_prism_input)]
     prism: u8,
+
+    /// Write a TSV listing every partial and failed file (for diffing runs).
+    #[arg(long)]
+    parse_report: Option<String>,
+
+    /// Resume from a previous interrupted run by reusing the spill file.
+    /// Only valid with --no-analyze (analysis requires a full in-memory map).
+    #[arg(long)]
+    resume: bool,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub fn validate_prism_input(val: &str) -> Result<u8, String> {
+    let n: u8 = val
+        .parse()
+        .map_err(|_| "Value must be a number".to_string())?;
+    if n == 1 || n == 2 {
+        Ok(n)
+    } else {
+        Err("can only accept 1 or 2".to_string())
+    }
+}
+
+pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(unix)]
     #[allow(unsafe_code)]
     unsafe {
@@ -366,10 +165,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
     let version = env!("CARGO_PKG_VERSION");
 
-    // Bin hash of eulix_parser binary (using build-time environment variable or fallback)
     let bin_hash = option_env!("VERGEN_GIT_SHA").unwrap_or("unknown");
 
-    // Set thread pool size
     if args.threads == 0 {
         args.threads = default_thread_count();
     }
@@ -378,6 +175,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_global()?;
     let write_dir = output_dir(&args.output);
     let start_time = Instant::now();
+
+    let rss_start = max_rss_mb();
 
     if args.verbose {
         println!("╔════════════════════════════════════════════════════════════════╗");
@@ -394,7 +193,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("[x] Ignore File:     {}", ignore);
         }
         println!();
+        println!("Peak RSS:    {:.1} MB", rss_start);
         println!("{}", "═".repeat(64));
+    }
+    if args.resume && !args.no_analyze {
+        return Err(
+            "--resume requires --no-analyze (analysis needs a full in-memory FileData map)".into(),
+        );
     }
 
     if args.verbose {
@@ -402,7 +207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", "─".repeat(64));
     }
     let parse_start = Instant::now();
-    let (mut kb, stats) = parse_directory(
+    let (mut kb, stats, spill) = parse_directory(
         &args.root,
         &args.languages,
         args.euignore.as_deref(),
@@ -410,7 +215,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         version,
         bin_hash,
         &write_dir,
+        args.resume,
     )?;
+    if std::env::var_os("EULIX_FIELD_REPORT").is_some() {
+        field_report(&kb);
+    }
+    let rss_after_parse = max_rss_mb();
     let metadata = kb.metadata.clone();
 
     if args.verbose {
@@ -420,10 +230,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "     Time:         {:.2}s",
             parse_start.elapsed().as_secs_f64()
         );
-        println!("     Parsed:       {} files", stats.parsed.len());
-        println!("     Skipped:      {} files", stats.skipped.len());
-        println!("     Failed:       {} files", stats.failed.len());
+        println!("     Peak RSS:     {:.1} MB", rss_after_parse);
         println!("{}", "═".repeat(64));
+    }
+
+    if let Some(report_path) = args.parse_report.as_deref() {
+        write_parse_report(Path::new(report_path), &stats)?;
+        if args.verbose {
+            println!("   Parse report written: {}", report_path);
+        }
     }
 
     if !args.no_analyze {
@@ -439,7 +254,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    Consider using --no-analyze for faster results");
         }
 
-        kb = Analyzer::analyze_and_build(kb, args.verbose, args.prism);
+        kb = analyze::analyze_and_build(kb, args.verbose, args.prism);
+        let rss_after_analyze = max_rss_mb();
 
         if args.verbose {
             println!("\n{}", "─".repeat(64));
@@ -450,6 +266,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             println!("  Graph Nodes:  {}", kb.call_graph.nodes.len());
             println!("  Graph Edges:  {}", kb.call_graph.edges.len());
+            println!("  Peak RSS:     {:.1} MB", rss_after_analyze);
             println!("{}", "═".repeat(64));
         }
 
@@ -458,21 +275,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", "─".repeat(64));
         }
         let summary_start = Instant::now();
-        let summary = Analyzer::generate_summary(&kb);
+        let summary = analyze::summary::generate_summary(&kb);
         const TOP_K: usize = 20;
-        let metrics = Analyzer::generate_metrics(&kb, TOP_K);
+        let metrics = analyze::metrics::generate_metrics(&kb, TOP_K);
+        let rss_after_summary = max_rss_mb();
 
         if args.verbose {
             println!(
                 " Summary + metrics generated in {:.2}s",
                 summary_start.elapsed().as_secs_f64()
             );
+            println!("PEak RSS: {:1.} MB", rss_after_summary);
             println!("{}", "═".repeat(64));
             println!("\n PHASE 4: WRITING OUTPUT FILES");
             println!("{}", "─".repeat(64));
         }
 
-        // Set up output paths
         let output_path = Path::new(&args.output);
         let output_dir = &write_dir;
         fs::create_dir_all(output_dir)?;
@@ -489,14 +307,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let deps_path = output_dir.join(format!("{}_external_deps.json", base_name));
         let patterns_path = output_dir.join(format!("{}_patterns.json", base_name));
 
-        // Build reference wrappers (cheap, zero‑copy)
-        let kb_ref = KnowledgeBaseSimplifiedRef {
-            metadata: &kb.metadata,
-            structure: StructureView(&kb.structure),
-        };
-        let index_ref = IndexDataRef {
-            indices: &kb.indices,
-        };
+        let indices = analyze::indices::generate_indices_view(&kb);
+        let index_ref = IndexViewRef { indices: &indices };
         let cg_ref = CallGraphRef {
             nodes: &kb.call_graph.nodes,
             edges: &kb.call_graph.edges,
@@ -511,11 +323,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             patterns: &kb.patterns,
         };
 
-        // Write all files SEQUENTIALLY, streaming directly to disk
         if args.verbose {
             println!("   Writing knowledge base...");
         }
-        write_json_streaming(output_path, &kb_ref, false)?;
+        write_kb_from_spill(output_path, &kb.metadata, &spill)?;
 
         if args.verbose {
             println!("   Writing index...");
@@ -551,9 +362,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("   Writing patterns...");
         }
         write_json_streaming(&patterns_path, &pat_ref, true)?;
+        // let rss_after_write = max_rss_mb();
 
-        // Prints files and there size in kb,
-        // todo let print value round off to mb or gb anything else nope.
         if args.verbose {
             let files_to_check = [
                 (output_path, "knowledge base"),
@@ -580,15 +390,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             print_final_summary(&metadata, &stats, start_time.elapsed().as_secs_f64());
         } else {
             println!(
-                "✓ Parsed {} files ({} LOC) in {:.2}s → {}",
-                kb.metadata.total_files,
+                "✓ Parsed {} files ({} clean, {} partial, {} failed; {} LOC) in {:.2}s → {}",
+                stats.total(),
+                stats.clean,
+                stats.partial.len(),
+                stats.failed.len(),
                 kb.metadata.total_loc,
                 start_time.elapsed().as_secs_f64(),
                 args.output
             );
         }
     } else {
-        // --no-analyze branch: writes only kb.json
         if args.verbose {
             println!("\n WRITING OUTPUT (ANALYSIS SKIPPED)");
             println!("{}", "─".repeat(64));
@@ -599,418 +411,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fs::create_dir_all(parent)?;
         }
 
-        let kb_simplified = KnowledgeBaseSimplifiedRef {
-            metadata: &kb.metadata,
-            structure: StructureView(&kb.structure),
-        };
-
-        write_json_streaming(output_path, &kb_simplified, false)?;
+        write_kb_from_spill(output_path, &kb.metadata, &spill)?;
+        let rss_after_write = max_rss_mb();
 
         if args.verbose {
             let size = fs::metadata(output_path)?.len();
             println!("   ✓ {} ({:.2} KB)", args.output, size as f64 / 1024.0);
+            println!("   Peak RSS:     {:.1} MB", rss_after_write);
             println!("{}", "═".repeat(64));
             print_final_summary(&metadata, &stats, start_time.elapsed().as_secs_f64());
         } else {
             println!(
-                "✓ Parsed {} files ({} LOC) in {:.2}s → {} (no analysis)",
-                metadata.total_files,
+                "✓ Parsed {} files ({} clean, {} partial, {} failed; {} LOC) in {:.2}s → {} (no analysis)",
+                stats.total(),
+                stats.clean,
+                stats.partial.len(),
+                stats.failed.len(),
                 metadata.total_loc,
                 start_time.elapsed().as_secs_f64(),
-                args.output
+                args.output,
             );
+            println!("Peak RSS: {:.1} MB", rss_after_write);
         }
     }
 
     Ok(())
-}
-
-fn print_final_summary(metadata: &Metadata, stats: &ParseStats, total_time: f64) {
-    println!("EXECUTION TIME");
-    println!("   Total:                  {:.2}s", total_time);
-    println!();
-    println!("CODE METRICS");
-    println!("   Files Processed:        {}", metadata.total_files);
-    println!("   Total Lines of Code:    {}", metadata.total_loc);
-    println!("   Functions:              {}", metadata.total_functions);
-    println!("   Classes:                {}", metadata.total_classes);
-    println!("   Methods:                {}", metadata.total_methods);
-    println!();
-    println!("LANGUAGES DETECTED");
-    for lang in &metadata.languages {
-        println!("   • {}", lang);
-    }
-    println!();
-    // if !stats.failed.is_empty() {
-    //     println!("[!]  FAILED FILES:");
-    //     for (file, reason) in &stats.failed {
-    //         println!("   • {} - {}", file, reason);
-    //     }
-    // }
-    println!(" PARSING STATISTICS");
-    println!("   ✓ Successfully Parsed:  {} files", stats.parsed.len());
-    println!("   ⊘ Skipped:              {} files", stats.skipped.len());
-    println!("   ✗ Failed:               {} files", stats.failed.len());
-    println!(" Analysis complete!");
-}
-
-fn parse_directory(
-    dir: &str,
-    languages: &str,
-    euignore_path: Option<&str>,
-    verbose: bool,
-    version: &str,
-    git_hash: &str,
-    write_dir: &Path,
-) -> Result<(KnowledgeBase, ParseStats), Box<dyn std::error::Error>> {
-    let path = PathBuf::from(dir);
-    let euignore = euignore_path.map(PathBuf::from).or_else(|| {
-        let default_path = path.join(".euignore");
-        default_path.exists().then_some(default_path)
-    });
-    if verbose {
-        if let Some(ref p) = euignore {
-            println!("   [!] Using .euignore: {:?}", p);
-        }
-    }
-
-    let (files, project_hash) =
-        collect_source_files_and_hash(&path, languages, euignore.as_deref(), verbose, write_dir)?;
-
-    println!("      • Number of source files to process: {}", files.len());
-    let vec_memory_bytes = files.capacity() * std::mem::size_of::<PathBuf>();
-    println!(
-        "      • Memory allocated for the PathBuf vector: ~{} bytes",
-        vec_memory_bytes
-    );
-
-    if verbose {
-        println!("    Discovered {} source files", files.len());
-        println!();
-    }
-
-    let pb = if verbose {
-        let pb = ProgressBar::new(files.len() as u64);
-        let style = ProgressStyle::default_bar()
-            .template(
-                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
-            )?
-            .progress_chars("#>-");
-        pb.set_style(style);
-        Some(pb)
-    } else {
-        None
-    };
-
-    #[cfg(target_os = "linux")]
-    if files.len() > 1 {
-        let prefetch_limit = files.len().min(1000);
-        for p in &files[0..prefetch_limit] {
-            os_io::prefetch(p);
-        }
-    }
-
-    // Scale chunk size to thread count so every worker gets a handful of chunks,
-    // rather than a size cliff at 10k files.
-    let num_threads = rayon::current_num_threads().max(1);
-    let chunk_size = (files.len() / (num_threads * 8)).clamp(16, 200);
-
-    type Acc = (
-        FxHashMap<String, FileData>,
-        usize,                 // total_loc
-        usize,                 // total_functions
-        usize,                 // total_classes
-        usize,                 // total_methods
-        FxHashSet<String>,     // languages
-        Vec<String>,           // parsed
-        Vec<(String, String)>, // failed: (path, error)
-    );
-
-    let (
-        structure,
-        total_loc,
-        total_functions,
-        total_classes,
-        total_methods,
-        languages_set,
-        parsed,
-        failed,
-    ) = files
-        .par_chunks(chunk_size)
-        .fold(
-            || {
-                (
-                    FxHashMap::default(),
-                    0usize,
-                    0usize,
-                    0usize,
-                    0usize,
-                    FxHashSet::default(),
-                    Vec::new(),
-                    Vec::new(),
-                )
-            },
-            |mut acc: Acc, chunk: &[PathBuf]| {
-                for file_path in chunk {
-                    let relative_path = file_path
-                        .strip_prefix(&path)
-                        .unwrap_or(file_path)
-                        .to_string_lossy()
-                        .into_owned();
-
-                    match parse_file(file_path, &path) {
-                        Ok((rel, file_data)) => {
-                            if let Some(ref pb) = pb {
-                                pb.inc(1);
-                                // Only format a message when verbose is already true,
-                                // and reuse relative_path instead of cloning it again.
-                                pb.set_message(format!("Parsed: {relative_path}"));
-                            }
-                            acc.1 += file_data.loc;
-                            acc.2 += file_data.functions.len();
-                            acc.3 += file_data.classes.len();
-                            acc.4 += file_data
-                                .classes
-                                .iter()
-                                .map(|c| c.methods.len())
-                                .sum::<usize>();
-                            acc.5.insert(file_data.language.clone());
-                            acc.6.push(relative_path); // no clone — this string is done being used
-                            acc.0.insert(rel, file_data);
-                        }
-                        Err(e) => {
-                            if let Some(ref pb) = pb {
-                                pb.println(format!("   ✗ Failed: {relative_path} - {e}"));
-                                pb.inc(1);
-                            }
-                            acc.7.push((relative_path, e.to_string()));
-                        }
-                    }
-                }
-                acc
-            },
-        )
-        .reduce(
-            || {
-                (
-                    FxHashMap::default(),
-                    0,
-                    0,
-                    0,
-                    0,
-                    FxHashSet::default(),
-                    Vec::new(),
-                    Vec::new(),
-                )
-            },
-            |mut a, b| {
-                a.0.extend(b.0);
-                a.1 += b.1;
-                a.2 += b.2;
-                a.3 += b.3;
-                a.4 += b.4;
-                a.5.extend(b.5);
-                a.6.extend(b.6);
-                a.7.extend(b.7);
-                a
-            },
-        );
-
-    let final_stats = ParseStats {
-        parsed,
-        failed,
-        ..ParseStats::new()
-    };
-
-    let project_name = path
-        .canonicalize()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        })
-        .unwrap_or_else(|| "unknown".to_string());
-
-    let metadata = Metadata {
-        version: version.to_string(),
-        git_hash: git_hash.to_string(),
-        project_name,
-        project_hash: project_hash.to_string(),
-        parsed_at: chrono::Utc::now().format("%Y.%m.%d.%H%M%S").to_string(),
-        languages: languages_set.into_iter().collect(),
-        total_files: structure.len(),
-        total_loc,
-        total_functions,
-        total_classes,
-        total_methods,
-    };
-
-    let kb = KnowledgeBase {
-        metadata,
-        structure: structure.into_iter().collect(),
-        call_graph: CallGraph::default(),
-        dependency_graph: DependencyGraph::default(),
-        indices: Indices::default(),
-        entry_points: vec![],
-        external_dependencies: vec![],
-        patterns: PatternInfo::default(),
-    };
-
-    if let Some(pb) = pb {
-        pb.finish_with_message("Parse complete!");
-    }
-
-    Ok((kb, final_stats))
-}
-
-fn collect_source_files_and_hash(
-    root: &Path,
-    languages: &str,
-    euignore_path: Option<&Path>,
-    verbose: bool,
-    write_dir: &Path,
-) -> Result<(Vec<PathBuf>, String), Box<dyn std::error::Error>> {
-    let lang_filters: Vec<Language> = if languages == "all" {
-        vec![
-            Language::C,
-            Language::Cpp,
-            Language::Python,
-            Language::JavaScript,
-            Language::TypeScript,
-            Language::Go,
-            Language::Rust,
-        ]
-    } else {
-        languages
-            .split(',')
-            .map(|s| s.trim())
-            .filter_map(|lang_str| match lang_str.to_lowercase().as_str() {
-                "c" | "h" => Some(Language::C),
-                "cpp" | "c++" | "cxx" | "hpp" => Some(Language::Cpp),
-                "python" | "py" => Some(Language::Python),
-                "javascript" | "js" => Some(Language::JavaScript),
-                "java" => Some(Language::Java),
-                "typescript" | "ts" => Some(Language::TypeScript),
-                "go" | "golang" => Some(Language::Go),
-                "rust" | "rs" => Some(Language::Rust),
-                _ => {
-                    if verbose {
-                        eprintln!("     Unknown language filter '{}'", lang_str);
-                    }
-                    None
-                }
-            })
-            .collect()
-    };
-
-    if verbose {
-        println!("    Searching for files...");
-    }
-
-    let mut ext_set: FxHashSet<&'static str> = FxHashSet::default();
-    for lang in &lang_filters {
-        for ext in lang.extensions() {
-            ext_set.insert(ext);
-        }
-    }
-
-    let walker = if let Some(ignore_path) = euignore_path {
-        FileWalker::new(root.to_path_buf()).with_euignore(ignore_path.to_path_buf())
-    } else {
-        FileWalker::new(root.to_path_buf())
-    };
-
-    let (mut all_files, project_hash) = walker.walk_and_project_hash(
-        |path| {
-            path.extension()
-                .and_then(|e| e.to_str())
-                .map(|e| ext_set.contains(e))
-                .unwrap_or(false)
-        },
-        write_dir,
-    )?;
-
-    if verbose {
-        println!("      • Found {} parseable files", all_files.len());
-    }
-
-    all_files.sort_unstable();
-    all_files.dedup();
-    Ok((all_files, project_hash))
-}
-
-fn parse_file(
-    file_path: &Path,
-    root: &Path,
-) -> Result<(String, FileData), Box<dyn std::error::Error>> {
-    let lang = Language::detect(file_path);
-
-    let relative_path = file_path
-        .strip_prefix(root)
-        .unwrap_or(file_path)
-        .to_string_lossy()
-        .to_string();
-
-    // Open with hints
-    let file = open_source_file(file_path)?;
-
-    // For very large files, use mmap
-    let _contents = if let Ok(metadata) = file.metadata() {
-        if metadata.len() > 10 * 1024 * 1024 {
-            use memmap2::Mmap;
-            #[allow(unsafe_code)]
-            let mmap = unsafe { Mmap::map(&file)? };
-            std::str::from_utf8(&mmap)?.to_string()
-        } else {
-            std::fs::read_to_string(file_path)?
-        }
-    } else {
-        std::fs::read_to_string(file_path)?
-    };
-
-    // Parse the file
-    let result = match lang {
-        Language::Python => {
-            let (_, fd) = python::parse_file(file_path)?;
-            fd
-        }
-        Language::JavaScript => {
-            let (_, fd) = javascript::parse_file(file_path)?;
-            fd
-            // return Err("JavaScript parsing not yet implemented".into());
-        }
-        Language::TypeScript => {
-            let (_, fd) = typescript::parse_file(file_path)?;
-            fd
-        }
-        Language::Go => {
-            let (_, fd) = go::parse_file(file_path)?;
-            fd
-        }
-        Language::C => {
-            let (_, fd) = c::parse_file(file_path)?;
-            fd
-        }
-        Language::Cpp => {
-            let (_, fd) = cpp::parse_file(file_path)?;
-            fd
-        }
-        Language::Rust => {
-            let (_, fd) = rust_parser::parse_file(file_path)?;
-            fd
-        }
-        Language::Java => {
-            let (_, fd) = java::parse_file(file_path)?;
-            fd
-        }
-        _ => return Err(format!("Unsupported language: {:?}", lang).into()),
-    };
-
-    // Optionally hint that we're done with the file
-    #[cfg(target_os = "linux")]
-    os_io::done_with_file(&file);
-
-    Ok((relative_path, result))
 }

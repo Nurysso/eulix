@@ -7,11 +7,6 @@
 /*
 This file is responsible for the eulix_embed related operations
 except the analyze command.
-
-VectorWeaver starts eulix_embed in "server" mode.  The mode is Set by
-config.Project.EmbedIs:
-  - "script" → venv Python + $HOME/.Eulix/eulix_embed/main.py  (default)
-  - "bin"    → embedded eulix_embed binary extracted from the eulix executable
 */
 
 package embeddings
@@ -30,8 +25,10 @@ import (
 	"time"
 )
 
-const stderrTailSize = 50
-const defaultRequestTimeout = 30 * time.Second
+const (
+	stderrTailSize        = 50
+	defaultRequestTimeout = 30 * time.Second
+)
 
 type stderrTail struct {
 	mu    sync.Mutex
@@ -157,6 +154,9 @@ func streamStderr(model string, r io.Reader, tail *stderrTail, debug bool) {
 		if debug {
 			log.Printf("[eulix_embed:%s] %s", model, line)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("[eulix_embed:%s] stderr scan error: %v", model, err)
 	}
 }
 
