@@ -11,22 +11,76 @@ This file is have helpers for cli stuff
 package cli
 
 import (
-	"eulix/internal/utils"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
+
+	"eulix/internal/utils"
 )
+
+// openInBrowser launches the specified path or URL in the system's default browser.
+// It handles platform-specific quirks, absolute path resolution, and non-blocking execution.
+func openInBrowser(target string) error {
+	var cmd *exec.Cmd
+
+	// Determine if the target is an HTTP/HTTPS URL or a local file path
+	isURL := strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://")
+	targetPath := target
+
+	if !isURL {
+		// Resolve relative paths (e.g. .eulix/...) to absolute paths
+		absPath, err := filepath.Abs(target)
+		if err != nil {
+			return fmt.Errorf("failed to resolve absolute path for %s: %w", target, err)
+		}
+		targetPath = absPath
+	}
+
+	switch runtime.GOOS {
+	case "windows":
+		// Properly format local file paths as file:// URIs while leaving web URLs untouched
+		destination := targetPath
+		if !isURL {
+			destination = "file:///" + filepath.ToSlash(targetPath)
+		}
+		// 'cmd /c start "" <url|file>' is resilient against spaces and quotes in paths
+		cmd = exec.Command("cmd", "/c", "start", "", destination)
+
+	case "darwin":
+		cmd = exec.Command("open", targetPath)
+
+	default: // Linux, FreeBSD, OpenBSD, etc.
+		// Check for xdg-open to prevent cryptic crashes on headless servers / Docker
+		if _, err := exec.LookPath("xdg-open"); err != nil {
+			return fmt.Errorf("xdg-open not found in $PATH (headless environment?); please open manually: %s", targetPath)
+		}
+		cmd = exec.Command("xdg-open", targetPath)
+	}
+
+	// Detach standard I/O streams so child browser processes don't hold terminal handles
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	// Start running without blocking or waiting for browser process exit
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start browser command for %s: %w", targetPath, err)
+	}
+
+	return nil
+}
 
 func writeQueryDebugLog(eulixDir, query, result string) error {
 	logFile := filepath.Join(eulixDir, "debug", "query-debug.log")
-	if err := os.MkdirAll(filepath.Dir(logFile), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
 		return fmt.Errorf("failed to create debug directory: %w", err)
 	}
 
-	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open debug log file: %w", err)
 	}
