@@ -3,8 +3,8 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-// use rustc_hash::FxHashMap; todo move to FxHashMap instead of HashMap
-use serde::ser::{SerializeMap, SerializeStruct, Serializer};
+use crate::utils::syntax::SyntaxHealth;
+use serde::ser::{SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -16,7 +16,7 @@ pub struct ClassSimpleView<'a>(pub &'a Class);
 impl<'a> Serialize for FunctionSimpleView<'a> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let f = self.0;
-        let mut st = s.serialize_struct("FunctionSimple", 11)?;
+        let mut st = s.serialize_struct("FunctionSimple", 8)?;
         st.serialize_field("id", &f.id)?;
         st.serialize_field("name", &f.name)?;
         st.serialize_field("signature", &f.signature)?;
@@ -25,9 +25,9 @@ impl<'a> Serialize for FunctionSimpleView<'a> {
         st.serialize_field("docstring", &f.docstring)?;
         st.serialize_field("line_start", &f.line_start)?;
         st.serialize_field("line_end", &f.line_end)?;
-        st.serialize_field("variables", &f.variables)?;
-        st.serialize_field("complexity", &f.complexity)?;
-        st.serialize_field("importance_score", &f.importance_score)?;
+        // "complexity" removed
+        // "importance_score" removed
+        // "variables" removed
         st.end()
     }
 }
@@ -42,7 +42,7 @@ impl<'a, T, V: Serialize> Serialize for SeqView<'a, T, V> {
 impl<'a> Serialize for ClassSimpleView<'a> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let c = self.0;
-        let mut st = s.serialize_struct("ClassSimple", 10)?;
+        let mut st = s.serialize_struct("ClassSimple", 9)?;
         st.serialize_field("id", &c.id)?;
         st.serialize_field("name", &c.name)?;
         st.serialize_field("bases", &c.bases)?;
@@ -52,7 +52,7 @@ impl<'a> Serialize for ClassSimpleView<'a> {
         st.serialize_field("methods", &SeqView(&c.methods, FunctionSimpleView))?;
         st.serialize_field("attributes", &c.attributes)?;
         st.serialize_field("decorators", &c.decorators)?;
-        st.serialize_field("lang_info", &c.lang_info)?;
+        // st.serialize_field("lang_info", &c.lang_info)?;
         st.end()
     }
 }
@@ -60,10 +60,10 @@ impl<'a> Serialize for ClassSimpleView<'a> {
 impl<'a> Serialize for FileDataSimpleView<'a> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let d = self.0;
-        let mut st = s.serialize_struct("FileDataSimple", 6)?;
+        let mut st = s.serialize_struct("FileDataSimple", 5)?;
         st.serialize_field("language", &d.language)?;
         st.serialize_field("loc", &d.loc)?;
-        st.serialize_field("imports", &d.imports)?;
+        // "imports" removed
         st.serialize_field("functions", &SeqView(&d.functions, FunctionSimpleView))?;
         st.serialize_field("classes", &SeqView(&d.classes, ClassSimpleView))?;
         st.serialize_field("todos", &d.todos)?;
@@ -71,27 +71,18 @@ impl<'a> Serialize for FileDataSimpleView<'a> {
     }
 }
 
-pub struct StructureView<'a>(pub &'a HashMap<String, FileData>);
-impl<'a> Serialize for StructureView<'a> {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut m = s.serialize_map(Some(self.0.len()))?;
-        for (k, v) in self.0 {
-            m.serialize_entry(k, &FileDataSimpleView(v))?;
-        }
-        m.end()
-    }
+#[derive(Serialize, Default)]
+pub struct IndicesView<'a> {
+    pub functions_by_name: HashMap<&'a str, Vec<String>>,
+    pub functions_calling: HashMap<&'a str, Vec<&'a str>>,
+    pub functions_by_tag: HashMap<&'a str, Vec<&'a str>>,
+    pub types_by_name: HashMap<&'a str, Vec<String>>,
+    pub files_by_category: HashMap<&'a str, Vec<&'a str>>,
 }
 
 #[derive(Serialize)]
-pub struct KnowledgeBaseSimplifiedRef<'a> {
-    pub metadata: &'a Metadata,
-    pub structure: StructureView<'a>,
-}
-
-// kb_index.json(*_index.json) structure
-#[derive(Serialize)]
-pub struct IndexDataRef<'a> {
-    pub indices: &'a Indices,
+pub struct IndexViewRef<'a> {
+    pub indices: &'a IndicesView<'a>,
 }
 
 // kb_call_graph.json (*_call_graph.json) structure
@@ -172,6 +163,10 @@ pub struct FileData {
     pub global_vars: Vec<GlobalVar>,
     pub todos: Vec<Todo>,
     pub security_notes: Vec<SecurityNote>,
+
+    /// ERROR/MISSING node info from tree-sitter. Runtime-only: not written to kb.json.
+    #[serde(skip)]
+    pub syntax: SyntaxHealth,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -449,21 +444,21 @@ pub struct PatternInfo {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LanguageSpecificInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub python: Option<PythonInfo>,
+    pub python: Option<Box<PythonInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rust: Option<RustInfo>,
+    pub rust: Option<Box<RustInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub go: Option<GoInfo>,
+    pub go: Option<Box<GoInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub typescript: Option<TypeScriptInfo>,
+    pub typescript: Option<Box<TypeScriptInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub javascript: Option<JavaScriptInfo>,
+    pub javascript: Option<Box<JavaScriptInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub c: Option<CInfo>,
+    pub c: Option<Box<CInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cpp: Option<CppInfo>,
+    pub cpp: Option<Box<CppInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub java: Option<JavaInfo>,
+    pub java: Option<Box<JavaInfo>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

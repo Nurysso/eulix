@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>vizEulize · Call Graph Explorer</title>
+<style>
+:root{--bg:#fff;--bg2:#f5f5f3;--bg3:#ebebe8;--tx:#1c1c1a;--tx2:#6b6b66;--bd:#d8d8d3;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1b1a;--bg2:#242423;--bg3:#2f2f2d;--tx:#ececea;--tx2:#9a9a94;--bd:#3d3d3a}}
+:root[data-theme="dark"]{--bg:#1b1b1a;--bg2:#242423;--bg3:#2f2f2d;--tx:#ececea;--tx2:#9a9a94;--bd:#3d3d3a}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:var(--bg);color:var(--tx)}
+#app{display:flex;flex-direction:column;height:100%}
+#top{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--bd);background:var(--bg2);flex-wrap:wrap}
+#top b{font-weight:600}
+label.btn,button{padding:5px 11px;font:inherit;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--tx);cursor:pointer}
+label.btn{background:#7F77DD;border-color:#7F77DD;color:#fff}
+button:hover{background:var(--bg3)}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #7F77DD;outline-offset:1px}
+#status{color:var(--tx2);flex:1;min-width:120px}
+#main{flex:1;display:flex;min-height:0}
+#side{width:280px;flex-shrink:0;border-right:1px solid var(--bd);background:var(--bg2);display:flex;flex-direction:column}
+#side .sec{padding:8px 10px;border-bottom:1px solid var(--bd);display:flex;flex-direction:column;gap:6px}
+input[type=text],select{width:100%;padding:5px 7px;font:inherit;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--tx)}
+.row{display:flex;gap:6px}.row button{flex:1;padding:5px 4px}
+#list{flex:1;overflow-y:auto}
+.it{padding:5px 10px;cursor:pointer;border-left:2px solid transparent}
+.it:hover{background:var(--bg3)}.it.on{border-left-color:#7F77DD;background:var(--bg3)}
+.it .n{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.it .f{color:var(--tx2);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lg{display:flex;flex-wrap:wrap;gap:4px 10px;color:var(--tx2);font-size:10px}
+.lg i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+.lg [data-et]{cursor:pointer}.lg .off{opacity:.35;text-decoration:line-through}
+#wrap{flex:1;position:relative;min-width:0;overflow:hidden}
+canvas{display:block;width:100%;height:100%;touch-action:none}
+#hint{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--tx2);line-height:1.8;padding:20px;pointer-events:none}
+#pb{width:260px;height:4px;background:var(--bg3);border-radius:2px;margin-top:12px;overflow:hidden}
+#pb i{display:block;height:100%;width:0;background:#7F77DD}
+#det{position:absolute;top:8px;right:8px;width:260px;max-height:calc(100% - 44px);overflow-y:auto;background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:10px;display:none;line-height:1.5}
+#det h4{font-size:13px;word-break:break-all}
+#det .k{color:var(--tx2);font-size:10px;margin-top:8px}
+#det .c{cursor:pointer;color:#378ADD;word-break:break-all;padding:1px 0}
+#det .c:hover{text-decoration:underline}
+#det .tag{display:inline-block;background:var(--bg3);border-radius:4px;padding:0 5px;margin:1px 2px 1px 0;font-size:10px}
+#bar{position:absolute;left:0;right:0;bottom:0;padding:5px 10px;font-size:10px;color:var(--tx2);background:var(--bg2);border-top:1px solid var(--bd);display:flex;gap:14px;white-space:nowrap;overflow:hidden}
+#i3{overflow:hidden;text-overflow:ellipsis}
+#drop{outline:2px dashed #7F77DD;outline-offset:-6px}
+@media(max-width:700px){#side{width:180px}#det{width:200px}}
+</style></head>
+<body><div id="app">
+<div id="top">
+  <b>vizEulize</b>
+  <label class="btn">Load JSON files<input id="file" type="file" accept=".json,application/json" multiple hidden></label>
+  <span id="status">Looking for the project's call graph…</span>
+</div>
+<div id="main">
+  <div id="side">
+    <div class="sec">
+      <input id="q" type="text" placeholder="Search name or file…  ( / )">
+      <select id="fcat"><option value="">All categories</option></select>
+      <select id="ftag"><option value="">All tags</option></select>
+      <select id="show"><option value="all">All nodes</option><option value="entry">No callers (entry / unused)</option><option value="leaf">No callees (leaf)</option><option value="proj">Hide external</option></select>
+      <div class="row">
+        <select id="dir" title="focus direction"><option value="both">both ways</option><option value="callees">callees →</option><option value="callers">← callers</option></select>
+        <select id="depth" title="focus depth"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>
+        <select id="lim" title="max nodes drawn"><option>80</option><option selected>150</option><option>300</option><option>600</option></select>
+      </div>
+      <div class="row"><button id="back">Back</button><button id="fitb">Fit</button><button id="reset">Reset</button></div>
+    </div>
+    <div class="sec lg" id="lg"></div>
+    <div id="list"></div>
+  </div>
+  <div id="wrap">
+    <canvas id="c"></canvas>
+    <div id="hint"><div id="hm"></div><div id="pb" hidden><i></i></div></div>
+    <div id="det"></div>
+    <div id="bar"><span id="i1"></span><span id="i2"></span><span id="i3"></span></div>
+  </div>
+</div></div>
+
+<script id="wk" type="text/plain">
+const K='func|fn|method|type|struct|class|interface|var|const|file|module|package';
+const A=new RegExp('^('+K+')_(.*?)::(.*)$','s'),B=new RegExp('^('+K+')_(.+)$','s');
+const CAT={function:0,func:0,fn:0,method:1,type:2,struct:2,class:2,interface:2,file:3,module:4,package:5};
+const pid=s=>{let m=A.exec(s);if(m)return[m[1],m[2],m[3]];m=B.exec(s);return m?[m[1],m[2],'']:['',s,''];};
+onmessage=e=>{
+  const{id,buf}=e.data;
+  try{
+    const d=JSON.parse(new TextDecoder().decode(buf));
+    if(Array.isArray(d.nodes)||Array.isArray(d.edges))graph(d,id);
+    else if(d.indices||d.functions_by_name||d.functions_calling)postMessage({id,kind:'index',data:d.indices||d});
+    else postMessage({id,kind:'unknown'});
+  }catch(err){postMessage({id,kind:'error',msg:err.message});}
+};
+function graph(d,id){
+  const idx=new Map(),ids=[],names=[],files=[],cat=[];
+  const get=(k,ext)=>{let i=idx.get(k);if(i===undefined){i=ids.length;idx.set(k,i);ids.push(k);const p=pid(k);names.push(p[1]);files.push(p[2]);cat.push(ext?6:(CAT[p[0]]??6));}return i;};
+  for(const s of d.nodes||[]){
+    if(s==null||s.id==null)continue;
+    const i=get(String(s.id),false);
+    if(s.name)names[i]=s.name;if(s.file)files[i]=s.file;if(s.node_type)cat[i]=CAT[s.node_type]??6;
+  }
+  const eF=[],eT=[],eY=[],eC=[],tn=[],tm=new Map();
+  for(const e of d.edges||[]){
+    const f=e.from??e.source??e.caller,t=e.to??e.target??e.callee;if(f==null||t==null)continue;
+    const ty=e.edge_type||e.type||'calls';let ti=tm.get(ty);
+    if(ti===undefined){ti=tn.length;tm.set(ty,ti);tn.push(ty);}
+    eF.push(get(String(f),true));eT.push(get(String(t),true));eY.push(ti);eC.push(e.conditional?1:0);
+  }
+  const n=ids.length,k=eF.length,F=Int32Array.from(eF),T=Int32Array.from(eT);
+  const oS=new Int32Array(n+1),iS=new Int32Array(n+1);
+  for(let j=0;j<k;j++){oS[F[j]+1]++;iS[T[j]+1]++;}
+  for(let i=0;i<n;i++){oS[i+1]+=oS[i];iS[i+1]+=iS[i];}
+  const oE=new Int32Array(k),iE=new Int32Array(k),po=oS.slice(0,n),pi=iS.slice(0,n);
+  for(let j=0;j<k;j++){oE[po[F[j]]++]=j;iE[pi[T[j]]++]=j;}
+  const Y=Uint8Array.from(eY),C=Uint8Array.from(eC),ct=Uint8Array.from(cat);
+  postMessage({id,kind:'graph',n,m:k,ids,names,files,cat:ct,eF:F,eT:T,eY:Y,eC:C,tn,oS,oE,iS,iE},
+    [ct.buffer,F.buffer,T.buffer,Y.buffer,C.buffer,oS.buffer,oE.buffer,iS.buffer,iE.buffer]);
+}
+</script>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const CATS=['function','method','type','file','module','package','external'];
+const COL={function:'#7F77DD',method:'#1D9E75',type:'#EF9F27',file:'#378ADD',module:'#378ADD',package:'#378ADD',external:'#888780'};
+const ECOL={calls:'#378ADD',imports:'#1D9E75',depends_on:'#D4537E'},EFB='#888780';
+const HINT='Load a call graph to begin.<br>Default view = most-connected nodes.<br>Click: details · Double-click: focus neighborhood · Drag: pan / move · Scroll: zoom<br>Keys: / search · Esc deselect';
+let G=null,IDX=null,vis=[],visE=[],focus=null,sel=null,hov=null,nb=new Set(),hist=[],hidE=new Set(),M=()=>true;
+let pan={x:0,y:0},zoom=1,alpha=0,dirty=true,dragN=null,panning=false,down=null,lastP=null,fitP=false;
+const status=s=>$('status').textContent=s;
+const mb=b=>(b/1048576).toFixed(1);
+const resetHint=()=>{$('hm').innerHTML=HINT;$('pb').hidden=true;};
+resetHint();
+
+// worker: parse + build compact CSR graph off the main thread
+const WK=new Worker(URL.createObjectURL(new Blob([$('wk').textContent])));
+const pend=new Map();let jid=0;
+WK.onmessage=e=>{const m=e.data,p=pend.get(m.id);pend.delete(m.id);m.kind==='error'?p.rej(new Error(m.msg)):p.res(m);};
+WK.onerror=e=>status('Worker error: '+e.message);
+const parse=buf=>new Promise((res,rej)=>{const id=++jid;pend.set(id,{res,rej});WK.postMessage({id,buf},[buf]);});
+
+// loading
+function prog(name,got,tot){
+  $('hm').textContent=`Loading ${name}… ${mb(got)}${tot?' / '+mb(tot):''} MB`;
+  const p=$('pb');p.hidden=false;p.firstChild.style.width=tot?(got/tot*100)+'%':'100%';
+}
+async function fetchBuf(url){
+  const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error(r.status);
+  const tot=+r.headers.get('Content-Length')||0,rd=r.body.getReader(),parts=[];let got=0;
+  for(;;){const{done,value}=await rd.read();if(done)break;parts.push(value);got+=value.length;prog(url.split('/').pop(),got,tot);}
+  const out=new Uint8Array(got);let o=0;for(const p of parts){out.set(p,o);o+=p.length;}
+  return out.buffer;
+}
+async function auto(){
+  if(location.protocol==='file:'){status('Opened as a file. Select *_call_graph.json (and *_index.json), or drop them here.');return;}
+  const get=async urls=>{for(const u of urls){try{return{name:u.split('/').pop(),buf:await fetchBuf(u)};}catch(e){}}return null;};
+  const g=await get(['/data/call_graph.json','/data/kb_call_graph.json']);
+  if(!g){status('No call graph served at /data/call_graph.json. Load files manually.');resetHint();return;}
+  const ix=await get(['/data/index.json','/data/kb_index.json']);
+  status('Parsing…');
+  await ingest([g,ix].filter(Boolean));
+}
+async function loadFiles(files){
+  const items=[];
+  for(const f of files){status(`Reading ${f.name} (${mb(f.size)} MB)…`);items.push({name:f.name,buf:await f.arrayBuffer()});}
+  status('Parsing…');await ingest(items);
+}
+async function ingest(items){
+  $('hm').textContent='Parsing…';$('pb').hidden=true;
+  const res=await Promise.all(items.map(it=>parse(it.buf).catch(e=>{status(`${it.name}: ${e.message}`);return null;})));
+  let ok=false,bad=false;
+  for(const m of res){if(!m)continue;if(m.kind==='index'){IDX=buildIndex(m.data);fillFilters();}else if(m.kind==='unknown')bad=true;}
+  for(const m of res)if(m&&m.kind==='graph'){setGraph(m);ok=true;}
+  if(ok){focus=null;sel=null;hist=[];nb=new Set();}
+  if(G){$('hint').style.display='none';showDet(null);rebuild();status(`Loaded ${items.map(i=>i.name).join(' + ')}`);}
+  else{resetHint();if(bad)status('Unrecognized JSON: expected nodes/edges or an index.');}
+}
+function setGraph(m){
+  const n=m.n,deg=new Int32Array(n),order=new Int32Array(n);
+  for(let i=0;i<n;i++){deg[i]=m.oS[i+1]-m.oS[i]+m.iS[i+1]-m.iS[i];order[i]=i;}
+  order.sort((a,b)=>deg[b]-deg[a]);
+  G={...m,deg,order,lc:null};
+}
+function buildIndex(ix){
+  const tagsOf=new Map(),fileCat=new Map();
+  for(const[t,arr]of Object.entries(ix.functions_by_tag||{}))for(const v of arr){(tagsOf.get(v)||tagsOf.set(v,[]).get(v)).push(t);}
+  for(const[c,arr]of Object.entries(ix.files_by_category||{}))for(const f of arr)fileCat.set(f,c);
+  return{ix,tagsOf,fileCat,tagSets:Object.fromEntries(Object.entries(ix.functions_by_tag||{}).map(([k,v])=>[k,new Set(v)]))};
+}
+function fillFilters(){
+  const ix=IDX.ix,f=(id,keys)=>{const s=$(id),first=s.options[0];s.innerHTML='';s.appendChild(first);keys.sort().forEach(k=>{const o=document.createElement('option');o.value=k;o.textContent=k;s.appendChild(o);});};
+  f('fcat',Object.keys(ix.files_by_category||{}));f('ftag',Object.keys(ix.functions_by_tag||{}));
+}
+const tagsFor=i=>IDX?[...new Set([...(IDX.tagsOf.get(G.names[i])||[]),...(IDX.tagsOf.get(G.ids[i])||[])])]:[];
+const catFor=i=>IDX&&G.files[i]?(IDX.fileCat.get(G.files[i])||null):null;
+
+// graph helpers
+function nbrs(u,dir,fn){
+  if(dir!=='callers')for(let k=G.oS[u];k<G.oS[u+1];k++)fn(G.eT[G.oE[k]]);
+  if(dir!=='callees')for(let k=G.iS[u];k<G.iS[u+1];k++)fn(G.eF[G.iE[k]]);
+}
+const rad=i=>6+Math.min(12,Math.sqrt(G.deg[i])*2.2);
+const noCallers=i=>G.iS[i+1]===G.iS[i]&&G.oS[i+1]>G.oS[i];
+function mk(){
+  const q=$('q').value.trim().toLowerCase(),c=$('fcat').value,t=$('ftag').value,s=$('show').value;
+  if(q&&!G.lc)G.lc=G.names.map((x,i)=>(x+'\n'+G.files[i]).toLowerCase());
+  const ts=t&&IDX?IDX.tagSets[t]:null;
+  return i=>{
+    if(q&&!G.lc[i].includes(q))return false;
+    if(c&&catFor(i)!==c)return false;
+    if(ts&&!(ts.has(G.names[i])||ts.has(G.ids[i])))return false;
+    if(s==='entry'&&!noCallers(i))return false;
+    if(s==='leaf'&&!(G.oS[i+1]===G.oS[i]&&G.iS[i+1]>G.iS[i]))return false;
+    if(s==='proj'&&G.cat[i]===6)return false;
+    return true;
+  };
+}
+
+// view building
+function rebuild(){
+  if(!G)return;
+  M=mk();
+  const lim=+$('lim').value;let ids=[];
+  if(focus!==null){
+    const dir=$('dir').value,depth=+$('depth').value,seen=new Set([focus]);ids=[focus];let fr=[focus];
+    for(let d=0;d<depth&&ids.length<lim;d++){const nx=[];
+      for(const u of fr)nbrs(u,dir,v=>{if(ids.length<lim&&!seen.has(v)){seen.add(v);ids.push(v);nx.push(v);}});
+      fr=nx;}
+  }else{
+    for(let k=0;k<G.n&&ids.length<lim;k++){const i=G.order[k];if(M(i))ids.push(i);}
+  }
+  const wr=$('wrap'),w=wr.clientWidth,h=wr.clientHeight;
+  vis=ids.map((i,k)=>{const a=k/ids.length*6.283,r=Math.min(w,h)*(.1+.35*Math.random());
+    return{i,x:w/2+Math.cos(a)*r,y:h/2+Math.sin(a)*r,vx:0,vy:0,r:rad(i)};});
+  if(focus!==null&&vis.length){vis[0].x=w/2;vis[0].y=h/2;}
+  pan={x:0,y:0};zoom=1;alpha=1;fitP=true;
+  link();buildList();
+}
+function link(){
+  const S=new Map(vis.map(o=>[o.i,o]));visE=[];
+  for(const o of vis)for(let k=G.oS[o.i];k<G.oS[o.i+1];k++){
+    const e=G.oE[k],t=S.get(G.eT[e]);
+    if(t&&t!==o&&!hidE.has(G.eY[e]))visE.push({s:o,t,ty:G.eY[e],c:G.eC[e]});
+  }
+  legend();
+  $('i1').textContent=`${G.n.toLocaleString()} nodes · ${G.m.toLocaleString()} edges total`;
+  $('i2').textContent=`showing ${vis.length} nodes · ${visE.length} edges${focus!==null?' · focus: '+G.names[focus]:' · top by connections'}${vis.length>=+$('lim').value?' (limit reached)':''}`;
+  dirty=true;
+}
+function legend(){
+  const t=[...new Set(vis.map(o=>G.cat[o.i]))].sort();
+  $('lg').innerHTML=t.map(c=>`<span><i style="background:${COL[CATS[c]]}"></i>${CATS[c]}</span>`).join('')+
+    G.tn.map((k,j)=>`<span data-et="${j}" class="${hidE.has(j)?'off':''}" title="Click to show or hide"><i style="background:${ECOL[k]||EFB};border-radius:0;height:2px;vertical-align:middle"></i>${esc(k)}</span>`).join('')+
+    '<span><i style="background:none;border:2px solid #E24B4A"></i>no callers</span>';
+}
+function buildList(){
+  const out=[];let tot=0;
+  for(let k=0;k<G.n;k++){const i=G.order[k];if(M(i)){tot++;if(out.length<200)out.push(i);}}
+  $('list').innerHTML=out.map(i=>`<div class="it${sel===i?' on':''}" data-id="${i}"><div class="n">${esc(G.names[i])} <span style="color:var(--tx2);font-weight:400">·${G.deg[i]}</span></div><div class="f">${esc(G.files[i]||'(no file)')}</div></div>`).join('')+
+    (tot>200?`<div class="it f">+${(tot-200).toLocaleString()} more. Refine the search.</div>`:'')+(tot===0?'<div class="it f">No matches.</div>':'');
+}
+const markList=()=>{for(const el of $('list').children)el.classList.toggle('on',sel!==null&&el.dataset.id===String(sel));};
+
+function showDet(i){
+  const el=$('det');if(i===null){el.style.display='none';return;}
+  const nm=G.names[i],out=[],inn=[];
+  for(let k=G.oS[i];k<G.oS[i+1];k++){const e=G.oE[k];out.push([G.eT[e],G.eC[e]]);}
+  for(let k=G.iS[i];k<G.iS[i+1];k++){const e=G.iE[k];inn.push([G.eF[e],G.eC[e]]);}
+  const L=a=>a.slice(0,40).map(([v,c])=>`<div class="c" data-id="${v}">${esc(G.names[v])}${c?' ?':''}</div>`).join('')+(a.length>40?`<div>+${a.length-40} more</div>`:'');
+  let h=`<h4>${esc(nm)}</h4><div style="color:var(--tx2)">${CATS[G.cat[i]]}${G.files[i]?' · '+esc(G.files[i]):''}</div>`;
+  if(IDX){
+    const x=IDX.ix,locs=x.functions_by_name?.[nm]||[],tg=tagsFor(i),cat=catFor(i),ic=x.functions_calling?.[nm]||[],ty=x.types_by_name?.[nm];
+    if(cat)h+=`<div class="k">category</div><span class="tag">${esc(cat)}</span>`;
+    if(tg.length)h+=`<div class="k">tags</div>`+tg.map(t=>`<span class="tag">${esc(t)}</span>`).join('');
+    if(locs.length)h+=`<div class="k">locations (index)</div>`+locs.slice(0,15).map(l=>`<div>${esc(l)}</div>`).join('');
+    if(!inn.length&&ic.length)h+=`<div class="k">callers (index)</div>`+ic.slice(0,30).map(c=>`<div>${esc(c)}</div>`).join('');
+    if(ty)h+=`<div class="k">type defs</div>`+ty.slice(0,10).map(l=>`<div>${esc(l)}</div>`).join('');
+  }
+  h+=`<div class="k">calls → ${out.length}</div>${L(out)}<div class="k">called by ← ${inn.length}</div>${L(inn)}`;
+  h+=`<div style="margin-top:8px"><button id="fbtn">Focus neighborhood</button></div>`;
+  el.innerHTML=h;el.style.display='block';
+  $('fbtn').onclick=()=>focusOn(i);
+}
+function setSel(i){
+  sel=i;nb=new Set();
+  if(i!==null){nb.add(i);nbrs(i,'both',v=>nb.add(v));}
+  showDet(i);markList();dirty=true;
+}
+function focusOn(i,noPush){
+  if(!noPush&&focus!==null&&focus!==i)hist.push(focus);
+  focus=i;setSel(i);rebuild();
+}
+function fit(){
+  if(!vis.length)return;
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const o of vis){x0=Math.min(x0,o.x-o.r);y0=Math.min(y0,o.y-o.r);x1=Math.max(x1,o.x+o.r);y1=Math.max(y1,o.y+o.r);}
+  const w=$('wrap').clientWidth,h=$('wrap').clientHeight-24,pad=40;
+  zoom=Math.max(.1,Math.min(1.5,Math.min((w-pad*2)/(x1-x0||1),(h-pad*2)/(y1-y0||1))));
+  pan.x=w/2-(x0+x1)/2*zoom;pan.y=h/2-(y0+y1)/2*zoom;dirty=true;
+}
+
+// simulation + drawing
+function tick(){
+  const N=vis.length,cx=$('wrap').clientWidth/2,cy=$('wrap').clientHeight/2;
+  for(let i=0;i<N;i++){const a=vis[i];
+    for(let j=i+1;j<N;j++){const b=vis[j];let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy;if(d2<25)d2=25;
+      const f=3500/d2,d=Math.sqrt(d2);dx=dx/d*f;dy=dy/d*f;a.vx+=dx;a.vy+=dy;b.vx-=dx;b.vy-=dy;}
+    a.vx+=(cx-a.x)*0.008;a.vy+=(cy-a.y)*0.008;}
+  for(const e of visE){const dx=e.t.x-e.s.x,dy=e.t.y-e.s.y,d=Math.sqrt(dx*dx+dy*dy)||1,f=(d-110)*0.03;
+    e.s.vx+=dx/d*f;e.s.vy+=dy/d*f;e.t.vx-=dx/d*f;e.t.vy-=dy/d*f;}
+  for(const o of vis){if(o===dragN){o.vx=o.vy=0;continue;}o.vx*=0.6;o.vy*=0.6;o.x+=o.vx*alpha*0.5;o.y+=o.vy*alpha*0.5;}
+  alpha*=0.985;
+}
+function draw(){
+  const cv=$('c'),ctx=cv.getContext('2d'),dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
+  if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);}
+  ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.setTransform(dpr*zoom,0,0,dpr*zoom,pan.x*dpr,pan.y*dpr);
+  const tx=getComputedStyle(document.documentElement).getPropertyValue('--tx').trim()||'#222',hs=sel!==null;
+  for(const e of visE){
+    ctx.globalAlpha=(!hs||e.s.i===sel||e.t.i===sel)?0.9:0.1;
+    const col=ECOL[G.tn[e.ty]]||EFB,dx=e.t.x-e.s.x,dy=e.t.y-e.s.y,len=Math.sqrt(dx*dx+dy*dy)||1,ux=dx/len,uy=dy/len;
+    const x1=e.s.x+ux*e.s.r,y1=e.s.y+uy*e.s.r,x2=e.t.x-ux*e.t.r,y2=e.t.y-uy*e.t.r;
+    ctx.setLineDash(e.c?[5/zoom,4/zoom]:[]);ctx.strokeStyle=col;ctx.lineWidth=1.3/zoom;
+    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.setLineDash([]);
+    const hh=7/zoom,a=Math.atan2(dy,dx);ctx.fillStyle=col;ctx.beginPath();ctx.moveTo(x2,y2);
+    ctx.lineTo(x2-Math.cos(a-0.4)*hh,y2-Math.sin(a-0.4)*hh);ctx.lineTo(x2-Math.cos(a+0.4)*hh,y2-Math.sin(a+0.4)*hh);ctx.fill();
+  }
+  ctx.textAlign='center';ctx.textBaseline='top';
+  for(const o of vis){
+    const i=o.i,dim=focus!==null&&!M(i);
+    ctx.globalAlpha=(!hs||nb.has(i))?(dim?0.4:1):0.2;
+    ctx.beginPath();ctx.arc(o.x,o.y,o.r,0,6.283);ctx.fillStyle=COL[CATS[G.cat[i]]];ctx.fill();
+    const nc=noCallers(i);
+    ctx.lineWidth=(i===sel||i===hov?3:nc?2:1)/zoom;ctx.strokeStyle=(i===sel||i===hov)?tx:nc?'#E24B4A':'rgba(0,0,0,.25)';ctx.stroke();
+    if(zoom>0.7||vis.length<80||(hs&&nb.has(i))||i===hov){
+      const nm=G.names[i];ctx.fillStyle=tx;ctx.font=`${11/zoom}px ui-monospace,monospace`;
+      ctx.fillText(nm.length>26?nm.slice(0,25)+'…':nm,o.x,o.y+o.r+2/zoom);
+    }
+  }
+  ctx.globalAlpha=1;
+}
+(function loop(){
+  if(alpha>0.01){tick();dirty=true;if(fitP&&alpha<0.3){fitP=false;fit();}}
+  if(dirty&&G){draw();dirty=false;}
+  requestAnimationFrame(loop);
+})();
+
+// This is for interaction
+const cv=$('c');
+const pos=e=>{const r=cv.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};};
+const world=p=>({x:(p.x-pan.x)/zoom,y:(p.y-pan.y)/zoom});
+function nodeAt(p){const w=world(p);for(let k=vis.length-1;k>=0;k--){const o=vis[k],dx=o.x-w.x,dy=o.y-w.y,r=o.r+2;if(dx*dx+dy*dy<r*r)return o;}return null;}
+cv.addEventListener('pointerdown',e=>{if(!G)return;cv.setPointerCapture(e.pointerId);const p=pos(e);down=p;lastP=p;dragN=nodeAt(p);panning=!dragN;fitP=false;});
+cv.addEventListener('pointermove',e=>{
+  if(!G)return;const p=pos(e);
+  if(down&&dragN){const w=world(p);dragN.x=w.x;dragN.y=w.y;alpha=Math.max(alpha,0.15);dirty=true;}
+  else if(down&&panning){pan.x+=p.x-lastP.x;pan.y+=p.y-lastP.y;lastP=p;dirty=true;}
+  else{
+    const o=nodeAt(p),h=o?o.i:null;cv.style.cursor=o?'pointer':'default';
+    if(h!==hov){hov=h;dirty=true;$('i3').textContent=o?`${G.names[h]} · ${G.files[h]||'no file'} · in ${G.iS[h+1]-G.iS[h]} / out ${G.oS[h+1]-G.oS[h]}`:'';}
+  }
+});
+cv.addEventListener('pointerup',e=>{
+  if(!down)return;const p=pos(e);
+  if(Math.hypot(p.x-down.x,p.y-down.y)<=4){const o=nodeAt(p);setSel(o&&sel!==o.i?o.i:null);}
+  down=null;dragN=null;panning=false;dirty=true;
+});
+cv.addEventListener('dblclick',e=>{if(!G)return;const o=nodeAt(pos(e));if(o)focusOn(o.i);});
+cv.addEventListener('wheel',e=>{e.preventDefault();const p=pos(e),w=world(p);zoom=Math.max(0.1,Math.min(6,zoom*(e.deltaY<0?1.12:0.89)));pan.x=p.x-w.x*zoom;pan.y=p.y-w.y*zoom;dirty=true;},{passive:false});
+document.addEventListener('click',e=>{const t=e.target.closest('[data-id]');if(t&&G)focusOn(+t.dataset.id);});
+$('lg').addEventListener('click',e=>{const s=e.target.closest('[data-et]');if(!s||!G)return;const j=+s.dataset.et;hidE.has(j)?hidE.delete(j):hidE.add(j);link();});
+let qt;['q','fcat','ftag','show'].forEach(id=>$(id).addEventListener('input',()=>{
+  clearTimeout(qt);qt=setTimeout(()=>{if(!G)return;if(focus===null)rebuild();else{M=mk();buildList();dirty=true;}},200);}));
+['dir','depth','lim'].forEach(id=>$(id).addEventListener('change',()=>rebuild()));
+$('back').onclick=()=>{if(!G)return;if(hist.length)focusOn(hist.pop(),true);else if(focus!==null){focus=null;setSel(null);rebuild();}};
+$('fitb').onclick=()=>fit();
+$('reset').onclick=()=>{if(!G)return;focus=null;hist=[];hidE.clear();['q','fcat','ftag'].forEach(i=>$(i).value='');$('show').value='all';setSel(null);rebuild();};
+$('file').addEventListener('change',e=>{loadFiles([...e.target.files]);e.target.value='';});
+addEventListener('keydown',e=>{
+  const typing=['INPUT','SELECT'].includes(document.activeElement.tagName);
+  if(e.key==='/'&&!typing){e.preventDefault();$('q').focus();}
+  else if(e.key==='Escape'){document.activeElement.blur();if(G)setSel(null);}
+});
+addEventListener('dragover',e=>{e.preventDefault();document.body.id='drop';});
+addEventListener('dragleave',()=>document.body.id='');
+addEventListener('drop',e=>{e.preventDefault();document.body.id='';loadFiles([...e.dataTransfer.files]);});
+new ResizeObserver(()=>{dirty=true;}).observe($('wrap'));
+
+auto();
+</script></body></html>

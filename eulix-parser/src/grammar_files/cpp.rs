@@ -3,8 +3,9 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::parser::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex};
 use crate::struc::kb_struct::*;
+use crate::utils::syntax;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -400,7 +401,7 @@ impl CppParser {
     pub fn parse(&mut self) -> Result<FileData, String> {
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_cpp::language())
+            .set_language(&tree_sitter_cpp::LANGUAGE.into())
             .map_err(|e| format!("Failed to load C++ grammar: {}", e))?;
 
         let tree = parser
@@ -421,6 +422,7 @@ impl CppParser {
             global_vars: self.extract_global_vars(&root),
             todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
+            syntax: syntax::inspect(&tree),
         })
     }
 
@@ -788,7 +790,7 @@ impl CppParser {
             tags,
             importance_score,
             lang_info: LanguageSpecificInfo {
-                cpp: Some(cpp_info),
+                cpp: Some(Box::new(cpp_info)),
                 ..Default::default()
             },
         })
@@ -1009,13 +1011,13 @@ impl CppParser {
             attributes,
             decorators,
             lang_info: LanguageSpecificInfo {
-                cpp: Some(CppInfo {
+                cpp: Some(Box::new(CppInfo {
                     type_kind: CppTypeKind::Enum,
                     is_scoped_enum: is_scoped,
                     is_flags_enum: is_flags,
                     underlying_type,
                     ..Default::default()
-                }),
+                })),
                 ..Default::default()
             },
         })
@@ -1045,11 +1047,11 @@ impl CppParser {
             attributes,
             decorators: vec!["union".to_string()],
             lang_info: LanguageSpecificInfo {
-                cpp: Some(CppInfo {
+                cpp: Some(Box::new(CppInfo {
                     type_kind: CppTypeKind::Union,
                     is_packed,
                     ..Default::default()
-                }),
+                })),
                 ..Default::default()
             },
         })
@@ -1207,7 +1209,7 @@ impl CppParser {
             attributes,
             decorators: vec![],
             lang_info: LanguageSpecificInfo {
-                cpp: Some(CppInfo {
+                cpp: Some(Box::new(CppInfo {
                     type_kind,
                     has_vtable,
                     is_abstract,
@@ -1216,7 +1218,7 @@ impl CppParser {
                     template_params,
                     inheritance_type,
                     ..Default::default()
-                }),
+                })),
                 ..Default::default()
             },
         })

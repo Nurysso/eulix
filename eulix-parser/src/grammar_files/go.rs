@@ -3,8 +3,10 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-use crate::parser::utils::extract_todos;
+use super::utils::extract_todos;
+
 use crate::struc::kb_struct::*;
+use crate::utils::syntax;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -74,7 +76,7 @@ impl GoParser {
     pub fn parse(&self) -> Result<FileData, String> {
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_go::language())
+            .set_language(&tree_sitter_go::LANGUAGE.into())
             .map_err(|e| format!("Failed to load Go grammar: {}", e))?;
         let tree = parser
             .parse(&self.source_code, None)
@@ -93,6 +95,7 @@ impl GoParser {
             global_vars: self.extract_global_vars(&root),
             todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
+            syntax: syntax::inspect(&tree),
         })
     }
 
@@ -442,7 +445,7 @@ impl GoParser {
             tags,
             importance_score,
             lang_info: LanguageSpecificInfo {
-                go: Some(go_info),
+                go: Some(Box::new(go_info)),
                 ..Default::default()
             },
         })
@@ -1117,14 +1120,14 @@ impl GoParser {
             attributes,
             decorators: vec![],
             lang_info: LanguageSpecificInfo {
-                go: Some(GoInfo {
+                go: Some(Box::new(GoInfo {
                     is_exported: name.chars().next().is_some_and(|c| c.is_uppercase()),
                     type_kind: Some(GoTypeKind::Struct),
                     has_embedded_types: has_embedded,
                     build_tags: self.build_tags.clone(),
                     uses_cgo: self.uses_cgo,
                     ..Default::default()
-                }),
+                })),
                 ..Default::default()
             },
         })
@@ -1289,13 +1292,13 @@ impl GoParser {
             attributes: vec![],
             decorators: vec!["interface".to_string()], // reuse decorators to signal kind
             lang_info: LanguageSpecificInfo {
-                go: Some(GoInfo {
+                go: Some(Box::new(GoInfo {
                     is_exported: name.chars().next().is_some_and(|c| c.is_uppercase()),
                     type_kind: Some(GoTypeKind::Interface),
                     build_tags: self.build_tags.clone(),
                     uses_cgo: self.uses_cgo,
                     ..Default::default()
-                }),
+                })),
                 ..Default::default()
             },
         })
@@ -1334,7 +1337,7 @@ impl GoParser {
                         tags: vec!["interface-method".to_string()],
                         importance_score: 0.5,
                         lang_info: LanguageSpecificInfo {
-                            go: Some(GoInfo {
+                            go: Some(Box::new(GoInfo {
                                 is_exported: name.chars().next().is_some_and(|c| c.is_uppercase()),
                                 is_interface_method: true,
                                 returns_error: return_type.contains("error"),
@@ -1344,7 +1347,7 @@ impl GoParser {
                                 build_tags: self.build_tags.clone(),
                                 uses_cgo: self.uses_cgo,
                                 ..Default::default()
-                            }),
+                            })),
                             ..Default::default()
                         },
                     });
@@ -1690,10 +1693,8 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
 
-    // Strips leading "./" or ".\" if present, otherwise leaves path as is
     let clean_path = path.strip_prefix("./").unwrap_or(path);
     let path_str = clean_path.to_string_lossy().to_string();
-
     let parser = GoParser::new(source_code, path_str.clone());
     let file_data = parser.parse()?;
 

@@ -1,5 +1,7 @@
-use crate::parser::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex};
+
 use crate::struc::kb_struct::*;
+use crate::utils::syntax;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -247,7 +249,7 @@ impl JsParser {
     pub fn parse(&mut self) -> Result<FileData, String> {
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_javascript::language())
+            .set_language(&tree_sitter_javascript::LANGUAGE.into())
             .map_err(|e| format!("Failed to load JavaScript grammar: {}", e))?;
         let tree = parser
             .parse(&self.source_code, None)
@@ -262,6 +264,7 @@ impl JsParser {
             global_vars: self.extract_global_vars(&root),
             todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
+            syntax: syntax::inspect(&tree),
         })
     }
 
@@ -513,7 +516,7 @@ impl JsParser {
         let is_commonjs_export = self.is_commonjs_export(name);
 
         let lang_info = LanguageSpecificInfo {
-            javascript: Some(JavaScriptInfo {
+            javascript: Some(Box::new(JavaScriptInfo {
                 is_async,
                 is_exported: self.is_exported(span_node),
                 is_default_export: self.is_default_export(span_node),
@@ -527,7 +530,7 @@ impl JsParser {
                 is_callback: false,
                 is_higher_order: self.returns_function(&body),
                 uses_hoisted_var: self.uses_var_keyword(&body),
-            }),
+            })),
             ..Default::default()
         };
 

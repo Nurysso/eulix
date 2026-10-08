@@ -10,6 +10,7 @@ pub fn static_regex(pattern: &str) -> Regex {
 static TODO_RE: LazyLock<Regex> = LazyLock::new(|| {
     static_regex(r"(?i)(?://|/\*).*?\b(?:TODO|FIXME|XXX)\b[:\s]*(.*?)(?:\*/\s*)?$")
 });
+
 pub fn extract_todos(source_code: &str) -> Vec<Todo> {
     source_code
         .lines()
