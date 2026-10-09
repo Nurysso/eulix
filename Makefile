@@ -127,7 +127,7 @@ parsers: | build-dir
 	@$(ECHO) "$(BLUE)Building eulix-parser for Linux (x86_64)...$(NC)"
 	cd $(PARSER_DIR) && cargo build --release --target x86_64-unknown-linux-gnu
 	@$(ECHO) "$(BLUE)Building eulix-parser for Windows (x86_64)...$(NC)"
-	cd $(PARSER_DIR) && cargo build --release --target x86_64-pc-windows-gnu
+	cd $(PARSER_DIR) && RUSTFLAGS="-C link-args=-ladvapi32" cargo build --release --target x86_64-pc-windows-gnu
 	@$(ECHO) "$(BLUE)Copying parser binaries to CLI assets...$(NC)"
 	$(CP) $(PARSER_DIR)/target/x86_64-unknown-linux-gnu/release/eulix_parser $(PARSER_LINUX)
 	$(CP) $(PARSER_DIR)/target/x86_64-pc-windows-gnu/release/eulix_parser.exe $(PARSER_WINDOWS)
@@ -139,7 +139,7 @@ embed-zip: | build-dir
 ifeq ($(DETECTED_OS),Windows)
 	powershell -Command "Compress-Archive -Path '$(EMBED_DIR)\*' -DestinationPath 'eulix-embed.zip' -Force"
 else
-	zip -r eulix-embed.zip $(EMBED_DIR)/ -x "*/.venv/*" "*/.ruff_cache/*" "*/.pytest_cache/*" "*/.mypy_cache/*" "*/.git/*" "*/__pycache__/*" "*.pyc" ".codespell-ignore"
+	zip -r eulix-embed.zip $(EMBED_DIR)/ -x "*/.venv/*" "*/__init__/*" "*/.ruff_cache/*" "*/.pytest_cache/*" "*/.mypy_cache/*" "*/.git/*" "*/__pycache__/*" "*.pyc" ".codespell-ignore"
 endif
 	$(CP) eulix-embed.zip $(ASSETS_BINS_DIR)/eulix-embed.zip
 	@$(ECHO) "$(GREEN)✓ eulix-embed.zip created and copied to CLI assets$(NC)"

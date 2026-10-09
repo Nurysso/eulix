@@ -54,7 +54,7 @@ jobs:
           cargo build --release --target x86_64-unknown-linux-gnu
 
           echo "Building for Windows (x86_64)..."
-          cargo build --release --target x86_64-pc-windows-gnu
+          RUSTFLAGS="-C link-args=-ladvapi32" cargo build --release --target x86_64-pc-windows-gnu
 
           # echo "Building for macOS ARM (aarch64)..."
           # cargo zigbuild --release --target aarch64-apple-darwin
@@ -94,12 +94,14 @@ jobs:
       - name: Create eulix-embed.zip
         run: |
           zip -r eulix-embed.zip eulix-embed/ \
-            -x "*/.venv/*" \
-            "*/.mypy_cache/*" \
-            "*/.git/*" \
-            "*/__pycache__/*" \
-            "*.pyc" \
-            ".codespell-ignore"
+            -x "*/.venv/*" "*.venv*" \
+              "*/.ruff_cache/*" "*.ruff_cache*" \
+              "*/.pytest_cache/*" "*.pytest_cache*" \
+              "*/.mypy_cache/*" "*.mypy_cache*" \
+              "*/.git/*" "*.git*" \
+              "*/__pycache__/*" "*__pycache__*" \
+              "*.pyc" \
+              "*/.codespell-ignore" "*.codespell-ignore"
           cp eulix-embed.zip eulix-cli/internal/assets/bins/eulix-embed.zip
 
       - name: Build eulix Go binaries
