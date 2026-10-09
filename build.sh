@@ -49,7 +49,7 @@ print_info "Building for Linux (x86_64)..."
 cargo build --release --target x86_64-unknown-linux-gnu
 
 print_info "Building for Windows (x86_64)..."
-cargo build --release --target x86_64-pc-windows-gnu
+RUSTFLAGS="-C link-args=-ladvapi32" cargo build --release --target x86_64-pc-windows-gnu
 
 # print_info "Building for macOS ARM (aarch64)..."
 # cargo zigbuild --release --target aarch64-apple-darwin
@@ -83,7 +83,7 @@ print_info "eulix_parser_windows.exe:  ${HASH_WINDOWS}"
 
 # Create eulix-embed.zip
 print_info "Creating eulix-embed.zip..."
-zip -r eulix-embed.zip eulix-embed/ -x "*/.venv/*" "*/.ruff_cache/*" "*/.pytest_cache/*" "*/.mypy_cache/*" "*/.git/*" "*/__pycache__/*" "*.pyc" ".codespell-ignore"
+zip -r eulix-embed.zip eulix-embed/ -x "*/.venv/*" "*/.ruff_cache/*" "*/__init__/*" "*/.pytest_cache/*" "*/.mypy_cache/*" "*/.git/*" "*/__pycache__/*" "*.pyc" ".codespell-ignore"
 
 cp eulix-embed.zip eulix-cli/internal/assets/bins/eulix-embed.zip
 
