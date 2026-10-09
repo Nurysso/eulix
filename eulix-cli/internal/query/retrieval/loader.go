@@ -17,8 +17,6 @@ import (
 	"bufio"
 	"encoding/binary"
 	"encoding/json"
-	"eulix/internal/query/retrieval/mmap"
-	"eulix/internal/utils"
 	"fmt"
 	"io"
 	"math"
@@ -27,6 +25,9 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"eulix/internal/query/retrieval/mmap"
+	"eulix/internal/utils"
 )
 
 const (
@@ -56,7 +57,8 @@ func (cb *ContextBuilder) logFileLoad(name string) func(error) {
 			cb.debugLog.Log("[LOAD] %-30s FAILED   (%v) elapsed=%v",
 				name, err, elapsed)
 		} else {
-			cb.debugLog.Log("[LOAD] %-30s done     elapsed=%-10v heap_delta=+%d MB total_heap=%d MB",
+			cb.debugLog.Log(
+				"[LOAD] %-30s done     elapsed=%-10v heap_delta=+%d MB total_heap=%d MB",
 				name, elapsed,
 				heapDelta/1024/1024,
 				memAfter.HeapInuse/1024/1024,
@@ -209,7 +211,8 @@ func (cb *ContextBuilder) streamKBChunks() error {
 func (cb *ContextBuilder) buildDerivedIndices() {
 	// Boilerplate detector (over the full corpus)
 	cb.buildBoilerplate()
-	cb.debugLog.Log("Boilerplate detector: %d symbols filtered (threshold=%.2f, corpus=%d) top: %v",
+	cb.debugLog.Log(
+		"Boilerplate detector: %d symbols filtered (threshold=%.2f, corpus=%d) top: %v",
 		len(cb.boilerplate.boilerplate),
 		dfThresholdDefault,
 		len(cb.chunks),

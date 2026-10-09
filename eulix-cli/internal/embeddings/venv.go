@@ -1,8 +1,9 @@
 //  Copyright (C) 2026 Dawood Khan
 //  SPDX-License-Identifier: GPL-3.0-or-later
-// Package embeddings provides the command-line interface implementation for EULIX.
 
 /*
+Package embeddings provides the command-line interface implementation for EULIX.
+
 This file is responsible for finding and executing the Python venv.
 It is used only when config.Project.Embedis == "script".
 */

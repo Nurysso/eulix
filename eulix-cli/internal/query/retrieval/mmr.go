@@ -3,9 +3,8 @@
 
 // Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 
-// Package retrieval provides context window Creation for Eulix's RAG system.
-
 /*
+Package retrieval provides context window Creation for Eulix's RAG system.
 Key Responsibilities:
   - Applies MMR or greedy file-locality strategies for diversity-aware chunk selection
   - Merges adjacent code spans and penalizes same-file redundancy
