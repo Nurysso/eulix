@@ -1395,18 +1395,21 @@ impl CParser {
     }
 }
 
-pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
-    let source_code = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
-
+pub fn parse_source(path: &Path, source_code: &str) -> Result<(String, FileData), String> {
     // Strips leading "./" or ".\" if present, otherwise leaves path as is
     let clean_path = path.strip_prefix("./").unwrap_or(path);
     let path_str = clean_path.to_string_lossy().to_string();
 
-    let mut parser = CParser::new(source_code, path_str.clone());
+    let mut parser = CParser::new(source_code.to_string(), path_str.clone());
     let file_data = parser.parse()?;
 
     Ok((path_str, file_data))
+}
+
+pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
+    let source_code = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
+    parse_source(path, &source_code)
 }
 
 // AI was heavily involved in writing the below tests, i did checked the test and code

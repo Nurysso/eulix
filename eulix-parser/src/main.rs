@@ -73,7 +73,7 @@
 // referenced here. The binary consumes them through `libeulix`. Silence the
 // per-target lint; see `src/lib.rs` for the mirror-image case.
 
-
+mod engine;
 mod memory;
 mod os_io;
 mod output;
@@ -87,16 +87,16 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
+use crate::engine::Engine;
 use crate::memory::{default_thread_count, max_rss_mb};
 use crate::output::{write_json_streaming, write_kb_from_spill};
 use crate::parse::directory::parse_directory;
 use crate::report::{field_report, print_final_summary, write_parse_report};
-
-use libeulix::{struc, analyze};
 use libeulix::struc::kb_struct::{
     CallGraphRef, EntryPointsRef, ExternalDepsRef, IndexViewRef, PatternsRef,
 };
 use libeulix::utils::utils::output_dir;
+use libeulix::{analyze, struc};
 
 #[global_allocator]
 static ALLOC: rpmalloc::RpMalloc = rpmalloc::RpMalloc;
@@ -175,12 +175,14 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.threads == 0 {
         args.threads = default_thread_count();
     }
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(args.threads)
-        .build_global()?;
+
+    // One thread pool, owned by the engine. Every parallel operation in
+    // this run goes through `engine.pool()` — no global pool, no surprise
+    // contention with other rayon users.
+    let engine = Engine::with_threads(args.threads)?;
+
     let write_dir = output_dir(&args.output);
     let start_time = Instant::now();
-
     let rss_start = max_rss_mb();
 
     if args.verbose {
@@ -201,6 +203,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Peak RSS:    {:.1} MB", rss_start);
         println!("{}", "═".repeat(64));
     }
+
     if args.resume && !args.no_analyze {
         return Err(
             "--resume requires --no-analyze (analysis needs a full in-memory FileData map)".into(),
@@ -221,6 +224,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         bin_hash,
         &write_dir,
         args.resume,
+        &engine,
     )?;
     if std::env::var_os("EULIX_FIELD_REPORT").is_some() {
         field_report(&kb);
@@ -364,7 +368,6 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("   Writing patterns...");
         }
         write_json_streaming(&patterns_path, &pat_ref, true)?;
-        // let rss_after_write = max_rss_mb();
 
         if args.verbose {
             let files_to_check = [

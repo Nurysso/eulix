@@ -101,8 +101,8 @@ todo = "deny"
 unwrap_used = "warn"
 
 [lints.rust]
-unsafe-code = "allow"
-unused-crate-dependencies = "warn"
+unsafe_code = "allow"
+unused_crate_dependencies = "warn"
 
 [profile.dev]
 opt-level = 0

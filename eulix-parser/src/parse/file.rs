@@ -2,79 +2,56 @@
 // language-specific parsers.
 
 use rustc_hash::FxHashSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::os_io;
 use crate::parse::slim::{slim, strip_emitted};
 use crate::spill::{ParsedFileResult, Spill};
-use libeulix::grammar_files::c;
-use libeulix::grammar_files::cpp;
-use libeulix::grammar_files::go;
-use libeulix::grammar_files::java;
-use libeulix::grammar_files::javascript;
+
+use libeulix::grammar_files;
 use libeulix::grammar_files::language::Language;
-use libeulix::grammar_files::python;
-use libeulix::grammar_files::rust as rust_parser;
-use libeulix::grammar_files::typescript;
-use libeulix::utils::file_walker::FileWalker;
 use libeulix::struc::kb_struct::FileDataSimpleView;
+use libeulix::utils::file_walker::FileWalker;
 
 #[cfg(target_os = "linux")]
-use crate::os_io;
 
 pub fn parse_file(
     file_path: &Path,
     root: &Path,
     spill: &Spill,
 ) -> Result<ParsedFileResult, Box<dyn std::error::Error>> {
-    // Figure out what parser to use from the extension.
-    let lang = Language::detect(file_path);
-
-    // Keep paths relative to the project root when possible. If the file
-    // isn't under root, just fall back to the full path instead of blowing up.
     let relative_path = file_path
         .strip_prefix(root)
         .unwrap_or(file_path)
         .to_string_lossy()
         .to_string();
 
+    // Open once, for the OS-level read hints. Read the bytes through this
+    // handle so the fadvise / sequential-scan flags actually apply.
     let file = open_source_file(file_path)?;
+    let mut source = String::new();
+    {
+        let mut reader = std::io::BufReader::new(&file);
+        reader.read_to_string(&mut source)?;
+    }
 
-    // The tree-sitter `Tree` is local to each language module's parse().
-    // It's already gone by the time this match returns `syntax::inspect`
-    // hands back owned data, so the tree can't escape. Nothing to drop here.
-    // In Phase 1, the memory cost is really the returned FileData plus
-    // whatever the caller keeps around.
-    let mut result = match lang {
-        Language::Python => python::parse_file(file_path)?.1,
-        Language::JavaScript => javascript::parse_file(file_path)?.1,
-        Language::TypeScript => typescript::parse_file(file_path)?.1,
-        Language::Go => go::parse_file(file_path)?.1,
-        Language::C => c::parse_file(file_path)?.1,
-        Language::Cpp => cpp::parse_file(file_path)?.1,
-        Language::Rust => rust_parser::parse_file(file_path)?.1,
-        Language::Java => java::parse_file(file_path)?.1,
-        _ => return Err(format!("Unsupported language: {:?}", lang).into()),
-    };
+    // tree-sitter Tree lives and dies inside this call.
+    let (_, mut result) = grammar_files::parse_source(file_path, &source)?;
 
     // Spill the rich view first. Phase 2 reads this back, so this has to
-    //    happen before we slim or strip anything.
+    // happen before we slim or strip anything.
     let loc = {
-        // 8 KiB is just a starting point; serde_json will grow it if needed.
         let mut frag = Vec::with_capacity(8 * 1024);
         serde_json::to_writer(&mut frag, &FileDataSimpleView(&result))?;
         spill.append(&relative_path, &frag)?
-        // `frag` is dropped here, before we spend time slimming.
     };
 
-    // We're done reading the file. Release the descriptor / mmap now,
-    //    not at function exit, so it doesn't overlap with the JSON buffer
-    //    that just came back from `spill.append`.
+    // Release the descriptor now, before we spend time shrinking in memory.
     #[cfg(target_os = "linux")]
     os_io::done_with_file(&file);
     drop(file);
 
-    // Shrink the in-memory view in place. No need to build a second
-    //    FileData just to throw most of it away.
     slim(&mut result);
     strip_emitted(&mut result);
 

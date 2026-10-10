@@ -1981,15 +1981,19 @@ impl CppParser {
     }
 }
 
-pub fn parse_file(path: &Path) -> Result<(String, FileData), Box<dyn std::error::Error>> {
-    let source = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
+pub fn parse_source(path: &Path, source_code: &str) -> Result<(String, FileData), String> {
+    // Strips leading "./" or ".\" if present, otherwise leaves path as is
     let clean_path = path.strip_prefix("./").unwrap_or(path);
     let path_str = clean_path.to_string_lossy().to_string();
-    let mut parser = CppParser::new(source, path_str.clone());
-    let file_data = parser
-        .parse()
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    let name = path.to_string_lossy().to_string();
-    Ok((name, file_data))
+
+    let mut parser = CppParser::new(source_code.to_string(), path_str.clone());
+    let file_data = parser.parse()?;
+
+    Ok((path_str, file_data))
+}
+
+pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
+    let source_code = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
+    parse_source(path, &source_code)
 }

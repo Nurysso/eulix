@@ -22,6 +22,7 @@ pub fn parse_directory(
     git_hash: &str,
     write_dir: &Path,
     resume: bool,
+    engine: &crate::engine::Engine,
 ) -> Result<(KnowledgeBase, ParseStats, SpillIndex), Box<dyn std::error::Error>> {
     let path = PathBuf::from(dir);
     let euignore = euignore_path.map(PathBuf::from).or_else(|| {
@@ -103,34 +104,40 @@ pub fn parse_directory(
         }
     }
 
-    let num_threads = rayon::current_num_threads().max(1);
+    // Thread count comes from the engine's pool, not the global one.
+    let num_threads = engine.threads().max(1);
     let chunk_size = (to_parse.len() / (num_threads * 8)).clamp(16, 200);
 
-    let acc = to_parse
-        .par_chunks(chunk_size)
-        .fold(Acc::default, |mut acc: Acc, chunk: &[PathBuf]| {
-            for file_path in chunk {
-                match parse_file(file_path, &path, &spill) {
-                    Ok((rel, file_data, loc)) => {
-                        if let Some(ref pb) = pb {
-                            pb.inc(1);
+    // The whole pipeline runs inside `engine.pool().install(...)` so that
+    // rayon drives the work on the engine's threads, not on a global pool
+    // that may not exist.
+    let acc = engine.pool().install(|| {
+        to_parse
+            .par_chunks(chunk_size)
+            .fold(Acc::default, |mut acc: Acc, chunk: &[PathBuf]| {
+                for file_path in chunk {
+                    match parse_file(file_path, &path, &spill) {
+                        Ok((rel, file_data, loc)) => {
+                            if let Some(ref pb) = pb {
+                                pb.inc(1);
+                            }
+                            acc.record_ok(rel, file_data, loc);
                         }
-                        acc.record_ok(rel, file_data, loc);
-                    }
-                    Err(e) => {
-                        let rel = rel_path(file_path, &path);
-                        let reason = e.to_string();
-                        if let Some(ref pb) = pb {
-                            pb.println(format!("   ✗ Failed: {rel} - {reason}"));
-                            pb.inc(1);
+                        Err(e) => {
+                            let rel = rel_path(file_path, &path);
+                            let reason = e.to_string();
+                            if let Some(ref pb) = pb {
+                                pb.println(format!("   ✗ Failed: {rel} - {reason}"));
+                                pb.inc(1);
+                            }
+                            acc.record_failed(rel, language_label(file_path), reason);
                         }
-                        acc.record_failed(rel, language_label(file_path), reason);
                     }
                 }
-            }
-            acc
-        })
-        .reduce(Acc::default, Acc::merge);
+                acc
+            })
+            .reduce(Acc::default, Acc::merge)
+    });
 
     spill.flush()?;
 
