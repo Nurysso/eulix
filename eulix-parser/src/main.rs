@@ -67,17 +67,20 @@
 //! - eulix_parser depends upon tree-sitter@latest so a newer version of language sysntax will result in partial
 //!   parse and not a complete failure
 
-mod analyze;
-mod grammar_files;
+#![allow(unused_crate_dependencies)]
+// Deps that only the library target uses (tree-sitter and its grammars, ignore,
+// regex, xxhash-rust, zstd, anyhow) are declared in Cargo.toml but never
+// referenced here. The binary consumes them through `libeulix`. Silence the
+// per-target lint; see `src/lib.rs` for the mirror-image case.
+
+
 mod memory;
-pub mod os_io;
+mod os_io;
 mod output;
 mod parse;
 mod report;
 mod spill;
 mod stats;
-mod struc;
-mod utils;
 
 use clap::Parser;
 use std::fs;
@@ -88,10 +91,12 @@ use crate::memory::{default_thread_count, max_rss_mb};
 use crate::output::{write_json_streaming, write_kb_from_spill};
 use crate::parse::directory::parse_directory;
 use crate::report::{field_report, print_final_summary, write_parse_report};
-use crate::struc::kb_struct::{
+
+use libeulix::{struc, analyze};
+use libeulix::struc::kb_struct::{
     CallGraphRef, EntryPointsRef, ExternalDepsRef, IndexViewRef, PatternsRef,
 };
-use crate::utils::utils::output_dir;
+use libeulix::utils::utils::output_dir;
 
 #[global_allocator]
 static ALLOC: rpmalloc::RpMalloc = rpmalloc::RpMalloc;
@@ -100,48 +105,48 @@ static ALLOC: rpmalloc::RpMalloc = rpmalloc::RpMalloc;
 #[command(
     name = "eulix_parser",
     version = env!("CARGO_PKG_VERSION"),
-    about = "Fast multi-language code analysis enginge"
+    about = "Fast multi-language repository analysis and parsing engine"
 )]
 pub struct Args {
-    /// Project root directory
-    #[arg(short, long)]
+    /// Root directory of the repository to analyze
+    #[arg(short = 'r', long)]
     root: String,
 
-    /// Output directory with file name for knowledge base
-    #[arg(short, long, default_value = "knowledge_base.json")]
+    /// Output file path for the generated knowledge base JSON
+    #[arg(short = 'o', long, default_value = "knowledge_base.json")]
     output: String,
 
-    /// Number of threads for parallel parsing
-    #[arg(short, long, default_value_t = 4)]
+    /// Number of parallel worker threads for parsing
+    #[arg(short = 't', long, default_value_t = 4)]
     threads: usize,
 
-    /// Verbose output
-    #[arg(short, long)]
+    /// Enable verbose output and detailed phase logging
+    #[arg(short = 'v', long)]
     verbose: bool,
 
-    /// Languages to parse (comma-separated, or "all")
-    #[arg(short, long, default_value = "all")]
+    /// Target languages to parse (comma-separated list, or "all")
+    #[arg(short = 'l', long, default_value = "all")]
     languages: String,
 
-    /// Skip analysis phase (faster, only parse files)
-    #[arg(long)]
+    /// Skip the relationship analysis phase (parse files only)
+    #[arg(short = 'n', long)]
     no_analyze: bool,
 
-    /// Path to custom .euignore file (defaults to <root>/.euignore)
-    #[arg(long)]
+    /// Path to a custom .euignore file (defaults to <root>/.euignore)
+    #[arg(short = 'e', long)]
     euignore: Option<String>,
 
-    /// switches prism algorithm version check docs to see what each version does
-    #[arg(short, long, value_parser = validate_prism_input)]
+    /// PRISM relationship engine version (1 or 2; see documentation for details)
+    #[arg(short = 'p', long, value_parser = validate_prism_input)]
     prism: u8,
 
-    /// Write a TSV listing every partial and failed file (for diffing runs).
-    #[arg(long)]
+    /// Write a TSV report listing every partial and failed file (useful for diffing runs)
+    #[arg(short = 'P', long)]
     parse_report: Option<String>,
 
-    /// Resume from a previous interrupted run by reusing the spill file.
-    /// Only valid with --no-analyze (analysis requires a full in-memory map).
-    #[arg(long)]
+    /// Resume from a previous interrupted run by reusing the spill file
+    /// (only valid with --no-analyze)
+    #[arg(short = 'u', long)]
     resume: bool,
 }
 

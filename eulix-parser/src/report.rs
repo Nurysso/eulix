@@ -1,7 +1,7 @@
 use crate::memory::max_rss_mb;
 use crate::stats::FailedFile;
 use crate::stats::{LangCounts, ParseStats, PartialFile};
-use crate::struc::kb_struct::{Class, FileData, Function, KnowledgeBase, Metadata};
+use libeulix::struc::kb_struct::{Class, FileData, Function, KnowledgeBase, Metadata};
 use rustc_hash::FxHashMap;
 use std::fs;
 use std::io::{BufWriter, Write};

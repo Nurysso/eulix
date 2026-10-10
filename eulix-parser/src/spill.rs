@@ -1,4 +1,4 @@
-use crate::struc::kb_struct::FileData;
+use libeulix::struc::kb_struct::FileData;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};

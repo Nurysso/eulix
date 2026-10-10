@@ -4,19 +4,19 @@
 use rustc_hash::FxHashSet;
 use std::path::{Path, PathBuf};
 
-use crate::grammar_files::c;
-use crate::grammar_files::cpp;
-use crate::grammar_files::go;
-use crate::grammar_files::java;
-use crate::grammar_files::javascript;
-use crate::grammar_files::language::Language;
-use crate::grammar_files::python;
-use crate::grammar_files::rust as rust_parser;
-use crate::grammar_files::typescript;
 use crate::parse::slim::{slim, strip_emitted};
 use crate::spill::{ParsedFileResult, Spill};
-use crate::struc::kb_struct::FileDataSimpleView;
-use crate::utils::file_walker::FileWalker;
+use libeulix::grammar_files::c;
+use libeulix::grammar_files::cpp;
+use libeulix::grammar_files::go;
+use libeulix::grammar_files::java;
+use libeulix::grammar_files::javascript;
+use libeulix::grammar_files::language::Language;
+use libeulix::grammar_files::python;
+use libeulix::grammar_files::rust as rust_parser;
+use libeulix::grammar_files::typescript;
+use libeulix::utils::file_walker::FileWalker;
+use libeulix::struc::kb_struct::FileDataSimpleView;
 
 #[cfg(target_os = "linux")]
 use crate::os_io;
