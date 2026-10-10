@@ -195,6 +195,7 @@ and which filters participate in the claiming process?
 ### Other commands
 
 ```bash
+eulix vizEulize     # Opens web application to view call graphs
 eulix history       # browse previous queries
 eulix version       # show component versions
 eulix verifyBins    # verify bundled binary hashes
@@ -210,6 +211,7 @@ eulix embed         # run the embedding pipeline on its own
 | `parser`     | Access the parser wrapper                                            |
 | `embed`      | Run the embedding pipeline                                           |
 | `chat`       | Start the interactive interface                                      |
+| `vizEulize`  | Opens web application to view call graphs                            |
 | `query`      | Build retrieval context or answer direct queries (retrieval testing) |
 | `history`    | Browse previous queries                                              |
 | `checksum`   | Update repository checksums                                          |
@@ -261,10 +263,10 @@ The full option list is in the [configuration reference](eulix-cli/README.md#con
 `eulix analyze` writes its output to a `.eulix` directory in the repository. For the Linux kernel this is approximately **2.2 GB**:
 
 ```text
-kb.json              ~693 MB
-kb_index.json        ~405 MB
-kb_call_graph.json   ~423 MB
-kb_summary.json      ~3.2 MB
+kb.json              ~353 MB
+kb_index.json        ~391 MB
+kb_call_graph.json   ~411 MB
+kb_summary.json      ~2.9 MB
 embeddings.bin       ~618 MB
 vectors.bin          ~50 MB
 other metadata       ~20 MB
@@ -323,6 +325,12 @@ A streaming embedding pipeline with PyTorch and ONNX Runtime backends, CPU and G
 ### `eulix` — Go
 
 The main CLI and orchestration layer: repository initialization and pipeline orchestration, query classification and routing, retrieval and context construction, LLM integration, and configuration, history, validation, and caching.
+
+#### ✨ Latest
+
+### vizEulize: HTML/JS
+
+The call graph visualizer: a single-file browser app that loads .eulix/kb_call_graph.json and .eulix/kb_index.json through a local server started by `eulix vizEulize` command, and shows them as an interactive, searchable graph with focus, filters, tags and categories. You can also load files manually.
 
 ### Retrieval pipeline
 
@@ -396,26 +404,38 @@ The entire analysis and retrieval stack runs on your machine. The LLM stage is o
 
 Full parser run on a Linux-kernel-scale checkout, 12 threads, PRISM v2:
 
-| Metric                     |         Result |
-| -------------------------- | -------------: |
-| Files scanned              |     **94,012** |
-| Source files parsed        |     **64,460** |
-| Failed / skipped           |      **0 / 0** |
-| Lines of code              | **37,322,700** |
-| Functions                  |    **648,407** |
-| Classes                    |    **211,416** |
-| Methods                    |      **6,243** |
-| Graph nodes                |    **774,296** |
-| Graph edges                |  **1,571,981** |
-| Parse phase                |    **37.39 s** |
-| Relationship / index phase |     **7.01 s** |
-| Summary / metrics phase    |     **0.39 s** |
-| **Parser total**           |    **48.43 s** |
-| Peak RSS                   |   **~8.8 GiB** |
+### Parser — Linux kernel
 
-Serialization uses slim repository views rather than the parser's full internal representation, cutting on-disk size by about **52%** (≈4.6 GB → ≈2.2 GB) versus the previous format.
+Full parser run on a Linux-kernel-scale checkout, 12 threads, PRISM v2:
+
+| Metric                        |         Result |
+| ----------------------------- | -------------: |
+| Files scanned                 |     **94,063** |
+| Source files found            |     **64,460** |
+| Failed / skipped              |      **0 / 0** |
+| Lines of code                 | **37,322,700** |
+| Functions                     |    **647,365** |
+| Classes                       |    **211,297** |
+| Methods                       |      **6,246** |
+| Graph nodes                   |    **773,072** |
+| Graph edges                   |  **1,510,341** |
+| Parse phase                   |    **52.23 s** |
+| Call graphs by Prismv2        |     **1.34 s** |
+| Summary / metrics phase       |     **0.34 s** |
+| **Parser total**              |    **57.20 s** |
+| Parse Phase RSS               |  **1963.2 MB** |
+| Analysis Phase RSS            |      **803MB** |
+| Summary / metrics Phase RSS   |        **3MB** |
+| Peak RSS / Writting Phase RSS |   **~3.3 GiB** |
+
+> [!NOTE]
+> Parsing quality: 32,338 clean / 32,122 partial / 0 failed. The partials are overwhelmingly C/C++ and expected without a preprocessor pass.
+
+_Serialization now uses a spill-to-disk architecture with improved slim repository views rather than the parser's full internal representation. This cuts peak RSS from ~8 GB to ~3.5 GB and reduces on-disk output to ~1.2 GB (down from ~2.2 GB in the previous slim format)._
 
 ### Embeddings — Linux kernel
+
+> Ran on AMD Radeon RX 6700 XT (ROCm/HIP)
 
 | Setting      | Value                              |
 | ------------ | ---------------------------------- |
@@ -423,20 +443,21 @@ Serialization uses slim repository views rather than the parser's full internal 
 | Dimension    | 768                                |
 | Quantization | SQ8 / INT8                         |
 | Device       | AMD Radeon RX 6700 XT (ROCm / HIP) |
-| Chunks       | 838,755                            |
+| Chunks       | 837,531                            |
 
-| Metric                         |            Result |
-| ------------------------------ | ----------------: |
-| KB scan + chunk generation     |       **48.68 s** |
-| Embedding generation           |  **~27 min 50 s** |
-| Embedding throughput           | **~500 chunks/s** |
-| Embedding pipeline total       |  **~28 min 49 s** |
-| Full `eulix analyze` wall time |   **29 min 50 s** |
-| Max RSS                        |      **~8.8 GiB** |
-| `embeddings.bin`               |     **~617.5 MB** |
-| `vectors.bin`                  |      **~49.6 MB** |
+| Metric                     |                                      Result |
+| -------------------------- | ------------------------------------------: |
+| KB scan + chunk generation |                                 **20.27 s** |
+| Embedding generation       |                             **26 min 27 s** |
+| Embedding throughput       |                          **527.6 chunks/s** |
+| Embedding pipeline total   |                             **26 min 57 s** |
+| Full parse + embedding     | **~26 min** (parse ~1 min; embedding-bound) |
+| `embeddings.bin`           |                                  **617 MB** |
+| `vectors.bin`              |                                   **50 MB** |
 
-Parsing accounts for under a minute of the ~30-minute end-to-end run; embedding is the throughput-bound stage at this scale and scales with accelerator capability. These figures were measured on a mid-range consumer GPU, and hardware-specific results are benchmarked separately rather than treating one GPU as a universal baseline.
+> Chunk breakdown: 121,227 class · 64,460 file · 645,670 function · 6,174 method.
+
+Parsing accounts for under a minute of the end-to-end run; embedding is the throughput-bound stage at this scale and scales with accelerator capability. These figures were measured on a mid-range consumer GPU, and hardware-specific results are benchmarked separately rather than treating one GPU as a universal baseline.
 
 ---
 
@@ -452,23 +473,27 @@ Known constraints are tracked in [Known Issues](docs/known-issues.md).
 
 ### Supported languages
 
-| Language   | Status                                         |
-| ---------- | ---------------------------------------------- |
-| C          | Supported                                      |
-| C++        | Supported                                      |
-| Go         | Supported                                      |
-| Python     | Supported                                      |
-| Rust       | Supported                                      |
-| TypeScript | Supported                                      |
-| JavaScript | Experimental — implemented, validation ongoing |
-| Java       | Experimental — implemented, validation ongoing |
+This version standardizes the terminology, uses a footnote to explain the caveat for C/C++, and keeps the table tidy.
+
+| Language   | Status      | Notes                      |
+| ---------- | ----------- | -------------------------- |
+| C          | Supported\* | Limited by macro expansion |
+| C++        | Supported\* | Limited by macro expansion |
+| Go         | Supported   | —                          |
+| Python     | Supported   | —                          |
+| Rust       | Supported   | —                          |
+| TypeScript | Supported   | —                          |
+| JavaScript | Supported   | —                          |
+| Java       | Supported   | —                          |
+
+> \*_ Parsing may not reach 100% accuracy due to macro expansion._
 
 ---
 
 ## Roadmap
 
-- **In beta:** interactive call-graph visualization
-- **Experimental:** JavaScript and Java validation (not yet tested on real codebases)
+- **Launched in 0.8.3:** interactive call-graph visualization
+- **Verfied on tomcat,openJDK,expressJS,ThreeJS:** JavaScript and Java validation
 - **Planned for next release:** MCP server for exposing Eulix retrieval to coding agents
 - **Planned for next release:** additional repository-scale benchmarks
 - **Planned:** architecture-aware documentation generation

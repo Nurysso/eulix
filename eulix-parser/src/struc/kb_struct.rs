@@ -25,6 +25,7 @@ impl<'a> Serialize for FunctionSimpleView<'a> {
         st.serialize_field("docstring", &f.docstring)?;
         st.serialize_field("line_start", &f.line_start)?;
         st.serialize_field("line_end", &f.line_end)?;
+        // st.serialize_field("tags", &f.tags)?;
         // "complexity" removed
         // "importance_score" removed
         // "variables" removed
@@ -71,6 +72,34 @@ impl<'a> Serialize for FileDataSimpleView<'a> {
     }
 }
 
+impl<'a> CallGraphRef<'a> {
+    pub fn new(kb: &'a KnowledgeBase, indices: &IndicesView<'a>) -> Self {
+        let mut tags: HashMap<&'a str, &'a [String]> = HashMap::new();
+        for fd in kb.structure.values() {
+            let methods = fd.classes.iter().flat_map(|c| c.methods.iter());
+            for f in fd.functions.iter().chain(methods) {
+                if !f.tags.is_empty() {
+                    tags.insert(f.id.as_str(), f.tags.as_slice());
+                }
+            }
+        }
+
+        let mut file_categories: HashMap<&'a str, &'a str> = HashMap::new();
+        for (cat, files) in &indices.files_by_category {
+            for file in files {
+                file_categories.insert(*file, *cat);
+            }
+        }
+
+        Self {
+            nodes: &kb.call_graph.nodes,
+            edges: &kb.call_graph.edges,
+            tags,
+            file_categories,
+        }
+    }
+}
+
 #[derive(Serialize, Default)]
 pub struct IndicesView<'a> {
     pub functions_by_name: HashMap<&'a str, Vec<String>>,
@@ -85,12 +114,18 @@ pub struct IndexViewRef<'a> {
     pub indices: &'a IndicesView<'a>,
 }
 
-// kb_call_graph.json (*_call_graph.json) structure
 #[derive(Serialize)]
 pub struct CallGraphRef<'a> {
     pub nodes: &'a [CallGraphNode],
     pub edges: &'a [CallGraphEdge],
+    /// node id -> tags
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub tags: HashMap<&'a str, &'a [String]>,
+    /// file path -> category
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub file_categories: HashMap<&'a str, &'a str>,
 }
+
 //kb_call_graph.json
 #[derive(Serialize)]
 pub struct EntryPointsRef<'a> {

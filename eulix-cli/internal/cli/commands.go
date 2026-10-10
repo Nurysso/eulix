@@ -136,7 +136,7 @@ var checksumCmd = &cobra.Command{
 }
 
 var vizEulizeCMD = &cobra.Command{
-	Use:   "vizEulize",
+	Use:   "vizeulize",
 	Short: "Opens web application to view call graphs",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -145,17 +145,17 @@ var vizEulizeCMD = &cobra.Command{
 			return fmt.Errorf("could not determine home directory: %w", err)
 		}
 
-		htmlPath := filepath.Join(home, ".Eulix", "bin", "vizEulize.html")
+		htmlPath := filepath.Join(home, utils.EulixGlobalDir, "bin", "vizeulize.html")
 		if _, err := os.Stat(htmlPath); err != nil {
-			return fmt.Errorf("could not find vizEulize.html at %s: %w", htmlPath, err)
+			return fmt.Errorf("could not find vizeulize.html at %s: %w", htmlPath, err)
 		}
 
 		// Fallback defaults to .eulix directory files if not specified via flags
 		if graphPath == "" {
-			graphPath = filepath.Join(".eulix", "kb_call_graph.json")
+			graphPath = filepath.Join(utils.EulixDir, "kb_call_graph.json")
 		}
 		if indexPath == "" {
-			indexPath = filepath.Join(".eulix", "kb_index.json")
+			indexPath = filepath.Join(utils.EulixDir, "kb_index.json")
 		}
 
 		// Verify files exist
@@ -176,13 +176,6 @@ var vizEulizeCMD = &cobra.Command{
 			w.Header().Set("Content-Type", "application/json")
 			http.ServeFile(w, r, graphPath)
 		})
-
-		if _, err := os.Stat(indexPath); err == nil {
-			mux.HandleFunc("/data/index.json", func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				http.ServeFile(w, r, indexPath)
-			})
-		}
 
 		// Bind local server port
 		ln, err := net.Listen("tcp", "127.0.0.1:0")

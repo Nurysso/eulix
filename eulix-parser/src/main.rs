@@ -309,10 +309,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let indices = analyze::indices::generate_indices_view(&kb);
         let index_ref = IndexViewRef { indices: &indices };
-        let cg_ref = CallGraphRef {
-            nodes: &kb.call_graph.nodes,
-            edges: &kb.call_graph.edges,
-        };
+        let cg_ref = CallGraphRef::new(&kb, &indices);
         let ep_ref = EntryPointsRef {
             entry_points: &kb.entry_points,
         };
@@ -331,7 +328,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         if args.verbose {
             println!("   Writing index...");
         }
-        write_json_streaming(&index_path, &index_ref, true)?;
+        write_json_streaming(&index_path, &index_ref, false)?;
 
         if args.verbose {
             println!("   Writing summary...");
@@ -356,7 +353,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         if args.verbose {
             println!("   Writing external deps...");
         }
-        write_json_streaming(&deps_path, &deps_ref, true)?;
+        write_json_streaming(&deps_path, &deps_ref, false)?;
 
         if args.verbose {
             println!("   Writing patterns...");

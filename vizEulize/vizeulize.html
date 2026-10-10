@@ -41,6 +41,7 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 #det .k{color:var(--tx2);font-size:10px;margin-top:8px}
 #det .c{cursor:pointer;color:#378ADD;word-break:break-all;padding:1px 0}
 #det .c:hover{text-decoration:underline}
+#det .cond{margin-left:6px;padding:0 4px;font-size:10px;color:var(--tx2);border:1px dashed var(--bd);border-radius:4px;white-space:nowrap}
 #det .tag{display:inline-block;background:var(--bg3);border-radius:4px;padding:0 5px;margin:1px 2px 1px 0;font-size:10px}
 #bar{position:absolute;left:0;right:0;bottom:0;padding:5px 10px;font-size:10px;color:var(--tx2);background:var(--bg2);border-top:1px solid var(--bd);display:flex;gap:14px;white-space:nowrap;overflow:hidden}
 #i3{overflow:hidden;text-overflow:ellipsis}
@@ -88,7 +89,6 @@ onmessage=e=>{
   try{
     const d=JSON.parse(new TextDecoder().decode(buf));
     if(Array.isArray(d.nodes)||Array.isArray(d.edges))graph(d,id);
-    else if(d.indices||d.functions_by_name||d.functions_calling)postMessage({id,kind:'index',data:d.indices||d});
     else postMessage({id,kind:'unknown'});
   }catch(err){postMessage({id,kind:'error',msg:err.message});}
 };
@@ -114,8 +114,21 @@ function graph(d,id){
   const oE=new Int32Array(k),iE=new Int32Array(k),po=oS.slice(0,n),pi=iS.slice(0,n);
   for(let j=0;j<k;j++){oE[po[F[j]]++]=j;iE[pi[T[j]]++]=j;}
   const Y=Uint8Array.from(eY),C=Uint8Array.from(eC),ct=Uint8Array.from(cat);
-  postMessage({id,kind:'graph',n,m:k,ids,names,files,cat:ct,eF:F,eT:T,eY:Y,eC:C,tn,oS,oE,iS,iE},
-    [ct.buffer,F.buffer,T.buffer,Y.buffer,C.buffer,oS.buffer,oE.buffer,iS.buffer,iE.buffer]);
+  // tags: {nodeId:[tag,...]}  ->  [[nodeIdx,[tagIdx,...]],...]
+  const tagNames=[],tIx=new Map(),tg=[];
+  for(const[nid,v]of Object.entries(d.tags||{})){
+    const i=idx.get(nid);if(i===undefined||!Array.isArray(v)||!v.length)continue;
+    tg.push([i,v.map(t=>{let x=tIx.get(t);if(x===undefined){x=tagNames.length;tIx.set(t,x);tagNames.push(t);}return x;})]);
+  }
+  // file_categories: {file:category}  ->  per-node category index (0 = none)
+  const catNames=[],cIx=new Map(),fm=d.file_categories||{},fc=new Uint16Array(n);
+  for(let i=0;i<n;i++){
+    const cn=fm[files[i]];if(cn===undefined)continue;
+    let x=cIx.get(cn);if(x===undefined){x=catNames.length;cIx.set(cn,x);catNames.push(cn);}
+    fc[i]=x+1;
+  }
+  postMessage({id,kind:'graph',n,m:k,ids,names,files,cat:ct,eF:F,eT:T,eY:Y,eC:C,tn,oS,oE,iS,iE,tagNames,tg,catNames,fc},
+    [ct.buffer,F.buffer,T.buffer,Y.buffer,C.buffer,oS.buffer,oE.buffer,iS.buffer,iE.buffer,fc.buffer]);
 }
 </script>
 
@@ -126,7 +139,7 @@ const CATS=['function','method','type','file','module','package','external'];
 const COL={function:'#7F77DD',method:'#1D9E75',type:'#EF9F27',file:'#378ADD',module:'#378ADD',package:'#378ADD',external:'#888780'};
 const ECOL={calls:'#378ADD',imports:'#1D9E75',depends_on:'#D4537E'},EFB='#888780';
 const HINT='Load a call graph to begin.<br>Default view = most-connected nodes.<br>Click: details · Double-click: focus neighborhood · Drag: pan / move · Scroll: zoom<br>Keys: / search · Esc deselect';
-let G=null,IDX=null,vis=[],visE=[],focus=null,sel=null,hov=null,nb=new Set(),hist=[],hidE=new Set(),M=()=>true;
+let G=null,vis=[],visE=[],focus=null,sel=null,hov=null,nb=new Set(),hist=[],hidE=new Set(),M=()=>true;
 let pan={x:0,y:0},zoom=1,alpha=0,dirty=true,dragN=null,panning=false,down=null,lastP=null,fitP=false;
 const status=s=>$('status').textContent=s;
 const mb=b=>(b/1048576).toFixed(1);
@@ -153,13 +166,12 @@ async function fetchBuf(url){
   return out.buffer;
 }
 async function auto(){
-  if(location.protocol==='file:'){status('Opened as a file. Select *_call_graph.json (and *_index.json), or drop them here.');return;}
+  if(location.protocol==='file:'){status('Opened as a file. Select *_call_graph.json, or drop it here.');return;}
   const get=async urls=>{for(const u of urls){try{return{name:u.split('/').pop(),buf:await fetchBuf(u)};}catch(e){}}return null;};
   const g=await get(['/data/call_graph.json','/data/kb_call_graph.json']);
   if(!g){status('No call graph served at /data/call_graph.json. Load files manually.');resetHint();return;}
-  const ix=await get(['/data/index.json','/data/kb_index.json']);
   status('Parsing…');
-  await ingest([g,ix].filter(Boolean));
+  await ingest([g]);
 }
 async function loadFiles(files){
   const items=[];
@@ -170,30 +182,27 @@ async function ingest(items){
   $('hm').textContent='Parsing…';$('pb').hidden=true;
   const res=await Promise.all(items.map(it=>parse(it.buf).catch(e=>{status(`${it.name}: ${e.message}`);return null;})));
   let ok=false,bad=false;
-  for(const m of res){if(!m)continue;if(m.kind==='index'){IDX=buildIndex(m.data);fillFilters();}else if(m.kind==='unknown')bad=true;}
+  for(const m of res)if(m&&m.kind==='unknown')bad=true;
   for(const m of res)if(m&&m.kind==='graph'){setGraph(m);ok=true;}
   if(ok){focus=null;sel=null;hist=[];nb=new Set();}
   if(G){$('hint').style.display='none';showDet(null);rebuild();status(`Loaded ${items.map(i=>i.name).join(' + ')}`);}
-  else{resetHint();if(bad)status('Unrecognized JSON: expected nodes/edges or an index.');}
+  else{resetHint();if(bad)status('Unrecognized JSON: expected a call graph with nodes and edges.');}
 }
 function setGraph(m){
   const n=m.n,deg=new Int32Array(n),order=new Int32Array(n);
   for(let i=0;i<n;i++){deg[i]=m.oS[i+1]-m.oS[i]+m.iS[i+1]-m.iS[i];order[i]=i;}
   order.sort((a,b)=>deg[b]-deg[a]);
-  G={...m,deg,order,lc:null};
+  G={...m,deg,order,lc:null,tagMap:new Map(m.tg)};
+  fillFilters();
 }
-function buildIndex(ix){
-  const tagsOf=new Map(),fileCat=new Map();
-  for(const[t,arr]of Object.entries(ix.functions_by_tag||{}))for(const v of arr){(tagsOf.get(v)||tagsOf.set(v,[]).get(v)).push(t);}
-  for(const[c,arr]of Object.entries(ix.files_by_category||{}))for(const f of arr)fileCat.set(f,c);
-  return{ix,tagsOf,fileCat,tagSets:Object.fromEntries(Object.entries(ix.functions_by_tag||{}).map(([k,v])=>[k,new Set(v)]))};
-}
+// option value = index into G.catNames / G.tagNames
 function fillFilters(){
-  const ix=IDX.ix,f=(id,keys)=>{const s=$(id),first=s.options[0];s.innerHTML='';s.appendChild(first);keys.sort().forEach(k=>{const o=document.createElement('option');o.value=k;o.textContent=k;s.appendChild(o);});};
-  f('fcat',Object.keys(ix.files_by_category||{}));f('ftag',Object.keys(ix.functions_by_tag||{}));
+  const f=(id,names)=>{const s=$(id),first=s.options[0];s.innerHTML='';s.appendChild(first);
+    names.map((k,i)=>[k,i]).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,i])=>{const o=document.createElement('option');o.value=i;o.textContent=k;s.appendChild(o);});};
+  f('fcat',G.catNames);f('ftag',G.tagNames);
 }
-const tagsFor=i=>IDX?[...new Set([...(IDX.tagsOf.get(G.names[i])||[]),...(IDX.tagsOf.get(G.ids[i])||[])])]:[];
-const catFor=i=>IDX&&G.files[i]?(IDX.fileCat.get(G.files[i])||null):null;
+const tagsFor=i=>(G.tagMap.get(i)||[]).map(t=>G.tagNames[t]);
+const catFor=i=>G.fc[i]?G.catNames[G.fc[i]-1]:null;
 
 // graph helpers
 function nbrs(u,dir,fn){
@@ -205,11 +214,11 @@ const noCallers=i=>G.iS[i+1]===G.iS[i]&&G.oS[i+1]>G.oS[i];
 function mk(){
   const q=$('q').value.trim().toLowerCase(),c=$('fcat').value,t=$('ftag').value,s=$('show').value;
   if(q&&!G.lc)G.lc=G.names.map((x,i)=>(x+'\n'+G.files[i]).toLowerCase());
-  const ts=t&&IDX?IDX.tagSets[t]:null;
+  const ci=c===''?0:+c+1,ti=t===''?-1:+t;
   return i=>{
     if(q&&!G.lc[i].includes(q))return false;
-    if(c&&catFor(i)!==c)return false;
-    if(ts&&!(ts.has(G.names[i])||ts.has(G.ids[i])))return false;
+    if(ci&&G.fc[i]!==ci)return false;
+    if(ti>=0){const a=G.tagMap.get(i);if(!a||!a.includes(ti))return false;}
     if(s==='entry'&&!noCallers(i))return false;
     if(s==='leaf'&&!(G.oS[i+1]===G.oS[i]&&G.iS[i+1]>G.iS[i]))return false;
     if(s==='proj'&&G.cat[i]===6)return false;
@@ -267,15 +276,12 @@ function showDet(i){
   const nm=G.names[i],out=[],inn=[];
   for(let k=G.oS[i];k<G.oS[i+1];k++){const e=G.oE[k];out.push([G.eT[e],G.eC[e]]);}
   for(let k=G.iS[i];k<G.iS[i+1];k++){const e=G.iE[k];inn.push([G.eF[e],G.eC[e]]);}
-  const L=a=>a.slice(0,40).map(([v,c])=>`<div class="c" data-id="${v}">${esc(G.names[v])}${c?' ?':''}</div>`).join('')+(a.length>40?`<div>+${a.length-40} more</div>`:'');
+  const L=a=>a.slice(0,40).map(([v,c])=>`<div class="c" data-id="${v}">${esc(G.names[v])}${c?'<span class="cond" title="Called only inside a branch, loop or conditional, not on every path">conditional</span>':''}</div>`).join('')+(a.length>40?`<div>+${a.length-40} more</div>`:'');
   let h=`<h4>${esc(nm)}</h4><div style="color:var(--tx2)">${CATS[G.cat[i]]}${G.files[i]?' · '+esc(G.files[i]):''}</div>`;
-  if(IDX){
-    const x=IDX.ix,locs=x.functions_by_name?.[nm]||[],tg=tagsFor(i),cat=catFor(i),ic=x.functions_calling?.[nm]||[],ty=x.types_by_name?.[nm];
+  {
+    const tg=tagsFor(i),cat=catFor(i);
     if(cat)h+=`<div class="k">category</div><span class="tag">${esc(cat)}</span>`;
     if(tg.length)h+=`<div class="k">tags</div>`+tg.map(t=>`<span class="tag">${esc(t)}</span>`).join('');
-    if(locs.length)h+=`<div class="k">locations (index)</div>`+locs.slice(0,15).map(l=>`<div>${esc(l)}</div>`).join('');
-    if(!inn.length&&ic.length)h+=`<div class="k">callers (index)</div>`+ic.slice(0,30).map(c=>`<div>${esc(c)}</div>`).join('');
-    if(ty)h+=`<div class="k">type defs</div>`+ty.slice(0,10).map(l=>`<div>${esc(l)}</div>`).join('');
   }
   h+=`<div class="k">calls → ${out.length}</div>${L(out)}<div class="k">called by ← ${inn.length}</div>${L(inn)}`;
   h+=`<div style="margin-top:8px"><button id="fbtn">Focus neighborhood</button></div>`;
@@ -347,7 +353,7 @@ function draw(){
   requestAnimationFrame(loop);
 })();
 
-// This is for interaction
+// interaction
 const cv=$('c');
 const pos=e=>{const r=cv.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};};
 const world=p=>({x:(p.x-pan.x)/zoom,y:(p.y-pan.y)/zoom});
