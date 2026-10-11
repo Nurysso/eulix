@@ -1,11 +1,21 @@
 [package]
 name = "eulix-parser"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "CLI for libeulix: multi-language code parser and call-graph builder"
+version = "0.8.1"
+edition = "2021"
+rust-version = "1.74"
+description = "multi-language code parsing and call-graph builder"
+documentation = "https://docs.rs/eulix-parser"
+repository = "https://github.com/Nurysso/eulix/tree/main/eulix-parser"
 readme = "README.md"
+license = "GPL-3.0-or-later"
+keywords = [
+    "code-analysis",
+    "parser",
+    "static-analysis",
+    "tree-sitter",
+    "call-graph",
+]
+categories = ["development-tools", "command-line-utilities"]
 
 [[bin]]
 name = "eulix_parser"
@@ -20,19 +30,16 @@ memmap2 = "0.9"
 rpmalloc = "0.2"
 rustc-hash = "2.1"
 crc32fast = "1.5"
+
+serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
-chrono = { version = "0.4", default-features = false, features = [
-  "now",
-  "serde",
-] }
-rayon = "1.12.0"
-serde = "1.0.229"
+chrono = { version = "0.4", default-features = false, features = ["now"] }
+rayon = "1.10"
 num_cpus = { version = "1.17.0", optional = true }
 
 [features]
 default = ["num_cpus"]
 num_cpus = ["dep:num_cpus"]
-
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

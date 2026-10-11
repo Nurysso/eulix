@@ -18,12 +18,11 @@
 //! ## Core Modules
 //!
 //! - [`analyze`]       — Tree-sitter parsing, AST extraction, and **PRISM**
-//!                       (Polyglot Resolution via Inverted Symbol Map) for
-//!                       approximate relationship and call-graph analysis.
+//!   (Polyglot Resolution via Inverted Symbol Map) for
+//!   approximate relationship and call-graph analysis.
 //! - [`grammar_files`] — Language grammar integrations and target definitions.
 //! - [`struc`]         — The foundational knowledge base schema and shared data types.
 //! - [`utils`]         — Shared, side-effect-free helper utilities.
-//!
 //! ## Library Boundaries
 //!
 //! **Purity first.** Anything that prints to stdout, writes directly to disk,

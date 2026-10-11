@@ -2,7 +2,7 @@
 name = "libeulix"
 version = "0.8.1"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.98.1"
 description = "Multi-language static analysis library: parses C, C++, Go, Java, JavaScript, Python, Rust, and TypeScript into a knowledge base with a project-wide resolved call graph."
 documentation = "https://docs.rs/libeulix"
 repository = "https://github.com/Nurysso/eulix/tree/main/libeulix"

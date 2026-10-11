@@ -15,7 +15,6 @@ use libeulix::grammar_files::language::Language;
 use libeulix::utils::file_walker::FileWalker;
 
 #[cfg(target_os = "linux")]
-
 pub fn parse_file(
     file_path: &Path,
     root: &Path,

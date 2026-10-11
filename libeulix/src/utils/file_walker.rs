@@ -25,7 +25,7 @@ pub struct WalkedFile {
 }
 pub struct FileWalker {
     root: PathBuf,
-    /// Optional path to a custom .euignore file (overrides the default <root>/.euignore)
+    /// Optional path to a custom .euignore file (overrides the default ``<root>``/.euignore)
     euignore_path: Option<PathBuf>,
 }
 
