@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use crate::os_io;
 use crate::parse::slim::{slim, strip_emitted};
 use crate::spill::{ParsedFileResult, Spill};
+use crate::views::FileDataSimpleView;
 
 use libeulix::grammar_files;
 use libeulix::grammar_files::language::Language;
-use libeulix::struc::kb_struct::FileDataSimpleView;
 use libeulix::utils::file_walker::FileWalker;
 
 #[cfg(target_os = "linux")]

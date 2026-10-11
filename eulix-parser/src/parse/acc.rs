@@ -1,5 +1,5 @@
 use crate::stats::{lang_counts, FailedFile, ParseStats, PartialFile};
-use crate::struc::kb_struct::FileData;
+use libeulix::struc::kb_struct::FileData;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Per-rayon-worker accumulator (fold) that is later merged (reduce).

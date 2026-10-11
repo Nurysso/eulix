@@ -1,7 +1,21 @@
 use crate::spill::SpillIndex;
-use crate::struc::kb_struct::Metadata;
+use libeulix::struc::kb_struct::Metadata;
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+// #![allow(clippy::module_inception)]
+
+/// "test1/kb.json" -> "test1"
+/// "test1/data/kb" -> "test1/data"
+/// "kb.json"       -> "."   (no directory part, so the current dir)
+pub fn output_dir(output: impl AsRef<Path>) -> PathBuf {
+    let path = output.as_ref();
+    match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
+
 
 pub fn write_json_streaming<T: serde::Serialize>(
     path: &Path,

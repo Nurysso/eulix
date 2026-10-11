@@ -67,12 +67,6 @@
 //! - eulix_parser depends upon tree-sitter@latest so a newer version of language sysntax will result in partial
 //!   parse and not a complete failure
 
-#![allow(unused_crate_dependencies)]
-// Deps that only the library target uses (tree-sitter and its grammars, ignore,
-// regex, xxhash-rust, zstd, anyhow) are declared in Cargo.toml but never
-// referenced here. The binary consumes them through `libeulix`. Silence the
-// per-target lint; see `src/lib.rs` for the mirror-image case.
-
 mod engine;
 mod memory;
 mod os_io;
@@ -81,6 +75,7 @@ mod parse;
 mod report;
 mod spill;
 mod stats;
+mod views;
 
 use clap::Parser;
 use std::fs;
@@ -89,14 +84,14 @@ use std::time::Instant;
 
 use crate::engine::Engine;
 use crate::memory::{default_thread_count, max_rss_mb};
-use crate::output::{write_json_streaming, write_kb_from_spill};
+use crate::output::{write_json_streaming, write_kb_from_spill,output_dir};
 use crate::parse::directory::parse_directory;
 use crate::report::{field_report, print_final_summary, write_parse_report};
-use libeulix::struc::kb_struct::{
+use crate::views::{
     CallGraphRef, EntryPointsRef, ExternalDepsRef, IndexViewRef, PatternsRef,
 };
-use libeulix::utils::utils::output_dir;
-use libeulix::{analyze, struc};
+
+use libeulix::analyze;
 
 #[global_allocator]
 static ALLOC: rpmalloc::RpMalloc = rpmalloc::RpMalloc;

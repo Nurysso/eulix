@@ -4,7 +4,7 @@ use super::acc::Acc;
 use super::file::{collect_source_files_and_hash, language_label, parse_file, rel_path};
 use crate::spill::{Entry, Spill, SpillGuard, SpillIndex};
 use crate::stats::ParseStats;
-use crate::struc::kb_struct::{
+use libeulix::struc::kb_struct::{
     CallGraph, DependencyGraph, Indices, KnowledgeBase, Metadata, PatternInfo,
 };
 use rayon::prelude::*;

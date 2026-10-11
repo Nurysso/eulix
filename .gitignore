@@ -8,8 +8,9 @@ __pycache__/
 .pyc/
 test/
 build/
-**/target/
+*target*
 *-bug.*
+*.bak*
 .eulix/
 callgraph-viz/
 context_debug_*.txt
@@ -20,6 +21,7 @@ coverage/
 diff*
 profile_*
 .env
+libeulix/Cargo.lock
 eulix-cli/eulix*
 eulix-cli/internal/assets/bins/eulix-embed.zip
 eulix-cli/internal/assets/bins/eulix_embed

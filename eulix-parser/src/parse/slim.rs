@@ -1,28 +1,4 @@
-use crate::struc::kb_struct::*;
-
-#[allow(dead_code)]
-pub fn slim1(fd: &mut FileData) {
-    fd.global_vars = Vec::new();
-    fd.security_notes = Vec::new();
-    let strip = |f: &mut Function| {
-        f.control_flow = ControlFlow::default();
-        f.exceptions = ExceptionInfo::default();
-        f.lang_info = LanguageSpecificInfo::default();
-        f.called_by = Vec::new();
-        for c in &mut f.calls {
-            c.args = Vec::new();
-            c.context = String::new();
-        }
-        f.calls.shrink_to_fit();
-    };
-    fd.functions.iter_mut().for_each(strip);
-    for c in &mut fd.classes {
-        c.methods.iter_mut().for_each(strip);
-        c.methods.shrink_to_fit();
-    }
-    fd.functions.shrink_to_fit();
-    fd.classes.shrink_to_fit();
-}
+use libeulix::struc::kb_struct::*;
 
 pub fn strip_fn(f: &mut Function) {
     f.control_flow = ControlFlow::default();

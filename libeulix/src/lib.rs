@@ -1,7 +1,7 @@
 //! # libeulix
 //!
 //! `libeulix` is the core parsing and analysis engine behind Eulix—designed to be
-//! reused by the CLI binary, LSP servers, and any downstream tool requiring
+//! reused by the eulix_parser binary, eulix_lsp, eulix-cli(eulix) and any downstream tool requiring
 //! deep code intelligence.
 //!
 //! ## The Spectrum Philosophy
@@ -29,13 +29,6 @@
 //! **Purity first.** Anything that prints to stdout, writes directly to disk,
 //! or assumes a global CLI context lives in the binary crate (`eulix_parser`).
 //! `libeulix` remains a pure, side-effect-free data transformation engine.
-
-#![allow(unused_crate_dependencies)]
-// Deps that only the CLI binary target uses are declared in Cargo.toml but
-// never referenced here (clap, indicatif, memmap2, rpmalloc, crc32fast,
-// rustc-hash, libc, num_cpus). The per-target version of the
-// `unused_crate_dependencies` lint cannot see that, so silence it here.
-// See `src/main.rs` for the mirror-image case.
 
 pub mod analyze;
 pub mod grammar_files;

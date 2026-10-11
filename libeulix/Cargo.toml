@@ -1,0 +1,67 @@
+[package]
+name = "libeulix"
+version = "0.8.1"
+edition = "2021"
+rust-version = "1.74"
+description = "Multi-language static analysis library: parses C, C++, Go, Java, JavaScript, Python, Rust, and TypeScript into a knowledge base with a project-wide resolved call graph."
+documentation = "https://docs.rs/libeulix"
+repository = "https://github.com/Nurysso/eulix/tree/main/libeulix"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+keywords = [
+    "code-analysis",
+    "parser",
+    "static-analysis",
+    "tree-sitter",
+    "call-graph",
+]
+categories = ["development-tools", "parsing"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+name = "libeulix"
+path = "src/lib.rs"
+
+[dependencies]
+rayon = "1.10"
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = { version = "1.0", features = ["raw_value"] }
+chrono = { version = "0.4", default-features = false, features = [
+    "now",
+    "serde",
+] }
+
+tree-sitter = "0.27"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+
+ignore = "0.4"
+regex = { version = "1.10", default-features = false, features = [
+    "perf",
+    "std",
+] }
+anyhow = "1.0"
+xxhash-rust = { version = "0.8", features = ["const_xxh3", "xxh3"] }
+zstd = "0.14"
+
+num_cpus = { version = "1.16", optional = true }
+secrecy = { version = "0.10", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = ["num_cpus"]
+num_cpus = ["dep:num_cpus"]
+secure = ["secrecy"]
+simd = ["ignore/simd-accel"]
+system = []
+dev = ["serde_json/arbitrary_precision"]
