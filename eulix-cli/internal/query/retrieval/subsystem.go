@@ -1,7 +1,6 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package retrieval provides context window Creation for Eulix's RAG system.
 
 // This file auto detects subsystem of the repo
@@ -9,14 +8,15 @@
 package retrieval
 
 import (
-	"eulix/internal/config"
-	"eulix/internal/utils"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"eulix/internal/config"
+	"eulix/internal/utils"
 )
 
 // SubsystemNode represents a directory node in the repository tree.
@@ -63,7 +63,7 @@ const subsysFinalK = 5
 // logSubsystemsToFile writes the constructed subsystem tree nodes to a debug log file.
 func logSubsystemsToFile(nodes []*SubsystemNode) error {
 	logPath := filepath.Join(utils.EulixDir, "debug", "susbstemDebug.log")
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open subsystem.log: %w", err)
 	}

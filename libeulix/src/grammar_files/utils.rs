@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+
+
 use crate::struc::kb_struct::*;
 use regex::Regex;
 use std::sync::LazyLock;

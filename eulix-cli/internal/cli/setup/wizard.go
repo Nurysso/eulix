@@ -1,7 +1,5 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
-
-// Maintainer mnae (Nurysso) contact - nurysso [at] proton.me
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
 // package setup contains code related to init flow of eulix
 

@@ -1,7 +1,5 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
-
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
 /*
 Package retrieval provides context window Creation for Eulix's RAG system.
@@ -13,8 +11,6 @@ package retrieval
 
 import (
 	"encoding/json"
-	"eulix/internal/config"
-	"eulix/internal/utils"
 	"fmt"
 	"math"
 	"os"
@@ -23,6 +19,9 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"eulix/internal/config"
+	"eulix/internal/utils"
 
 	"gonum.org/v1/gonum/blas/blas32"
 )
@@ -37,6 +36,7 @@ func (cb *ContextBuilder) Close() error {
 	}
 	return nil
 }
+
 func getHeapAlloc() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -159,7 +159,7 @@ func mmrWatchMatch(id, name, file string) bool {
 // Intended for offline analysis; not used in production path.
 func (cb *ContextBuilder) writeContextToFile(ctx *utils.ContextWindow) error {
 	logDir := filepath.Join(cb.config.Project.Path, utils.EulixDir, "debug", "retrieval")
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return err
 	}
 	fileName := fmt.Sprintf("retrieval_debug_%s.txt", time.Now().Format("20060102_150405"))
@@ -243,7 +243,7 @@ func cosineSimilarity(a, b []float32) float64 {
 	if na == 0 || nb == 0 {
 		return 0
 	}
-	return dot / (math.Sqrt(na * nb))
+	return dot / math.Sqrt(na*nb)
 }
 
 // dotProduct computes the dot product of two equal-length float32 vectors.

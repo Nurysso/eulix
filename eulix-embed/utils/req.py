@@ -1,4 +1,4 @@
-# Copyright (C) 2026 Dawood Khan
+# Copyright (C) 2026 Dawood K.
 # SPDX-License-Identifier: Apache-2.0
 
 # Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me

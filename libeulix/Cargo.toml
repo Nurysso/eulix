@@ -1,10 +1,13 @@
+# Copyright 2025-2026 Dawood K. (Nurysso)
+# SPDX-License-Identifier: Apache-2.0
+
 [package]
 name = "libeulix"
 version = "0.8.1"
 edition = "2021"
 rust-version = "1.98.1"
 description = "Multi-language static analysis library: parses C, C++, Go, Java, JavaScript, Python, Rust, and TypeScript into a knowledge base with a project-wide resolved call graph."
-documentation = "https://docs.rs/libeulix"
+documentation = "https://docs.rs/libeulix/0.8.1/libeulix/"
 repository = "https://github.com/Nurysso/eulix/tree/main/libeulix"
 readme = "README.md"
 license = "GPL-3.0-or-later"

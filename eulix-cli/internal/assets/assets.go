@@ -1,5 +1,5 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
 // Package assets holds the binaries and scripts that ship inside the eulix
 // executable.
@@ -36,7 +36,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"eulix/internal/utils"
 	"fmt"
 	"io"
 	"log"
@@ -49,6 +48,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"eulix/internal/utils"
 )
 
 // EmbedZip holds the eulix-embed.zip archive (the eulix_embed Python
@@ -58,11 +59,15 @@ import (
 var EmbedZip embed.FS
 
 // -ldflags "-X eulix/internal/assets.ParserHash=<sha256>" hash for verification of parser bin, skip if empty
-var ParserHash string
-var embed_requirements = "onnx-amd.txt"
+var (
+	ParserHash         string
+	embed_requirements = "onnx-amd.txt"
+)
 
-var extractMu sync.Mutex
-var ErrIntegrityMismatch = errors.New("asset integrity check failed")
+var (
+	extractMu            sync.Mutex
+	ErrIntegrityMismatch = errors.New("asset integrity check failed")
+)
 
 type FileHash struct {
 	Name   string
@@ -242,10 +247,10 @@ func ExtractAll() (string, error) {
 	parserDir := filepath.Join(root, utils.ParserSubDir)
 	scriptsDir := filepath.Join(root, utils.ScriptsSubDir)
 
-	if err := os.MkdirAll(parserDir, 0755); err != nil {
+	if err := os.MkdirAll(parserDir, 0o755); err != nil {
 		return "", fmt.Errorf("create parser dir: %w", err)
 	}
-	if err := os.MkdirAll(scriptsDir, 0755); err != nil {
+	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
 		return "", fmt.Errorf("create scripts dir: %w", err)
 	}
 
@@ -298,7 +303,7 @@ func extractParser(dir string) error {
 		return nil // already extracted, skip
 	}
 
-	if err := os.WriteFile(destPath, content, 0755); err != nil {
+	if err := os.WriteFile(destPath, content, 0o755); err != nil {
 		return fmt.Errorf("write extracted parser binary %q: %w", destPath, err)
 	}
 	return nil
@@ -337,13 +342,13 @@ func extractEmbedZip(dir string) error {
 		}
 
 		if zf.FileInfo().IsDir() {
-			if err := os.MkdirAll(destPath, 0755); err != nil {
+			if err := os.MkdirAll(destPath, 0o755); err != nil {
 				return fmt.Errorf("create dir %q: %w", destPath, err)
 			}
 			continue
 		}
 
-		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 			return fmt.Errorf("create parent dir for %q: %w", destPath, err)
 		}
 
@@ -356,9 +361,9 @@ func extractEmbedZip(dir string) error {
 			return err
 		}
 
-		mode := os.FileMode(0644)
-		if zf.Mode()&0111 != 0 {
-			mode = 0755 // preserve executable bit for scripts that need it
+		mode := os.FileMode(0o644)
+		if zf.Mode()&0o111 != 0 {
+			mode = 0o755 // preserve executable bit for scripts that need it
 		}
 		if err := os.WriteFile(destPath, content, mode); err != nil {
 			return fmt.Errorf("write extracted file %q: %w", destPath, err)
@@ -450,19 +455,20 @@ func VerifyOrExtract(root string) error {
 
 	if gotParser != wantParser.SHA256 {
 		// Print clear error with instructions
-		fmt.Fprintf(os.Stderr, "\n"+
-			"╔══════════════════════════════════════════════════════════════════════════════╗\n"+
-			"║               OOPS    Eulix_parser BINARY INTEGRITY ERROR                    ║\n"+
-			"╚══════════════════════════════════════════════════════════════════════════════╝\n\n"+
-			"The eulix_parser binary has been modified or corrupted.\n\n"+
-			"  File:     %[1]s\n"+
-			"  Expected: %[2]s\n"+
-			"  Got:      %[3]s\n\n"+
-			"To fix this issue:\n\n"+
-			"  1. Delete the corrupted binary:\n"+
-			"     rm %[1]s\n\n"+
-			"  2. Run eulix again - it will automatically extract a fresh copy:\n"+
-			"     eulix analyze\n\n",
+		fmt.Fprintf(
+			os.Stderr, "\n"+
+				"╔══════════════════════════════════════════════════════════════════════════════╗\n"+
+				"║               OOPS    Eulix_parser BINARY INTEGRITY ERROR                    ║\n"+
+				"╚══════════════════════════════════════════════════════════════════════════════╝\n\n"+
+				"The eulix_parser binary has been modified or corrupted.\n\n"+
+				"  File:     %[1]s\n"+
+				"  Expected: %[2]s\n"+
+				"  Got:      %[3]s\n\n"+
+				"To fix this issue:\n\n"+
+				"  1. Delete the corrupted binary:\n"+
+				"     rm %[1]s\n\n"+
+				"  2. Run eulix again - it will automatically extract a fresh copy:\n"+
+				"     eulix analyze\n\n",
 			parserPath, wantParser.SHA256, gotParser,
 		)
 
@@ -646,7 +652,7 @@ func GlobalInitialized(EulixRoot string) error {
 	}
 
 	filename := filepath.Join(EulixRoot, ".initialized")
-	if err := writeHiddenFile(filename, jsonData, 0644); err != nil {
+	if err := writeHiddenFile(filename, jsonData, 0o644); err != nil {
 		return fmt.Errorf("write initialized file %q: %w", filename, err)
 	}
 

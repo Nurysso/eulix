@@ -1,7 +1,6 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package retrieval provides context window Creation for Eulix's RAG system.
 
 // This files handles classification of query intent in context window allowing us better control of weight in budget allocation.
@@ -9,10 +8,11 @@
 package retrieval
 
 import (
-	"eulix/internal/utils"
 	"math"
 	"sort"
 	"strings"
+
+	"eulix/internal/utils"
 )
 
 const (

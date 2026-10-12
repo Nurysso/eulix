@@ -1,7 +1,6 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package Fixers makes an attempt to fix files present in .eulix
 // In case they are corrupted
 
@@ -11,11 +10,12 @@ package fixers
 
 import (
 	"encoding/binary"
-	"eulix/internal/utils"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+
+	"eulix/internal/utils"
 )
 
 // AspirineOptions holds configuration for the Aspirine rebuild process
@@ -375,7 +375,7 @@ func selfHeal(path string, data []byte, hdr binHeader, payloadOff int, opts Aspi
 func rewriteHeader(path string, data []byte, payloadOff int, hdr binHeader, opts AspirineOptions) error {
 	if !opts.NoBackup {
 		backupPath := fmt.Sprintf("%s.backup.%d", path, os.Getpid())
-		if err := os.WriteFile(backupPath, data, 0644); err != nil {
+		if err := os.WriteFile(backupPath, data, 0o644); err != nil {
 			fmt.Printf("   ⚠  Could not create backup %s: %v\n", backupPath, err)
 		} else {
 			fmt.Printf("   ✓ Backed up original to %s\n", backupPath)

@@ -1,7 +1,6 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package utils provides Shared type and func across project
 
 //go:build windows
@@ -19,8 +18,10 @@ import (
 //go:embed bins/eulix_parser_windows.exe
 var parserBin embed.FS
 
-const parserBinFile = "bins/eulix_parser_windows.exe"
-const parserBinDestName = "eulix_parser.exe"
+const (
+	parserBinFile     = "bins/eulix_parser_windows.exe"
+	parserBinDestName = "eulix_parser.exe"
+)
 
 func parserBinaryBytes() ([]byte, string, error) {
 	content, err := parserBin.ReadFile(parserBinFile)

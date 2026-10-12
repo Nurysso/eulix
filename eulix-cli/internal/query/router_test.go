@@ -1,7 +1,6 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package query manages query routing for EULIX.
 
 /*
@@ -29,8 +28,10 @@ import (
 )
 
 // Fixture helpers
-type M = map[string]any
-type S = []any
+type (
+	M = map[string]any
+	S = []any
+)
 
 // fill populates *dst from a spec of nested M (structs/maps), S (slices) and scalars,
 // keyed by Go field name. A bare string for a struct with a Name field means {Name: s}.
@@ -568,25 +569,53 @@ func TestParseSig(t *testing.T) {
 		lang  language
 		want  string
 	}{
-		{"go method", []string{"func (r *Router) Foo(a int) error {", "\treturn nil", "}"}, langGo,
-			"  func (r *Router) Foo(a int) error\n"},
-		{"go multi-line params", []string{"func Foo(", "\ta int,", "\tb string,", ") error {", "body"}, langGo,
-			"  func Foo(\n  \ta int,\n  \tb string,\n  ) error\n"},
+		{
+			"go method",
+			[]string{"func (r *Router) Foo(a int) error {", "\treturn nil", "}"},
+			langGo,
+			"  func (r *Router) Foo(a int) error\n",
+		},
+		{
+			"go multi-line params",
+			[]string{"func Foo(", "\ta int,", "\tb string,", ") error {", "body"},
+			langGo,
+			"  func Foo(\n  \ta int,\n  \tb string,\n  ) error\n",
+		},
 		{"go struct", []string{"type Foo struct {", "\tX int", "}"}, langGo, "  type Foo struct\n"},
 		{"go one-liner", []string{"func f() { return }"}, langGo, "  func f()\n"},
 		{"go no terminator, trailing blanks trimmed", []string{"func f()", "", ""}, langGo, "  func f()\n"},
-		{"rust fn", []string{"pub fn foo(a: i32) -> Result<(), Error> {"}, langRust,
-			"  pub fn foo(a: i32) -> Result<(), Error>\n"},
+		{
+			"rust fn",
+			[]string{"pub fn foo(a: i32) -> Result<(), Error> {"},
+			langRust,
+			"  pub fn foo(a: i32) -> Result<(), Error>\n",
+		},
 		{"rust trait decl", []string{"fn foo(&self);"}, langRust, "  fn foo(&self);\n"},
-		{"rust multi-line", []string{"pub fn foo(", "    a: i32,", "    b: i32,", ") -> i32 {"}, langRust,
-			"  pub fn foo(\n      a: i32,\n      b: i32,\n  ) -> i32\n"},
+		{
+			"rust multi-line",
+			[]string{"pub fn foo(", "    a: i32,", "    b: i32,", ") -> i32 {"},
+			langRust,
+			"  pub fn foo(\n      a: i32,\n      b: i32,\n  ) -> i32\n",
+		},
 		{"python simple", []string{"def foo(a, b):", "    pass"}, langPython, "  def foo(a, b)\n"},
-		{"python multi-line", []string{"def foo(", "    a,", "    b,", "):", "    pass"}, langPython,
-			"  def foo(\n      a,\n      b,\n  )\n"},
-		{"ts arrow", []string{"export const f = (a: number) => {", "  return a", "}"}, langTS,
-			"  export const f = (a: number) =>\n"},
-		{"ts async", []string{"async function f(x: string): Promise<void> {"}, langTS,
-			"  async function f(x: string): Promise<void>\n"},
+		{
+			"python multi-line",
+			[]string{"def foo(", "    a,", "    b,", "):", "    pass"},
+			langPython,
+			"  def foo(\n      a,\n      b,\n  )\n",
+		},
+		{
+			"ts arrow",
+			[]string{"export const f = (a: number) => {", "  return a", "}"},
+			langTS,
+			"  export const f = (a: number) =>\n",
+		},
+		{
+			"ts async",
+			[]string{"async function f(x: string): Promise<void> {"},
+			langTS,
+			"  async function f(x: string): Promise<void>\n",
+		},
 		{"c function", []string{"static int foo(int a) {"}, langC, "  static int foo(int a)\n"},
 		{"unterminated returns what it has", []string{"func f(", "a int,"}, langGo, "  func f(\n  a int,\n"},
 		{"index past end", nil, langGo, ""},
@@ -1535,13 +1564,17 @@ func writeMetrics(t *testing.T, r *Router, nFuncs int) {
 	t.Helper()
 	fns := S{}
 	for i := 1; i <= nFuncs; i++ {
-		fns = append(fns, M{"Name": fmt.Sprintf("fn%02d", i), "File": fmt.Sprintf("f%02d.go", i),
-			"LineStart": i * 10, "LineEnd": i*10 + 5, "Complexity": 100 - i, "ImportanceScore": 0.25})
+		fns = append(fns, M{
+			"Name": fmt.Sprintf("fn%02d", i), "File": fmt.Sprintf("f%02d.go", i),
+			"LineStart": i * 10, "LineEnd": i*10 + 5, "Complexity": 100 - i, "ImportanceScore": 0.25,
+		})
 	}
 	rep := &utils.MetricsReport{}
 	fill(t, rep, M{
-		"Metadata": M{"ProjectName": "proj", "TotalFiles": 2, "TotalLoc": 100, "TotalFunctions": nFuncs,
-			"Languages": S{"go", "rust"}, "ParsedAt": "2026-01-02T03:04:05Z"},
+		"Metadata": M{
+			"ProjectName": "proj", "TotalFiles": 2, "TotalLoc": 100, "TotalFunctions": nFuncs,
+			"Languages": S{"go", "rust"}, "ParsedAt": "2026-01-02T03:04:05Z",
+		},
 		"TopComplexFunctions": fns,
 	})
 	writeJSON(t, filepath.Join(r.projectPath(), ".eulix", "kb_metrics.json"), rep)

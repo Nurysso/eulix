@@ -1,7 +1,6 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package Fixers makes an attempt to fix files present in .eulix
 // In case they are corrupted
 
@@ -12,10 +11,11 @@ package fixers
 import (
 	"encoding/binary"
 	"encoding/json"
-	"eulix/internal/utils"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"eulix/internal/utils"
 )
 
 // binHeader holds the decoded header common to embeddings.bin and vectors.bin.

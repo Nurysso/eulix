@@ -1,7 +1,6 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package cli provides the command-line interface implementation for EULIX.
 /*
 This file is responsible for running the Chat command that launches tui
@@ -102,7 +101,8 @@ func startChat() error {
 	// Run checksum - handles loading, calculating, comparing, and saving in one call
 	result, err := checksum.Run()
 	if err != nil {
-		printStatusMessage("Failed to run checksum.",
+		printStatusMessage(
+			"Failed to run checksum.",
 			"Run 'eulix analyze' to generate one.",
 		)
 		return fmt.Errorf("checksum required: %w", err)
@@ -110,7 +110,8 @@ func startChat() error {
 
 	// Check if this is the first run (no existing checksum)
 	if result.FirstRun {
-		printStatusMessage("No checksum found.",
+		printStatusMessage(
+			"No checksum found.",
 			"Run 'eulix analyze' to generate one.",
 		)
 		return fmt.Errorf("checksum required - first run analysis needed")
@@ -120,13 +121,15 @@ func startChat() error {
 	changePercent := result.ChangedRatio
 
 	if changePercent > 0.30 {
-		printStatusMessage(fmt.Sprintf("Codebase changed %.1f%%", changePercent*100),
+		printStatusMessage(
+			fmt.Sprintf("Codebase changed %.1f%%", changePercent*100),
 			"Knowledge base is significantly stale.",
 			"Run 'eulix analyze' to update.",
 		)
 		return fmt.Errorf("analysis required")
 	} else if changePercent > 0.10 {
-		printStatusMessage(fmt.Sprintf("Codebase changed %.1f%%", changePercent*100),
+		printStatusMessage(
+			fmt.Sprintf("Codebase changed %.1f%%", changePercent*100),
 			"Consider running 'eulix analyze' to update.",
 		)
 		if !promptConfirm("Continue anyway?") {

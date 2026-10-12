@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+
+//
 //! Tree-sitter never "fails" on bad input: `Parser::parse` returns a tree even
 //! for garbage, with ERROR / MISSING nodes marking where it had to recover.
 //! This module turns that into a number you can report.

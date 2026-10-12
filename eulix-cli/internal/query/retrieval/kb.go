@@ -1,7 +1,5 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
-
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
 /*
 Package retrieval provides context window Creation for Eulix's RAG system.
@@ -14,9 +12,10 @@ Key Responsibilities:
 package retrieval
 
 import (
-	"eulix/internal/utils"
 	"fmt"
 	"strings"
+
+	"eulix/internal/utils"
 )
 
 // kbExactLookup performs symbol-based retrieval from the knowledge base.
