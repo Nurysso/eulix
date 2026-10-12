@@ -1,7 +1,5 @@
-// Copyright (C) 2026 Dawood Khan
-// SPDX-License-Identifier: GPL-3.0-or-later
-
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
 /*
 Package query provides context window building and query routing for Eulix's RAG system.
@@ -26,9 +24,10 @@ by taskBodies, so no individual query type needs to repeat them.
 package query
 
 import (
-	c "eulix/internal/query/classifier"
 	"fmt"
 	"strings"
+
+	c "eulix/internal/query/classifier"
 )
 
 // languageAgnosticNote stops any prompt from silently assuming a specific

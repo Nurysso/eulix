@@ -1,7 +1,6 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package classifier deterministically categorizes incoming queries to streamline CoT routing and short-circuit non-LLM requests.
 
 package classifier
@@ -264,8 +263,10 @@ func TestExtractEntities(t *testing.T) {
 		in := []string{"F", "X", "F", "X"}
 		got := c.extractEntities(in)
 		want := []Entity{
-			{Name: "F", Type: "function"}, {Name: "X", Type: "unknown"},
-			{Name: "F", Type: "function"}, {Name: "X", Type: "unknown"},
+			{Name: "F", Type: "function"},
+			{Name: "X", Type: "unknown"},
+			{Name: "F", Type: "function"},
+			{Name: "X", Type: "unknown"},
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("got %+v, want %+v", got, want)

@@ -1,3 +1,8 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+
+
 use crate::spill::SpillIndex;
 use libeulix::struc::kb_struct::Metadata;
 use std::io::{BufWriter, Write};

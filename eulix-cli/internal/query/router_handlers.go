@@ -1,7 +1,6 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package query provides query c.Classification functionality.
 
 /*
@@ -11,8 +10,6 @@ package query
 
 import (
 	"encoding/json"
-	c "eulix/internal/query/classifier"
-	"eulix/internal/utils"
 	"fmt"
 	"math"
 	"os"
@@ -20,6 +17,9 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	c "eulix/internal/query/classifier"
+	"eulix/internal/utils"
 )
 
 type metricsEntry struct {
@@ -138,7 +138,6 @@ func (r *Router) handleImplementation(query string, class *c.Classification) (st
 }
 
 func (r *Router) handleArchitecture(query string, class *c.Classification) (string, error) {
-
 	ctx, err := r.contextBuilder.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)

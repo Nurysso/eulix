@@ -1,7 +1,6 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
-
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
 
 use anyhow::{Context, Result};
 use ignore::{WalkBuilder, WalkState};
@@ -190,11 +189,11 @@ impl FileWalker {
         F: Fn(&Path) -> bool + Sync,
     {
         let (files, scanned) = self.walk_and_hash(filter)?;
-        println!(
-            "      • Walker stats: Scanned {} total files, found {} matching source files.",
-            scanned,
-            files.len()
-        );
+        // println!(
+        //     "      • Walker stats: Scanned {} total files, found {} matching source files.",
+        //     scanned,
+        //     files.len()
+        // );
         Ok(files.into_iter().map(|f| f.path).collect())
     }
 
@@ -223,11 +222,11 @@ impl FileWalker {
         F: Fn(&Path) -> bool + Sync,
     {
         let (mut files, scanned) = self.walk_and_hash(filter)?;
-        println!(
-            "      • Walker stats: Scanned {} total files, found {} matching source files.",
-            scanned,
-            files.len()
-        );
+        // println!(
+        //     "      • Walker stats: Scanned {} total files, found {} matching source files.",
+        //     scanned,
+        //     files.len()
+        // );
         files.sort_unstable_by(|a, b| a.rel.cmp(&b.rel));
 
         let mut hasher = Xxh3::new();

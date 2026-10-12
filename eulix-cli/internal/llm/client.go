@@ -1,7 +1,5 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
-
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
 // Package llm handles communication with LLM providers (Anthropic and Ollama).
 
@@ -85,8 +83,7 @@ type anthropicResponse struct {
 	} `json:"error,omitempty"`
 }
 
-//OpenAI-compatible (OpenAI, Groq, Together, vLLM, LM Studio, Mistral …)
-
+// OpenAI-compatible (OpenAI, Groq, Together, vLLM, LM Studio, Mistral …)
 type openAIRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
@@ -208,12 +205,12 @@ func resolveProvider(l config.LLMConfig) string {
 func (c *Client) LlmResponse(prompt string) (string, error) {
 	if c.config.Project.DebugConfig {
 		logDir := filepath.Join(c.config.Project.Path, utils.EulixDir, "debug")
-		if err := os.MkdirAll(logDir, 0755); err != nil {
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
 			return "", fmt.Errorf("failed to create debug directory: %w", err)
 		}
 
 		logFile := filepath.Join(logDir, "llmdebug.log")
-		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
 			return "", fmt.Errorf("failed to open debug log file: %w", err)
 		}
@@ -490,7 +487,8 @@ func (c *Client) buildPrompt(context *utils.ContextWindow, userQuery string) str
 			metaChunks = append(metaChunks, chunk)
 		}
 	}
-	fmt.Fprintf(&sb,
+	fmt.Fprintf(
+		&sb,
 		"Context: %d source chunks, %d metadata, %d tokens across %d files\n\n",
 		len(srcChunks), len(metaChunks), context.TotalTokens, len(context.Sources),
 	)

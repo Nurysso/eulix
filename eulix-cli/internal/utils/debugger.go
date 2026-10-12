@@ -1,7 +1,6 @@
-//  Copyright (C) 2026 Dawood Khan
-//  SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
 
-// Maintainer Dawood (Nurysso) contact - nurysso [at] proton.me
 // Package utils provides Shared type and func across project
 
 package utils
@@ -33,11 +32,11 @@ func IsDebugLevel3() bool {
 func NewDebugLogger(eulixDir string) *DebugLogger {
 	logPath := filepath.Join(eulixDir, "debug", "context_debug.log")
 
-	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return &DebugLogger{} // silent fallback
 	}
 
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return &DebugLogger{} // silent fallback
 	}
@@ -61,7 +60,8 @@ func (d *DebugLogger) Log(format string, args ...interface{}) {
 	defer d.mu.Unlock()
 
 	now := time.Now()
-	msg := fmt.Sprintf("[%s.%03d.%03d.%03d] ",
+	msg := fmt.Sprintf(
+		"[%s.%03d.%03d.%03d] ",
 		now.Format("15:04:05"),
 		now.Nanosecond()/1_000_000,     // Milliseconds (0-999)
 		(now.Nanosecond()/1_000)%1_000, // Microseconds remainder (0-999)
@@ -144,7 +144,8 @@ func LogFileLoad(dbg *DebugLogger, name string) func(error) {
 				name, err, elapsed)
 			return
 		}
-		dbg.Log("[LOAD] %-30s done     elapsed=%-10v heap_delta=+%d MB total_heap=%d MB",
+		dbg.Log(
+			"[LOAD] %-30s done     elapsed=%-10v heap_delta=+%d MB total_heap=%d MB",
 			name, elapsed,
 			heapDelta/1024/1024,
 			memAfter.HeapInuse/1024/1024,
