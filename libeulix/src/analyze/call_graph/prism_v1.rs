@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
 //! PRISM v1 — Polyglot Resolution via Inverted Symbol Map.
 //!
 //! This module builds an approximate call graph from already‑parsed code.
@@ -456,9 +459,6 @@ pub fn populate_called_by(kb: &mut KnowledgeBase) {
 
 #[cfg(test)]
 mod tests {
-    // #![expect(clippy::expect_used)]
-    // #![expect(clippy::unwrap_used)]
-
     use super::*;
     mod resolve_indirect_call_tests {
         use super::*;

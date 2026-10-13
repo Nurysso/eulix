@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
 //! PRISM v2 — Polyglot Resolution via Inverted Symbol Map, version 2.
 //!
 //! v2 is a *scope-aware* call-graph resolver. Compared with v1, it trades a

@@ -17,7 +17,7 @@
 //! # libeulix
 //!
 //! `libeulix` is the core parsing and analysis engine behind Eulix—designed to be
-//! reused by the eulix_parser binary, eulix_lsp, eulix-cli(eulix) and any downstream tool requiring
+//! reused by the eulix_parser binary, eulixlsp, eulix-cli(eulix) and any downstream tool requiring
 //! deep code intelligence.
 //!
 //! ## The Spectrum Philosophy

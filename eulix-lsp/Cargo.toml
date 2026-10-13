@@ -1,0 +1,45 @@
+# Copyright 2025-2026 Dawood K. (Nurysso)
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "eulix-lsp"
+version = "0.1.2"
+edition = "2021"
+rust-version = "1.98"
+license = "Apache-2.0"
+description = "Language server for the eulix polyglot knowledge base"
+
+[[bin]]
+name = "eulixlsp"
+path = "src/main.rs"
+
+[dependencies]
+libeulix = { path = "../libeulix", version = "0.8.1" }
+
+tower-lsp = "0.20.0"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "io-std",
+    "sync",
+    "time",
+    "fs",
+] }
+ropey = "1.6"
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+ignore = "0.4"
+num_cpus = "1.16"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+# Parsing is CPU-bound; opt-level 3 with thin LTO keeps the binary small
+# without measurably hurting the tree-sitter hot path.
+lto = "thin"
+codegen-units = 1

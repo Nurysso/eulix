@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::struc::kb_struct::{FunctionMetric, KnowledgeBase, MetricsReport};
 
 // Borrows from `kb` (`'a`) instead of cloning every function's name into

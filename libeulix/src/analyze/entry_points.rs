@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+
 /// Find entry points (main functions, app init, etc.)
 ///
 /// Deliberately name/decorator-based rather than framework-specific
