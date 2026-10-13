@@ -421,7 +421,9 @@ checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
 name = "libeulix"
-version = "0.8.1"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eadfd5b936adef27a8de8e84dc457c1b1e95375afaedeb8602e0342c5e49d1b6"
 dependencies = [
  "anyhow",
  "chrono",

@@ -96,12 +96,10 @@ use std::time::Instant;
 
 use crate::engine::Engine;
 use crate::memory::{default_thread_count, max_rss_mb};
-use crate::output::{write_json_streaming, write_kb_from_spill,output_dir};
+use crate::output::{output_dir, write_json_streaming, write_kb_from_spill};
 use crate::parse::directory::parse_directory;
 use crate::report::{field_report, print_final_summary, write_parse_report};
-use crate::views::{
-    CallGraphRef, EntryPointsRef, ExternalDepsRef, IndexViewRef, PatternsRef,
-};
+use crate::views::{CallGraphRef, EntryPointsRef, ExternalDepsRef, IndexViewRef, PatternsRef};
 
 use libeulix::analyze;
 

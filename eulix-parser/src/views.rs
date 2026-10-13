@@ -1,11 +1,9 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
-//
-
 
 use libeulix::struc::kb_struct::{
-    CallGraphEdge, CallGraphNode, Class, EntryPoint, ExternalDependency,
-    FileData, Function, IndicesView, KnowledgeBase, PatternInfo,
+    CallGraphEdge, CallGraphNode, Class, EntryPoint, ExternalDependency, FileData, Function,
+    IndicesView, KnowledgeBase, PatternInfo,
 };
 use serde::ser::{SerializeStruct, Serializer};
 use serde::Serialize;

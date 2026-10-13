@@ -1,7 +1,5 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
-//
-
 
 // This module is the bridge between walking the repo and running the
 // language-specific parsers.
@@ -19,7 +17,6 @@ use libeulix::grammar_files;
 use libeulix::grammar_files::language::Language;
 use libeulix::utils::file_walker::FileWalker;
 
-#[cfg(target_os = "linux")]
 pub fn parse_file(
     file_path: &Path,
     root: &Path,
@@ -107,7 +104,7 @@ pub fn collect_source_files_and_hash(
     };
 
     if verbose {
-        println!("    Searching for files...");
+        println!("      • Searching for files...");
     }
 
     // Collect extensions once so the walker predicate is just a hash lookup.
@@ -135,10 +132,6 @@ pub fn collect_source_files_and_hash(
         },
         write_dir,
     )?;
-
-    if verbose {
-        println!("      • Found {} parseable files", all_files.len());
-    }
 
     // Sort + dedup keeps output stable. The walker shouldn't produce dupes,
     // but this is cheap insurance.

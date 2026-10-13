@@ -1,7 +1,5 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
-//
-
 
 use crate::spill::SpillIndex;
 use libeulix::struc::kb_struct::Metadata;
@@ -20,7 +18,6 @@ pub fn output_dir(output: impl AsRef<Path>) -> PathBuf {
         _ => PathBuf::from("."),
     }
 }
-
 
 pub fn write_json_streaming<T: serde::Serialize>(
     path: &Path,
