@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,13 +49,39 @@ func (r *Router) SetCurrentChecksum(checksum string) {
 }
 
 func (r *Router) Close() error {
+	return r.CloseContextBuilder()
+}
+
+// CloseContextBuilder closes the active ContextBuilder and frees its resources.
+func (r *Router) CloseContextBuilder() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.contextBuilder != nil {
-		return r.contextBuilder.Close()
+		err := r.contextBuilder.Close()
+		r.contextBuilder = nil
+		runtime.GC()
+		return err
 	}
 	return nil
 }
 
+// HasContextBuilder reports whether the ContextBuilder is currently active in memory.
+func (r *Router) HasContextBuilder() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.contextBuilder != nil
+}
+
+// SetContextBuilder assigns the active ContextBuilder (useful for tests and custom lifecycles).
+func (r *Router) SetContextBuilder(cb *retrieval.ContextBuilder) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.contextBuilder = cb
+}
+
 func (r *Router) ensureContextBuilder() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.contextBuilder != nil {
 		return nil
 	}

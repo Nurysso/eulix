@@ -1,12 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-// Package query manages query routing for EULIX.
-
-/*
-Package strip handles stripping of comments in retrieval stage to safe tokens
-*/
-
+// Package strip handles stripping of comments in retrieval stage to safe tokens
 package strip
 
 // stripPythonComments removes # comments and ”'/""" docstrings from Python

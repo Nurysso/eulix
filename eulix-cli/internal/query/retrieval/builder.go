@@ -369,3 +369,15 @@ func (cb *ContextBuilder) GetKBIndex() *utils.Indices {
 func (cb *ContextBuilder) GetCallGraphRef() *utils.CallGraphRef {
 	return cb.cgRef
 }
+
+// NewTestContextBuilder initializes a minimal ContextBuilder for testing without loading binary embeddings.
+func NewTestContextBuilder(cfg *config.Config, eulixDir string, debugLogger *utils.DebugLogger) *ContextBuilder {
+	return &ContextBuilder{
+		config:        cfg,
+		eulixDir:      eulixDir,
+		debugLog:      debugLogger,
+		subsystemTree: make([]*SubsystemNode, 0),
+		noisePaths:    make([]string, 0),
+		vectorMap:     make(map[string]int),
+	}
+}

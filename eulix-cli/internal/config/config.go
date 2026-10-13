@@ -196,6 +196,28 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
+// LoadFrom loads and validates the configuration from a specific project repository directory.
+func LoadFrom(repoDir string) (*Config, error) {
+	absPath, err := filepath.Abs(repoDir)
+	if err != nil {
+		return nil, err
+	}
+	_ = godotenv.Load(filepath.Join(absPath, ".env"))
+	cfg := *DefaultConfig()
+
+	tomlPath := filepath.Join(absPath, "eulix.toml")
+	_, _ = toml.DecodeFile(tomlPath, &cfg)
+
+	cfg = *validateAndClampConfig(&cfg)
+	cfg.Project.Path = absPath
+
+	if cfg.LLM.APIKey == "" {
+		cfg.LLM.APIKey = resolveAPIKeyFromEnv(cfg.LLM.Provider)
+	}
+
+	return &cfg, nil
+}
+
 func DefaultConfig() *Config {
 	cwd, err := os.Getwd()
 	if err != nil {
