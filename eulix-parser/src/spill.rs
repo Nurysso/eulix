@@ -1,7 +1,5 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
-//
-
 
 use libeulix::struc::kb_struct::FileData;
 use std::fs::{self, File, OpenOptions};

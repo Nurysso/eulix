@@ -1,8 +1,9 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-// Package cli provides the command-line interface implementation for EULIX.
 /*
+Package cli provides the command-line interface implementation for EULIX.
+
 This file is responsible for managing all the commands executed/supported
 by eulix and serves as a entry point for the project
 */
@@ -603,8 +604,8 @@ func setupInitSubcommands() {
 
 func setupFlags() {
 	// aspirine flags
-	aspirineCmd.Flags().Bool("no-backup", false, "Don't backup existing embeddings.bin")
-	aspirineCmd.Flags().Bool("force", false, "Force rebuild even if validations fail")
+	// aspirineCmd.Flags().Bool("no-backup", false, "Don't backup existing embeddings.bin")
+	// aspirineCmd.Flags().Bool("force", false, "Force rebuild even if validations fail")
 
 	// history flags
 	historyCmd.Flags().Bool("no-tui", false, "Use plain-text output instead of the TUI")
@@ -636,9 +637,10 @@ func registerCommands() {
 		analyzeCmd,
 		chatCmd,
 		queryCmd,
+		mcpCmd,
 		configCmd,
-		glaDOSCmd,
-		aspirineCmd,
+		// glaDOSCmd,
+		// aspirineCmd,
 		historyCmd,
 		cacheCmd,
 		embedCMD,

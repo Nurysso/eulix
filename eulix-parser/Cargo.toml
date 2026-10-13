@@ -10,7 +10,7 @@ description = "multi-language code parsing and call-graph builder"
 documentation = "https://docs.rs/eulix-parser"
 repository = "https://github.com/Nurysso/eulix/tree/main/eulix-parser"
 readme = "README.md"
-license = "GPL-3.0-or-later"
+license = "Apache-2.0"
 keywords = [
     "code-analysis",
     "parser",
@@ -25,7 +25,7 @@ name = "eulix_parser"
 path = "src/main.rs"
 
 [dependencies]
-libeulix = { path = "../libeulix", version = "0.8.1" }
+libeulix = "0.8.2"
 
 clap = { version = "4.5", features = ["derive"] }
 indicatif = "0.18"

@@ -29,6 +29,7 @@ import (
 )
 
 type Router struct {
+	mu              sync.RWMutex
 	eulixDir        string
 	config          *config.Config
 	classifier      *classifier.Classifier
@@ -101,8 +102,12 @@ func QueryTrafficController(
 }
 
 func (r *Router) PromptOrAnswer(query string) (string, error) {
+	return r.PromptOrAnswerWithCoT(query, true)
+}
+
+func (r *Router) PromptOrAnswerWithCoT(query string, includeCoT bool) (string, error) {
 	classification := r.classifier.Classify(query)
-	r.debug.Log("[ROUTE] PromptOrAnswer: query=%q type=%v", query, classification.Type)
+	r.debug.Log("[ROUTE] PromptOrAnswer: query=%q type=%v includeCoT=%v", query, classification.Type, includeCoT)
 
 	// Non‑LLM queries – return direct answer
 	switch classification.Type {
@@ -126,21 +131,32 @@ func (r *Router) PromptOrAnswer(query string) (string, error) {
 		return r.handleCodeGeneration()
 	}
 
-	// LLM queries build context + return the full prompt
+	// LLM queries build context + return the prompt
 	if err := r.ensureContextBuilder(); err != nil {
 		return "", err
 	}
 
-	ctx, err := r.contextBuilder.BuildContext(query)
+	r.mu.RLock()
+	cb := r.contextBuilder
+	r.mu.RUnlock()
+	if cb == nil {
+		return "", fmt.Errorf("context builder unavailable")
+	}
+
+	ctx, err := cb.BuildContext(query)
 	if err != nil {
 		return "", fmt.Errorf("failed to build context: %w", err)
+	}
+
+	contextPrompt := r.llmClient.BuildFullPrompt(ctx, query)
+	if !includeCoT {
+		return contextPrompt, nil
 	}
 
 	src := hasSourceCode(ctx)
 	taskBody := getTaskBody(r, query, classification)
 	realCodeBudgetRatio := r.config.RetrievalConfig.CodeToAstRatio
 	// Build the complete prompt with context and CoT
-	contextPrompt := r.llmClient.BuildFullPrompt(ctx, query)
 	cotPrompt := BuildPromptString(query, classification, src, taskBody, realCodeBudgetRatio)
 
 	// Combine context inventory + CoT prompt

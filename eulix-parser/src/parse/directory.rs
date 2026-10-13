@@ -1,7 +1,5 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
-//
-
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -44,8 +42,7 @@ pub fn parse_directory(
         collect_source_files_and_hash(&path, languages, euignore.as_deref(), verbose, write_dir)?;
 
     if verbose {
-        println!("    Discovered {} source files", files.len());
-        println!();
+        println!("      • Discovered {} source files", files.len());
     }
 
     // Spill setup: fresh or resumed
@@ -74,17 +71,20 @@ pub fn parse_directory(
         .into_iter()
         .filter(|p| !done.contains(&rel_path(p, &path)))
         .collect();
-
-    println!(
-        "      • Number of source files to process: {} ({} skipped via resume)",
-        to_parse.len(),
-        done.len()
-    );
+    if verbose {
+        println!(
+            "      • Number of source files to process: {} ({} skipped via resume)",
+            to_parse.len(),
+            done.len()
+        );
+    }
     let vec_memory_bytes = to_parse.capacity() * std::mem::size_of::<PathBuf>();
-    println!(
-        "      • Memory allocated for the PathBuf vector: ~{} bytes",
-        vec_memory_bytes
-    );
+    if verbose {
+        println!(
+            "      • Memory allocated for the PathBuf vector: ~{} bytes",
+            vec_memory_bytes
+        );
+    }
 
     //  Progress bar reflects only the work we're actually doing
     let pb = if verbose {
