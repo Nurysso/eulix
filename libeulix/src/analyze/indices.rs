@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::struc::kb_struct::{IndicesView, KnowledgeBase};
 
 pub fn generate_indices_view(kb: &KnowledgeBase) -> IndicesView<'_> {

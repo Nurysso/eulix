@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::struc::kb_struct::{FileData, KnowledgeBase, PatternInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

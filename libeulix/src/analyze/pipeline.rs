@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::struc::kb_struct::KnowledgeBase;
 
 use super::{call_graph, dependencies, entry_points, patterns};

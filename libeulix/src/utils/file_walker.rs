@@ -1,6 +1,5 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
-//
 
 use anyhow::{Context, Result};
 use ignore::{WalkBuilder, WalkState};
@@ -22,7 +21,28 @@ pub struct WalkedFile {
     pub mod_time: i64, // unix nanos, same as Go's UnixNano()
     pub lines: usize,
 }
+
+/// Statistics gathered during a single tree walk.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WalkStats {
+    /// Every regular file encountered (after ignore rules).
+    pub scanned: usize,
+    /// Files that passed the caller's filter.
+    pub matched: usize,
+}
+
+impl std::fmt::Display for WalkStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Scanned {} total file(s), matched {} file(s).",
+            self.scanned, self.matched
+        )
+    }
+}
+
 pub struct FileWalker {
+    /// Root of directory to be walked
     root: PathBuf,
     /// Optional path to a custom .euignore file (overrides the default ``<root>``/.euignore)
     euignore_path: Option<PathBuf>,
@@ -63,7 +83,6 @@ impl FileWalker {
         }
     }
 
-    /// Use a custom .euignore path (from --euignore CLI flag) instead of the default
     pub fn with_euignore(mut self, path: PathBuf) -> Self {
         self.euignore_path = Some(path);
         self
@@ -119,55 +138,39 @@ impl FileWalker {
         builder
     }
 
-    /// Single traversal: applies `filter` per entry, reads+hashes only the
-    /// files that pass, and reports total files scanned. Both `walk_files`
-    /// and `project_hash` build on this so the tree is only ever walked once.
-    fn walk_and_hash<F>(&self, filter: F) -> Result<(Vec<WalkedFile>, usize)>
+    // ========== Core walker ==========
+
+    /// Single parallel traversal. `filter` is applied per entry; `process`
+    /// runs on the worker thread for every path that passes the filter.
+    /// Collects `WalkStats` for free.
+    fn walk_raw<F, T, P>(&self, filter: F, process: P) -> Result<(Vec<T>, WalkStats)>
     where
         F: Fn(&Path) -> bool + Sync,
+        T: Send + 'static,
+        P: Fn(&Path) -> Result<T> + Sync,
     {
         let builder = self.build_walker();
-        let root = self.root.clone();
-        let (tx, rx) = mpsc::channel::<Result<WalkedFile>>();
+        let (tx, rx) = mpsc::channel::<Result<T>>();
         let total_scanned = Arc::new(AtomicUsize::new(0));
+        let total_matched = Arc::new(AtomicUsize::new(0));
 
         builder.build_parallel().run(|| {
             let tx = tx.clone();
             let filter = &filter;
-            let root = root.clone();
-            let counter = Arc::clone(&total_scanned);
+            let process = &process;
+            let scanned = Arc::clone(&total_scanned);
+            let matched = Arc::clone(&total_matched);
             Box::new(move |entry| {
                 let entry = match entry {
                     Ok(e) => e,
                     Err(_) => return WalkState::Continue,
                 };
                 if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                    counter.fetch_add(1, Ordering::Relaxed);
+                    scanned.fetch_add(1, Ordering::Relaxed);
                     let path = entry.path();
                     if filter(path) {
-                        let path = path.to_path_buf();
-                        let result = fs::read(&path)
-                            .with_context(|| {
-                                format!("failed to read {} while walking project", path.display())
-                            })
-                            .map(|contents| {
-                                let rel = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
-                                let mod_time = fs::metadata(&path)
-                                    .and_then(|m| m.modified())
-                                    .ok()
-                                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                                    .map(|d| d.as_nanos() as i64)
-                                    .unwrap_or(0);
-                                WalkedFile {
-                                    content_hash: xxh3_64(&contents),
-                                    size: contents.len() as i64,
-                                    mod_time,
-                                    lines: contents.iter().filter(|&&b| b == b'\n').count(),
-                                    path,
-                                    rel,
-                                }
-                            });
-                        let _ = tx.send(result);
+                        matched.fetch_add(1, Ordering::Relaxed);
+                        let _ = tx.send(process(path));
                     }
                 }
                 WalkState::Continue
@@ -179,40 +182,94 @@ impl FileWalker {
         for res in rx {
             files.push(res?);
         }
-        let scanned = total_scanned.load(Ordering::Relaxed);
-        Ok((files, scanned))
+
+        Ok((
+            files,
+            WalkStats {
+                scanned: total_scanned.load(Ordering::Relaxed),
+                matched: total_matched.load(Ordering::Relaxed),
+            },
+        ))
     }
 
-    #[allow(dead_code)]
+    // =========== Public: paths only (no reads, no hashes) ==========
+
+    /// Walk the tree and return matching paths **without reading or hashing**
+    /// any file. Use this when you only need the file list; it is much faster
+    /// than `walk_files` used to be.
+    pub fn walk_paths<F>(&self, filter: F) -> Result<(Vec<PathBuf>, WalkStats)>
+    where
+        F: Fn(&Path) -> bool + Sync,
+    {
+        self.walk_raw(filter, |p| Ok(p.to_path_buf()))
+    }
+
+    /// Backwards-compatible convenience. Returns just the paths.
+    /// (Now implemented via `walk_paths`, so no more wasted hashing.)
     pub fn walk_files<F>(&self, filter: F) -> Result<Vec<PathBuf>>
     where
         F: Fn(&Path) -> bool + Sync,
     {
-        let (files, scanned) = self.walk_and_hash(filter)?;
-        // println!(
-        //     "      • Walker stats: Scanned {} total files, found {} matching source files.",
-        //     scanned,
-        //     files.len()
-        // );
-        Ok(files.into_iter().map(|f| f.path).collect())
+        Ok(self.walk_paths(filter)?.0)
     }
 
-    #[allow(dead_code)]
-    pub fn project_hash(&self) -> Result<String> {
-        let (mut files, _scanned) = self.walk_and_hash(|_| true)?;
-        files.sort_unstable_by(|a, b| a.rel.cmp(&b.rel));
+    // =========== Public: paths + hashes ==========
 
+    /// Walk + read + hash. Internal building block for `project_hash`.
+    fn walk_and_hash<F>(&self, filter: F) -> Result<(Vec<WalkedFile>, WalkStats)>
+    where
+        F: Fn(&Path) -> bool + Sync,
+    {
+        let root = self.root.clone();
+        self.walk_raw(filter, move |path| {
+            let path = path.to_path_buf();
+            let contents = fs::read(&path).with_context(|| {
+                format!("failed to read {} while walking project", path.display())
+            })?;
+            let rel = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
+            let mod_time = fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos() as i64)
+                .unwrap_or(0);
+            Ok(WalkedFile {
+                content_hash: xxh3_64(&contents),
+                size: contents.len() as i64,
+                mod_time,
+                lines: contents.iter().filter(|&&b| b == b'\n').count(),
+                path,
+                rel,
+            })
+        })
+    }
+
+    fn hash_files(files: &mut [WalkedFile]) -> String {
+        files.sort_unstable_by(|a, b| a.rel.cmp(&b.rel));
         let mut hasher = Xxh3::new();
-        for f in &files {
+        for f in files.iter() {
             hasher.update(f.rel.to_string_lossy().as_bytes());
             hasher.update(b"\0");
             hasher.update(&f.content_hash.to_le_bytes());
         }
-        Ok(format!("{:016x}", hasher.digest()))
+        format!("{:016x}", hasher.digest())
     }
 
     /// Discover matching source files AND compute the project hash
     /// in a single walk. Returns (matching source files, project hash).
+    #[allow(dead_code)]
+    pub fn project_hash(&self) -> Result<String> {
+        Ok(self.project_hash_with_stats()?.0)
+    }
+
+    #[allow(dead_code)]
+    pub fn project_hash_with_stats(&self) -> Result<(String, WalkStats)> {
+        let (mut files, stats) = self.walk_and_hash(|_| true)?;
+        Ok((Self::hash_files(&mut files), stats))
+    }
+
+    /// Discover matching source files AND compute the project hash in a
+    /// single walk. Existing signature preserved.
     pub fn walk_and_project_hash<F>(
         &self,
         filter: F,
@@ -221,29 +278,26 @@ impl FileWalker {
     where
         F: Fn(&Path) -> bool + Sync,
     {
-        let (mut files, scanned) = self.walk_and_hash(filter)?;
-        // println!(
-        //     "      • Walker stats: Scanned {} total files, found {} matching source files.",
-        //     scanned,
-        //     files.len()
-        // );
-        files.sort_unstable_by(|a, b| a.rel.cmp(&b.rel));
-
-        let mut hasher = Xxh3::new();
-        for f in &files {
-            hasher.update(f.rel.to_string_lossy().as_bytes());
-            hasher.update(b"\0");
-            hasher.update(&f.content_hash.to_le_bytes());
-        }
-        let hash = format!("{:016x}", hasher.digest());
-
-        self.write_checksum(&files, &hash, write_dir)?;
-
-        let paths = files.into_iter().map(|f| f.path).collect();
+        let (paths, hash, _stats) = self.walk_and_project_hash_with_stats(filter, write_dir)?;
         Ok((paths, hash))
     }
 
-    /// Writes checksum.json.zst in the schema the Go side reads.
+    /// Same as `walk_and_project_hash`, but also returns walk statistics.
+    pub fn walk_and_project_hash_with_stats<F>(
+        &self,
+        filter: F,
+        write_dir: &Path,
+    ) -> Result<(Vec<PathBuf>, String, WalkStats)>
+    where
+        F: Fn(&Path) -> bool + Sync,
+    {
+        let (mut files, stats) = self.walk_and_hash(filter)?;
+        let hash = Self::hash_files(&mut files);
+        self.write_checksum(&files, &hash, write_dir)?;
+        let paths = files.into_iter().map(|f| f.path).collect();
+        Ok((paths, hash, stats))
+    }
+
     fn write_checksum(
         &self,
         files: &[WalkedFile],
