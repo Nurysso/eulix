@@ -20,7 +20,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -43,6 +43,12 @@ const (
 	alignLeft tableAlign = iota
 	alignCenter
 	alignRight
+)
+
+const (
+	maxInputRows    = 6 // input box never grows past this many text rows
+	chromeRows      = 8 // title+subtitle+viewport border+status+input border+footer
+	minViewportRows = 3
 )
 
 // Message is one transcript entry. The unexported fields are a render cache:
@@ -69,7 +75,8 @@ func newMessage(role, content string) Message {
 
 type Model struct {
 	state         AppState
-	input         textinput.Model
+	input         textarea.Model
+	inputRows     int
 	messages      []Message
 	viewport      viewport.Model
 	spinner       spinner.Model
@@ -217,14 +224,33 @@ func roleMeta(role string) (string, lipgloss.Style, lipgloss.Style) {
 }
 
 func MainModel(router *query.Router, cfg *config.Config, cacheManager *cache.Manager) Model {
-	ti := textinput.New()
+	ti := textarea.New()
 	ti.Placeholder = "Ask a question or type /help for commands"
-	ti.Focus()
-	ti.CharLimit = 0
-	ti.Width = 80
-	ti.PromptStyle = lipgloss.NewStyle().Foreground(utils.PrimaryColor).Bold(true)
-	ti.TextStyle = lipgloss.NewStyle().Foreground(utils.TextColor)
 	ti.Prompt = "❯ "
+	ti.SetPromptFunc(2, func(lineIdx int) string {
+		if lineIdx == 0 {
+			return "❯ "
+		}
+		return "  "
+	})
+	ti.ShowLineNumbers = false
+	ti.CharLimit = 0
+	ti.MaxHeight = 0 // 0 = no line cap; we cap the height ourselves
+	ti.SetWidth(80)
+	ti.SetHeight(1)
+
+	// Enter submits, so newline moves to Alt+Enter / Ctrl+J.
+	ti.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "ctrl+j"))
+
+	// Flat styling: no cursor-line highlight, no base border (our box draws it).
+	base := lipgloss.NewStyle()
+	ti.FocusedStyle.Base = base
+	ti.FocusedStyle.CursorLine = base
+	ti.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(utils.PrimaryColor).Bold(true)
+	ti.FocusedStyle.Text = lipgloss.NewStyle().Foreground(utils.TextColor)
+	ti.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(utils.MutedColor)
+	ti.BlurredStyle = ti.FocusedStyle
+	ti.Focus()
 
 	s := spinner.New()
 	s.Spinner = spinner.Points
@@ -265,7 +291,7 @@ func MainModel(router *query.Router, cfg *config.Config, cacheManager *cache.Man
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		textinput.Blink,
+		textarea.Blink,
 		tea.DisableMouse,
 	)
 }
@@ -283,8 +309,6 @@ func (m *Model) refresh() {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -292,29 +316,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "esc":
-			// Clear the input first; only quit when it's already empty.
 			if m.input.Value() != "" {
-				m.input.SetValue("")
+				m.input.Reset()
+				m.layout()
 				return m, nil
 			}
 			return m, tea.Quit
+
+		// Scroll keys go only to the viewport so the textarea cursor
+		// doesn't also move.
+		case "up", "down", "pgup", "pgdown":
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
 
 		case "enter":
 			// Typing stays enabled while processing; only submit is blocked.
 			if m.processing {
 				return m, nil
 			}
-
 			q := strings.TrimSpace(m.input.Value())
 			if q == "" {
 				return m, nil
 			}
-
 			if strings.HasPrefix(q, "/") {
 				return m.handleCommand(q)
 			}
 
-			m.input.SetValue("")
+			m.input.Reset()
+			m.layout() // shrink the box before the transcript re-renders
 			m.processing = true
 			m.state = StateProcessing
 			m.push("user", q)
@@ -348,7 +378,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		if m.processing {
 			var cmd tea.Cmd
-			m.spinner, cmd = m.spinner.Update(msg)
+			m.spinner, cmd = m.spinner.Update(msg) // spinner, not input
 			return m, cmd
 		}
 		return m, nil
@@ -357,11 +387,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		widthChanged := msg.Width != m.width
 		m.width, m.height = msg.Width, msg.Height
 		m.viewport.Width = max(10, msg.Width-6)
-		m.viewport.Height = max(3, msg.Height-9)
-		m.input.Width = max(10, msg.Width-8)
+		m.input.SetWidth(max(10, msg.Width-6))
+		m.layout()
 		if widthChanged {
 			m.viewport.SetContent(m.renderMessages())
+			m.viewport.GotoBottom()
 		}
+		return m, nil
 
 	case switchToCacheViewerMsg:
 		if m.cacheManager == nil {
@@ -392,16 +424,71 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return cacheModel, cacheModel.Init()
 	}
 
+	// Typed keys, paste, cursor blink: input only, then resync the layout.
+	// This is the line that makes the box grow while you type.
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	cmds = append(cmds, cmd)
-	m.viewport, cmd = m.viewport.Update(msg)
-	cmds = append(cmds, cmd)
+	m.layout()
+	return m, cmd
+}
 
-	return m, tea.Batch(cmds...)
+// visualRows is how many screen rows one logical line occupies at width w.
+func visualRows(line string, w int) int {
+	if line == "" {
+		return 1
+	}
+	parts := strings.Split(ansi.Wrap(line, w, ""), "\n")
+	n := len(parts)
+	// A full last row pushes the cursor onto a new row.
+	if lipgloss.Width(parts[n-1]) >= w {
+		n++
+	}
+	return n
+}
+
+// desiredInputRows computes the input height from content, clamped to the cap.
+func (m Model) desiredInputRows() int {
+	limit := min(maxInputRows, max(1, m.height-chromeRows-minViewportRows))
+	w := m.input.Width()
+	if w < 1 {
+		return 1
+	}
+	rows := 0
+	for _, l := range strings.Split(m.input.Value(), "\n") {
+		rows += visualRows(l, w)
+		if rows >= limit { // early exit: huge pastes stay cheap
+			return limit
+		}
+	}
+	return max(1, rows)
+}
+
+// layout syncs input height and viewport height. It only touches the
+// components when something actually changed.
+func (m *Model) layout() {
+	if m.width == 0 {
+		return
+	}
+	if rows := m.desiredInputRows(); rows != m.inputRows {
+		m.inputRows = rows
+		m.input.SetHeight(rows)
+	}
+
+	vpH := max(minViewportRows, m.height-chromeRows-m.inputRows)
+	if vpH != m.viewport.Height {
+		atBottom := m.viewport.AtBottom()
+		m.viewport.Height = vpH
+		if atBottom {
+			m.viewport.GotoBottom()
+		} else {
+			m.viewport.SetYOffset(m.viewport.YOffset) // re-clamp
+		}
+	}
 }
 
 func (m Model) handleCommand(command string) (tea.Model, tea.Cmd) {
+	m.input.Reset()
+	m.layout()
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
 		return m, nil
@@ -436,7 +523,7 @@ func (m Model) handleCommand(command string) (tea.Model, tea.Cmd) {
 		m.push("system", fmt.Sprintf("Reasoning traces are now %s.", visibility))
 	case "/clear":
 		m.messages = []Message{newMessage("system", "Conversation cleared. How can I help you?")}
-		m.viewport.SetContent(m.renderMessages())
+		m.refresh()
 		m.viewport.GotoTop()
 	case "/stats":
 		m.push("system", m.getSystemStats())
@@ -549,8 +636,9 @@ func (m Model) View() string {
 
 	// Footer key hints
 	b.WriteString(helpBarStyle.Render(fmt.Sprintf(
-		"%s send   %s quit   %s commands   %s toggle reasoning   %s scroll",
+		"%s send   %s newline   %s quit   %s commands   %s toggle reasoning   %s scroll",
 		keyHintStyle.Render("Enter"),
+		keyHintStyle.Render("Alt+Enter"),
 		keyHintStyle.Render("Esc"),
 		keyHintStyle.Render("/help"),
 		keyHintStyle.Render("/think"),
