@@ -3,215 +3,273 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*' # Triggers on tags like v1.0.0, v2.1.3, etc.
-  workflow_dispatch: # Allows manual triggering
+      - 'v*'
+  workflow_dispatch: # manual run: builds everything, only tag runs publish a release
 
 env:
   GO_VERSION: '1.27'
   RUST_VERSION: 'stable'
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build:
-    name: Build All Binaries
+  # Built once, reused by every matrix leg and by the release.
+  prepare:
+    name: Package eulix-embed
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Create eulix-embed.zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error title=Packaging eulix-embed failed::$1"; exit 1; }
+
+          [ -d eulix-embed ] || fail "Directory 'eulix-embed/' not found in the repo root. Was it renamed or moved?"
+
+          zip -r eulix-embed.zip eulix-embed/ \
+            -x "*/.venv/*" "*.venv*" \
+               "*/.ruff_cache/*" "*.ruff_cache*" \
+               "*/.pytest_cache/*" "*.pytest_cache*" \
+               "*/.mypy_cache/*" "*.mypy_cache*" \
+               "*/.git/*" "*.git*" \
+               "*/__pycache__/*" "*__pycache__*" \
+               "*.pyc" \
+               "*/.codespell-ignore" "*.codespell-ignore" \
+            || fail "'zip' failed while archiving eulix-embed/. See the log above."
+
+          [ -s eulix-embed.zip ] || fail "eulix-embed.zip was created but is empty."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: embed-zip
+          path: eulix-embed.zip
+          if-no-files-found: error
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false # one platform failing must not hide the result of the others
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            rust_target: x86_64-unknown-linux-gnu
+            rustflags: ''
+            parser_src: eulix_parser
+            parser_embed: eulix_parser_linux
+            ext: ''
+            variants: 'amd nvidia'
+
+          - name: windows-amd64
+            runner: windows-latest
+            goos: windows
+            goarch: amd64
+            rust_target: x86_64-pc-windows-msvc
+            rustflags: '-C link-arg=advapi32.lib' # rpmalloc needs advapi32
+            parser_src: eulix_parser.exe
+            parser_embed: eulix_parser_windows.exe
+            ext: '.exe'
+            variants: 'amd nvidia'
+
+          - name: macos-arm64 # Apple Silicon (M series)
+            runner: macos-14
+            goos: darwin
+            goarch: arm64
+            rust_target: aarch64-apple-darwin
+            rustflags: ''
+            parser_src: eulix_parser
+            parser_embed: eulix_parser_darwin
+            ext: ''
+            variants: 'amd' # NVIDIA/CUDA doesn't exist on Apple Silicon
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Setup Go
+        id: setup_go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: eulix-cli/go.sum
 
       - name: Setup Rust
+        id: setup_rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_VERSION }}
+          target: ${{ matrix.rust_target }}
+          cache: false
           rustflags: ''
 
-      - name: Add Rust targets
-        run: |
-          rustup target add x86_64-unknown-linux-gnu
-          rustup target add x86_64-pc-windows-gnu
-          # rustup target add aarch64-apple-darwin
-          # rustup target add x86_64-apple-darwin
-
-      # - name: Install zig
-      #   uses: goto-bus-stop/setup-zig@v2
-      #   with:
-      #     version: 0.11.0
-
-      # - name: Install cargo-zigbuild
-      #   run: cargo install cargo-zigbuild
-
-      - name: Install mingw-w64 (for Windows cross-compile)
-        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: eulix-parser -> target
+          key: ${{ matrix.rust_target }}
 
       - name: Build eulix-parser
+        id: parser
         working-directory: ./eulix-parser
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
         run: |
-          echo "Building for Linux (x86_64)..."
-          cargo build --release --target x86_64-unknown-linux-gnu
+          set -euo pipefail
+          echo "Building parser for ${{ matrix.rust_target }}..."
+          cargo build --release --target "${{ matrix.rust_target }}" || {
+            echo "::error title=Rust parser build failed (${{ matrix.name }})::cargo could not compile eulix-parser for ${{ matrix.rust_target }}. The compiler error is in this step's log."
+            exit 1
+          }
 
-          echo "Building for Windows (x86_64)..."
-          RUSTFLAGS="-C link-args=-ladvapi32" cargo build --release --target x86_64-pc-windows-gnu
+          bin="target/${{ matrix.rust_target }}/release/${{ matrix.parser_src }}"
+          [ -f "$bin" ] || {
+            echo "::error title=Parser binary missing (${{ matrix.name }})::cargo succeeded but '$bin' does not exist. Check that the binary name in Cargo.toml is still 'eulix_parser'."
+            exit 1
+          }
 
-          # echo "Building for macOS ARM (aarch64)..."
-          # cargo zigbuild --release --target aarch64-apple-darwin
-
-          # echo "Building for macOS Intel (x86_64)..."
-          # cargo zigbuild --release --target x86_64-apple-darwin
-
-      - name: Copy parser binaries into eulix assets
+      - name: Stage parser and embed archive
+        id: stage
         run: |
-          mkdir -p eulix-cli/internal/assets/bins
-          cp eulix-parser/target/x86_64-pc-windows-gnu/release/eulix_parser.exe eulix-cli/internal/assets/bins/eulix_parser_windows.exe
-          cp eulix-parser/target/x86_64-unknown-linux-gnu/release/eulix_parser eulix-cli/internal/assets/bins/eulix_parser_linux
-          # cp eulix-parser/target/aarch64-apple-darwin/release/eulix_parser eulix-cli/internal/assets/bins/eulix_parser_macos_arm
-          # cp eulix-parser/target/x86_64-apple-darwin/release/eulix_parser eulix-cli/internal/assets/bins/eulix_parser_macos_intel
+          set -euo pipefail
+          fail() { echo "::error title=Staging failed (${{ matrix.name }})::$1"; exit 1; }
 
-      - name: Hash parser binaries
-        id: parser_hashes
+          bins=eulix-cli/internal/assets/bins
+          mkdir -p "$bins" dist
+          src="eulix-parser/target/${{ matrix.rust_target }}/release/${{ matrix.parser_src }}"
+
+          cp "$src" "$bins/${{ matrix.parser_embed }}" || fail "Could not copy $src into $bins."
+          cp "$src" "dist/eulix-parser-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" \
+            || fail "Could not copy parser into dist/."
+
+      - name: Download eulix-embed.zip
+        uses: actions/download-artifact@v4
+        with:
+          name: embed-zip
+          path: eulix-cli/internal/assets/bins
+
+      - name: Hash parser binary
+        id: hash
         run: |
-          # Each Go build embeds exactly one parser binary (via build tags on
-          HASH_LINUX=$(sha256sum eulix-cli/internal/assets/bins/eulix_parser_linux | awk '{print $1}')
-          HASH_WINDOWS=$(sha256sum eulix-cli/internal/assets/bins/eulix_parser_windows.exe | awk '{print $1}')
-          echo "eulix_parser_linux:       ${HASH_LINUX}"
-          echo "eulix_parser_windows.exe: ${HASH_WINDOWS}"
+          set -euo pipefail
+          f="eulix-cli/internal/assets/bins/${{ matrix.parser_embed }}"
+          [ -f "$f" ] || { echo "::error title=Hashing failed (${{ matrix.name }})::$f not found."; exit 1; }
 
-          echo "hash_linux=${HASH_LINUX}" >> "$GITHUB_OUTPUT"
-          echo "hash_windows=${HASH_WINDOWS}" >> "$GITHUB_OUTPUT"
+          if command -v sha256sum >/dev/null 2>&1; then
+            h=$(sha256sum "$f" | awk '{print $1}')
+          else
+            h=$(shasum -a 256 "$f" | awk '{print $1}')   # macOS
+          fi
+          [ -n "$h" ] || { echo "::error title=Hashing failed (${{ matrix.name }})::Empty sha256 for $f."; exit 1; }
 
-          # embed_linux.go / embed_darwin.go / embed_windows.go), so the hash
-          # passed as -X embeddedParserHash to a given Go build below must
-          # match the parser binary that build actually embeds.
-          # Uncomment alongside the macOS parser builds above:
-          # HASH_MACOS_ARM=$(sha256sum eulix-cli/internal/assets/bins/eulix_parser_macos_arm | awk '{print $1}')
-          # HASH_MACOS_INTEL=$(sha256sum eulix-cli/internal/assets/bins/eulix_parser_macos_intel | awk '{print $1}')
-          # echo "hash_macos_arm=${HASH_MACOS_ARM}" >> "$GITHUB_OUTPUT"
-          # echo "hash_macos_intel=${HASH_MACOS_INTEL}" >> "$GITHUB_OUTPUT"
+          echo "${{ matrix.parser_embed }}: $h"
+          echo "parser_hash=$h" >> "$GITHUB_OUTPUT"
 
-      - name: Create eulix-embed.zip
-        run: |
-          zip -r eulix-embed.zip eulix-embed/ \
-            -x "*/.venv/*" "*.venv*" \
-              "*/.ruff_cache/*" "*.ruff_cache*" \
-              "*/.pytest_cache/*" "*.pytest_cache*" \
-              "*/.mypy_cache/*" "*.mypy_cache*" \
-              "*/.git/*" "*.git*" \
-              "*/__pycache__/*" "*__pycache__*" \
-              "*.pyc" \
-              "*/.codespell-ignore" "*.codespell-ignore"
-          cp eulix-embed.zip eulix-cli/internal/assets/bins/eulix-embed.zip
-
-      - name: Build eulix Go binaries
+      - name: Build eulix (Go)
+        id: gobuild
         working-directory: ./eulix-cli
         env:
-          HASH_LINUX: ${{ steps.parser_hashes.outputs.hash_linux }}
-          HASH_WINDOWS: ${{ steps.parser_hashes.outputs.hash_windows }}
-          # HASH_MACOS_ARM: ${{ steps.parser_hashes.outputs.hash_macos_arm }}
-          # HASH_MACOS_INTEL: ${{ steps.parser_hashes.outputs.hash_macos_intel }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+          PARSER_HASH: ${{ steps.hash.outputs.parser_hash }}
         run: |
-          echo "Using Go version: $(go version)"
+          set -euo pipefail
+          echo "Using $(go version)"
 
-          # ONNX backend variants: each OS is built twice, once per
-          # requirements file, via -X eulix/internal/assets.embed_requirements.
-          # Each build also gets -X eulix/internal/assets.embeddedParserHash
-          # set to the sha256 of whichever parser binary that OS's Go build
-          # embeds, so Hashes() can verify the compiled-in parser at runtime.
-          for pair in "onnx-amd.txt:amd" "onnx-nvidia.txt:nvidia"; do
-            req_file="${pair%%:*}"
-            tag="${pair##*:}"
-
+          for tag in ${{ matrix.variants }}; do
+            req_file="onnx-${tag}.txt"
+            out="$GITHUB_WORKSPACE/dist/eulix-${{ matrix.goos }}-${{ matrix.goarch }}-onnx-${tag}${{ matrix.ext }}"
             echo "Building ONNX '${tag}' variant (embed_requirements=${req_file})..."
 
-            echo "  Linux (amd64)..."
-            GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
-              -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${req_file}' -X 'eulix/internal/assets.embeddedParserHash=${HASH_LINUX}'" \
-              -trimpath -o "eulix_linux_${tag}" ./cmd/eulix/main.go
+            go build \
+              -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${req_file}' -X 'eulix/internal/assets.embeddedParserHash=${PARSER_HASH}'" \
+              -trimpath -o "$out" ./cmd/eulix/main.go || {
+              echo "::error title=Go build failed (${{ matrix.name }}, variant ${tag})::'go build' failed. Common causes: missing file in internal/assets/bins (the //go:embed target for this OS), a compile error, or an invalid Go version. See the log above."
+              exit 1
+            }
 
-            echo "  Windows (amd64)..."
-            GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
-              -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${req_file}' -X 'eulix/internal/assets.embeddedParserHash=${HASH_WINDOWS}'" \
-              -trimpath -o "eulix_windows_${tag}.exe" ./cmd/eulix/main.go
-
-            # echo "  macOS Intel (amd64)..."
-            # GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build \
-            #   -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${req_file}' -X 'eulix/internal/assets.embeddedParserHash=${HASH_MACOS_INTEL}'" \
-            #   -trimpath -o "eulix_macos_intel_${tag}" ./cmd/eulix/main.go
-
-            # echo "  macOS ARM (arm64)..."
-            # GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build \
-            #   -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${req_file}' -X 'eulix/internal/assets.embeddedParserHash=${HASH_MACOS_ARM}'" \
-            #   -trimpath -o "eulix_macos_arm_${tag}" ./cmd/eulix/main.go
+            [ -s "$out" ] || { echo "::error title=Go build failed (${{ matrix.name }})::Output $out is missing or empty."; exit 1; }
           done
 
-      - name: Upload build artifacts
+      - name: Upload build outputs
         uses: actions/upload-artifact@v4
         with:
-          name: build-outputs
+          name: dist-${{ matrix.name }}
+          path: dist/*
           if-no-files-found: error
-          path: |
-            eulix-cli/eulix_linux_amd
-            eulix-cli/eulix_linux_nvidia
-            eulix-cli/eulix_windows_amd.exe
-            eulix-cli/eulix_windows_nvidia.exe
-            eulix-parser/target/x86_64-unknown-linux-gnu/release/eulix_parser
-            eulix-parser/target/x86_64-pc-windows-gnu/release/eulix_parser.exe
-            eulix-embed.zip
-            # eulix-cli/eulix_macos_intel_amd
-            # eulix-cli/eulix_macos_intel_nvidia
-            # eulix-cli/eulix_macos_arm_amd
-            # eulix-cli/eulix_macos_arm_nvidia
-            # eulix-parser/target/aarch64-apple-darwin/release/eulix_parser
-            # eulix-parser/target/x86_64-apple-darwin/release/eulix_parser
+
+      - name: Failure summary
+        if: failure()
+        run: |
+          {
+            echo "### ❌ Build failed: ${{ matrix.name }}"
+            echo ""
+            echo "| Step | Result |"
+            echo "|---|---|"
+            echo "| Setup Go | ${{ steps.setup_go.outcome }} |"
+            echo "| Setup Rust | ${{ steps.setup_rust.outcome }} |"
+            echo "| Build parser | ${{ steps.parser.outcome }} |"
+            echo "| Stage files | ${{ steps.stage.outcome }} |"
+            echo "| Hash parser | ${{ steps.hash.outcome }} |"
+            echo "| Go build | ${{ steps.gobuild.outcome }} |"
+            echo ""
+            echo "The first row that is not \`success\` is where it broke. Open that step's log for the exact error."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   create-release:
     name: Create Release
-    runs-on: ubuntu-latest
     needs: [build]
-    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: startsWith(github.ref, 'refs/tags/') # manual runs on a branch never publish
     permissions:
-      contents: write # Required for creating releases
+      contents: write
     steps:
-      - name: Download build artifacts
+      - name: Download all build outputs
         uses: actions/download-artifact@v4
         with:
-          name: build-outputs
-          path: artifacts/
+          pattern: dist-*
+          merge-multiple: true
+          path: release_assets
 
-      - name: Organize release assets
+      - name: Download eulix-embed.zip
+        uses: actions/download-artifact@v4
+        with:
+          name: embed-zip
+          path: release_assets
+
+      - name: Checksums
+        working-directory: release_assets
         run: |
-          mkdir -p release_assets
-
-          cp artifacts/eulix-cli/eulix_linux_amd release_assets/eulix-linux-amd64-onnx-amd
-          cp artifacts/eulix-cli/eulix_linux_nvidia release_assets/eulix-linux-amd64-onnx-nvidia
-          cp artifacts/eulix-cli/eulix_windows_amd.exe release_assets/eulix-windows-amd64-onnx-amd.exe
-          cp artifacts/eulix-cli/eulix_windows_nvidia.exe release_assets/eulix-windows-amd64-onnx-nvidia.exe
-          cp artifacts/eulix-parser/target/x86_64-unknown-linux-gnu/release/eulix_parser release_assets/eulix-parser-linux-amd64
-          cp artifacts/eulix-parser/target/x86_64-pc-windows-gnu/release/eulix_parser.exe release_assets/eulix-parser-windows-amd64.exe
-
-          cp artifacts/eulix-embed.zip release_assets/eulix-embed.zip
-
-          cd release_assets
+          set -euo pipefail
+          count=$(ls | wc -l)
+          # 6 CLI binaries (2 linux, 2 windows, 1 mac) ... adjust if you change the matrix
+          echo "Found $count files:"; ls -l
+          [ "$count" -gt 0 ] || { echo "::error title=No release assets::release_assets/ is empty."; exit 1; }
           sha256sum * > checksums.txt
-          cd ..
 
-          # cp artifacts/eulix-cli/eulix_macos_arm_amd release_assets/eulix-darwin-arm64-onnx-amd
-          # cp artifacts/eulix-cli/eulix_macos_arm_nvidia release_assets/eulix-darwin-arm64-onnx-nvidia
-          # cp artifacts/eulix-cli/eulix_macos_intel_amd release_assets/eulix-darwin-amd64-onnx-amd
-          # cp artifacts/eulix-cli/eulix_macos_intel_nvidia release_assets/eulix-darwin-amd64-onnx-nvidia
-          # cp artifacts/eulix-parser/target/aarch64-apple-darwin/release/eulix_parser release_assets/eulix-parser-darwin-arm64
-          # cp artifacts/eulix-parser/target/x86_64-apple-darwin/release/eulix_parser release_assets/eulix-parser-darwin-amd64
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: true
-          files: |
-            release_assets/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          fail_on_unmatched_files: true
+          files: release_assets/*
