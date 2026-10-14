@@ -374,6 +374,8 @@ struct Resolver<'a> {
     /// file idx -> dir id; non-decreasing because files are sorted by (dir, path)
     file_dir: &'a [u32],
     imports: &'a [FileImports<'a>],
+    /// file idx -> written in PHP
+    php: &'a [bool],
     /// (class idx, method name, method idx), sorted — enables binary search
     /// for "does this class define this method".
     methods: &'a [(u32, &'a str, u32)],
@@ -401,6 +403,10 @@ impl<'a> Resolver<'a> {
         let mut eligible = 0usize;
         for c in cands {
             let n = &self.nodes[c as usize];
+            // PHP and the other languages never call into each other.
+            if self.php[n.file as usize] != self.php[file as usize] {
+                continue;
+            }
             let Some(r) = rank(want, n.kind, strict) else {
                 continue;
             };
@@ -735,6 +741,7 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
         imports.extend(ex.imports);
     }
 
+    let php: Vec<bool> = files.iter().map(|f| f.1.language == "php").collect();
     let mut by_name: Map<&str, Vec<u32>> = Map::with_capacity(nodes.len());
     for (i, n) in nodes.iter().enumerate() {
         by_name.entry(n.name).or_default().push(i as u32);
@@ -757,6 +764,7 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
         files: &paths,
         file_dir: &file_dir,
         imports: &imports,
+        php: &php,
         methods: &methods,
         parents: Map::new(),
         children: Map::new(),
