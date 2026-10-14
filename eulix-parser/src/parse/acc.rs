@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::stats::{lang_counts, FailedFile, ParseStats, PartialFile};
+use libeulix::grammar_files::php;
 use libeulix::struc::kb_struct::FileData;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -22,7 +23,13 @@ impl Acc {
     pub fn record_ok(&mut self, rel: String, fd: FileData, loc: (u64, u32)) {
         self.index.push((rel.clone(), loc.0, loc.1));
         self.loc += fd.loc;
-        self.functions += fd.functions.len();
+        // A PHP file's `{main}` holds its top-level code; it is not a
+        // declared function.
+        self.functions += fd
+            .functions
+            .iter()
+            .filter(|f| !f.tags.iter().any(|t| t == php::SCRIPT_TAG))
+            .count();
         self.classes += fd.classes.len();
         self.methods += fd.classes.iter().map(|c| c.methods.len()).sum::<usize>();
         if !self.languages.contains(fd.language.as_str()) {
