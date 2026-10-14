@@ -40,6 +40,19 @@ jobs:
         working-directory: eulix-parser
         run: cargo clippy -- -D warnings
 
+  lint-lib:
+    needs: changes
+    if: needs.changes.outputs.parser == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run clippy
+        working-directory: libeulix
+        run: cargo clippy -- -D warnings
+
   lint-embed:
     needs: changes
     if: needs.changes.outputs.embed == 'true'
