@@ -17,17 +17,51 @@ EULIX_BIN_DIR="$EULIX_DIR/bin"
 EULIX_VENV="$EULIX_DIR/.venv"
 EULIX_PARSER_PATH="$EULIX_BIN_DIR/eulix_parser"
 EULIX_EMBED_PATH="$EULIX_DIR/eulix_embed"
-VIZEULIZE_HTML_PATH="$EULIX_BIN_DIR/vizEulize.html"
+VIZEULIZE_HTML_PATH="$EULIX_BIN_DIR/vizeulize.html"
 
 REPO="Nurysso/eulix"
-RELEASE_TAG="v0.8.2"
-RELEASE_BASE="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
 DOC_URL="https://github.com/${REPO}/blob/main/docs/install.md"
+
+# Resolved at runtime inside main()
+RELEASE_TAG=""
+RELEASE_BASE=""
 
 IS_UV=false
 DETECTED_OS=""
 GPU_VARIANT=""   # amd | nvidia
 ASSET_NAME=""
+
+# ---------------------------------------------------------------------------
+# Fetch the latest release tag from the GitHub API.
+# Falls back to following the /releases/latest redirect if the API is blocked
+# (e.g. unauthenticated rate limit hit).
+# ---------------------------------------------------------------------------
+get_latest_release_tag() {
+    local repo="$1"
+    local api_url="https://api.github.com/repos/${repo}/releases/latest"
+    local tag=""
+
+    # Preferred: GitHub REST API
+    tag=$(curl -fsSL "$api_url" 2>/dev/null \
+        | grep '"tag_name":' \
+        | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' \
+        || true)
+
+    # Fallback: resolve the /releases/latest HTML redirect
+    if [[ -z "$tag" ]]; then
+        warn "GitHub API lookup failed — falling back to redirect resolution."
+        tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+            "https://github.com/${repo}/releases/latest" 2>/dev/null \
+            | sed -E 's|.*/tag/||' \
+            || true)
+    fi
+
+    if [[ -z "$tag" || "$tag" == *"/"* ]]; then
+        die "Could not determine the latest release tag for ${repo}. Set EULIX_VERSION to pin one explicitly."
+    fi
+
+    echo "$tag"
+}
 
 # Detect OS (linux/mac only — mac unsupported for now)
 Check_OS() {
@@ -139,14 +173,14 @@ get_checksum() {
     ' "$checksums_file"
 }
 
-# Download the release binary for the chosen OS/GPU variant and vizEulize.html, verify checksums, install them
+# Download the release binary for the chosen OS/GPU variant and vizeulize.html, verify checksums, install them
 download_binary() {
     ASSET_NAME="eulix-linux-amd64-onnx-${GPU_VARIANT}"
-    local html_asset_name="vizEulize.html"
+    local html_asset_name="vizeulize.html"
 
     local asset_url="${RELEASE_BASE}/${ASSET_NAME}"
     local html_url="${RELEASE_BASE}/${html_asset_name}"
-    local checksums_url="${RELEASE_BASE}/checksums.txt"
+    local checksums_url="${RELEASE_BASE}/checksum.txt"
 
     local tmp_bin="/tmp/${ASSET_NAME}"
     local tmp_html="/tmp/${html_asset_name}"
@@ -180,7 +214,7 @@ download_binary() {
         success "Binary checksum verified."
     fi
 
-    # Verify vizEulize.html checksum (matches 'vizEulize/vizEulize.html' in checksums.txt)
+    # Verify vizeulize.html checksum (matches 'vizeulize.html' in checksums.txt)
     local expected_html actual_html
     expected_html="$(get_checksum "$html_asset_name" "$tmp_checksums")"
     if [[ -z "$expected_html" ]]; then
@@ -191,7 +225,7 @@ download_binary() {
             rm -f "$tmp_bin" "$tmp_html" "$tmp_checksums"
             die "Checksum mismatch for ${html_asset_name}! Expected ${expected_html}, got ${actual_html}."
         fi
-        success "vizEulize.html checksum verified."
+        success "vizeulize.html checksum verified."
     fi
 
     rm -f "$tmp_checksums"
@@ -202,7 +236,7 @@ download_binary() {
     mv "$tmp_bin" "$INSTALL_DIR/eulix"
     success "Installed binary → $INSTALL_DIR/eulix"
 
-    # Install vizEulize.html into ~/.Eulix/bin/
+    # Install vizeulize.html into ~/.Eulix/bin/
     mkdir -p "$EULIX_BIN_DIR"
     mv "$tmp_html" "$VIZEULIZE_HTML_PATH"
     success "Installed UI webapp → $VIZEULIZE_HTML_PATH"
@@ -229,9 +263,20 @@ ensure_path() {
 
 # Main
 main() {
-    echo -e "\n${BOLD}${CYAN}╔══════════════════════════════╗"
-    echo -e "║   Eulix Installer ${RELEASE_TAG}      ║"
-    echo -e "╚══════════════════════════════╝${RESET}\n"
+    # --- Resolve release tag (latest, or pinned via EULIX_VERSION) ---
+    if [[ -n "${EULIX_VERSION:-}" ]]; then
+        RELEASE_TAG="$EULIX_VERSION"
+        success "Using pinned release: ${RELEASE_TAG}"
+    else
+        info "Resolving latest Eulix release..."
+        RELEASE_TAG="$(get_latest_release_tag "$REPO")"
+        success "Latest release: ${RELEASE_TAG}"
+    fi
+    RELEASE_BASE="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
+
+    echo -e "\n${BOLD}${CYAN}╔════════════════════════════════════════╗"
+    echo -e "║   Eulix Installer  (${RELEASE_TAG})"
+    echo -e "╚════════════════════════════════════════╝${RESET}\n"
 
     Check_OS
     choose_gpu_variant
@@ -242,12 +287,13 @@ main() {
     ensure_path
 
     echo -e "\n${GREEN}${BOLD}✓ Eulix installed successfully!${RESET}"
+    echo -e "  Version       : ${BOLD}$RELEASE_TAG${RESET}"
     echo -e "  Binary        : ${BOLD}$INSTALL_DIR/eulix${RESET}"
     echo -e "  Data dir      : ${BOLD}$EULIX_DIR${RESET}"
     echo -e "  Venv          : ${BOLD}$EULIX_VENV${RESET}"
     echo -e "  eulix_parser  : ${BOLD}$EULIX_PARSER_PATH${RESET}"
     echo -e "  eulix_embed   : ${BOLD}$EULIX_EMBED_PATH${RESET}"
-    echo -e "  vizEulize.html: ${BOLD}$VIZEULIZE_HTML_PATH${RESET}"
+    echo -e "  vizeulize.html: ${BOLD}$VIZEULIZE_HTML_PATH${RESET}"
     echo -e "  Run           : ${BOLD}eulix --help${RESET}\n"
 
     if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
