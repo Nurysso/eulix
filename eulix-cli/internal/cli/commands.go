@@ -359,6 +359,7 @@ var queryCmd = &cobra.Command{
 	},
 }
 
+// nolint:unused
 var glaDOSCmd = &cobra.Command{
 	Use:   "glados [directory]",
 	Short: "[Depriciated] Checks for errors in knowledge base and embeddings size",
@@ -369,6 +370,7 @@ var glaDOSCmd = &cobra.Command{
 	},
 }
 
+// nolint:unused
 var aspirineCmd = &cobra.Command{
 	Use:   "aspirine [directory]",
 	Short: "[Depriciated] tries to fix embedings.bin and kb MEANT TO BE USED IN TEST",
