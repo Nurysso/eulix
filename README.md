@@ -66,7 +66,7 @@ Eulix doesn't treat code understanding as an LLM problem. It treats it as an **i
 | **Graph**      | **773K nodes / 1.51M edges**, extracted with **0 parse failures**      |
 | **Embeddings** | **837,531 chunks** embedded locally on a single consumer GPU           |
 | **Privacy**    | Parsing, indexing, retrieval and embedding run **entirely on-device**  |
-| **Languages**  | C, C++, Go, Java, JavaScript, Python, Rust, TypeScript                 |
+| **Languages**  | C, C++, Go, Java, JavaScript, PHP, Python, Rust, TypeScript            |
 
 ---
 
@@ -114,7 +114,7 @@ Tune retrieval behavior through eulix.toml. Use PyTorch or ONNX Runtime, CPU or 
 
 </details>
 
-Supported languages: C, C++, Go, Java, JavaScript, Python, Rust, and TypeScript. JSX and TSX are not currently supported.
+Supported languages: C, C++, Go, Java, JavaScript, PHP, Python, Rust, and TypeScript. JSX and TSX are not currently supported.
 
 <!-- ## Demo
 
@@ -537,6 +537,7 @@ Known constraints are tracked in [Known Issues](docs/known-issues.md).
 | TypeScript | Supported   | Validated on Deno. Can't parse tsx files                   |
 | JavaScript | Supported   | Validated on Express.js and Three.js. Cant parse jsx files |
 | Java       | Supported   | Validated on Tomcat and OpenJDK                            |
+| PHP        | Supported   | Validated on WordPress, Laravel and Symfony                |
 
 \* Parsing may not reach 100% accuracy for C and C++ because macros are not expanded. JSX and TSX files are not currently parsed.
 
