@@ -210,4 +210,29 @@ mod tests {
             "v2's `seen` set collapses repeated calls to the same callee into one edge"
         );
     }
+
+    #[test]
+    fn duplicate_declarations_of_one_id_in_a_file_share_one_edge_per_target() {
+        // `#ifdef` branches can declare the same function twice in one file;
+        // both declarations are one node, so they get one edge per target.
+        let mut structure = HashMap::new();
+        structure.insert(
+            "a.c".to_string(),
+            filedata(
+                vec![
+                    func("func_f::a.c", "f", vec!["g"]),
+                    func("func_f::a.c", "f", vec!["g"]),
+                    func("func_g::a.c", "g", vec![]),
+                ],
+                vec![],
+            ),
+        );
+        let g = build_call_graph_v2(&structure);
+        let count = g
+            .edges
+            .iter()
+            .filter(|e| e.from == "func_f::a.c" && e.to == "func_g::a.c")
+            .count();
+        assert_eq!(count, 1);
+    }
 }

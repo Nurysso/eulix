@@ -323,18 +323,21 @@ fn build_file_imports<'a>(fd: &'a FileData, index: &'a Map<&'a str, Vec<u32>>) -
     out
 }
 
-/// Collapse the edges of ONE caller: one edge per target, first call-site line,
-/// `conditional` only if *every* call to that target is conditional.
+/// Collapse the edges of ONE file's callers: one edge per (caller, target),
+/// first call-site line, `conditional` only if *every* call to that target is
+/// conditional.
 ///
-/// This is deliberately per-caller (not global): it keeps the graph from
+/// This is deliberately per-file (not global): it keeps the graph from
 /// growing with the number of call sites inside the same function, which
-/// matters a lot on machine-generated code.
+/// matters a lot on machine-generated code. Per file rather than per
+/// function because a file can declare one id twice (`#ifdef` branches), and
+/// both declarations are the same graph node.
 fn flush_edges(out: &mut Vec<RawEdge>, buf: &mut Vec<RawEdge>) {
-    buf.sort_unstable_by_key(|e| (e.to, e.line));
+    buf.sort_unstable_by_key(|e| (e.from, e.to, e.line));
     let mut it = buf.drain(..);
     if let Some(mut cur) = it.next() {
         for e in it {
-            if e.to == cur.to {
+            if (e.from, e.to) == (cur.from, cur.to) {
                 cur.conditional &= e.conditional;
             } else {
                 out.push(cur);
@@ -796,7 +799,8 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
     //
     // Parallel across chunks again. Each chunk writes into its own `out`
     // and `buf`, so no locks are needed. `flush_edges` collapses multiple
-    // calls to the same target from one caller into a single edge.
+    // calls to the same target from one caller into a single edge, once per
+    // file.
     let call_edges: Vec<RawEdge> = files
         .par_chunks(chunk)
         .enumerate()
@@ -820,7 +824,6 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                             });
                         }
                     }
-                    flush_edges(&mut out, &mut buf);
                 }
                 for class in &fd.classes {
                     let Some(&cidx) = r.node_map.get(class.id.as_str()) else {
@@ -845,9 +848,9 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                                 });
                             }
                         }
-                        flush_edges(&mut out, &mut buf);
                     }
                 }
+                flush_edges(&mut out, &mut buf);
             }
             out.into_iter()
         })
