@@ -50,6 +50,8 @@ var KnownExtensions = map[string]bool{
 	".rs":    true,
 	".rb":    true,
 	".php":   true,
+	".phtml": true,
+	".inc":   true,
 	".cs":    true,
 	".swift": true,
 	".kt":    true,
