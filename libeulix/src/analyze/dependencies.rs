@@ -14,7 +14,13 @@ pub fn analyze_external_deps(kb: &KnowledgeBase) -> Vec<ExternalDependency> {
             filedata
                 .imports
                 .iter()
-                .filter(|i| i.import_type != "internal" && i.import_type != "cgo")
+                // PHP `include`/`require` name project files, not packages.
+                .filter(|i| {
+                    !matches!(
+                        i.import_type.as_str(),
+                        "internal" | "cgo" | "include" | "include_dynamic"
+                    )
+                })
                 .map(|i| (i.module.clone(), filepath.clone(), i.import_type.clone()))
                 .collect::<Vec<_>>()
         })

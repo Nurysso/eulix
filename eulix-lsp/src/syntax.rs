@@ -235,10 +235,12 @@ pub struct ParseFailure(pub String);
 // Note the absences: `Language::detect` maps `.jsx`/`.tsx` to
 // `Language::Jsx`/`Language::Tsx`, but `parse_source` has no arm for either
 // and falls through to `Err("Unsupported language: …")`. They're excluded
-// here so the server never offers features it can't back up.
+// here so the server never offers features it can't back up. `.inc` is out
+// too: C, C++ and assembler share it, and `parse_source` refuses a `.inc`
+// without PHP code, which would show up as a parse failure.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "h++", "c++", "go", "java", "js", "mjs", "cjs",
-    "py", "pyw", "pyi", "rs", "ts", "mts", "cts",
+    "php", "phtml", "py", "pyw", "pyi", "rs", "ts", "mts", "cts",
 ];
 
 pub fn is_supported(path: &Path) -> bool {
@@ -260,6 +262,7 @@ pub fn detect_language(path: &Path) -> &'static str {
         Language::Tsx => "tsx",
         Language::Python => "python",
         Language::Rust => "rust",
+        Language::Php => "php",
         Language::Unknown => "unknown",
     }
 }
@@ -342,6 +345,7 @@ fn convert_function(f: &libeulix::struc::kb_struct::Function) -> Func {
     let js = f.lang_info.javascript.as_deref();
     let c = f.lang_info.c.as_deref();
     let cpp = f.lang_info.cpp.as_deref();
+    let php = f.lang_info.php.as_deref();
 
     Func {
         id: f.id.clone(),
@@ -385,10 +389,15 @@ fn convert_function(f: &libeulix::struc::kb_struct::Function) -> Func {
             || js.is_some_and(|i| i.is_exported)
             || j.is_some_and(|i| i.access_modifier.as_deref() == Some("public"))
             || c.is_some_and(|i| !i.is_static)
-            || cpp.is_some_and(|i| i.access_specifier.as_deref() != Some("private")),
+            || cpp.is_some_and(|i| i.access_specifier.as_deref() != Some("private"))
+            // PHP functions and methods without a modifier are public.
+            || php.is_some_and(|i| {
+                !matches!(i.access_modifier.as_deref(), Some("private" | "protected"))
+            }),
         is_static: c.is_some_and(|i| i.is_static)
             || cpp.is_some_and(|i| i.is_static)
-            || j.is_some_and(|i| i.is_static),
+            || j.is_some_and(|i| i.is_static)
+            || php.is_some_and(|i| i.is_static),
         is_test: r.is_some_and(|i| i.is_test) || j.is_some_and(|i| i.is_test),
         is_unsafe: r.is_some_and(|i| i.is_unsafe),
         is_extern: r.is_some_and(|i| i.is_extern) || cpp.is_some_and(|i| i.is_extern_c),
@@ -404,6 +413,7 @@ fn convert_class(c: &libeulix::struc::kb_struct::Class) -> Klass {
     let cpp = c.lang_info.cpp.as_deref();
     let g = c.lang_info.go.as_deref();
     let t = c.lang_info.typescript.as_deref();
+    let php = c.lang_info.php.as_deref();
 
     // Each language reports the class-like kind in its own enum, so normalize
     // to a lowercase string that the LSP layer can map to a SymbolKind.
@@ -418,6 +428,9 @@ fn convert_class(c: &libeulix::struc::kb_struct::Class) -> Klass {
     } else if let Some(k) = g.map(|i| &i.type_kind) {
         // GoTypeKind: Struct | Interface | Function | Method
         format!("{k:?}").to_lowercase()
+    } else if let Some(k) = php.and_then(|i| i.type_kind.as_ref()) {
+        // PhpTypeKind: Class | Interface | Trait | Enum
+        format!("{k:?}").to_lowercase()
     } else if t.is_some_and(|i| i.is_abstract) {
         "interface".to_string()
     } else {
@@ -428,6 +441,7 @@ fn convert_class(c: &libeulix::struc::kb_struct::Class) -> Klass {
         || cpp.is_some_and(|i| i.is_abstract)
         || j.is_some_and(|i| i.is_abstract)
         || t.is_some_and(|i| i.is_abstract)
+        || php.is_some_and(|i| i.is_abstract)
         || kind == "interface"
         || kind == "trait";
 
@@ -519,5 +533,7 @@ mod tests {
         assert!(is_supported(Path::new("a.PY")));
         assert!(!is_supported(Path::new("a.jsx")));
         assert!(!is_supported(Path::new("a.md")));
+        assert!(is_supported(Path::new("a.php")));
+        assert!(!is_supported(Path::new("a.inc")));
     }
 }

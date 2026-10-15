@@ -12,7 +12,8 @@
 //!     `Get`...), which is the common case in real repos.
 //!
 //!   * v2 resolves the same short name through a *scope ladder*:
-//!     same file  →  explicit import  →  same package/dir  →  project-wide
+//!     same file  →  explicit import  →  included files (PHP)  →  same
+//!     package/dir  →  project-wide
 //!     Only if the caller is still ambiguous at every tighter tier does it
 //!     fall back to the loose global search, and even then it refuses
 //!     names that are too common (`max_ambiguous`).
@@ -20,6 +21,9 @@
 //! v2 also understands class hierarchies: `self.foo()` and
 //! `BaseClass.foo()` can be resolved through the inheritance chain rather
 //! than a name-only guess.
+//!
+//! PHP is resolved by its own rules, in the `php` submodule. PHP and
+//! non-PHP symbols never resolve to each other.
 //!
 //! On a ~64k-file polyglot repo this runs in ~1.4s with ~3.1GB peak RSS,
 //! producing ~773k nodes and ~1.5M edges. That is the target profile.
@@ -33,6 +37,10 @@ use std::cmp::Reverse;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+
+mod php;
+use crate::grammar_files::php::FALLBACK_TAG;
+use php::{include_closures, php_name, php_namespace, IncludeIndex, PhpHierarchy};
 
 type Map<K, V> = HashMap<K, V>;
 
@@ -53,7 +61,9 @@ const EDGE_INHERIT: u8 = 1;
 pub struct CallGraphOptions {
     /// A bare name that matches more than this many project symbols (and could
     /// not be pinned down by file / import / package) is considered too generic
-    /// (`Get`, `Close`, `String`...) and produces no edge.
+    /// (`Get`, `Close`, `String`...) and produces no edge. PHP method calls on
+    /// a receiver of unknown class are stricter: they need the only method of
+    /// that name in the project (see the `php` submodule).
     pub max_ambiguous: usize,
     /// If a name or qualifier comes from an import that does not map to a file
     /// in the project (stdlib, third-party), never fall back to a global name
@@ -90,15 +100,36 @@ pub enum Want {
     Class,
 }
 
+/// What a lookup accepts: the kinds a call-site shape allows, ranked
+/// (`Want`), or exactly one kind. PHP uses the latter, since its call syntax
+/// already says whether it reaches a function or a method.
+#[derive(Clone, Copy)]
+enum Seek {
+    Shape(Want),
+    Only(Kind),
+}
+
+impl From<Want> for Seek {
+    fn from(want: Want) -> Self {
+        Seek::Shape(want)
+    }
+}
+
 /// Borrowed view of everything the resolver needs about one node.
 /// All `&'a str` fields point into the original `KnowledgeBase`, so the
-/// resolver allocates essentially nothing per node.
+/// resolver allocates essentially nothing per node. The one exception is the
+/// name of a PHP node, owned because it is the lowercase qualified name
+/// (`app\models\user`): PHP names are case-insensitive.
 struct Node<'a> {
     id: &'a str,
-    name: &'a str,
+    name: Cow<'a, str>,
     kind: Kind,
     file: u32,
     is_entry: bool,
+    /// PHP fallback declaration, see `FALLBACK_TAG`.
+    fallback: bool,
+    /// PHP `static` method.
+    php_static: bool,
     owner: Option<&'a str>,
 }
 
@@ -128,12 +159,19 @@ struct FileImports<'a> {
     names: Map<&'a str, Target<'a>>,
     /// `import * as ns from "x"` or `import x.y` — `ns.foo()` / `x.y.foo()`.
     namespaces: Map<&'a str, Target<'a>>,
+    /// PHP `include`/`require` targets, sorted. Direct includes while the
+    /// files are read, then replaced by the transitive closure.
+    includes: Vec<u32>,
 }
 
 /// Everything a single parallel chunk extracts from its slice of files.
 struct Extract<'a> {
     nodes: Vec<Node<'a>>,
     bases: Vec<BaseRef<'a>>,
+    /// PHP class -> the class it `extends` and the traits it uses (`bases`
+    /// holds both, with the interfaces, in no particular order).
+    php_extends: Vec<BaseRef<'a>>,
+    php_traits: Vec<BaseRef<'a>>,
     imports: Vec<FileImports<'a>>,
 }
 
@@ -297,8 +335,17 @@ fn resolve_module<'a>(module: &str, index: &'a Map<&'a str, Vec<u32>>) -> Target
     }
 }
 
-fn build_file_imports<'a>(fd: &'a FileData, index: &'a Map<&'a str, Vec<u32>>) -> FileImports<'a> {
+fn build_file_imports<'a>(
+    fd: &'a FileData,
+    index: &'a Map<&'a str, Vec<u32>>,
+    includes: &IncludeIndex,
+    path: &str,
+) -> FileImports<'a> {
     let mut out = FileImports::default();
+    if fd.language == "php" {
+        out.includes = php::includes_of(fd, includes, path);
+        return out;
+    }
     for imp in &fd.imports {
         let target = resolve_module(&imp.module, index);
         for item in &imp.items {
@@ -323,18 +370,22 @@ fn build_file_imports<'a>(fd: &'a FileData, index: &'a Map<&'a str, Vec<u32>>) -
     out
 }
 
-/// Collapse the edges of ONE caller: one edge per target, first call-site line,
-/// `conditional` only if *every* call to that target is conditional.
+/// Collapse the edges of ONE file's callers: one edge per (caller, target),
+/// first call-site line, `conditional` only if *every* call to that target is
+/// conditional.
 ///
-/// This is deliberately per-caller (not global): it keeps the graph from
+/// This is deliberately per-file (not global): it keeps the graph from
 /// growing with the number of call sites inside the same function, which
-/// matters a lot on machine-generated code.
+/// matters a lot on machine-generated code. Per file rather than per
+/// function because a file can declare one id twice (`#ifdef` branches,
+/// PHP's `if (...) { function f() {} } else { function f() {} }`), and both
+/// declarations are the same graph node.
 fn flush_edges(out: &mut Vec<RawEdge>, buf: &mut Vec<RawEdge>) {
-    buf.sort_unstable_by_key(|e| (e.to, e.line));
+    buf.sort_unstable_by_key(|e| (e.from, e.to, e.line));
     let mut it = buf.drain(..);
     if let Some(mut cur) = it.next() {
         for e in it {
-            if e.to == cur.to {
+            if (e.from, e.to) == (cur.from, cur.to) {
                 cur.conditional &= e.conditional;
             } else {
                 out.push(cur);
@@ -362,6 +413,14 @@ fn rank(want: Want, k: Kind, strict: bool) -> Option<u8> {
     }
 }
 
+/// `rank` for a `Seek`: the one accepted kind ranks first, any other is dropped.
+fn rank_seek(seek: Seek, k: Kind, strict: bool) -> Option<u8> {
+    match seek {
+        Seek::Shape(want) => rank(want, k, strict),
+        Seek::Only(only) => (k == only).then_some(0),
+    }
+}
+
 struct Resolver<'a> {
     nodes: &'a [Node<'a>],
     node_map: &'a Map<&'a str, u32>,
@@ -371,6 +430,10 @@ struct Resolver<'a> {
     /// file idx -> dir id; non-decreasing because files are sorted by (dir, path)
     file_dir: &'a [u32],
     imports: &'a [FileImports<'a>],
+    /// file idx -> written in PHP
+    php: &'a [bool],
+    /// `extends` and traits of PHP classes, for PHP's lookup order.
+    php_hierarchy: PhpHierarchy,
     /// (class idx, method name, method idx), sorted — enables binary search
     /// for "does this class define this method".
     methods: &'a [(u32, &'a str, u32)],
@@ -389,16 +452,21 @@ impl<'a> Resolver<'a> {
     fn pick(
         &self,
         cands: impl Iterator<Item = u32>,
-        want: Want,
+        want: impl Into<Seek>,
         strict: bool,
         file: u32,
         closeness: bool,
     ) -> (Option<u32>, usize) {
-        let mut best: Option<(u8, Reverse<usize>, u32)> = None;
+        let want = want.into();
+        let mut best: Option<(u8, bool, Reverse<usize>, u32)> = None;
         let mut eligible = 0usize;
         for c in cands {
             let n = &self.nodes[c as usize];
-            let Some(r) = rank(want, n.kind, strict) else {
+            // PHP and the other languages never call into each other.
+            if self.php[n.file as usize] != self.php[file as usize] {
+                continue;
+            }
+            let Some(r) = rank_seek(want, n.kind, strict) else {
                 continue;
             };
             eligible += 1;
@@ -407,19 +475,25 @@ impl<'a> Resolver<'a> {
             } else {
                 0
             };
-            // Sort by (rank, close desc, idx asc) — the last term keeps the
-            // result deterministic when rank and closeness tie.
-            let key = (r, Reverse(close), c);
+            // Sort by (rank, fallback last, close desc, idx asc) — the last
+            // term keeps the result deterministic when the rest ties.
+            let key = (r, n.fallback, Reverse(close), c);
             if best.is_none_or(|b| key < b) {
                 best = Some(key);
             }
         }
-        (best.map(|k| k.2), eligible)
+        (best.map(|k| k.3), eligible)
     }
 
     /// Restrict a name lookup to files belonging to a resolved import.
     /// `fs` is sorted, so the inner filter is a binary search per candidate.
-    fn lookup_in_files(&self, name: &str, fs: &[u32], file: u32, want: Want) -> Option<u32> {
+    fn lookup_in_files(
+        &self,
+        name: &str,
+        fs: &[u32],
+        file: u32,
+        want: impl Into<Seek>,
+    ) -> Option<u32> {
         let cands = self.by_name.get(name)?;
         let it = cands
             .iter()
@@ -429,12 +503,15 @@ impl<'a> Resolver<'a> {
     }
 
     /// Scope ladder; the first tier that yields a candidate wins:
-    /// same file -> explicit import -> same package/dir -> project-wide (strict).
+    /// same file -> explicit import -> included files (PHP) -> same package/dir
+    /// -> project-wide (strict). A PHP fallback found in the same dir waits
+    /// for the project-wide tier, where a real definition beats it.
     ///
     /// `by_name[name]` is globally sorted by file idx, and file idx is
     /// itself sorted by (dir, path). That lets each tier slice the candidate
     /// list with `partition_point` instead of filtering the whole thing.
-    fn lookup(&self, name: &str, file: u32, want: Want) -> Option<u32> {
+    fn lookup(&self, name: &str, file: u32, want: impl Into<Seek>) -> Option<u32> {
+        let want = want.into();
         let cands = self.by_name.get(name)?.as_slice();
 
         // Tier 1: same file.
@@ -455,21 +532,50 @@ impl<'a> Resolver<'a> {
             _ => {}
         }
 
+        // Tier 2b: PHP files pulled in by include/require, transitively.
+        let included = &self.imports[file as usize].includes;
+        if !included.is_empty() {
+            if let Some(x) = self.lookup_in_files(name, included, file, want) {
+                return Some(x);
+            }
+        }
+
         // Tier 3: same package/dir. Same partition_point trick, on dir id.
         let d = self.file_dir[file as usize];
         let dir_of_c = |c: u32| self.file_dir[self.nodes[c as usize].file as usize];
         let lo = cands.partition_point(|&c| dir_of_c(c) < d);
         let hi = lo + cands[lo..].partition_point(|&c| dir_of_c(c) <= d);
+        // A PHP fallback here only wins if tier 4 has no real definition
+        // (WordPress' `wp-admin/includes/noop.php` stubs vs `l10n.php`).
+        let mut fallback = None;
         if let (Some(x), _) = self.pick(cands[lo..hi].iter().copied(), want, false, file, false) {
-            return Some(x);
+            if !self.nodes[x as usize].fallback {
+                return Some(x);
+            }
+            fallback = Some(x);
         }
 
         // Tier 4: project-wide, but only if the name is not too generic.
-        let (best, n) = self.pick(cands.iter().copied(), want, true, file, true);
-        if n > self.max_ambiguous.max(1) {
-            None
-        } else {
-            best
+        // Fallbacks don't make a name generic: ten theme copies of
+        // `wp_body_open()` under `function_exists` leave core's one definition.
+        let is_fallback = |c: &u32| self.nodes[*c as usize].fallback;
+        let real = cands.iter().copied().filter(|c| !is_fallback(c));
+        if let (Some(x), n) = self.pick(real, want, true, file, true) {
+            // Too generic: keep the fallback tier 3 found, if any.
+            return if n <= self.max_ambiguous.max(1) {
+                Some(x)
+            } else {
+                fallback
+            };
+        }
+        // No real definition: the fallback nearby, else one elsewhere.
+        if fallback.is_some() {
+            return fallback;
+        }
+        let fallbacks = cands.iter().copied().filter(is_fallback);
+        match self.pick(fallbacks, want, true, file, true) {
+            (Some(x), n) if n <= self.max_ambiguous.max(1) => Some(x),
+            _ => None,
         }
     }
 
@@ -650,6 +756,11 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
     let threads = rayon::current_num_threads().max(1);
     let chunk = (files.len() / (threads * 8)).clamp(16, 2048);
     let module_index = build_module_index(&paths);
+    let include_index = if files.iter().any(|f| f.1.language == "php") {
+        IncludeIndex::new(&paths)
+    } else {
+        IncludeIndex::default()
+    };
 
     // 1. Nodes, class->base refs and resolved imports (parallel, order-preserving).
     let extracts: Vec<Extract> = files
@@ -659,15 +770,23 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
             let mut ex = Extract {
                 nodes: Vec::with_capacity(slice.len() * 8),
                 bases: Vec::new(),
+                php_extends: Vec::new(),
+                php_traits: Vec::new(),
                 imports: Vec::with_capacity(slice.len()),
             };
-            for (j, &(_, fd)) in slice.iter().enumerate() {
+            for (j, &(path, fd)) in slice.iter().enumerate() {
                 let f = (ci * chunk + j) as u32;
-                ex.imports.push(build_file_imports(fd, &module_index));
+                ex.imports
+                    .push(build_file_imports(fd, &module_index, &include_index, path));
+                let php = fd.language == "php";
                 for func in &fd.functions {
                     ex.nodes.push(Node {
                         id: &func.id,
-                        name: bare_name(&func.id),
+                        name: if php {
+                            php_name(&func.name, &func.lang_info)
+                        } else {
+                            Cow::Borrowed(bare_name(&func.id))
+                        },
                         kind: if func.id.starts_with("method_") {
                             Kind::Method
                         } else {
@@ -675,16 +794,24 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                         },
                         file: f,
                         is_entry: func.tags.iter().any(|t| t.as_str() == ENTRY_TAG),
+                        fallback: func.tags.iter().any(|t| t.as_str() == FALLBACK_TAG),
+                        php_static: false,
                         owner: None,
                     });
                 }
                 for class in &fd.classes {
                     ex.nodes.push(Node {
                         id: &class.id,
-                        name: bare_name(&class.id),
+                        name: if php {
+                            php_name(&class.name, &class.lang_info)
+                        } else {
+                            Cow::Borrowed(bare_name(&class.id))
+                        },
                         kind: Kind::Class,
                         file: f,
                         is_entry: false,
+                        fallback: false,
+                        php_static: false,
                         owner: None,
                     });
                     for base in &class.bases {
@@ -695,13 +822,40 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                             line: class.line_start as u32,
                         });
                     }
+                    if let Some(info) = class.lang_info.php.as_deref().filter(|_| php) {
+                        let line = class.line_start as u32;
+                        for b in info.extends.iter().take(1) {
+                            ex.php_extends.push(BaseRef {
+                                class: &class.id,
+                                base: b.as_str(),
+                                file: f,
+                                line,
+                            });
+                        }
+                        for b in &info.traits {
+                            ex.php_traits.push(BaseRef {
+                                class: &class.id,
+                                base: b.as_str(),
+                                file: f,
+                                line,
+                            });
+                        }
+                    }
                     for m in &class.methods {
                         ex.nodes.push(Node {
                             id: &m.id,
-                            name: bare_name(&m.id),
+                            // `bare_name` of a `method_{Class}_{name}` id is
+                            // `{Class}_{name}`, which no call site spells.
+                            name: if php {
+                                Cow::Owned(m.name.to_ascii_lowercase())
+                            } else {
+                                Cow::Borrowed(bare_name(&m.id))
+                            },
                             kind: Kind::Method,
                             file: f,
                             is_entry: false,
+                            fallback: false,
+                            php_static: m.lang_info.php.as_ref().is_some_and(|p| p.is_static),
                             owner: Some(&class.id),
                         });
                     }
@@ -720,6 +874,8 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
     let mut nodes: Vec<Node> = Vec::new();
     let mut node_map: Map<&str, u32> = Map::new();
     let mut base_refs: Vec<BaseRef> = Vec::new();
+    let mut php_extends: Vec<BaseRef> = Vec::new();
+    let mut php_traits: Vec<BaseRef> = Vec::new();
     let mut imports: Vec<FileImports> = Vec::with_capacity(files.len());
     for ex in extracts {
         for n in ex.nodes {
@@ -729,12 +885,24 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
             }
         }
         base_refs.extend(ex.bases);
+        php_extends.extend(ex.php_extends);
+        php_traits.extend(ex.php_traits);
         imports.extend(ex.imports);
     }
+    if imports.iter().any(|i| !i.includes.is_empty()) {
+        let direct: Vec<Vec<u32>> = imports
+            .iter_mut()
+            .map(|i| std::mem::take(&mut i.includes))
+            .collect();
+        for (i, closure) in imports.iter_mut().zip(include_closures(&direct)) {
+            i.includes = closure;
+        }
+    }
 
+    let php: Vec<bool> = files.iter().map(|f| f.1.language == "php").collect();
     let mut by_name: Map<&str, Vec<u32>> = Map::with_capacity(nodes.len());
     for (i, n) in nodes.iter().enumerate() {
-        by_name.entry(n.name).or_default().push(i as u32);
+        by_name.entry(n.name.as_ref()).or_default().push(i as u32);
     }
     // Class-method index, sorted for binary search by (class, name).
     let mut methods: Vec<(u32, &str, u32)> = nodes
@@ -742,7 +910,7 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
         .enumerate()
         .filter_map(|(i, n)| {
             let owner = *node_map.get(n.owner?)?;
-            Some((owner, n.name, i as u32))
+            Some((owner, n.name.as_ref(), i as u32))
         })
         .collect();
     methods.sort_unstable();
@@ -754,6 +922,8 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
         files: &paths,
         file_dir: &file_dir,
         imports: &imports,
+        php: &php,
+        php_hierarchy: PhpHierarchy::default(),
         methods: &methods,
         parents: Map::new(),
         children: Map::new(),
@@ -773,7 +943,11 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
             .par_iter()
             .filter_map(|b| {
                 let child = *r.node_map.get(b.class)?;
-                let parent = r.resolve_base(b.base, b.file)?;
+                let parent = if r.php[b.file as usize] {
+                    r.php_class(b.base, b.file)?
+                } else {
+                    r.resolve_base(b.base, b.file)?
+                };
                 (child != parent).then_some(RawEdge {
                     from: child,
                     to: parent,
@@ -791,12 +965,15 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
         r.parents.entry(e.from).or_default().push(e.to);
         r.children.entry(e.to).or_default().push(e.from);
     }
+    let php_hierarchy = PhpHierarchy::new(&r, &php_extends, &php_traits);
+    r.php_hierarchy = php_hierarchy;
 
     // 4. Call edges.
     //
     // Parallel across chunks again. Each chunk writes into its own `out`
     // and `buf`, so no locks are needed. `flush_edges` collapses multiple
-    // calls to the same target from one caller into a single edge.
+    // calls to the same target from one caller into a single edge, once per
+    // file.
     let call_edges: Vec<RawEdge> = files
         .par_chunks(chunk)
         .enumerate()
@@ -805,12 +982,23 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
             let mut buf: Vec<RawEdge> = Vec::new();
             for (j, &(_, fd)) in slice.iter().enumerate() {
                 let f = (ci * chunk + j) as u32;
+                let php = r.php[f as usize];
                 for func in &fd.functions {
                     let Some(&from) = r.node_map.get(func.id.as_str()) else {
                         continue;
                     };
                     for call in &func.calls {
-                        if let Some(to) = r.resolve_call(&call.callee, f, None, false) {
+                        let to = if php {
+                            r.resolve_php_call(
+                                &call.callee,
+                                f,
+                                None,
+                                php_namespace(&func.lang_info),
+                            )
+                        } else {
+                            r.resolve_call(&call.callee, f, None, false)
+                        };
+                        if let Some(to) = to {
                             buf.push(RawEdge {
                                 from,
                                 to,
@@ -820,7 +1008,6 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                             });
                         }
                     }
-                    flush_edges(&mut out, &mut buf);
                 }
                 for class in &fd.classes {
                     let Some(&cidx) = r.node_map.get(class.id.as_str()) else {
@@ -834,8 +1021,13 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                         // shortcut in `resolve_call`.
                         let has_self = first_self_param(&m.params);
                         for call in &m.calls {
-                            if let Some(to) = r.resolve_call(&call.callee, f, Some(cidx), has_self)
-                            {
+                            let to = if php {
+                                let ns = php_namespace(&m.lang_info);
+                                r.resolve_php_call(&call.callee, f, Some(cidx), ns)
+                            } else {
+                                r.resolve_call(&call.callee, f, Some(cidx), has_self)
+                            };
+                            if let Some(to) = to {
                                 buf.push(RawEdge {
                                     from,
                                     to,
@@ -845,9 +1037,9 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                                 });
                             }
                         }
-                        flush_edges(&mut out, &mut buf);
                     }
                 }
+                flush_edges(&mut out, &mut buf);
             }
             out.into_iter()
         })

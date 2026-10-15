@@ -15,6 +15,7 @@ pub enum Language {
     Tsx,
     Python,
     Rust,
+    Php,
     Unknown,
 }
 /// Single source of truth for extension/filename -> language mapping.
@@ -73,6 +74,11 @@ static LANG_TABLE: &[LangSpec] = &[
     LangSpec {
         lang: Language::Cpp,
         extensions: &["cpp", "cc", "cxx", "hpp", "hxx", "h++", "c++"],
+        filenames: &[],
+    },
+    LangSpec {
+        lang: Language::Php,
+        extensions: &["php", "phtml", "inc"],
         filenames: &[],
     },
 ];
@@ -172,6 +178,11 @@ mod tests {
         assert_eq!(Language::from_extension("h++"), Some(Language::Cpp));
         assert_eq!(Language::from_extension("c++"), Some(Language::Cpp));
 
+        // PHP
+        assert_eq!(Language::from_extension("php"), Some(Language::Php));
+        assert_eq!(Language::from_extension("phtml"), Some(Language::Php));
+        assert_eq!(Language::from_extension("inc"), Some(Language::Php));
+
         // Unmatched extension
         assert_eq!(Language::from_extension("txt"), None);
     }
@@ -181,6 +192,9 @@ mod tests {
         assert_eq!(Language::from_extension("PY"), Some(Language::Python));
         assert_eq!(Language::from_extension("Rs"), Some(Language::Rust));
         assert_eq!(Language::from_extension("CPP"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("PHP"), Some(Language::Php));
+        assert_eq!(Language::from_extension("Phtml"), Some(Language::Php));
+        assert_eq!(Language::from_extension("INC"), Some(Language::Php));
     }
 
     #[test]
@@ -208,6 +222,15 @@ mod tests {
         // Path resolution by exact filename (no extension match)
         assert_eq!(Language::detect(Path::new("Cargo.toml")), Language::Rust);
         assert_eq!(Language::detect(Path::new("project/Makefile")), Language::C);
+        assert_eq!(
+            Language::detect(Path::new("web/views/home.phtml")),
+            Language::Php
+        );
+        assert_eq!(Language::detect(Path::new("lib/db.inc")), Language::Php);
+        assert_eq!(
+            Language::detect(Path::new("legacy/INDEX.PHP")),
+            Language::Php
+        );
 
         // Unknown path/extension
         assert_eq!(Language::detect(Path::new("README.md")), Language::Unknown);
@@ -221,6 +244,7 @@ mod tests {
     fn test_language_extensions_getter() {
         assert_eq!(Language::Python.extensions(), &["py", "pyw", "pyi"]);
         assert_eq!(Language::Go.extensions(), &["go"]);
+        assert_eq!(Language::Php.extensions(), &["php", "phtml", "inc"]);
         assert_eq!(Language::Unknown.extensions(), &[] as &[&str]);
     }
 }
