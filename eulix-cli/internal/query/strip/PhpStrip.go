@@ -26,7 +26,9 @@ const (
 //   - a // or # comment ends at the newline or at "?>", whichever comes
 //     first, and the "?>" is kept because it switches back to HTML;
 //   - '...', "..." and `...` strings, including {$a["key"]} interpolation,
-//     and heredoc/nowdoc bodies are copied verbatim;
+//     and heredoc/nowdoc bodies are copied verbatim; "{$" or "${" opens
+//     interpolation only when a variable name or "$" follows, so a stray
+//     one in broken code cannot swallow the closing quote;
 //   - "#[" opens a PHP 8 attribute, not a comment.
 //
 // Segments are usually cut from the middle of a file, so the starting mode
@@ -113,7 +115,8 @@ func stripPHPComments(src string) string {
 			case c == '\\' && i+1 < n:
 				out = append(out, next)
 				i++
-			case quote != '\'' && ((c == '{' && next == '$') || (c == '$' && next == '{')):
+			case quote != '\'' && ((c == '{' && next == '$') || (c == '$' && next == '{')) &&
+				i+2 < n && phpOpensInterp(runes[i+2]):
 				out = append(out, next)
 				i++
 				interp = 1
@@ -286,6 +289,21 @@ func phpSkipQuoted(runes []rune, i int) int {
 		}
 	}
 	return len(runes)
+}
+
+// phpOpensInterp reports whether c, read right after "{$" or "${" in a
+// string, starts what PHP interpolates there: a variable name or another "$"
+// ("{$$name}"). PHP opens on any "{$" and "${", so "{$" with nothing after it
+// is a parse error; segments come from broken or half-written files too, and
+// this keeps such a pair literal instead of reading code until a later quote.
+func phpOpensInterp(c rune) bool {
+	return c == '$' || phpIsLabelStart(c)
+}
+
+// phpIsLabelStart reports whether c may start a PHP name: a letter, "_" or
+// any byte from 0x80 up, but not a digit.
+func phpIsLabelStart(c rune) bool {
+	return c == '_' || c >= 0x80 || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 func phpIsIdentRune(c rune) bool {

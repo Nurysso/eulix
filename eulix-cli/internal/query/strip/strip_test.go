@@ -388,6 +388,34 @@ func TestPHP_InterpolationWithNestedQuotesSurvives(t *testing.T) {
 	}
 }
 
+func TestPHP_InterpolationOpenersWithNestedQuotesSurvive(t *testing.T) {
+	for _, s := range []string{`"{$$name["k"]} // still string"`, `"${arr["k"]} // still string"`} {
+		got := StripCommentsAndDocs([]string{`$s = ` + s + `; // comment`}, "php")
+		if len(got) != 1 || !strings.Contains(got[0], s) {
+			t.Fatalf("interpolated string %s was mangled: %v", s, got)
+		}
+		if strings.Contains(got[0], "comment") {
+			t.Fatalf("comment after %s not stripped: %v", s, got)
+		}
+	}
+}
+
+func TestPHP_StrayInterpolationOpenerDoesNotHideComments(t *testing.T) {
+	for _, src := range []string{
+		"<?php\n$x = \"{$\";\n/* this comment should be stripped */\n$y = \"ok\";\n",
+		"<?php\n$a = \"${\";\n// line comment should be stripped\n$b = 1;\n",
+		"<?php\n$n = \"{$1}\"; // digit is not a name, should be stripped\n",
+	} {
+		out := strings.Join(StripCommentsAndDocs(lines(src), "php"), "\n")
+		if strings.Contains(out, "should be stripped") {
+			t.Fatalf("comment after a stray opener survived:\n%s", out)
+		}
+		if !strings.Contains(out, "<?php") || strings.Count(out, `"`)%2 != 0 {
+			t.Fatalf("code around the stray opener was mangled:\n%s", out)
+		}
+	}
+}
+
 func TestPHP_HeredocAndNowdocBodiesSurvive(t *testing.T) {
 	src := `$html = <<<HTML
 <a href="http://x.test/">// not a comment</a> # nor this
