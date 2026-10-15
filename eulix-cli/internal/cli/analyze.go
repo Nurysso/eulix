@@ -16,6 +16,7 @@ eulix_embed is always a script no more `config.Project.Embedis` config
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -30,6 +31,11 @@ import (
 )
 
 func analyzeProject(projectPath string) error {
+	return analyzeWithPipeline(projectPath, runAnalysisPipeline)
+}
+
+// analyzeWithPipeline keeps completion handling independent of subprocess setup.
+func analyzeWithPipeline(projectPath string, pipeline func(string, *config.Config) error) error {
 	startTime := time.Now()
 
 	// Load config (used for parser and embedding settings)
@@ -38,22 +44,44 @@ func analyzeProject(projectPath string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Run checksum – loads config internally, calculates, compares, and saves
+	// Compare source files with the baseline written by the parser.
 	result, err := checksum.Run()
 	if err != nil {
 		return fmt.Errorf("checksum failed: %w", err)
 	}
 
-	// Decide whether to run the full analysis pipeline
+	eulixDir := filepath.Join(projectPath, utils.EulixDir)
+
+	// An unchanged parser checksum alone does not prove embeddings completed.
 	if result.FirstRun {
 		fmt.Println("First time analyzing project – running full analysis...")
 	} else if result.ChangedRatio > 0 {
 		fmt.Printf("Codebase changed: %.1f%% files modified – running analysis...\n", result.ChangedRatio*100)
-	} else {
+	} else if analysisComplete(eulixDir, cfg) {
 		fmt.Println("No changes detected – skipping analysis.")
 		return nil
+	} else {
+		fmt.Println("Analysis incomplete or pipeline settings changed – running full analysis...")
 	}
 
+	// Invalidate old success before the parser can overwrite the checksum.
+	if err := os.Remove(filepath.Join(eulixDir, analysisCompleteFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("invalidate analysis completion: %w", err)
+	}
+	if err := pipeline(projectPath, cfg); err != nil {
+		return err
+	}
+	if err := saveAnalysisCompletion(eulixDir, cfg); err != nil {
+		return fmt.Errorf("record analysis completion: %w", err)
+	}
+
+	duration := time.Since(startTime)
+	fmt.Printf("Took %s\n", duration.Round(time.Second))
+	fmt.Println(" Run 'eulix chat' to start querying your codebase!")
+	return nil
+}
+
+func runAnalysisPipeline(projectPath string, cfg *config.Config) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
@@ -120,11 +148,5 @@ func analyzeProject(projectPath string) error {
 	}
 	fmt.Println("✓ Embeddings completed")
 
-	// No explicit checksum save needed – checksum.Run() already persisted it.
-	// The checksum is based on source files and is unaffected by parser/embedding outputs.
-
-	duration := time.Since(startTime)
-	fmt.Printf("Took %s\n", duration.Round(time.Second))
-	fmt.Println(" Run 'eulix chat' to start querying your codebase!")
 	return nil
 }
