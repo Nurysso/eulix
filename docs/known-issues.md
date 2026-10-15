@@ -126,7 +126,7 @@ You can try increasing the maximum token limit in `eulix.toml`. Note that this *
 | Area     | Issue                                                                          | Severity | Status                                                                                     |
 | -------- | ------------------------------------------------------------------------------ | -------- | ------------------------------------------------------------------------------------------ |
 | Parser   | Approximate call graphs (PRISM); v1 vs v2 edge-count / speed / memory tradeoff | Medium   | Known limitation; **v2 recommended** (more precise, faster, lower memory on large corpora) |
-| Parser   | Missing languages (Ruby, PHP, C#, …)                                           | Medium   | Unsupported; planned                                                                       |
+| Parser   | Missing languages (Ruby, C#, …)                                                | Medium   | Unsupported; planned                                                                       |
 | Parser   | C/C++ partial parse due to macros                                              | Low      | By design; out of scope                                                                    |
 | Embedder | ROCm `(null)` warning                                                          | Cosmetic | Upstream ROCm issue                                                                        |
 | Embedder | `perf`/`time` on CLI launcher misses worker RSS                                | Low      | Measurement caveat; attach to worker                                                       |
