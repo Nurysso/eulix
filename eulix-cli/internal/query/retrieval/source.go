@@ -295,11 +295,6 @@ func (cb *ContextBuilder) loadItem(it *hItem, cache *fileCache, chunks []Chunk, 
 		it.skip, it.reason = true, "source unavailable"
 		return
 	}
-	// ".inc" is PHP only when the file holds PHP code: C, C++ and assembler
-	// use the extension too, and PHP's "#" comments would eat their #include.
-	if it.lang == "php" && strings.EqualFold(filepath.Ext(c.File), ".inc") && !strip.HasPHPOpenTag(src) {
-		it.lang = "unknown"
-	}
 	end := c.EndLine
 	if end > len(src) {
 		end = len(src)
@@ -649,8 +644,6 @@ func detectLanguage(filePath string) string {
 		return "cpp"
 	case ".java":
 		return "java"
-	case ".php", ".phtml", ".inc":
-		return "php"
 	default:
 		return "unknown"
 	}

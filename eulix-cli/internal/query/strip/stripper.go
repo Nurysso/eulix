@@ -32,8 +32,6 @@ func StripCommentsAndDocs(lines []string, lang string) []string {
 		cleaned = stripCStyleComments(src, false)
 	case "python":
 		cleaned = stripPythonComments(src)
-	case "php":
-		cleaned = stripPHPComments(src)
 	default:
 		return lines // unknown language: don't touch it
 	}
