@@ -818,7 +818,7 @@ impl CppParser {
             "qualified_identifier" | "destructor_name" | "operator_name" => {
                 Some(self.get_node_text(declarator))
             }
-            "identifier" => Some(self.get_node_text(declarator)),
+            "identifier" | "field_identifier" => Some(self.get_node_text(declarator)),
             _ => None,
         }
     }
@@ -1994,4 +1994,53 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
     parse_source(path, &source_code)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use super::*;
+
+    fn parse(src: &str) -> FileData {
+        parse_source(Path::new("shapes.cpp"), src)
+            .expect("parse should succeed")
+            .1
+    }
+
+    #[test]
+    fn inline_member_functions_in_class_and_struct_are_extracted() {
+        let src = r#"
+class Shape {
+public:
+    Shape() {}
+    double area() const { return 0.0; }
+    void scale(double factor) { size *= factor; }
+private:
+    double size = 1.0;
+};
+
+struct Counter {
+    int get() const { return value; }
+    void bump() { value += 1; }
+    int value = 0;
+};
+"#;
+        let fd = parse(src);
+        let shape = fd
+            .classes
+            .iter()
+            .find(|c| c.name == "Shape")
+            .expect("Shape class found");
+        let shape_methods: Vec<&str> = shape.methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(shape_methods, vec!["Shape", "area", "scale"]);
+
+        let counter = fd
+            .classes
+            .iter()
+            .find(|c| c.name == "Counter")
+            .expect("Counter struct found");
+        let counter_methods: Vec<&str> = counter.methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(counter_methods, vec!["get", "bump"]);
+    }
 }
