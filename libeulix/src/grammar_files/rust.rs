@@ -287,8 +287,9 @@ impl RustParser {
 
                     if inner.starts_with("derive") {
                         if let Some(s) = inner.find('(') {
-                            let end = inner.rfind(')').unwrap_or(inner.len());
-                            for d in inner[s + 1..end].split(',') {
+                            let rest = &inner[s + 1..];
+                            let inside = rest.rfind(')').map_or(rest, |e| &rest[..e]);
+                            for d in inside.split(',') {
                                 let d = d.trim().to_string();
                                 if !d.is_empty() {
                                     derives.push(d);
@@ -1433,4 +1434,31 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
     parse_source(path, &source_code)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn malformed_derive_does_not_panic_and_valid_derive_extracts_traits() {
+        let broken = "#[derive)(]\nstruct Broken;\n#[derive)Clone(]\nenum AlsoBroken { A }\n";
+        let fd = parse_source(Path::new("broken.rs"), broken)
+            .expect("malformed derive must not panic")
+            .1;
+        assert_eq!(fd.classes.len(), 2);
+
+        let valid = "#[derive(Debug, Clone, PartialEq)]\npub struct Good {\n    pub x: i32,\n}\n";
+        let fd_valid = parse_source(Path::new("good.rs"), valid)
+            .expect("valid rust parses")
+            .1;
+        let info = fd_valid.classes[0]
+            .lang_info
+            .rust
+            .as_deref()
+            .expect("rust info present");
+        assert_eq!(info.derives, vec!["Debug", "Clone", "PartialEq"]);
+    }
 }
