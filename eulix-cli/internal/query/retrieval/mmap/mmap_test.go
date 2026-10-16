@@ -37,7 +37,7 @@ func mustTempDir(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
 }
 
@@ -171,14 +171,11 @@ func TestErrFileTooLargeForPath_wrapsOverflowSentinel(t *testing.T) {
 		t.Fatal("expected non-nil error")
 	}
 
-	// Two calls on the same arguments must produce errors that share the same
-	// wrapped sentinel (unwrapping chain leads to the same base type).
+	// Distinct paths give distinct errors. Both wrap the same sentinel, but
+	// errors.Is does not treat one fmt.Errorf wrap as the other.
 	err2 := mmap.ErrFileTooLargeForPath("/tmp/y", 100)
 	if errors.Is(err, err2) {
-		// Distinct paths → distinct errors (they should NOT be equal at the leaf
-		// level because the messages differ). This is a sanity check.
-		// Actually, if both wrap the same sentinel errors.Is would be true for the
-		// sentinel, but two distinct fmt.Errorf wraps are not equal to each other.
+		t.Errorf("errors for different paths should not match each other")
 	}
 
 	// The error must not be nil — already checked above.
@@ -707,7 +704,7 @@ func TestOpenForSequentialRead_permission_denied(t *testing.T) {
 
 func BenchmarkDecodeJSONFile_small(b *testing.B) {
 	dir, _ := os.MkdirTemp("", "bench_mmap_*")
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	data, _ := json.Marshal(simplePayload{Name: "bench", Count: 1})
 	path := filepath.Join(dir, "small.json")
@@ -724,7 +721,7 @@ func BenchmarkDecodeJSONFile_small(b *testing.B) {
 
 func BenchmarkDecodeJSONFile_large(b *testing.B) {
 	dir, _ := os.MkdirTemp("", "bench_mmap_large_*")
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	data := makeLargeJSON(mmapThreshold + 65536)
 	path := filepath.Join(dir, "large.json")
@@ -742,7 +739,7 @@ func BenchmarkDecodeJSONFile_large(b *testing.B) {
 
 func BenchmarkOpenForSequentialRead_large_readAll(b *testing.B) {
 	dir, _ := os.MkdirTemp("", "bench_seq_*")
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	data := makeLargeJSON(mmapThreshold + 65536)
 	path := filepath.Join(dir, "seq.json")
