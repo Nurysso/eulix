@@ -147,10 +147,16 @@ pub fn collect_source_files_and_hash(
     // Walk the tree, keep files whose extension matches, and compute the
     // project hash while we're at it.
     let (mut all_files, project_hash) = walker.walk_and_project_hash(
-        |path| match path.extension().and_then(|e| e.to_str()) {
-            Some("inc") => ext_set.contains("inc") && holds_php(path),
-            Some(e) => ext_set.contains(e),
-            None => false,
+        |path| {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase);
+            match ext.as_deref() {
+                Some("inc") => ext_set.contains("inc") && holds_php(path),
+                Some(e) => ext_set.contains(e),
+                None => false,
+            }
         },
         write_dir,
     )?;
@@ -206,6 +212,8 @@ mod tests {
     use crate::analysis_pipeline::analyze_and_build;
     use crate::engine::Engine;
     use crate::parse::directory::parse_directory;
+    use crate::stats::ParseStats;
+    use libeulix::struc::kb_struct::KnowledgeBase;
     use std::fs;
     use tempfile::TempDir;
 
@@ -248,5 +256,37 @@ mod tests {
             "expected call edge func_caller::src/a.py -> func_target::src/b.py, got {:?}",
             kb.call_graph.edges
         );
+    }
+
+    fn parse(repo: &TempDir, out: &TempDir) -> (KnowledgeBase, ParseStats) {
+        let engine = Engine::with_threads(2).unwrap();
+        let root_str = repo.path().to_string_lossy().to_string();
+        let (kb, stats, _spill) = parse_directory(
+            &root_str,
+            "all",
+            None,
+            false,
+            "0.8.1",
+            "test",
+            out.path(),
+            false,
+            &engine,
+        )
+        .unwrap();
+        (kb, stats)
+    }
+
+    #[test]
+    fn uppercase_extensions_are_parsed() {
+        let repo = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        fs::write(repo.path().join("UPPER.PY"), "def upper():\n    return 1\n").unwrap();
+        fs::write(repo.path().join("Lower.Rs"), "pub fn lower() {}\n").unwrap();
+
+        let (kb, stats) = parse(&repo, &out);
+
+        assert_eq!(kb.structure["UPPER.PY"].functions[0].name, "upper");
+        assert_eq!(kb.structure["Lower.Rs"].functions[0].name, "lower");
+        assert_eq!(stats.clean, 2);
     }
 }
