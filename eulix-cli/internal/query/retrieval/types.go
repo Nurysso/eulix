@@ -51,8 +51,10 @@ type ContextBuilder struct {
 	config      *config.Config
 	debugLog    *utils.DebugLogger
 	// depIdx        *depIndex
-	embeddings [][]float32
-	eulixDir   string
+	embeddingRelease func() error
+	ivfBuild         sync.WaitGroup
+	embeddings       [][]float32
+	eulixDir         string
 	// externalDeps  []utils.ExternalDependency
 	hasCallGraph  bool
 	hasEmbeddings bool

@@ -410,7 +410,15 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	quantized := flag[0] == 1
 
 	// allocate matrix (hugepage-aligned on Linux, flat elsewhere)
-	cb.embeddings = mmap.AllocEmbeddingMatrix(numEmb, dim)
+	cb.embeddings, cb.embeddingRelease = mmap.AllocEmbeddingMatrixOwned(numEmb, dim)
+	loaded := false
+	defer func() {
+		if !loaded {
+			_ = cb.embeddingRelease()
+			cb.embeddingRelease = nil
+			cb.embeddings = nil
+		}
+	}()
 
 	if !quantized {
 		cb.debugLog.Log("Non Quantize embeddings")
@@ -448,7 +456,9 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	cb.debugLog.Log("numEmb: %d ivfBuildThreshold: %d", numEmb, ivfBuildThreshold)
 	if numEmb > ivfBuildThreshold {
 		cb.debugLog.Log("IVF condition met: numEmb (%d) > threshold (%d)", numEmb, ivfBuildThreshold) // <-- Log added
+		cb.ivfBuild.Add(1)
 		go func() {
+			defer cb.ivfBuild.Done()
 			idx := cb.buildIVFIndex(cb.embeddings, ivfNClusters, ivfKMeansIter)
 			cb.mu.Lock()
 			cb.ivfIndex = idx
@@ -457,6 +467,7 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 		}()
 		cb.debugLog.Log("IVF build started in background (%d embeddings)", numEmb)
 	}
+	loaded = true
 	return nil
 }
 

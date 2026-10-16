@@ -33,12 +33,20 @@ func (cb *ContextBuilder) Close() error {
 	if cb == nil {
 		return nil
 	}
+	cb.ivfBuild.Wait()
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
 	if cb.debugLog != nil {
 		cb.debugLog.Log("Closing ContextBuilder...")
 		cb.debugLog.Close()
+	}
+	var releaseErr error
+	if cb.embeddingRelease != nil {
+		releaseErr = cb.embeddingRelease()
+		if releaseErr == nil {
+			cb.embeddingRelease = nil
+		}
 	}
 	cb.chunks = nil
 	cb.embeddings = nil
@@ -56,7 +64,7 @@ func (cb *ContextBuilder) Close() error {
 	cb.kbIdx = nil
 	cb.kbData = nil
 	cb.boilerplate = nil
-	return nil
+	return releaseErr
 }
 
 func getHeapAlloc() uint64 {
