@@ -187,6 +187,29 @@ func (it *hItem) render() string {
 
 func span(c Chunk) int { return c.EndLine - c.StartLine }
 
+// shouldSkeleton reports whether a chunk must render as a header-only skeleton.
+//
+// Nested children always skeletonize so the parent does not duplicate bodies
+// already present as their own chunks. Oversized file/class spans do the same.
+// Leaf functions and methods do not: they are the unit of retrieval, and
+// pre-truncating them to skeletonHeadLines (before grants run) is what produced
+// "... rest of body omitted" on the exact hit in MCP/query output. Token
+// budget still limits them later via allocateGrants / fit.
+func shouldSkeleton(c Chunk, nKids, spanLines, maxLines int) bool {
+	if nKids > 0 {
+		return true
+	}
+	if spanLines <= maxLines {
+		return false
+	}
+	switch strings.ToLower(c.ChunkType) {
+	case "function", "method":
+		return false
+	default:
+		return true
+	}
+}
+
 // directChildren maps each chunk to the chunks whose innermost enclosing chunk it is.
 func directChildren(chunks []Chunk) [][]int {
 	kids := make([][]int, len(chunks))
@@ -310,7 +333,8 @@ func (cb *ContextBuilder) loadItem(it *hItem, cache *fileCache, chunks []Chunk, 
 	}
 
 	kids := childRanges(chunks, kidIdx, c.StartLine, end)
-	if len(kids) > 0 || end-c.StartLine+1 > maxLines {
+	if shouldSkeleton(c, len(kids), end-c.StartLine+1, maxLines) {
+
 		it.skeleton = true
 		it.lines, it.tail = buildSkeleton(src, c.StartLine, end, kids, it.lang)
 	} else {
@@ -522,7 +546,8 @@ func (cb *ContextBuilder) enforceCeiling(items []*hItem, ceiling, usedCode int) 
 }
 
 // hydrateSourceCode swaps AST content for real source where the budget allows.
-// maxLinesDefault is the largest raw span rendered in full; bigger chunks become skeletons.
+// maxLinesDefault is the largest raw span a file/class chunk may occupy before
+// it is skeletonized. Leaf function/method chunks hydrate in full (budget willing).
 // The returned slice keeps input order and may be shorter if cold chunks were evicted.
 func (cb *ContextBuilder) hydrateSourceCode(
 	chunks []Chunk,

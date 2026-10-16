@@ -7,6 +7,7 @@ package utils
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 type DebugLogger struct {
 	file   *os.File
 	writer *bufio.Writer
+	buf    *bytes.Buffer // currently used for test
 	mu     sync.Mutex
 	closed bool
 }
@@ -29,22 +31,72 @@ func IsDebugLevel3() bool {
 
 // NewDebugLogger creates a thread-safe debug logger writing to eulixDir/debug/context_debug.log.
 // If file creation fails, returns a silent (no-op) logger rather than panicking.
-func NewDebugLogger(eulixDir string) *DebugLogger {
-	logPath := filepath.Join(eulixDir, "debug", "context_debug.log")
+func NewDebugLogger(eulixDir ...string) *DebugLogger {
+	if len(eulixDir) == 0 || eulixDir[0] == "" {
+		return &DebugLogger{buf: &bytes.Buffer{}}
+	}
+
+	logPath := filepath.Join(eulixDir[0], "debug", "context_debug.log")
 
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return &DebugLogger{} // silent fallback
+		return &DebugLogger{buf: &bytes.Buffer{}} // silent fallback (in-memory)
 	}
 
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
-		return &DebugLogger{} // silent fallback
+		return &DebugLogger{buf: &bytes.Buffer{}} // silent fallback (in-memory)
 	}
 
 	return &DebugLogger{
 		file:   f,
-		writer: bufio.NewWriterSize(f, 64*1024), // 64KB buffer
+		writer: bufio.NewWriterSize(f, 64*1024),
 	}
+}
+
+// Write makes DebugLogger usable as an io.Writer.
+func (d *DebugLogger) Write(p []byte) (int, error) {
+	if d == nil {
+		return len(p), nil
+	}
+	if d.writer != nil {
+		return d.writer.Write(p)
+	}
+	if d.buf != nil {
+		return d.buf.Write(p)
+	}
+	return len(p), nil
+}
+
+// Lines returns the log lines emitted so far.
+// It flushes any buffered data first.
+func (d *DebugLogger) Lines() []string {
+	if d == nil {
+		return nil
+	}
+
+	if d.buf != nil {
+		s := d.buf.String()
+		if s == "" {
+			return nil
+		}
+		return strings.Split(strings.TrimRight(s, "\n"), "\n")
+	}
+
+	if d.writer != nil {
+		_ = d.writer.Flush()
+	}
+	if d.file != nil {
+		data, err := os.ReadFile(d.file.Name())
+		if err != nil {
+			return nil
+		}
+		s := strings.TrimRight(string(data), "\n")
+		if s == "" {
+			return nil
+		}
+		return strings.Split(s, "\n")
+	}
+	return nil
 }
 
 // Log writes a timestamped debug message to the log file.
@@ -53,9 +105,13 @@ func NewDebugLogger(eulixDir string) *DebugLogger {
 //
 // Format: [HH:MM:SS] <formatted message>
 func (d *DebugLogger) Log(format string, args ...interface{}) {
-	if d.file == nil || d.closed {
+	if d == nil || d.closed {
 		return
 	}
+	if d.writer == nil && d.buf == nil {
+		return
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -71,6 +127,12 @@ func (d *DebugLogger) Log(format string, args ...interface{}) {
 	msg += fmt.Sprintf(format, args...)
 	if !strings.HasSuffix(msg, "\n") {
 		msg += "\n"
+	}
+
+	// In-memory mode (tests / silent fallback).
+	if d.writer == nil {
+		_, _ = d.buf.WriteString(msg)
+		return
 	}
 
 	_, _ = d.writer.WriteString(msg)
