@@ -58,18 +58,18 @@ var errFileTooLarge = errors.New("file size overflows int on this platform")
 // Stores results produced during package init()
 var initPretouchResults []PretouchResult
 
-// sizeFitsInt returns true when size can't be represented as int.
+// SizeOverflows returns true when size can't be represented as int.
 func SizeOverflows(size int64) bool {
 	const maxInt = int64(^uint(0) >> 1)
 	return size > maxInt
 }
 
-// errFileTooLargeForPath formats the overflow error with path context.
+// ErrFileTooLargeForPath formats the overflow error with path context.
 func ErrFileTooLargeForPath(path string, size int64) error {
 	return fmt.Errorf("%w: %s is %d bytes", errFileTooLarge, path, size)
 }
 
-// sonicCopy is a sonic config that always copies strings out of the input
+// SonicCopy is a sonic config that always copies strings out of the input
 // buffer. This is required on the mmap path: the mapped region is unmapped
 // before the caller uses the decoded value, so any decoded string that
 // references the raw bytes directly would become a dangling pointer.
@@ -158,7 +158,7 @@ func decodeViaReader(path string, v any) error {
 		Decode(v)
 }
 
-// openForSequentialRead returns an io.Reader over path, using mmap with
+// OpenForSequentialRead returns an io.Reader over path, using mmap with
 // sequential-read hints for large files and a buffered file reader otherwise.
 //
 // The returned cleanup func must always be called once reader is no longer
