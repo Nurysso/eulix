@@ -241,6 +241,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Checkout first: on a workspace that isn't a repository yet, it clears
+      # the directory, which would delete the artifacts downloaded below.
+      - uses: actions/checkout@v4
+
       - name: Download all build outputs
         uses: actions/download-artifact@v4
         with:
@@ -254,6 +258,11 @@ jobs:
           name: embed-zip
           path: release_assets
 
+      - name: Stage web UI
+        run: |
+          set -euo pipefail
+          cp vizEulize/vizeulize.html release_assets/vizeulize.html
+
       - name: Checksums
         working-directory: release_assets
         run: |
@@ -262,7 +271,7 @@ jobs:
           # 6 CLI binaries (2 linux, 2 windows, 1 mac) ... adjust if you change the matrix
           echo "Found $count files:"; ls -l
           [ "$count" -gt 0 ] || { echo "::error title=No release assets::release_assets/ is empty."; exit 1; }
-          sha256sum * > checksums.txt
+          sha256sum eulix-* vizeulize.html > checksum.txt
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
