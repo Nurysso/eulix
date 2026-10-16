@@ -409,6 +409,11 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 	}
 	quantized := flag[0] == 1
 
+	if numEmb == 0 {
+		cb.embeddings = nil
+		return nil
+	}
+
 	// allocate matrix (hugepage-aligned on Linux, flat elsewhere)
 	cb.embeddings, cb.embeddingRelease = mmap.AllocEmbeddingMatrixOwned(numEmb, dim)
 	loaded := false
