@@ -52,9 +52,15 @@ type fileEntry struct {
 
 // fileCache reads each file once. The map lock is only held to find the entry, so
 // prefetch goroutines really do read different files in parallel.
+//
+// With a root, names are relative to the project and every read goes through
+// os.Root: a `..` path or a symlink pointing outside the project fails like a
+// missing file instead of pulling outside content into the context.
 type fileCache struct {
-	mu    sync.Mutex
-	files map[string]*fileEntry
+	mu       sync.Mutex
+	files    map[string]*fileEntry
+	root     *os.Root
+	rootPath string
 }
 
 func newFileCache() *fileCache {
@@ -71,7 +77,7 @@ func (fc *fileCache) get(path string, debugLog *utils.DebugLogger) []string {
 	fc.mu.Unlock()
 
 	e.once.Do(func() {
-		data, err := os.ReadFile(path)
+		data, err := fc.read(path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				debugLog.Log("Source file not found: %s", path)
@@ -85,12 +91,26 @@ func (fc *fileCache) get(path string, debugLog *utils.DebugLogger) []string {
 	return e.lines
 }
 
+func (fc *fileCache) read(name string) ([]byte, error) {
+	if fc.root == nil {
+		return os.ReadFile(name)
+	}
+	if filepath.IsAbs(name) {
+		rel, err := filepath.Rel(fc.rootPath, name)
+		if err != nil {
+			return nil, err
+		}
+		name = rel
+	}
+	return fc.root.ReadFile(name)
+}
+
 func (cb *ContextBuilder) prefetchFiles(chunks []Chunk, cache *fileCache) {
 	seen := make(map[string]struct{}, len(chunks))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, prefetchMaxConcurrency)
 	for _, chunk := range chunks {
-		sourceFile := filepath.Join(cb.sourceRoot, chunk.File)
+		sourceFile := chunk.File
 		if _, ok := seen[sourceFile]; ok {
 			continue
 		}
@@ -313,7 +333,7 @@ func buildSkeleton(src []string, start, end int, kids [][2]int, lang string) (ou
 
 func (cb *ContextBuilder) loadItem(it *hItem, cache *fileCache, chunks []Chunk, kidIdx []int, maxLines int) {
 	c := it.chunk
-	src := cache.get(filepath.Join(cb.sourceRoot, c.File), cb.debugLog)
+	src := cache.get(c.File, cb.debugLog)
 	if src == nil {
 		it.skip, it.reason = true, "source unavailable"
 		return
@@ -576,7 +596,14 @@ func (cb *ContextBuilder) hydrateSourceCode(
 		return chunks
 	}
 
+	root, err := os.OpenRoot(cb.sourceRoot)
+	if err != nil {
+		cb.debugLog.Log("Source hydration skipped: cannot open source root: %v", err)
+		return chunks
+	}
+	defer func() { _ = root.Close() }()
 	cache := newFileCache()
+	cache.root, cache.rootPath = root, cb.sourceRoot
 	cb.prefetchFiles(chunks, cache)
 
 	items := cb.buildItems(chunks, cache, maxLines)
