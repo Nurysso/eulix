@@ -198,7 +198,7 @@ jobs:
             echo "Building ONNX '${tag}' variant (embed_requirements=${req_file})..."
 
             go build \
-              -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${req_file}' -X 'eulix/internal/assets.embeddedParserHash=${PARSER_HASH}'" \
+              -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${req_file}' -X 'eulix/internal/assets.ParserHash=${PARSER_HASH}'" \
               -trimpath -o "$out" ./cmd/eulix/main.go || {
               echo "::error title=Go build failed (${{ matrix.name }}, variant ${tag})::'go build' failed. Common causes: missing file in internal/assets/bins (the //go:embed target for this OS), a compile error, or an invalid Go version. See the log above."
               exit 1
