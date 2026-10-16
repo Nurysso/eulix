@@ -218,7 +218,7 @@ cp eulix-embed.zip eulix-cli/internal/assets/bins/eulix-embed.zip
 REQ=onnx-nvidia.txt
 cd eulix-cli
 CGO_ENABLED=0 go build \
-  -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${REQ}' -X 'eulix/internal/assets.embeddedParserHash=${HASH}'" \
+  -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${REQ}' -X 'eulix/internal/assets.ParserHash=${HASH}'" \
   -trimpath -o ~/.local/bin/eulix ./cmd/eulix/main.go
 ```
 
@@ -251,7 +251,7 @@ cp eulix-embed.zip eulix-cli/internal/assets/bins/eulix-embed.zip
 REQ=onnx-amd.txt   # see the note on requirements files below
 cd eulix-cli
 GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build \
-  -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${REQ}' -X 'eulix/internal/assets.embeddedParserHash=${HASH}'" \
+  -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${REQ}' -X 'eulix/internal/assets.ParserHash=${HASH}'" \
   -trimpath -o ~/.local/bin/eulix ./cmd/eulix/main.go
 ```
 
@@ -284,7 +284,7 @@ HASH_MACOS_ARM=$(sha256sum eulix-cli/internal/assets/bins/eulix_parser_macos_arm
 # (zip the embedder as in the manual Linux steps), then:
 cd eulix-cli
 GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build \
-  -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=onnx-amd.txt' -X 'eulix/internal/assets.embeddedParserHash=${HASH_MACOS_ARM}'" \
+  -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=onnx-amd.txt' -X 'eulix/internal/assets.ParserHash=${HASH_MACOS_ARM}'" \
   -trimpath -o eulix_macos_arm_amd ./cmd/eulix/main.go
 ```
 
@@ -295,7 +295,7 @@ To enable macOS in the full build script, uncomment the `aarch64-apple-darwin` t
 The script's comments reuse the ARM parser for the Intel build (`HASH_MACOS_INTEL="${HASH_MACOS_ARM}"`). An ARM parser binary won't run on an Intel Mac, so for a working Intel build:
 
 1. Build the parser for `x86_64-apple-darwin` (natively on an Intel Mac, or `cargo zigbuild --release --target x86_64-apple-darwin`).
-2. Hash **that** binary and pass it as `embeddedParserHash`.
+2. Hash **that** binary and pass it as `ParserHash`.
 3. Build the CLI with `GOARCH=amd64`.
 
 Until the repo adds a separate Intel parser filename, `embed_darwin.go` still looks for `eulix_parser_macos_arm`, so you'll need to stage the Intel binary under that name or update the embed file.
@@ -442,7 +442,7 @@ cd eulix-cli
 $env:CGO_ENABLED = "0"
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.local\bin" | Out-Null
 go build `
-  -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=$REQ' -X 'eulix/internal/assets.embeddedParserHash=$HASH'" `
+  -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=$REQ' -X 'eulix/internal/assets.ParserHash=$HASH'" `
   -trimpath -o "$env:USERPROFILE\.local\bin\eulix.exe" .\cmd\eulix\main.go
 ```
 
@@ -486,7 +486,7 @@ The choice is baked into the binary at build time through `-X eulix/internal/ass
 
 - **Build fails with a missing embed file (`pattern ...: no matching files found`)**: the parser binary or `eulix-embed.zip` isn't in `eulix-cli/internal/assets/bins/`. Rebuild the parser and re-run the copy and zip steps. The filename must match the OS: `eulix_parser_linux`, `eulix_parser_windows.exe`, or `eulix_parser_macos_arm`.
 
-- **Parser hash mismatch at runtime**: the `embeddedParserHash` passed to `go build` didn't match the parser binary that build embedded. Re-hash the binary currently in `bins/` and rebuild the CLI.
+- **Parser hash mismatch at runtime**: the `ParserHash` passed to `go build` didn't match the parser binary that build embedded. Re-hash the binary currently in `bins/` and rebuild the CLI.
 
 - **GPU not detected by the embedder**: you probably built with the wrong variant. Rebuild with `onnx-nvidia.txt` for NVIDIA or `onnx-amd.txt` for AMD, and make sure your GPU drivers are up to date.
 
