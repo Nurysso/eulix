@@ -33,14 +33,32 @@ pub fn parse_file(
     // Open once, for the OS-level read hints. Read the bytes through this
     // handle so the fadvise / sequential-scan flags actually apply.
     let file = open_source_file(file_path)?;
-    let mut source = String::new();
+    let mut bytes = Vec::new();
     {
         let mut reader = std::io::BufReader::new(&file);
-        reader.read_to_string(&mut source)?;
+        reader.read_to_end(&mut bytes)?;
     }
+
+    // Older code often has Latin-1 comments or strings. Replacing the
+    // invalid bytes keeps the rest of the file instead of failing it, and
+    // the file is reported as partial so the loss still shows up.
+    let (source, invalid_line) = match String::from_utf8(bytes) {
+        Ok(source) => (source, None),
+        Err(e) => {
+            let valid = e.utf8_error().valid_up_to();
+            let bytes = e.into_bytes();
+            let line = 1 + bytes[..valid].iter().filter(|&&b| b == b'\n').count();
+            (String::from_utf8_lossy(&bytes).into_owned(), Some(line))
+        }
+    };
 
     // tree-sitter Tree lives and dies inside this call.
     let (_, mut result) = grammar_files::parse_source(Path::new(&relative_path), &source)?;
+    if let Some(line) = invalid_line {
+        let syntax = &mut result.syntax;
+        syntax.error_nodes += 1;
+        syntax.first_error_line = Some(syntax.first_error_line.map_or(line, |l| l.min(line)));
+    }
 
     // Spill the rich view first. Phase 2 reads this back, so this has to
     // happen before we slim or strip anything.
@@ -288,5 +306,31 @@ mod tests {
         assert_eq!(kb.structure["UPPER.PY"].functions[0].name, "upper");
         assert_eq!(kb.structure["Lower.Rs"].functions[0].name, "lower");
         assert_eq!(stats.clean, 2);
+    }
+
+    #[test]
+    fn non_utf8_bytes_are_replaced_and_reported_as_partial() {
+        let repo = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        // 0xE9 is "é" in Latin-1 and not valid UTF-8 on its own.
+        fs::write(
+            repo.path().join("latin1.py"),
+            b"def first():\n    return 1\n\n# caf\xe9\ndef second():\n    return 2\n",
+        )
+        .unwrap();
+
+        let (kb, stats) = parse(&repo, &out);
+
+        let names: Vec<&str> = kb.structure["latin1.py"]
+            .functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["first", "second"]);
+        assert_eq!(stats.clean, 0);
+        assert!(stats.failed.is_empty());
+        assert_eq!(stats.partial.len(), 1);
+        assert_eq!(stats.partial[0].path, "latin1.py");
+        assert_eq!(stats.partial[0].first_error_line, Some(4));
     }
 }
