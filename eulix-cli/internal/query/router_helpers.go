@@ -22,6 +22,7 @@ import (
 
 	"eulix/internal/query/classifier"
 	"eulix/internal/query/retrieval"
+	"eulix/internal/query/retrieval/mmap"
 	"eulix/internal/query/strip"
 	"eulix/internal/utils"
 )
@@ -875,25 +876,16 @@ const (
 	depIntentCount                    // how many deps total
 )
 
-var externalDeps []utils.ExternalDependency
-
-func getExternalDeps() []utils.ExternalDependency {
-	return externalDeps
-}
-
-func loadExternalDeps(filePath string) error {
+func readExternalDeps(filePath string) ([]utils.ExternalDependency, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to read deps file: %w", err)
+		return nil, fmt.Errorf("failed to read deps file: %w", err)
 	}
-
 	var wrapper utils.ExternalDependencyRef
 	if err := json.Unmarshal(data, &wrapper); err != nil {
-		return fmt.Errorf("failed to unmarshal JSON: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
 	}
-
-	externalDeps = wrapper.ExternalDependencies
-	return nil
+	return wrapper.ExternalDependencies, nil
 }
 
 // nolint: unused
@@ -1276,4 +1268,22 @@ func extractDepQueryTerm(query string) string {
 		}
 	}
 	return ""
+}
+
+// ensureKB loads the full KB only for handlers that need file details.
+func (r *Router) ensureKB() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.kb != nil {
+		return nil
+	}
+	var kb utils.KnowledgeBaseSimplifiedRef
+	if err := mmap.DecodeJSONFile(filepath.Join(r.eulixDir, "kb.json"), &kb); err != nil {
+		return err
+	}
+	if kb.Metadata == nil {
+		return fmt.Errorf("kb.json has no metadata")
+	}
+	r.kb = &kb
+	return nil
 }
