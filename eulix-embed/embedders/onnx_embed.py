@@ -325,7 +325,7 @@ class EmbeddingGeneratorOnnx:
             self.batch_size = batch_size
 
             self.use_bucketing = use_bucketing and self.device in ("cuda", "rocm")
-            print("Using ONNX-RUNTIME")
+            print("Using ONNX-RUNTIME", file=sys.stderr)
             print(f"     Model:      {model_name}", file=sys.stderr)
             print(f"     Provider:   {self.providers[0]}", file=sys.stderr)
             print(f"     Batch size: {self.batch_size}", file=sys.stderr)
