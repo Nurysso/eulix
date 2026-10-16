@@ -160,13 +160,25 @@ fn key_features(structure: &HashMap<String, FileData>) -> Vec<String> {
 /// The first sentence of a docstring's first paragraph, with its whitespace
 /// collapsed, or `None` when it does not read as a feature description.
 fn docstring_opener(docstring: &str) -> Option<String> {
+    // Normalize CRLF and lone-CR so paragraph splitting is line-ending
+    // agnostic. Order matters: collapse \r\n first, then any remaining \r.
+    let normalized = docstring.replace("\r\n", "\n").replace('\r', "\n");
+
     // Length threshold (>20 chars) filters out placeholder or near-empty
     // docstrings that wouldn't read as a real "feature" description anyway.
-    if docstring.len() <= 20 {
+    if normalized.len() <= 20 {
         return None;
     }
 
-    let paragraph = docstring.trim().split("\n\n").next()?;
+    // The first paragraph: lines up to the first blank one, after any
+    // leading blank lines.
+    let paragraph = normalized
+        .lines()
+        .map(str::trim)
+        .skip_while(|l| l.is_empty())
+        .take_while(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     let sentence = paragraph.split('.').next()?;
     let opener = sentence.split_whitespace().collect::<Vec<_>>().join(" ");
 
@@ -246,5 +258,19 @@ mod tests {
                 "Formats a date for display".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn docstring_opener_ignores_the_line_ending_style() {
+        let expected = Some("Loads the configuration from disk".to_string());
+        for doc in [
+            "Loads the configuration\nfrom disk\n\n@param string $path",
+            "Loads the configuration\r\nfrom disk\r\n\r\n@param string $path",
+            "Loads the configuration\rfrom disk\r\r@param string $path",
+            "\r\n\r\nLoads the configuration\r\nfrom disk. More text.",
+        ] {
+            assert_eq!(docstring_opener(doc), expected, "{doc:?}");
+        }
+        assert_eq!(docstring_opener("\r\n\r\n@see Other::method()\r\n"), None);
     }
 }
