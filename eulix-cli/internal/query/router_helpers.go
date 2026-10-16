@@ -22,6 +22,7 @@ import (
 
 	"eulix/internal/query/classifier"
 	"eulix/internal/query/retrieval"
+	"eulix/internal/query/strip"
 	"eulix/internal/utils"
 )
 
@@ -42,6 +43,7 @@ const (
 	langTS
 	langC // covers C and C++
 	langJava
+	langPHP
 )
 
 func (r *Router) SetCurrentChecksum(checksum string) {
@@ -241,8 +243,8 @@ func extractFilePath(query string) string {
 			continue
 		}
 
-		// Valid file extension matching a known language (e.g., "main.go")
-		if ext := filepath.Ext(cleaned); ext != "" && detectLang(cleaned) != langUnknown {
+		// Recognise source paths even when their language needs content (.inc).
+		if ext := filepath.Ext(cleaned); ext != "" && (looksLikeFilePath(cleaned) || detectLang(cleaned) != langUnknown) {
 			return cleaned
 		}
 	}
@@ -461,6 +463,10 @@ func extractSignature(filePath string, startLine int) (string, error) {
 	}
 
 	lang := detectLang(filePath)
+	// .inc is shared with C and assembly; only opt into PHP after reading it.
+	if strings.EqualFold(filepath.Ext(filePath), ".inc") && strip.HasPHPOpenTag(lines) {
+		lang = langPHP
+	}
 	return parseSig(lines, startLine-1, lang) // convert to 0-based
 }
 
@@ -476,6 +482,10 @@ func detectLang(path string) language {
 		return langTS
 	case ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp":
 		return langC
+	case ".php", ".phtml":
+		return langPHP
+	case ".inc":
+		return langUnknown
 	default:
 		return langGo
 	}
@@ -486,6 +496,10 @@ func detectLang(path string) language {
 func parseSig(lines []string, idx int, lang language) (string, error) {
 	if idx >= len(lines) || idx < 0 {
 		return "", nil
+	}
+
+	if lang == langPHP {
+		return parsePHPSig(lines, idx), nil
 	}
 
 	var collected []string
@@ -542,6 +556,70 @@ func parseSig(lines []string, idx int, lang language) (string, error) {
 
 	// Hit the line limit — return what we have
 	return formatSig(collected, lang), nil
+}
+
+// parsePHPSig keeps modifiers, attributes, parameter defaults and return types.
+// It stops at the first top-level body or declaration terminator, ignoring
+// delimiters in quoted strings and comments. Like the other readers it is
+// bounded to 40 lines, not a full PHP parser (e.g. heredoc defaults).
+func parsePHPSig(lines []string, idx int) string {
+	src := strings.Join(lines[idx:min(idx+40, len(lines))], "\n")
+	depth := 0
+	var quote byte
+	blockComment := false
+	lineComment := false
+	end := len(src)
+	for i := 0; i < len(src); i++ {
+		ch := src[i]
+		var next byte
+		if i+1 < len(src) {
+			next = src[i+1]
+		}
+		if lineComment {
+			if ch == '\n' {
+				lineComment = false
+			}
+			continue
+		}
+		if blockComment {
+			if ch == '*' && next == '/' {
+				blockComment = false
+				i++
+			}
+			continue
+		}
+		if quote != 0 {
+			switch ch {
+			case '\\':
+				i++
+			case quote:
+				quote = 0
+			}
+			continue
+		}
+		switch {
+		case ch == '/' && next == '*':
+			blockComment = true
+			i++
+		case (ch == '/' && next == '/') || (ch == '#' && next != '['):
+			lineComment = true
+		case ch == '\'' || ch == '"' || ch == '`':
+			quote = ch
+		case ch == '(' || ch == '[':
+			depth++
+		case ch == ')' || ch == ']':
+			depth--
+		case depth == 0 && (ch == '{' || ch == ';'):
+			end = i
+			if ch == ';' {
+				end++ // Keep abstract/interface declarations visibly bodyless.
+			}
+		}
+		if end != len(src) {
+			break
+		}
+	}
+	return indentSig(strings.Split(src[:end], "\n"))
 }
 
 // formatSig trims the body and formats the signature block for display.
@@ -608,6 +686,10 @@ func formatSig(lines []string, lang language) string {
 		}
 	}
 
+	return indentSig(lines)
+}
+
+func indentSig(lines []string) string {
 	// Trim trailing blank lines
 	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 		lines = lines[:len(lines)-1]
@@ -1164,7 +1246,7 @@ func formatFileImports(file string, idx *depIndex) string {
 
 var sourceFileExts = []string{
 	".go", ".py", ".rs", ".ts", ".tsx", ".js", ".jsx",
-	".java", ".c", ".h", ".cpp", ".hpp", ".rb", ".php",
+	".java", ".c", ".h", ".cpp", ".hpp", ".rb", ".php", ".phtml", ".inc",
 }
 
 func looksLikeFilePath(s string) bool {
