@@ -34,6 +34,7 @@
 //! | Go         | `.go`                                 |
 //! | JavaScript | `.js`                                 |
 //! |java        | `java`                                |
+//! | PHP        | `.php`, `.phtml`, `.inc`              |
 //!
 //! ## Pipeline
 //!

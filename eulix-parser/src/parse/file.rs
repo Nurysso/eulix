@@ -15,6 +15,7 @@ use crate::views::FileDataSimpleView;
 
 use libeulix::grammar_files;
 use libeulix::grammar_files::language::Language;
+use libeulix::grammar_files::php;
 use libeulix::utils::file_walker::FileWalker;
 
 pub fn parse_file(
@@ -79,6 +80,7 @@ pub fn collect_source_files_and_hash(
             Language::Go,
             Language::Rust,
             Language::Java,
+            Language::Php,
         ]
     } else {
         languages
@@ -93,6 +95,7 @@ pub fn collect_source_files_and_hash(
                 "typescript" | "ts" => Some(Language::TypeScript),
                 "go" | "golang" => Some(Language::Go),
                 "rust" | "rs" => Some(Language::Rust),
+                "php" => Some(Language::Php),
                 _ => {
                     if verbose {
                         eprintln!("     Unknown language filter '{}'", lang_str);
@@ -124,11 +127,10 @@ pub fn collect_source_files_and_hash(
     // Walk the tree, keep files whose extension matches, and compute the
     // project hash while we're at it.
     let (mut all_files, project_hash) = walker.walk_and_project_hash(
-        |path| {
-            path.extension()
-                .and_then(|e| e.to_str())
-                .map(|e| ext_set.contains(e))
-                .unwrap_or(false)
+        |path| match path.extension().and_then(|e| e.to_str()) {
+            Some("inc") => ext_set.contains("inc") && holds_php(path),
+            Some(e) => ext_set.contains(e),
+            None => false,
         },
         write_dir,
     )?;
@@ -138,6 +140,12 @@ pub fn collect_source_files_and_hash(
     all_files.sort_unstable();
     all_files.dedup();
     Ok((all_files, project_hash))
+}
+
+/// Whether a `.inc` file holds PHP code, judged by a PHP opening tag the way
+/// libeulix judges it. C, C++ and assembler projects use the extension too.
+fn holds_php(path: &Path) -> bool {
+    std::fs::read(path).is_ok_and(|bytes| php::has_open_tag(&String::from_utf8_lossy(&bytes)))
 }
 
 pub fn open_source_file(path: &Path) -> std::io::Result<std::fs::File> {

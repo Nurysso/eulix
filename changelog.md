@@ -1,5 +1,14 @@
 # Changelog
 
+## **_[Unreleased]_** - PHP support
+
+- **libeulix:** new PHP parser (`.php`, `.phtml`, and `.inc` holding PHP code) on `tree-sitter-php` 0.25 with the inline-HTML grammar. Extracts functions, methods, classes, interfaces, traits and enums (access modifier, `static`, docblocks, attributes), `include`/`require` (literal or dynamic) and `use` imports, globals (`define`, `const`, top-level variables, `global $x`), complexity, TODOs and security notes (`eval`, shell execution, `unserialize`, SQL built from variables in `mysql_query`/`mysqli_query`). Class names are written fully qualified; top-level code becomes a `{main}` function per file; legacy `$s{0}` string offsets parse like `$s[0]`. New `PhpInfo` in `LanguageSpecificInfo`.
+- **PRISM v2:** PHP call sites go through `resolve_php_call`: exact qualified class names, namespace-then-global functions, for known receivers the class, its traits and its `extends` chain (interfaces last), then `__call`/`__callStatic`, `include`/`require` as a scope tier, name-only method matches only for a method name defined once in the project, and never to a static method from `->`. Other languages resolve exactly as before.
+- **PRISM v2 (all languages):** duplicate declarations of one id in a file (`#ifdef` branches) now produce one call edge per target instead of one per declaration.
+- **eulix_parser:** `php` in `--languages` and in `all`; a `.inc` file counts as PHP only when it holds PHP code (C, C++ and assembler use the extension too); PHP keeps its imports, namespace, `extends`, traits and `static` until the call graph is built; a PHP file's `{main}` is not counted in `total_functions`.
+- **eulix CLI:** PHP comment stripping in retrieval (`//`, `#`, `/* */`; HTML, strings, heredocs and `#[...]` attributes are left alone); a `.inc` file is stripped as PHP only when it holds PHP code.
+- **eulix-lsp:** serves `.php` and `.phtml` files and maps `PhpInfo`; `.inc` stays out, since C, C++ and assembler share it.
+
 ## Eulix_embed v0.4.1 (2026-10-02)
 
 - Linter fixes and lint.sh uses ruff for most of the lints
