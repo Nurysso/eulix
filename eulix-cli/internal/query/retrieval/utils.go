@@ -41,7 +41,10 @@ func (cb *ContextBuilder) Close() error {
 		cb.debugLog.Close()
 	}
 	cb.chunks = nil
-	cb.embeddings = nil
+	if cb.embeddings != nil {
+		cb.embeddings.Close()
+		cb.embeddings = nil
+	}
 	cb.vectorMap = nil
 	cb.hydrateIdx = nil
 	cb.symbolIndex = nil

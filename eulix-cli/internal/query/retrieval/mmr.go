@@ -116,9 +116,9 @@ func (cb *ContextBuilder) mmrSelect(
 	var embHits, embMisses int64
 
 	embOf := func(id string) []float32 {
-		if idx, ok := cb.vectorMap[id]; ok && idx < len(cb.embeddings) {
+		if idx, ok := cb.vectorMap[id]; ok && idx < cb.embeddings.Len() {
 			embHits++
-			return cb.embeddings[idx]
+			return cb.embeddings.Row(idx) // BUG MAYBE
 		}
 		embMisses++
 		return nil

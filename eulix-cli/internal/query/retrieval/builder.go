@@ -58,7 +58,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 		cb.hasEmbeddings = false
 	} else {
 		cb.hasEmbeddings = true
-		cb.debugLog.Log("Loaded %d embeddings", len(cb.embeddings))
+		cb.debugLog.Log("Loaded %d embeddings", cb.embeddings.Len())
 	}
 
 	if err := cb.loadVectorMap(); err != nil {

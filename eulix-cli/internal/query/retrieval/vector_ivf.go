@@ -69,10 +69,10 @@ func (cb *ContextBuilder) vectorSearchIVF(qEmb []float32, topK int, threshold fl
 				continue
 			}
 			seen[embIdx] = true
-			if int(embIdx) >= len(cb.chunks) || int(embIdx) >= len(cb.embeddings) {
+			if int(embIdx) >= len(cb.chunks) || int(embIdx) >= cb.embeddings.Len() {
 				continue
 			}
-			sim := float32(dotProduct(qEmb, cb.embeddings[embIdx]))
+			sim := float32(dotProduct(qEmb, cb.embeddings.Row(int(embIdx)))) // BUG maybe???
 			if sim >= threshF {
 				scored = append(scored, ScoredChunk{
 					Chunk: cb.chunks[embIdx],

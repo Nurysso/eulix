@@ -3,7 +3,7 @@
 
 // Package mmap hold os specific mmap helper code.
 
-//go:build !unix && !windows
+//go:build !linux && !darwin && !windows
 
 /*
 Prevents mmap to happen on unsupported os
@@ -32,11 +32,7 @@ func OpenForSequentialRead(path string) (io.Reader, func(), error) {
 	return bufio.NewReaderSize(f, jsonBufSize), func() { f.Close() }, nil
 }
 
-func AllocEmbeddingMatrix(n, dim int) [][]float32 {
+func AllocEmbeddingMatrix(n, dim int) *EmbeddingMatrix {
 	flat := make([]float32, n*dim)
-	rows := make([][]float32, n)
-	for i := range rows {
-		rows[i] = flat[i*dim : (i+1)*dim]
-	}
-	return rows
+	return &EmbeddingMatrix{rows: makeRows(flat, n, dim)}
 }

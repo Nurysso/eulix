@@ -1166,7 +1166,7 @@ func normalizeToCallGraphID(c Chunk) string {
 
 func (cb *ContextBuilder) vectorSearch(qEmb []float32, topK int, threshold float64) []ScoredChunk {
 	threshF := float32(threshold)
-	n := len(cb.embeddings)
+	n := cb.embeddings.Len()
 	if len(cb.chunks) < n {
 		n = len(cb.chunks)
 	}
@@ -1175,7 +1175,7 @@ func (cb *ContextBuilder) vectorSearch(qEmb []float32, topK int, threshold float
 	}
 	scored := make([]ScoredChunk, 0, topK*2)
 	for i := 0; i < n; i++ {
-		if sim := dotProduct(qEmb, cb.embeddings[i]); sim >= threshF {
+		if sim := dotProduct(qEmb, cb.embeddings.Row(i)); sim >= threshF {
 			scored = append(scored, ScoredChunk{Chunk: cb.chunks[i], Score: float64(sim)})
 		}
 	}

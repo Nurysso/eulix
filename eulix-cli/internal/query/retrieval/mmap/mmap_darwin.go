@@ -49,11 +49,13 @@ func mmapAdvisePlatform(data []byte) {
 	_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
 }
 
-func AllocEmbeddingMatrix(n, dim int) [][]float32 {
+func (m *EmbeddingMatrix) Close() error {
+	m.raw = nil
+	m.rows = nil
+	return nil
+}
+
+func AllocEmbeddingMatrix(n, dim int) *EmbeddingMatrix {
 	flat := make([]float32, n*dim)
-	rows := make([][]float32, n)
-	for i := range rows {
-		rows[i] = flat[i*dim : (i+1)*dim]
-	}
-	return rows
+	return &EmbeddingMatrix{rows: makeRows(flat, n, dim)}
 }

@@ -15,6 +15,7 @@ import (
 
 	"eulix/internal/config"
 	"eulix/internal/llm"
+	"eulix/internal/query/retrieval/mmap"
 	"eulix/internal/utils"
 )
 
@@ -51,7 +52,7 @@ type ContextBuilder struct {
 	config      *config.Config
 	debugLog    *utils.DebugLogger
 	// depIdx        *depIndex
-	embeddings [][]float32
+	embeddings *mmap.EmbeddingMatrix
 	eulixDir   string
 	// externalDeps  []utils.ExternalDependency
 	hasCallGraph  bool

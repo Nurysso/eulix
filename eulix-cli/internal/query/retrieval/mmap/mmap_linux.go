@@ -17,6 +17,7 @@ package mmap
 
 import (
 	"os"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -66,13 +67,57 @@ func mmapAdvisePlatform(data []byte) {
 	_ = unix.Madvise(data, unix.MADV_HUGEPAGE)
 }
 
-func AllocEmbeddingMatrix(n, dim int) [][]float32 {
-	flat := allocHugepageAligned(n * dim)
-	rows := make([][]float32, n)
-	for i := range rows {
-		rows[i] = flat[i*dim : (i+1)*dim]
+func (m *EmbeddingMatrix) Close() error {
+	if m.raw == nil {
+		return nil
 	}
-	return rows
+	raw := m.raw
+	m.raw = nil
+	m.rows = nil
+	return unix.Munmap(raw)
+}
+
+// AllocEmbeddingMatrix allocates an n×dim matrix backed by an anonymous
+// mmap, aligned to a 2 MiB boundary so the kernel can back it with
+// transparent huge-pages.  The caller must call Close() when done.
+func AllocEmbeddingMatrix(n, dim int) *EmbeddingMatrix {
+	const hugepage = 2 << 20 // 2 MiB
+
+	size := n * dim * int(unsafe.Sizeof(float32(0)))
+
+	// Over-allocate by one hugepage so we can align the start address.
+	raw, err := unix.Mmap(
+		-1, 0, size+hugepage,
+		unix.PROT_READ|unix.PROT_WRITE,
+		unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
+	)
+	if err != nil {
+		// fallback to heap
+		flat := make([]float32, n*dim)
+		return &EmbeddingMatrix{rows: makeRows(flat, n, dim)}
+		// Graceful fallback: plain heap allocation, no hugepage alignment.
+		// flat := make([]float32, n*dim)
+		// rows := makeRows(flat, n, dim)
+		// return &EmbeddingMatrix{rows: rows}, nil // raw stays nil → Close is a no-op
+	}
+
+	// Align to 2 MiB boundary inside the over-allocated region.
+	addr := uintptr(unsafe.Pointer(&raw[0]))
+	aligned := (addr + uintptr(hugepage) - 1) &^ (uintptr(hugepage) - 1)
+	offset := int(aligned - addr)
+
+	alignedBytes := raw[offset : offset+size]
+	_ = unix.Madvise(raw, unix.MADV_HUGEPAGE)
+
+	flat := unsafe.Slice((*float32)(unsafe.Pointer(&alignedBytes[0])), n*dim)
+	rows := makeRows(flat, n, dim)
+	em := &EmbeddingMatrix{rows: rows, raw: raw}
+
+	// Safety net: if the caller forgets Close, the finalizer will munmap.
+	// This is a last resort — prefer explicit Close.
+	runtime.SetFinalizer(em, func(m *EmbeddingMatrix) { _ = m.Close() })
+
+	return em
 }
 
 func allocHugepageAligned(n int) []float32 {
@@ -90,9 +135,11 @@ func allocHugepageAligned(n int) []float32 {
 	addr := uintptr(unsafe.Pointer(&b[0]))
 	aligned := (addr + uintptr(hugepage) - 1) &^ (uintptr(hugepage) - 1)
 	offset := int(aligned - addr)
-	aligned_b := b[offset : offset+size]
+
+	alignedB := b[offset : offset+size]
 	_ = unix.Madvise(b, unix.MADV_HUGEPAGE)
+
 	// Return as float32 slice
-	ptr := (*float32)(unsafe.Pointer(&aligned_b[0]))
+	ptr := (*float32)(unsafe.Pointer(&alignedB[0]))
 	return unsafe.Slice(ptr, n)
 }

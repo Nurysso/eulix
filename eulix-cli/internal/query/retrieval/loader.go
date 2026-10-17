@@ -414,22 +414,20 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 
 	if !quantized {
 		cb.debugLog.Log("Non Quantize embeddings")
-		// Fixed-width float32 records: read entire payload into the
-		// contiguous backing buffer in one shot.
-		// AllocEmbeddingMatrix lays out all rows in a single flat allocation,
-		// so embeddings[0][:numEmb*dim] covers the whole thing.
-		flat := cb.embeddings[0][:numEmb*dim]
+		rows := cb.embeddings.Rows()
+		flat := rows[0][:numEmb*dim]
 		if err := binary.Read(br, binary.LittleEndian, flat); err != nil {
 			return fmt.Errorf("reading float32 vectors: %w", err)
 		}
 		for i := 0; i < numEmb; i++ {
-			Normalize(cb.embeddings[i])
+			Normalize(rows[i])
 		}
 	} else {
 		// SQ8: 4-byte scale + dim int8 bytes per embedding
 		cb.debugLog.Log("Quantize embeddings")
 		scaleBuf := make([]byte, 4)
 		int8Buf := make([]byte, dim)
+		rows := cb.embeddings.Rows() // ← was cb.embeddings[i]
 		for i := 0; i < numEmb; i++ {
 			if _, err := io.ReadFull(br, scaleBuf); err != nil {
 				return fmt.Errorf("reading scale at %d: %w", i, err)
@@ -438,18 +436,20 @@ func (cb *ContextBuilder) loadEmbeddings() error {
 			if _, err := io.ReadFull(br, int8Buf); err != nil {
 				return fmt.Errorf("reading quantized vector at %d: %w", i, err)
 			}
-			row := cb.embeddings[i]
+			row := rows[i] // ← was cb.embeddings[i]
 			for j := 0; j < dim; j++ {
 				row[j] = float32(int8(int8Buf[j])) * scale
 			}
 			Normalize(row)
 		}
 	}
+
 	cb.debugLog.Log("numEmb: %d ivfBuildThreshold: %d", numEmb, ivfBuildThreshold)
 	if numEmb > ivfBuildThreshold {
-		cb.debugLog.Log("IVF condition met: numEmb (%d) > threshold (%d)", numEmb, ivfBuildThreshold) // <-- Log added
+		cb.debugLog.Log("IVF condition met: numEmb (%d) > threshold (%d)", numEmb, ivfBuildThreshold)
+		rows := cb.embeddings.Rows() // capture before goroutine; don't pass *EmbeddingMatrix into goroutine
 		go func() {
-			idx := cb.buildIVFIndex(cb.embeddings, ivfNClusters, ivfKMeansIter)
+			idx := cb.buildIVFIndex(rows, ivfNClusters, ivfKMeansIter)
 			cb.mu.Lock()
 			cb.ivfIndex = idx
 			cb.mu.Unlock()

@@ -1,12 +1,11 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-// Package mmap hold os specific mmap helper code.
+//go:build !ignore
 
+// Package mmap hold os specific mmap helper code.
 // this file exists for experimentation and currently isn't used anywhere
 // in the code base
-
-// nolint:unused
 package mmap
 
 import (
@@ -25,7 +24,28 @@ type EmbeddingMeta struct {
 	Quantized bool
 }
 
-func loadEmbeddingsBin(path string) ([][]float32, EmbeddingMeta, error) {
+// EmbeddingMatrix owns an mmap'd slab and the row-slice view over it.
+// Call Close when the matrix is no longer needed; the GC will NOT release
+// the underlying anonymous mapping on its own.
+type EmbeddingMatrix struct {
+	rows [][]float32 // public view
+	raw  []byte      // non-nil for mmap'd allocations
+}
+
+func (m *EmbeddingMatrix) Len() int            { return len(m.rows) }
+func (m *EmbeddingMatrix) Row(i int) []float32 { return m.rows[i] }
+func (m *EmbeddingMatrix) Rows() [][]float32   { return m.rows }
+
+// nolint: unused
+func makeRows(flat []float32, n, dim int) [][]float32 {
+	rows := make([][]float32, n)
+	for i := range rows {
+		rows[i] = flat[i*dim : (i+1)*dim]
+	}
+	return rows
+}
+
+func loadEmbeddingsBin(path string) (*EmbeddingMatrix, EmbeddingMeta, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, EmbeddingMeta{}, err
@@ -79,14 +99,13 @@ func loadEmbeddingsBin(path string) ([][]float32, EmbeddingMeta, error) {
 		Quantized: quantized,
 	}
 
-	// allocate the matrix (hugepage-aligned on Linux, flat on others)
-	matrix := AllocEmbeddingMatrix(int(count), int(dim))
+	matrix := AllocEmbeddingMatrix(int(count), int(dim)) // single return value on all platforms
+	rows := matrix.Rows()
 
 	if !quantized {
-		// float32 path: read the entire payload into the flat backing buffer
-		// matrix[0] is the start of the contiguous allocation
-		flat := matrix[0][:int(count)*int(dim)]
+		flat := rows[0][:int(count)*int(dim)]
 		if err := binary.Read(f, binary.LittleEndian, flat); err != nil {
+			_ = matrix.Close()
 			return nil, meta, fmt.Errorf("read vectors: %w", err)
 		}
 	} else {
@@ -94,14 +113,16 @@ func loadEmbeddingsBin(path string) ([][]float32, EmbeddingMeta, error) {
 		for i := 0; i < int(count); i++ {
 			var scale float32
 			if err := binary.Read(f, binary.LittleEndian, &scale); err != nil {
+				_ = matrix.Close()
 				return nil, meta, fmt.Errorf("embedding %d scale: %w", i, err)
 			}
-			quantized := make([]int8, dim)
-			if err := binary.Read(f, binary.LittleEndian, quantized); err != nil {
+			q8 := make([]int8, dim)
+			if err := binary.Read(f, binary.LittleEndian, q8); err != nil {
+				_ = matrix.Close()
 				return nil, meta, fmt.Errorf("embedding %d data: %w", i, err)
 			}
-			for j, q := range quantized {
-				matrix[i][j] = float32(q) * scale / math.MaxInt8
+			for j, q := range q8 {
+				rows[i][j] = float32(q) * scale / math.MaxInt8
 			}
 		}
 	}
