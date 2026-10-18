@@ -23,6 +23,7 @@ pub fn parse_file(
     root: &Path,
     spill: &Spill,
 ) -> Result<ParsedFileResult, Box<dyn std::error::Error>> {
+    // ) -> Result<(String, FileData, SpillLoc, Vec<(String, String)>), Box<dyn std::error::Error>> {
     let relative_path = file_path
         .strip_prefix(root)
         .unwrap_or(file_path)
@@ -49,6 +50,25 @@ pub fn parse_file(
         spill.append(&relative_path, &frag)?
     };
 
+    // Extract imports BEFORE slim() clears them
+    let raw_imports: Vec<(String, String, String)> = result
+        .imports
+        .iter()
+        .filter(|i| {
+            !matches!(
+                i.import_type.as_str(),
+                "internal" | "cgo" | "include" | "include_dynamic"
+            )
+        })
+        .map(|i| {
+            (
+                i.module.clone(),
+                relative_path.clone(),
+                i.import_type.clone(),
+            )
+        })
+        .collect();
+
     // Release the descriptor now, before we spend time shrinking in memory.
     #[cfg(target_os = "linux")]
     os_io::done_with_file(&file);
@@ -57,7 +77,7 @@ pub fn parse_file(
     slim(&mut result);
     strip_emitted(&mut result);
 
-    Ok((relative_path, result, loc))
+    Ok((relative_path, result, loc, raw_imports))
 }
 
 pub fn collect_source_files_and_hash(

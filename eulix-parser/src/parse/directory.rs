@@ -8,10 +8,11 @@ use super::file::{collect_source_files_and_hash, language_label, parse_file, rel
 use crate::spill::{Entry, Spill, SpillGuard, SpillIndex};
 use crate::stats::ParseStats;
 use libeulix::struc::kb_struct::{
-    CallGraph, DependencyGraph, Indices, KnowledgeBase, Metadata, PatternInfo,
+    CallGraph, DependencyGraph, ExternalDependency, Indices, KnowledgeBase, Metadata, PatternInfo,
 };
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -122,11 +123,11 @@ pub fn parse_directory(
             .fold(Acc::default, |mut acc: Acc, chunk: &[PathBuf]| {
                 for file_path in chunk {
                     match parse_file(file_path, &path, &spill) {
-                        Ok((rel, file_data, loc)) => {
+                        Ok((rel, file_data, loc, raw_imports)) => {
                             if let Some(ref pb) = pb {
                                 pb.inc(1);
                             }
-                            acc.record_ok(rel, file_data, loc);
+                            acc.record_ok(rel, file_data, loc, raw_imports);
                         }
                         Err(e) => {
                             let rel = rel_path(file_path, &path);
@@ -155,7 +156,31 @@ pub fn parse_directory(
         languages: languages_set,
         stats: mut final_stats,
         mut index,
+        raw_imports,
     } = acc;
+
+    // Aggregate raw import tuples into ExternalDependency — mirrors the
+    // logic in dependencies.rs but runs here so we don't need kb.structure
+    // to be populated during analyze_and_build.
+    let external_dependencies = {
+        let mut deps_map: HashMap<String, (HashSet<String>, String)> = HashMap::new();
+        for (module, filepath, import_type) in raw_imports {
+            let entry = deps_map
+                .entry(module)
+                .or_insert_with(|| (HashSet::new(), import_type));
+            entry.0.insert(filepath);
+        }
+        deps_map
+            .into_iter()
+            .map(|(name, (files, import_type))| ExternalDependency {
+                name,
+                version: None,
+                source: import_type,
+                import_count: files.len(),
+                used_by: files.into_iter().collect(),
+            })
+            .collect::<Vec<_>>()
+    };
 
     // Merge prior entries (from resume) with newly written ones
     // Prior entries have offsets into the *same* spill file; nothing else to do.
@@ -206,7 +231,7 @@ pub fn parse_directory(
         dependency_graph: DependencyGraph::default(),
         indices: Indices::default(),
         entry_points: vec![],
-        external_dependencies: vec![],
+        external_dependencies,
         patterns: PatternInfo::default(),
     };
 

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 pub type SpillLoc = (u64, u32);
-pub type ParsedFileResult = (String, FileData, SpillLoc);
+pub type ParsedFileResult = (String, FileData, SpillLoc, Vec<(String, String, String)>);
 
 const FLUSH_EVERY: u64 = 512;
 
