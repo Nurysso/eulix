@@ -34,7 +34,7 @@ rustup target list | grep -q "x86_64-pc-windows-gnu (installed)" || print_warn "
 #     exit 1
 # fi
 
-# Check for sha256sum (used to hash parser binaries for -X embeddedParserHash)
+# Check for sha256sum (used to hash parser binaries for -X ParserHash)
 if ! command -v sha256sum &> /dev/null; then
     print_error "sha256sum is not installed. Required to hash parser binaries."
     exit 1
@@ -64,7 +64,7 @@ cd ../
 
 # Hash the parser binaries. Each Go build embeds exactly one of these (via
 # build tags on embed_linux.go / embed_darwin.go / embed_windows.go), so the
-# -X embeddedParserHash ldflag passed to a given Go build below must match
+# -X ParserHash ldflag passed to a given Go build below must match
 # the parser binary that build actually embeds.
 print_info "Hashing parser binaries..."
 PARSER_DIR="eulix-cli/internal/assets/bins"
@@ -97,7 +97,7 @@ print_info "Using Go version: $go_version"
 
 # ONNX backend variants: each OS is built twice, once per requirements file,
 # via -X eulix/internal/assets.embed_requirements. Each build also gets
-# -X eulix/internal/assets.embeddedParserHash set to the sha256 of whichever
+# -X eulix/internal/assets.ParserHash set to the sha256 of whichever
 # parser binary that OS's Go build embeds, so Hashes() can verify the
 # compiled-in parser at runtime.
 VARIANTS=("onnx-amd.txt:amd" "onnx-nvidia.txt:nvidia")
@@ -106,7 +106,7 @@ build_variant() {
   local goos="$1" goarch="$2" out="$3" parser_hash="$4" req_file="$5" ldflags_extra="$6"
 
   GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build \
-    -ldflags="-s -w ${ldflags_extra} -X 'eulix/internal/assets.embed_requirements=${req_file}' -X 'eulix/internal/assets.embeddedParserHash=${parser_hash}'" \
+    -ldflags="-s -w ${ldflags_extra} -X 'eulix/internal/assets.embed_requirements=${req_file}' -X 'eulix/internal/assets.ParserHash=${parser_hash}'" \
     -trimpath -o "$out" ./cmd/eulix/main.go
 }
 
