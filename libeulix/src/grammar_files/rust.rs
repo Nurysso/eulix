@@ -609,7 +609,11 @@ impl RustParser {
                     let trait_type = child.child_by_field_name("trait");
                     let self_type = child
                         .child_by_field_name("type")
-                        .map(|t| self.get_node_text(&t))
+                        .map(|t| {
+                            let raw = self.get_node_text(&t);
+                            let base = raw.split('<').next().unwrap_or(&raw).trim();
+                            base.rsplit("::").next().unwrap_or(base).trim().to_string()
+                        })
                         .unwrap_or_default();
 
                     let (impl_trait_name, key) = match &trait_type {
@@ -1460,5 +1464,59 @@ mod tests {
             .as_deref()
             .expect("rust info present");
         assert_eq!(info.derives, vec!["Debug", "Clone", "PartialEq"]);
+    }
+
+    #[test]
+    fn generic_and_path_qualified_impl_methods_attach_to_type() {
+        let src = r#"
+pub struct Wrapper<T> {
+    value: T,
+}
+
+impl<T> Wrapper<T> {
+    pub fn new(value: T) -> Self {
+        Self { value }
+    }
+}
+
+impl<T: Clone> Clone for Wrapper<T> {
+    fn clone(&self) -> Self {
+        Self { value: self.value.clone() }
+    }
+}
+
+impl<T> crate::m::Wrapper<T> {
+    pub fn get(&self) -> &T {
+        &self.value
+    }
+}
+"#;
+        let fd = parse_source(Path::new("wrapper.rs"), src)
+            .expect("valid rust parses")
+            .1;
+        assert_eq!(fd.classes.len(), 1);
+        let wrapper = &fd.classes[0];
+        assert_eq!(wrapper.name, "Wrapper");
+
+        let method_names: Vec<&str> = wrapper.methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(method_names, vec!["new", "clone", "get"]);
+
+        let method_ids: Vec<&str> = wrapper.methods.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            method_ids,
+            vec![
+                "method_Wrapper_new::wrapper.rs",
+                "method_Wrapper_clone::wrapper.rs",
+                "method_Wrapper_get::wrapper.rs",
+            ]
+        );
+
+        let clone_info = wrapper.methods[1]
+            .lang_info
+            .rust
+            .as_deref()
+            .expect("rust info on clone");
+        assert!(clone_info.is_trait_impl_method);
+        assert_eq!(clone_info.trait_name.as_deref(), Some("Clone"));
     }
 }
