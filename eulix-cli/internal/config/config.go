@@ -87,8 +87,8 @@ type ChecksumConfig struct {
 }
 
 var providerEnvVar = map[string]string{
-	"Anthropic":  "ANTHROPIC_API_KEY",
-	"Gemini":     "GEMINI_API_KEY",
+	"anthropic":  "ANTHROPIC_API_KEY",
+	"gemini":     "GEMINI_API_KEY",
 	"openai":     "OPENAI_API_KEY",
 	"groq":       "GROQ_API_KEY",
 	"together":   "TOGETHER_API_KEY",
@@ -98,14 +98,20 @@ var providerEnvVar = map[string]string{
 	"fireworks":  "FIREWORKS_API_KEY",
 }
 
-func resolveAPIKeyFromEnv(provider string) string {
+func resolveAPIKeyFromEnv(provider string, repoEnv map[string]string) string {
+	lookup := func(key string) string {
+		if value, ok := os.LookupEnv(key); ok {
+			return value
+		}
+		return repoEnv[key]
+	}
 	p := strings.ToLower(strings.TrimSpace(provider))
 	if envVar, ok := providerEnvVar[p]; ok {
-		if v := os.Getenv(envVar); v != "" {
+		if v := lookup(envVar); v != "" {
 			return v
 		}
 	}
-	return os.Getenv("LLM_API_KEY")
+	return lookup("LLM_API_KEY")
 }
 
 // clamp restricts v to the inclusive range [min, max].
@@ -169,8 +175,8 @@ func validateAndClampConfig(cfg *Config) *Config {
 
 // Load loads and validates the configuration
 func Load() (*Config, error) {
-	// Load .env into process env if present. Missing file is fine not an error.
-	_ = godotenv.Load()
+	// Read repository keys without leaking them into other repositories.
+	repoEnv, _ := godotenv.Read(".env")
 	cfg := *DefaultConfig()
 
 	// Overlay configuration from file if present
@@ -190,7 +196,7 @@ func Load() (*Config, error) {
 
 	// Resolve API key if not set
 	if cfg.LLM.APIKey == "" {
-		cfg.LLM.APIKey = resolveAPIKeyFromEnv(cfg.LLM.Provider)
+		cfg.LLM.APIKey = resolveAPIKeyFromEnv(cfg.LLM.Provider, repoEnv)
 	}
 
 	return &cfg, nil
@@ -202,7 +208,7 @@ func LoadFrom(repoDir string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = godotenv.Load(filepath.Join(absPath, ".env"))
+	repoEnv, _ := godotenv.Read(filepath.Join(absPath, ".env"))
 	cfg := *DefaultConfig()
 
 	tomlPath := filepath.Join(absPath, "eulix.toml")
@@ -212,7 +218,7 @@ func LoadFrom(repoDir string) (*Config, error) {
 	cfg.Project.Path = absPath
 
 	if cfg.LLM.APIKey == "" {
-		cfg.LLM.APIKey = resolveAPIKeyFromEnv(cfg.LLM.Provider)
+		cfg.LLM.APIKey = resolveAPIKeyFromEnv(cfg.LLM.Provider, repoEnv)
 	}
 
 	return &cfg, nil

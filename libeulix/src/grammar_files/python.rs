@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex};
+use super::utils::{static_regex, todo_in_comment};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
@@ -123,7 +123,7 @@ impl PythonParser {
             functions: self.extract_functions(&root),
             classes: self.extract_classes(&root),
             global_vars: self.extract_global_vars(&root),
-            todos: extract_todos(&self.source_code),
+            todos: self.collect_todos(&root),
             security_notes: self.detect_security_patterns(),
             syntax: syntax::inspect(&tree),
         })
@@ -254,7 +254,7 @@ impl PythonParser {
     fn parse_function(&self, node: &Node, class_context: &str) -> Option<Function> {
         let mut cursor = node.walk();
         let mut name = String::new();
-        let is_async = node.kind() == "async_function_definition";
+        let is_async = node.children(&mut cursor).any(|ch| ch.kind() == "async");
 
         let mut decorators = Vec::new();
         if let Some(parent) = node.parent() {
@@ -1045,6 +1045,16 @@ impl PythonParser {
                         methods.push(method);
                     }
                 }
+                "decorated_definition" => {
+                    let mut inner_cursor = child.walk();
+                    for inner in child.children(&mut inner_cursor) {
+                        if inner.kind() == "function_definition" {
+                            if let Some(method) = self.parse_function(&inner, class_name) {
+                                methods.push(method);
+                            }
+                        }
+                    }
+                }
                 "expression_statement" => {
                     if let Some(attr) = self.parse_attribute(&child) {
                         attributes.push(attr);
@@ -1448,6 +1458,29 @@ impl PythonParser {
             .unwrap_or("")
             .to_string()
     }
+
+    // Python comments start with `#`, which `extract_todos` doesn't look
+    // for, so walk the comment nodes instead. That also keeps a "# TODO"
+    // inside a string from counting.
+    fn collect_todos(&self, root: &Node) -> Vec<Todo> {
+        let mut todos = Vec::new();
+        let mut stack = vec![*root];
+        while let Some(n) = stack.pop() {
+            if n.kind() == "comment" {
+                let text = self.get_node_text(&n);
+                if let Some(body) = text.strip_prefix('#') {
+                    todos.extend(todo_in_comment(n.start_position().row + 1, body));
+                }
+                continue;
+            }
+            let mut cursor = n.walk();
+            for child in n.children(&mut cursor) {
+                stack.push(child);
+            }
+        }
+        todos.sort_by_key(|t| t.line);
+        todos
+    }
 }
 
 pub fn parse_source(path: &Path, source_code: &str) -> Result<(String, FileData), String> {
@@ -1465,4 +1498,83 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
     parse_source(path, &source_code)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn decorated_methods_async_def_and_hash_todos_are_extracted() {
+        let src = r##"# TODO: handle urgent retries
+# FIXME: minor cleanup
+
+async def top_async():
+    return "# TODO: inside string, not a comment"
+
+class Service:
+    def plain(self, x: int) -> int:
+        return x
+
+    @staticmethod
+    def build():
+        pass
+
+    @classmethod
+    def create(cls):
+        pass
+
+    @property
+    def title(self) -> str:
+        return "svc"
+
+    async def execute(self):
+        pass
+"##;
+        let fd = parse_source(Path::new("service.py"), src)
+            .expect("python parses")
+            .1;
+
+        assert_eq!(fd.functions.len(), 1);
+        assert_eq!(fd.functions[0].name, "top_async");
+        assert!(fd.functions[0].is_async, "top_async should be marked async");
+
+        let svc = &fd.classes[0];
+        let method_names: Vec<&str> = svc.methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(
+            method_names,
+            vec!["plain", "build", "create", "title", "execute"]
+        );
+
+        let build_info = svc.methods[1]
+            .lang_info
+            .python
+            .as_deref()
+            .expect("python info");
+        assert!(build_info.is_staticmethod);
+        let create_info = svc.methods[2]
+            .lang_info
+            .python
+            .as_deref()
+            .expect("python info");
+        assert!(create_info.is_classmethod);
+        let title_info = svc.methods[3]
+            .lang_info
+            .python
+            .as_deref()
+            .expect("python info");
+        assert!(title_info.is_property);
+
+        assert!(!svc.methods[0].is_async);
+        assert!(svc.methods[4].is_async, "execute should be marked async");
+
+        assert_eq!(fd.todos.len(), 2);
+        assert_eq!(fd.todos[0].line, 1);
+        assert_eq!(fd.todos[0].text, "handle urgent retries");
+        assert_eq!(fd.todos[0].priority, "high");
+        assert_eq!(fd.todos[1].line, 2);
+        assert_eq!(fd.todos[1].priority, "low");
+    }
 }

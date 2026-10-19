@@ -53,7 +53,7 @@ const (
 )
 
 // errFileTooLarge is returned when size would overflow int on 32 bits platform
-var errFileTooLarge = errors.New("file size overflows int on this platform")
+var ErrFileTooLarge = errors.New("file size overflows int on this platform")
 
 // Stores results produced during package init()
 var initPretouchResults []PretouchResult
@@ -66,7 +66,7 @@ func SizeOverflows(size int64) bool {
 
 // ErrFileTooLargeForPath formats the overflow error with path context.
 func ErrFileTooLargeForPath(path string, size int64) error {
-	return fmt.Errorf("%w: %s is %d bytes", errFileTooLarge, path, size)
+	return fmt.Errorf("%w: %s is %d bytes", ErrFileTooLarge, path, size)
 }
 
 // SonicCopy is a sonic config that always copies strings out of the input

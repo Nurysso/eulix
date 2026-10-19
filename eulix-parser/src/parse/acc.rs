@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::stats::{lang_counts, FailedFile, ParseStats, PartialFile};
+use libeulix::grammar_files::php;
 use libeulix::struc::kb_struct::FileData;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -16,18 +17,34 @@ pub struct Acc {
     pub languages: FxHashSet<String>,
     pub stats: ParseStats,
     pub index: Vec<(String, u64, u32)>,
+    pub raw_imports: Vec<(String, String, String)>,
 }
 
 impl Acc {
-    pub fn record_ok(&mut self, rel: String, fd: FileData, loc: (u64, u32)) {
+    pub fn record_ok(
+        &mut self,
+        rel: String,
+        fd: FileData,
+        loc: (u64, u32),
+        raw_imports: Vec<(String, String, String)>,
+    ) {
         self.index.push((rel.clone(), loc.0, loc.1));
         self.loc += fd.loc;
-        self.functions += fd.functions.len();
+        // A PHP file's `{main}` holds its top-level code; it is not a
+        // declared function.
+        self.functions += fd
+            .functions
+            .iter()
+            .filter(|f| !f.tags.iter().any(|t| t == php::SCRIPT_TAG))
+            .count();
         self.classes += fd.classes.len();
         self.methods += fd.classes.iter().map(|c| c.methods.len()).sum::<usize>();
         if !self.languages.contains(fd.language.as_str()) {
             self.languages.insert(fd.language.clone());
         }
+
+        // Imports already filtered in parse_file before slim(); just store them
+        self.raw_imports.extend(raw_imports);
 
         let counts = lang_counts(&mut self.stats.by_lang, &fd.language);
         if fd.syntax.is_clean() {
@@ -57,6 +74,7 @@ impl Acc {
 
     pub fn merge(mut self, mut other: Acc) -> Acc {
         self.index.extend(other.index);
+        self.raw_imports.append(&mut other.raw_imports);
 
         if self.structure.len() < other.structure.len() {
             std::mem::swap(&mut self.structure, &mut other.structure);

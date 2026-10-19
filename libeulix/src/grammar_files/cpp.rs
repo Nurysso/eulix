@@ -709,6 +709,9 @@ impl CppParser {
                         self.collect_functions(&body, functions, ctx, fn_ptr_map);
                     }
                 }
+                "template_declaration" => {
+                    self.collect_functions(&child, functions, ctx, fn_ptr_map);
+                }
                 _ => {}
             }
         }
@@ -818,7 +821,7 @@ impl CppParser {
             "qualified_identifier" | "destructor_name" | "operator_name" => {
                 Some(self.get_node_text(declarator))
             }
-            "identifier" => Some(self.get_node_text(declarator)),
+            "identifier" | "field_identifier" => Some(self.get_node_text(declarator)),
             _ => None,
         }
     }
@@ -957,6 +960,9 @@ impl CppParser {
                     if let Some(body) = child.child_by_field_name("body") {
                         self.collect_classes(&body, classes);
                     }
+                }
+                "template_declaration" => {
+                    self.collect_classes(&child, classes);
                 }
                 _ => {}
             }
@@ -1267,6 +1273,21 @@ impl CppParser {
                         Some(current_access.clone()),
                     ) {
                         methods.push(method);
+                    }
+                }
+                "template_declaration" => {
+                    let mut tc = child.walk();
+                    for inner in child.children(&mut tc) {
+                        if inner.kind() == "function_definition" {
+                            if let Some(method) = self.parse_function(
+                                &inner,
+                                class_name,
+                                &self.fn_ptr_map,
+                                Some(current_access.clone()),
+                            ) {
+                                methods.push(method);
+                            }
+                        }
                     }
                 }
                 "declaration" => {}
@@ -1994,4 +2015,99 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
     parse_source(path, &source_code)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use super::*;
+
+    fn parse(src: &str) -> FileData {
+        parse_source(Path::new("shapes.cpp"), src)
+            .expect("parse should succeed")
+            .1
+    }
+
+    #[test]
+    fn inline_member_functions_in_class_and_struct_are_extracted() {
+        let src = r#"
+class Shape {
+public:
+    Shape() {}
+    double area() const { return 0.0; }
+    void scale(double factor) { size *= factor; }
+private:
+    double size = 1.0;
+};
+
+struct Counter {
+    int get() const { return value; }
+    void bump() { value += 1; }
+    int value = 0;
+};
+"#;
+        let fd = parse(src);
+        let shape = fd
+            .classes
+            .iter()
+            .find(|c| c.name == "Shape")
+            .expect("Shape class found");
+        let shape_methods: Vec<&str> = shape.methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(shape_methods, vec!["Shape", "area", "scale"]);
+
+        let counter = fd
+            .classes
+            .iter()
+            .find(|c| c.name == "Counter")
+            .expect("Counter struct found");
+        let counter_methods: Vec<&str> = counter.methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(counter_methods, vec!["get", "bump"]);
+    }
+
+    #[test]
+    fn template_classes_methods_and_functions_are_extracted() {
+        let src = r#"
+template <typename T>
+class Box {
+public:
+    T get() const { return val; }
+
+    template <typename U>
+    U convert(U other) { return other; }
+private:
+    T val;
+};
+
+template <typename T>
+T add(T a, T b) {
+    return a + b;
+}
+"#;
+        let fd = parse(src);
+        assert_eq!(fd.functions.len(), 1);
+        assert_eq!(fd.functions[0].name, "add");
+        assert!(
+            fd.functions[0]
+                .lang_info
+                .cpp
+                .as_deref()
+                .expect("cpp info")
+                .is_template
+        );
+
+        assert_eq!(fd.classes.len(), 1);
+        let box_cls = &fd.classes[0];
+        assert_eq!(box_cls.name, "Box");
+        assert!(
+            box_cls
+                .lang_info
+                .cpp
+                .as_deref()
+                .expect("cpp info")
+                .is_template
+        );
+        let methods: Vec<&str> = box_cls.methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(methods, vec!["get", "convert"]);
+    }
 }

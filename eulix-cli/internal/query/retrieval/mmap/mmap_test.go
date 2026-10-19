@@ -37,7 +37,7 @@ func mustTempDir(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
 }
 
@@ -164,25 +164,34 @@ func TestErrFileTooLargeForPath(t *testing.T) {
 func TestErrFileTooLargeForPath_wrapsOverflowSentinel(t *testing.T) {
 	t.Parallel()
 
-	// ErrFileTooLargeForPath must wrap a sentinel so callers can use errors.Is
-	// to distinguish overflow errors from generic I/O errors.
 	err := mmap.ErrFileTooLargeForPath("/tmp/x", 99)
 	if err == nil {
 		t.Fatal("expected non-nil error")
 	}
 
-	// Two calls on the same arguments must produce errors that share the same
-	// wrapped sentinel (unwrapping chain leads to the same base type).
-	err2 := mmap.ErrFileTooLargeForPath("/tmp/y", 100)
-	if errors.Is(err, err2) {
-		// Distinct paths → distinct errors (they should NOT be equal at the leaf
-		// level because the messages differ). This is a sanity check.
-		// Actually, if both wrap the same sentinel errors.Is would be true for the
-		// sentinel, but two distinct fmt.Errorf wraps are not equal to each other.
+	// The whole point: callers must be able to match the sentinel via errors.Is.
+	if !errors.Is(err, mmap.ErrFileTooLarge) {
+		t.Fatalf("errors.Is(err, ErrFileTooLarge) = false; want true (err = %v)", err)
 	}
 
-	// The error must not be nil — already checked above.
-	_ = err
+	// Message should carry the path and size so it's useful in logs.
+	msg := err.Error()
+	if !strings.Contains(msg, "/tmp/x") {
+		t.Errorf("error message missing path: %q", msg)
+	}
+	if !strings.Contains(msg, "99") {
+		t.Errorf("error message missing size: %q", msg)
+	}
+
+	// Two distinct calls produce distinct wraps (different paths/sizes),
+	// even though both match the same sentinel.
+	err2 := mmap.ErrFileTooLargeForPath("/tmp/y", 100)
+	if errors.Is(err, err2) {
+		t.Errorf("errors.Is(err, err2) = true; want false (distinct wraps)")
+	}
+	if !errors.Is(err2, mmap.ErrFileTooLarge) {
+		t.Errorf("errors.Is(err2, ErrFileTooLarge) = false; want true")
+	}
 }
 
 func TestFlushPretouchLogs_nilLogger(t *testing.T) {
@@ -707,14 +716,14 @@ func TestOpenForSequentialRead_permission_denied(t *testing.T) {
 
 func BenchmarkDecodeJSONFile_small(b *testing.B) {
 	dir, _ := os.MkdirTemp("", "bench_mmap_*")
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	data, _ := json.Marshal(simplePayload{Name: "bench", Count: 1})
 	path := filepath.Join(dir, "small.json")
 	_ = os.WriteFile(path, data, 0o600)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		var v simplePayload
 		if err := mmap.DecodeJSONFile(path, &v); err != nil {
 			b.Fatal(err)
@@ -724,7 +733,7 @@ func BenchmarkDecodeJSONFile_small(b *testing.B) {
 
 func BenchmarkDecodeJSONFile_large(b *testing.B) {
 	dir, _ := os.MkdirTemp("", "bench_mmap_large_*")
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	data := makeLargeJSON(mmapThreshold + 65536)
 	path := filepath.Join(dir, "large.json")
@@ -732,7 +741,7 @@ func BenchmarkDecodeJSONFile_large(b *testing.B) {
 
 	b.ResetTimer()
 	b.SetBytes(int64(len(data)))
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		var v map[string]string
 		if err := mmap.DecodeJSONFile(path, &v); err != nil {
 			b.Fatal(err)
@@ -742,7 +751,7 @@ func BenchmarkDecodeJSONFile_large(b *testing.B) {
 
 func BenchmarkOpenForSequentialRead_large_readAll(b *testing.B) {
 	dir, _ := os.MkdirTemp("", "bench_seq_*")
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	data := makeLargeJSON(mmapThreshold + 65536)
 	path := filepath.Join(dir, "seq.json")
@@ -750,7 +759,7 @@ func BenchmarkOpenForSequentialRead_large_readAll(b *testing.B) {
 
 	b.ResetTimer()
 	b.SetBytes(int64(len(data)))
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		r, cleanup, err := mmap.OpenForSequentialRead(path)
 		if err != nil {
 			b.Fatal(err)

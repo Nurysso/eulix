@@ -15,6 +15,7 @@ use crate::views::FileDataSimpleView;
 
 use libeulix::grammar_files;
 use libeulix::grammar_files::language::Language;
+use libeulix::grammar_files::php;
 use libeulix::utils::file_walker::FileWalker;
 
 pub fn parse_file(
@@ -22,6 +23,7 @@ pub fn parse_file(
     root: &Path,
     spill: &Spill,
 ) -> Result<ParsedFileResult, Box<dyn std::error::Error>> {
+    // ) -> Result<(String, FileData, SpillLoc, Vec<(String, String)>), Box<dyn std::error::Error>> {
     let relative_path = file_path
         .strip_prefix(root)
         .unwrap_or(file_path)
@@ -38,7 +40,7 @@ pub fn parse_file(
     }
 
     // tree-sitter Tree lives and dies inside this call.
-    let (_, mut result) = grammar_files::parse_source(file_path, &source)?;
+    let (_, mut result) = grammar_files::parse_source(Path::new(&relative_path), &source)?;
 
     // Spill the rich view first. Phase 2 reads this back, so this has to
     // happen before we slim or strip anything.
@@ -48,6 +50,25 @@ pub fn parse_file(
         spill.append(&relative_path, &frag)?
     };
 
+    // Extract imports BEFORE slim() clears them
+    let raw_imports: Vec<(String, String, String)> = result
+        .imports
+        .iter()
+        .filter(|i| {
+            !matches!(
+                i.import_type.as_str(),
+                "internal" | "cgo" | "include" | "include_dynamic"
+            )
+        })
+        .map(|i| {
+            (
+                i.module.clone(),
+                relative_path.clone(),
+                i.import_type.clone(),
+            )
+        })
+        .collect();
+
     // Release the descriptor now, before we spend time shrinking in memory.
     #[cfg(target_os = "linux")]
     os_io::done_with_file(&file);
@@ -56,7 +77,7 @@ pub fn parse_file(
     slim(&mut result);
     strip_emitted(&mut result);
 
-    Ok((relative_path, result, loc))
+    Ok((relative_path, result, loc, raw_imports))
 }
 
 pub fn collect_source_files_and_hash(
@@ -79,6 +100,7 @@ pub fn collect_source_files_and_hash(
             Language::Go,
             Language::Rust,
             Language::Java,
+            Language::Php,
         ]
     } else {
         languages
@@ -93,6 +115,7 @@ pub fn collect_source_files_and_hash(
                 "typescript" | "ts" => Some(Language::TypeScript),
                 "go" | "golang" => Some(Language::Go),
                 "rust" | "rs" => Some(Language::Rust),
+                "php" => Some(Language::Php),
                 _ => {
                     if verbose {
                         eprintln!("     Unknown language filter '{}'", lang_str);
@@ -124,11 +147,10 @@ pub fn collect_source_files_and_hash(
     // Walk the tree, keep files whose extension matches, and compute the
     // project hash while we're at it.
     let (mut all_files, project_hash) = walker.walk_and_project_hash(
-        |path| {
-            path.extension()
-                .and_then(|e| e.to_str())
-                .map(|e| ext_set.contains(e))
-                .unwrap_or(false)
+        |path| match path.extension().and_then(|e| e.to_str()) {
+            Some("inc") => ext_set.contains("inc") && holds_php(path),
+            Some(e) => ext_set.contains(e),
+            None => false,
         },
         write_dir,
     )?;
@@ -138,6 +160,12 @@ pub fn collect_source_files_and_hash(
     all_files.sort_unstable();
     all_files.dedup();
     Ok((all_files, project_hash))
+}
+
+/// Whether a `.inc` file holds PHP code, judged by a PHP opening tag the way
+/// libeulix judges it. C, C++ and assembler projects use the extension too.
+fn holds_php(path: &Path) -> bool {
+    std::fs::read(path).is_ok_and(|bytes| php::has_open_tag(&String::from_utf8_lossy(&bytes)))
 }
 
 pub fn open_source_file(path: &Path) -> std::io::Result<std::fs::File> {
@@ -171,4 +199,54 @@ pub fn rel_path(file: &Path, root: &Path) -> String {
 pub fn language_label(file: &Path) -> String {
     // Debug format lowercased, e.g. "python", "rust", etc.
     format!("{:?}", Language::detect(file)).to_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analysis_pipeline::analyze_and_build;
+    use crate::engine::Engine;
+    use crate::parse::directory::parse_directory;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn symbol_ids_use_relative_paths_and_call_graph_resolves() {
+        let repo = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        let src_dir = repo.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("a.py"), "def caller():\n    target()\n").unwrap();
+        fs::write(src_dir.join("b.py"), "def target():\n    return 1\n").unwrap();
+
+        let engine = Engine::with_threads(2).unwrap();
+        let root_str = repo.path().to_string_lossy().to_string();
+        let (kb, _stats, _spill) = parse_directory(
+            &root_str,
+            "all",
+            None,
+            false,
+            "0.8.1",
+            "test",
+            out.path(),
+            false,
+            &engine,
+        )
+        .unwrap();
+
+        let fd_a = kb.structure.get("src/a.py").expect("src/a.py in structure");
+        assert_eq!(fd_a.functions[0].id, "func_caller::src/a.py");
+        let fd_b = kb.structure.get("src/b.py").expect("src/b.py in structure");
+        assert_eq!(fd_b.functions[0].id, "func_target::src/b.py");
+
+        let kb = analyze_and_build(kb, false, 2);
+        assert!(
+            kb.call_graph.edges.iter().any(|e| {
+                e.edge_type == "call"
+                    && e.from == "func_caller::src/a.py"
+                    && e.to == "func_target::src/b.py"
+            }),
+            "expected call edge func_caller::src/a.py -> func_target::src/b.py, got {:?}",
+            kb.call_graph.edges
+        );
+    }
 }

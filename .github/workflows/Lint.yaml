@@ -2,15 +2,16 @@ name: Lint
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   push:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
       parser: ${{ steps.filter.outputs.parser }}
+      lib: ${{ steps.filter.outputs.lib }}
       embed: ${{ steps.filter.outputs.embed }}
       cli: ${{ steps.filter.outputs.cli }}
     steps:
@@ -18,10 +19,12 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
-          base: ${{ github.event_name == 'pull_request' && github.base_ref || 'main' }}
+          base: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
           filters: |
             parser:
               - 'eulix-parser/**'
+            lib:
+              - 'libeulix/**'
             embed:
               - 'eulix-embed/**'
             cli:
@@ -42,7 +45,7 @@ jobs:
 
   lint-lib:
     needs: changes
-    if: needs.changes.outputs.parser == 'true'
+    if: needs.changes.outputs.lib == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

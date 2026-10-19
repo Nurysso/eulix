@@ -42,14 +42,14 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	queryEmbedder, err := embeddings.VectorWeaver(cfg.Embeddings.Model, cfg.Embeddings.Debug)
 	if err != nil {
 		cb.debugLog.Log("Failed to initialize embedder: %v", err)
-		cb.debugLog.Close()
+		_ = cb.Close()
 		return nil, fmt.Errorf("failed to initialize embedder: %w", err)
 	}
 	cb.queryEmbedder = queryEmbedder
 
 	if err := cb.loadChunks(); err != nil {
 		cb.debugLog.Log("Failed to load chunks: %v", err)
-		cb.debugLog.Close()
+		_ = cb.Close()
 		return nil, fmt.Errorf("failed to load chunks from KB: %w", err)
 	}
 
@@ -57,7 +57,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 		cb.debugLog.Log("Embeddings not loaded: %v", err)
 		cb.hasEmbeddings = false
 	} else {
-		cb.hasEmbeddings = true
+		cb.hasEmbeddings = len(cb.embeddings) > 0
 		cb.debugLog.Log("Loaded %d embeddings", len(cb.embeddings))
 	}
 

@@ -66,8 +66,9 @@ func mmapAdvisePlatform(data []byte) {
 	_ = unix.Madvise(data, unix.MADV_HUGEPAGE)
 }
 
+// AllocEmbeddingMatrix returns a GC-owned matrix for callers without a lifecycle.
 func AllocEmbeddingMatrix(n, dim int) [][]float32 {
-	flat := allocHugepageAligned(n * dim)
+	flat := make([]float32, n*dim)
 	rows := make([][]float32, n)
 	for i := range rows {
 		rows[i] = flat[i*dim : (i+1)*dim]
@@ -75,7 +76,22 @@ func AllocEmbeddingMatrix(n, dim int) [][]float32 {
 	return rows
 }
 
-func allocHugepageAligned(n int) []float32 {
+// AllocEmbeddingMatrixOwned retains the entire mapping for deterministic release.
+func AllocEmbeddingMatrixOwned(n, dim int) ([][]float32, func() error) {
+	if n == 0 || dim == 0 {
+		return AllocEmbeddingMatrix(n, dim), func() error { return nil }
+	}
+	flat, release := allocHugepageAligned(n * dim)
+	rows := make([][]float32, n)
+	for i := range rows {
+		rows[i] = flat[i*dim : (i+1)*dim]
+	}
+	return rows, release
+}
+
+// allocHugepageAligned also returns a release func that unmaps the whole
+// mapping; the aligned slice alone can't be passed to Munmap.
+func allocHugepageAligned(n int) ([]float32, func() error) {
 	const hugepage = 2 << 20 // 2MB
 	size := n * 4            // Allocate raw bytes, aligned to hugepage boundary
 	// mmap anonymous gives page-aligned memory; request extra for alignment
@@ -84,15 +100,24 @@ func allocHugepageAligned(n int) []float32 {
 		unix.MAP_PRIVATE|unix.MAP_ANONYMOUS)
 	if err != nil {
 		// fallback to make()
-		return make([]float32, n)
+		return make([]float32, n), func() error { return nil }
 	}
 	// Align to 2MB boundary
 	addr := uintptr(unsafe.Pointer(&b[0]))
 	aligned := (addr + uintptr(hugepage) - 1) &^ (uintptr(hugepage) - 1)
 	offset := int(aligned - addr)
-	aligned_b := b[offset : offset+size]
+	alignedBytes := b[offset : offset+size]
 	_ = unix.Madvise(b, unix.MADV_HUGEPAGE)
 	// Return as float32 slice
-	ptr := (*float32)(unsafe.Pointer(&aligned_b[0]))
-	return unsafe.Slice(ptr, n)
+	flat := unsafe.Slice((*float32)(unsafe.Pointer(&alignedBytes[0])), n)
+	return flat, func() error {
+		if b == nil {
+			return nil
+		}
+		if err := unix.Munmap(b); err != nil {
+			return err
+		}
+		b = nil
+		return nil
+	}
 }

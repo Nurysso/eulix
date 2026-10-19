@@ -143,9 +143,18 @@ func (d *Detector) Load() (*Checksum, error) {
 	return &c, nil
 }
 
-// Only track the extensions Rust actually tracked.
+// Track supported source extensions as well as those present in the baseline.
 func extsFromBaseline(stored *Checksum) map[string]bool {
-	set := make(map[string]bool)
+	// Match the "all" filter in eulix-parser/src/parse/file.rs and the selected
+	// extensions in libeulix/src/grammar_files/language.rs. Keep both in sync.
+	set := map[string]bool{
+		".py": true, ".pyw": true, ".pyi": true,
+		".js": true, ".mjs": true, ".cjs": true,
+		".ts": true, ".mts": true, ".cts": true,
+		".go": true, ".rs": true, ".java": true,
+		".c": true, ".h": true, ".cpp": true, ".cc": true, ".cxx": true,
+		".hpp": true, ".hxx": true, ".h++": true, ".c++": true,
+	}
 	for p := range stored.Files {
 		base := filepath.Base(p)
 		// A leading-dot-only basename (".gitignore") is not an extension.

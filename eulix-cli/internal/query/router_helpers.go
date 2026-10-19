@@ -1,9 +1,8 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-// Package query provides query classification functionality.
-
 /*
+Package query provides query classification functionality.
 This file is responsible for Helpers used in Query routing.
 */
 package query
@@ -22,6 +21,7 @@ import (
 
 	"eulix/internal/query/classifier"
 	"eulix/internal/query/retrieval"
+	"eulix/internal/query/retrieval/mmap"
 	"eulix/internal/query/strip"
 	"eulix/internal/utils"
 )
@@ -875,25 +875,16 @@ const (
 	depIntentCount                    // how many deps total
 )
 
-var externalDeps []utils.ExternalDependency
-
-func getExternalDeps() []utils.ExternalDependency {
-	return externalDeps
-}
-
-func loadExternalDeps(filePath string) error {
+func readExternalDeps(filePath string) ([]utils.ExternalDependency, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to read deps file: %w", err)
+		return nil, fmt.Errorf("failed to read deps file: %w", err)
 	}
-
 	var wrapper utils.ExternalDependencyRef
 	if err := json.Unmarshal(data, &wrapper); err != nil {
-		return fmt.Errorf("failed to unmarshal JSON: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
 	}
-
-	externalDeps = wrapper.ExternalDependencies
-	return nil
+	return wrapper.ExternalDependencies, nil
 }
 
 // nolint: unused
@@ -1164,94 +1155,15 @@ func formatFileImports(file string, idx *depIndex) string {
 	return b.String()
 }
 
-// func formatMatchedDeps(query string, deps []*utils.ExternalDependency) string {
-// 	var b strings.Builder
-
-// 	if len(deps) == 1 {
-// 		d := deps[0]
-// 		ver := "(unpinned)"
-// 		if d.Version != nil {
-// 			ver = *d.Version
-// 		}
-// 		usedBy := make([]string, len(d.UsedBy))
-// 		copy(usedBy, d.UsedBy)
-// 		sort.Strings(usedBy)
-
-// 		fmt.Fprintf(&b, "Dependency  : %s\n", d.Name)
-// 		fmt.Fprintf(&b, "Version     : %s\n", ver)
-// 		fmt.Fprintf(&b, "Source      : %s\n", d.Source)
-// 		fmt.Fprintf(&b, "Import count: %d\n", d.ImportCount)
-// 		fmt.Fprintf(&b, "\nUsed by (%d file(s)):\n", len(usedBy))
-// 		for _, f := range usedBy {
-// 			fmt.Fprintf(&b, "  • %s\n", f)
-// 		}
-// 		return b.String()
-// 	}
-
-// 	// multiple matches — sort deps alphabetically, files within each dep too
-// 	fmt.Fprintf(&b, "%d dependencies matched '%s':\n\n", len(deps), query)
-// 	for _, d := range deps {
-// 		ver := "(unpinned)"
-// 		if d.Version != nil {
-// 			ver = *d.Version
-// 		}
-// 		files := make([]string, len(d.UsedBy))
-// 		copy(files, d.UsedBy)
-// 		sort.Strings(files)
-
-// 		fmt.Fprintf(&b, "  %-40s  %-12s  %d import(s)\n", d.Name, ver, d.ImportCount)
-// 		for _, f := range files {
-// 			fmt.Fprintf(&b, "      • %s\n", f)
-// 		}
-// 		b.WriteString("\n")
-// 	}
-// 	return b.String()
-// }
-
-// func formatAllExternalDeps(deps []utils.ExternalDependency) string {
-// 	var b strings.Builder
-// 	bySource := make(map[string][]utils.ExternalDependency)
-// 	for _, d := range deps {
-// 		src := d.Source
-// 		if src == "" {
-// 			src = "unknown"
-// 		}
-// 		bySource[src] = append(bySource[src], d)
-// 	}
-
-// 	sources := make([]string, 0, len(bySource))
-// 	for s := range bySource {
-// 		sources = append(sources, s)
-// 	}
-// 	sort.Strings(sources)
-
-// 	fmt.Fprintf(&b, "All dependencies (%d total):\n", len(deps))
-// 	for _, src := range sources {
-// 		group := bySource[src]
-// 		// sort deps within each source group
-// 		sort.Slice(group, func(i, j int) bool {
-// 			return group[i].Name < group[j].Name
-// 		})
-// 		fmt.Fprintf(&b, "\n[%s — %d]\n", src, len(group))
-// 		for _, d := range group {
-// 			ver := "(unpinned)"
-// 			if d.Version != nil {
-// 				ver = *d.Version
-// 			}
-// 			fmt.Fprintf(&b, "  %-40s  %-12s  %d file(s)\n", d.Name, ver, d.ImportCount)
-// 		}
-// 	}
-// 	return b.String()
-// }
-
 var sourceFileExts = []string{
 	".go", ".py", ".rs", ".ts", ".tsx", ".js", ".jsx",
 	".java", ".c", ".h", ".cpp", ".hpp", ".rb", ".php", ".phtml", ".inc",
 }
 
 func looksLikeFilePath(s string) bool {
+	low := strings.ToLower(s)
 	for _, ext := range sourceFileExts {
-		if strings.HasSuffix(s, ext) {
+		if strings.HasSuffix(low, ext) {
 			return true
 		}
 	}
@@ -1276,4 +1188,22 @@ func extractDepQueryTerm(query string) string {
 		}
 	}
 	return ""
+}
+
+// ensureKB loads the full KB only for handlers that need file details.
+func (r *Router) ensureKB() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.kb != nil {
+		return nil
+	}
+	var kb utils.KnowledgeBaseSimplifiedRef
+	if err := mmap.DecodeJSONFile(filepath.Join(r.eulixDir, "kb.json"), &kb); err != nil {
+		return err
+	}
+	if kb.Metadata == nil {
+		return fmt.Errorf("kb.json has no metadata")
+	}
+	r.kb = &kb
+	return nil
 }
