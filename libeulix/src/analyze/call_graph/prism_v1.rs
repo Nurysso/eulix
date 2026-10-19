@@ -65,10 +65,11 @@ pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
     // resolver needs a complete `node_map` to look up targets against.
     // Building it lazily/interleaved would mean some calls resolve
     // differently depending on processing order.
-    let structure_vec: Vec<_> = structure.iter().collect();
+    let mut structure_vec: Vec<_> = structure.iter().collect();
+    structure_vec.sort_unstable_by(|a, b| a.0.cmp(b.0));
     let chunks: Vec<_> = structure_vec.chunks(CHUNK_SIZE).collect();
 
-    let file_list: Vec<String> = structure.keys().cloned().collect();
+    let file_list: Vec<String> = structure_vec.iter().map(|(k, _)| (*k).clone()).collect();
     let file_map: HashMap<String, usize> = file_list
         .iter()
         .enumerate()
@@ -139,7 +140,8 @@ pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
     // without it, resolving calls in a large codebase was measured to
     // take on the order of tens of minutes.
     let mut symbol_index: HashMap<&str, usize> = HashMap::with_capacity(node_map.len());
-    for (id, &idx) in node_map.iter() {
+    for (idx, node) in unique_nodes.iter().enumerate() {
+        let id = node.id.as_str();
         let short_name = id
             .split("::")
             .last()
@@ -155,7 +157,7 @@ pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
     // as node ids, so they are matched against class names. First wins, as
     // in symbol_index.
     let mut class_index: HashMap<&str, usize> = HashMap::new();
-    for filedata in structure.values() {
+    for (_, filedata) in &structure_vec {
         for class in &filedata.classes {
             if let Some(&idx) = node_map.get(&class.id) {
                 class_index.entry(class.name.as_str()).or_insert(idx);
@@ -340,7 +342,8 @@ pub fn resolve_indirect_call(
 /// caller list is more useful than none.
 pub fn resolve_call_locations(kb: &mut KnowledgeBase) {
     const CHUNK_SIZE: usize = 1000;
-    let structure_vec: Vec<_> = kb.structure.iter().collect();
+    let mut structure_vec: Vec<_> = kb.structure.iter().collect();
+    structure_vec.sort_unstable_by(|a, b| a.0.cmp(b.0));
     let func_info: HashMap<String, (String, String)> = structure_vec
         .par_chunks(CHUNK_SIZE)
         .map(|chunk| {
@@ -404,7 +407,8 @@ pub fn resolve_call_locations(kb: &mut KnowledgeBase) {
 pub fn populate_called_by(kb: &mut KnowledgeBase) {
     const CHUNK_SIZE: usize = 1000;
 
-    let structure_vec: Vec<_> = kb.structure.iter().collect();
+    let mut structure_vec: Vec<_> = kb.structure.iter().collect();
+    structure_vec.sort_unstable_by(|a, b| a.0.cmp(b.0));
     let chunks: Vec<_> = structure_vec.chunks(CHUNK_SIZE).collect();
 
     let all_calls: Vec<(String, CallerInfo)> = chunks
@@ -570,6 +574,97 @@ mod tests {
                 "expected inheritance edge Child -> Base, got {:?}",
                 cg.edges
             );
+        }
+
+        #[test]
+        fn different_hashmap_insertion_orders_produce_identical_call_graph() {
+            use crate::grammar_files::parse_source;
+            use crate::struc::kb_struct::{DependencyGraph, Indices, Metadata, PatternInfo};
+            use std::path::Path;
+
+            fn kb_from(structure: HashMap<String, FileData>) -> KnowledgeBase {
+                KnowledgeBase {
+                    metadata: Metadata {
+                        version: String::new(),
+                        git_hash: String::new(),
+                        project_name: String::new(),
+                        project_hash: String::new(),
+                        parsed_at: String::new(),
+                        languages: vec![],
+                        total_files: 0,
+                        total_loc: 0,
+                        total_functions: 0,
+                        total_classes: 0,
+                        total_methods: 0,
+                    },
+                    structure,
+                    call_graph: CallGraph::default(),
+                    dependency_graph: DependencyGraph::default(),
+                    indices: Indices::default(),
+                    entry_points: vec![],
+                    external_dependencies: vec![],
+                    patterns: PatternInfo::default(),
+                }
+            }
+
+            let files: Vec<(String, String)> = (0..16)
+                .map(|i| {
+                    (
+                        format!("pkg/mod_{i:02}.py"),
+                        "class Base:\n    pass\ndef helper():\n    pass\n".to_string(),
+                    )
+                })
+                .chain(std::iter::once((
+                    "pkg/caller.py".to_string(),
+                    "class Child(Base):\n    pass\ndef run():\n    helper()\n".to_string(),
+                )))
+                .collect();
+
+            let mut forward_map = HashMap::new();
+            for (path, src) in &files {
+                let (_, fd) = parse_source(Path::new(path), src).unwrap();
+                forward_map.insert(path.clone(), fd);
+            }
+
+            let mut reverse_map = HashMap::new();
+            for (path, src) in files.iter().rev() {
+                let (_, fd) = parse_source(Path::new(path), src).unwrap();
+                reverse_map.insert(path.clone(), fd);
+            }
+
+            let mut kb_forward = kb_from(forward_map);
+            resolve_call_locations(&mut kb_forward);
+            let cg_forward = build_call_graph(&kb_forward.structure);
+            populate_called_by(&mut kb_forward);
+
+            let mut kb_reverse = kb_from(reverse_map);
+            resolve_call_locations(&mut kb_reverse);
+            let cg_reverse = build_call_graph(&kb_reverse.structure);
+            populate_called_by(&mut kb_reverse);
+
+            let forward_edges: Vec<_> = cg_forward
+                .edges
+                .iter()
+                .map(|e| (&e.from, &e.to, &e.edge_type, e.call_site_line))
+                .collect();
+            let reverse_edges: Vec<_> = cg_reverse
+                .edges
+                .iter()
+                .map(|e| (&e.from, &e.to, &e.edge_type, e.call_site_line))
+                .collect();
+            assert_eq!(forward_edges, reverse_edges);
+
+            let forward_nodes: Vec<_> = cg_forward
+                .nodes
+                .iter()
+                .map(|n| (&n.id, &n.node_type, &n.file, n.call_count_estimate))
+                .collect();
+            let reverse_nodes: Vec<_> = cg_reverse
+                .nodes
+                .iter()
+                .map(|n| (&n.id, &n.node_type, &n.file, n.call_count_estimate))
+                .collect();
+            assert_eq!(forward_nodes, reverse_nodes);
         }
     }
 }
