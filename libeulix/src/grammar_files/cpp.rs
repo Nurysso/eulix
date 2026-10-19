@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex, walk};
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
 use regex::Regex;
@@ -432,105 +432,105 @@ impl CppParser {
     }
 
     fn scan_fn_ptr_assignments(&self, node: &Node, map: &mut HashMap<String, String>) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        // Direct function pointer assignment: fp = &func or fp = func
-        if node.kind() == "assignment_expression" {
-            let lhs = node.child_by_field_name("left");
-            let rhs = node.child_by_field_name("right");
-            if let (Some(l), Some(r)) = (lhs, rhs) {
-                let lhs_text = self.get_node_text(&l);
-                let rhs_text = self
-                    .get_node_text(&r)
-                    .trim_start_matches('&')
-                    .trim()
-                    .to_string();
+            // Direct function pointer assignment: fp = &func or fp = func
+            if node.kind() == "assignment_expression" {
+                let lhs = node.child_by_field_name("left");
+                let rhs = node.child_by_field_name("right");
+                if let (Some(l), Some(r)) = (lhs, rhs) {
+                    let lhs_text = self.get_node_text(&l);
+                    let rhs_text = self
+                        .get_node_text(&r)
+                        .trim_start_matches('&')
+                        .trim()
+                        .to_string();
 
-                if rhs_text.chars().all(|c| c.is_alphanumeric() || c == '_') && !rhs_text.is_empty()
-                {
-                    map.insert(lhs_text, rhs_text);
-                }
-            }
-        }
-
-        if node.kind() == "init_declarator" {
-            if let (Some(decl), Some(val)) = (
-                node.child_by_field_name("declarator"),
-                node.child_by_field_name("value"),
-            ) {
-                let name = self.extract_declarator_name(&decl);
-                let val_text = self
-                    .get_node_text(&val)
-                    .trim_start_matches('&')
-                    .trim()
-                    .to_string();
-
-                if !name.is_empty()
-                    && !val_text.is_empty()
-                    && val_text
-                        .chars()
-                        .all(|c| c.is_alphanumeric() || c == '_' || c == ':')
-                {
-                    map.insert(name, val_text);
-                }
-            }
-        }
-
-        if node.kind() == "field_initializer" {
-            let field = node.child_by_field_name("field");
-            let value = node.child_by_field_name("value");
-            if let (Some(f), Some(v)) = (field, value) {
-                let field_name = self.get_node_text(&f);
-                let val_text = self
-                    .get_node_text(&v)
-                    .trim_start_matches('&')
-                    .trim()
-                    .to_string();
-
-                if val_text.chars().all(|c| c.is_alphanumeric() || c == '_') && !val_text.is_empty()
-                {
-                    map.insert(field_name, val_text);
-                }
-            }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.scan_fn_ptr_assignments(&child, map);
-        }
-    }
-
-    fn scan_std_function_assignments(&self, node: &Node, map: &mut HashMap<String, String>) {
-        let mut cursor = node.walk();
-
-        if node.kind() == "init_declarator" || node.kind() == "assignment_expression" {
-            let (decl_name, value_node) = if node.kind() == "init_declarator" {
-                (
-                    node.child_by_field_name("declarator")
-                        .map(|d| self.extract_declarator_name(&d)),
-                    node.child_by_field_name("value"),
-                )
-            } else {
-                (
-                    node.child_by_field_name("left")
-                        .map(|l| self.get_node_text(&l)),
-                    node.child_by_field_name("right"),
-                )
-            };
-
-            if let (Some(name), Some(val)) = (decl_name, value_node) {
-                let val_text = self.get_node_text(&val);
-
-                if val_text.contains("std::bind") || val_text.contains("std::function") {
-                    if let Some(func_name) = self.extract_bound_function(&val_text) {
-                        map.insert(name, func_name);
+                    if rhs_text.chars().all(|c| c.is_alphanumeric() || c == '_')
+                        && !rhs_text.is_empty()
+                    {
+                        map.insert(lhs_text, rhs_text);
                     }
                 }
             }
-        }
 
-        for child in node.children(&mut cursor) {
-            self.scan_std_function_assignments(&child, map);
-        }
+            if node.kind() == "init_declarator" {
+                if let (Some(decl), Some(val)) = (
+                    node.child_by_field_name("declarator"),
+                    node.child_by_field_name("value"),
+                ) {
+                    let name = self.extract_declarator_name(&decl);
+                    let val_text = self
+                        .get_node_text(&val)
+                        .trim_start_matches('&')
+                        .trim()
+                        .to_string();
+
+                    if !name.is_empty()
+                        && !val_text.is_empty()
+                        && val_text
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || c == '_' || c == ':')
+                    {
+                        map.insert(name, val_text);
+                    }
+                }
+            }
+
+            if node.kind() == "field_initializer" {
+                let field = node.child_by_field_name("field");
+                let value = node.child_by_field_name("value");
+                if let (Some(f), Some(v)) = (field, value) {
+                    let field_name = self.get_node_text(&f);
+                    let val_text = self
+                        .get_node_text(&v)
+                        .trim_start_matches('&')
+                        .trim()
+                        .to_string();
+
+                    if val_text.chars().all(|c| c.is_alphanumeric() || c == '_')
+                        && !val_text.is_empty()
+                    {
+                        map.insert(field_name, val_text);
+                    }
+                }
+            }
+            Some(())
+        });
+    }
+
+    fn scan_std_function_assignments(&self, node: &Node, map: &mut HashMap<String, String>) {
+        walk(*node, (), |node, _| {
+            let node = &node;
+
+            if node.kind() == "init_declarator" || node.kind() == "assignment_expression" {
+                let (decl_name, value_node) = if node.kind() == "init_declarator" {
+                    (
+                        node.child_by_field_name("declarator")
+                            .map(|d| self.extract_declarator_name(&d)),
+                        node.child_by_field_name("value"),
+                    )
+                } else {
+                    (
+                        node.child_by_field_name("left")
+                            .map(|l| self.get_node_text(&l)),
+                        node.child_by_field_name("right"),
+                    )
+                };
+
+                if let (Some(name), Some(val)) = (decl_name, value_node) {
+                    let val_text = self.get_node_text(&val);
+
+                    if val_text.contains("std::bind") || val_text.contains("std::function") {
+                        if let Some(func_name) = self.extract_bound_function(&val_text) {
+                            map.insert(name, func_name);
+                        }
+                    }
+                }
+            }
+            Some(())
+        });
     }
 
     fn extract_bound_function(&self, bind_expr: &str) -> Option<String> {
@@ -695,9 +695,13 @@ impl CppParser {
         ctx: &str,
         fn_ptr_map: &HashMap<String, String>,
     ) {
-        let mut cursor = node.walk();
-
-        for child in node.children(&mut cursor) {
+        walk(*node, None, |child, target| {
+            if child == *node {
+                return Some(None);
+            }
+            if let Some(target) = target {
+                return if child == target { Some(None) } else { None };
+            }
             match child.kind() {
                 "function_definition" => {
                     if let Some(func) = self.parse_function(&child, ctx, fn_ptr_map, None) {
@@ -706,15 +710,16 @@ impl CppParser {
                 }
                 "namespace_definition" => {
                     if let Some(body) = child.child_by_field_name("body") {
-                        self.collect_functions(&body, functions, ctx, fn_ptr_map);
+                        return Some(Some(body));
                     }
                 }
                 "template_declaration" => {
-                    self.collect_functions(&child, functions, ctx, fn_ptr_map);
+                    return Some(None);
                 }
                 _ => {}
             }
-        }
+            None
+        });
     }
 
     fn parse_function(
@@ -811,19 +816,27 @@ impl CppParser {
     }
 
     fn extract_function_name(&self, declarator: &Node) -> Option<String> {
-        match declarator.kind() {
-            "function_declarator" => declarator
-                .child_by_field_name("declarator")
-                .and_then(|d| self.extract_function_name(&d)),
-            "pointer_declarator" | "reference_declarator" => declarator
-                .child_by_field_name("declarator")
-                .and_then(|d| self.extract_function_name(&d)),
-            "qualified_identifier" | "destructor_name" | "operator_name" => {
-                Some(self.get_node_text(declarator))
+        let mut result = None;
+        walk(*declarator, None, |node, target| {
+            if result.is_some() || target.is_some_and(|n| n != node) || !node.is_named() {
+                return None;
             }
-            "identifier" | "field_identifier" => Some(self.get_node_text(declarator)),
-            _ => None,
-        }
+            match node.kind() {
+                "function_declarator" | "pointer_declarator" | "reference_declarator" => {
+                    node.child_by_field_name("declarator").map(Some)
+                }
+                "qualified_identifier"
+                | "destructor_name"
+                | "operator_name"
+                | "identifier"
+                | "field_identifier" => {
+                    result = Some(self.get_node_text(&node));
+                    None
+                }
+                _ => None,
+            }
+        });
+        result
     }
 
     fn extract_parameters(&self, declarator: &Node) -> Vec<Parameter> {
@@ -833,71 +846,78 @@ impl CppParser {
     }
 
     fn find_params(&self, node: &Node, params: &mut Vec<Parameter>) {
-        if node.kind() == "parameter_list" {
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if child.kind() == "parameter_declaration" {
-                    let type_annotation = child
-                        .child_by_field_name("type")
-                        .map(|t| self.get_node_text(&t))
-                        .unwrap_or_default();
+        walk(*node, (), |node, _| {
+            let node = &node;
+            if node.kind() == "parameter_list" {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "parameter_declaration" {
+                        let type_annotation = child
+                            .child_by_field_name("type")
+                            .map(|t| self.get_node_text(&t))
+                            .unwrap_or_default();
 
-                    let name = child
-                        .child_by_field_name("declarator")
-                        .map(|d| self.extract_declarator_name(&d))
-                        .unwrap_or_else(|| format!("_p{}", params.len()));
+                        let name = child
+                            .child_by_field_name("declarator")
+                            .map(|d| self.extract_declarator_name(&d))
+                            .unwrap_or_else(|| format!("_p{}", params.len()));
 
-                    params.push(Parameter {
-                        name,
-                        type_annotation,
-                        default_value: None,
-                    });
-                } else if child.kind() == "optional_parameter_declaration" {
-                    let type_annotation = child
-                        .child_by_field_name("type")
-                        .map(|t| self.get_node_text(&t))
-                        .unwrap_or_default();
-                    let name = child
-                        .child_by_field_name("declarator")
-                        .map(|d| self.extract_declarator_name(&d))
-                        .unwrap_or_else(|| format!("_p{}", params.len()));
-                    let default_value = child
-                        .child_by_field_name("default_value")
-                        .map(|v| self.get_node_text(&v));
+                        params.push(Parameter {
+                            name,
+                            type_annotation,
+                            default_value: None,
+                        });
+                    } else if child.kind() == "optional_parameter_declaration" {
+                        let type_annotation = child
+                            .child_by_field_name("type")
+                            .map(|t| self.get_node_text(&t))
+                            .unwrap_or_default();
+                        let name = child
+                            .child_by_field_name("declarator")
+                            .map(|d| self.extract_declarator_name(&d))
+                            .unwrap_or_else(|| format!("_p{}", params.len()));
+                        let default_value = child
+                            .child_by_field_name("default_value")
+                            .map(|v| self.get_node_text(&v));
 
-                    params.push(Parameter {
-                        name,
-                        type_annotation,
-                        default_value,
-                    });
-                } else if child.kind() == "variadic_parameter_declaration" {
-                    params.push(Parameter {
-                        name: "...".to_string(),
-                        type_annotation: "variadic".to_string(),
-                        default_value: None,
-                    });
+                        params.push(Parameter {
+                            name,
+                            type_annotation,
+                            default_value,
+                        });
+                    } else if child.kind() == "variadic_parameter_declaration" {
+                        params.push(Parameter {
+                            name: "...".to_string(),
+                            type_annotation: "variadic".to_string(),
+                            default_value: None,
+                        });
+                    }
                 }
+                None
+            } else {
+                Some(())
             }
-        } else {
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                self.find_params(&child, params);
-            }
-        }
+        });
     }
 
     fn extract_declarator_name(&self, node: &Node) -> String {
-        match node.kind() {
-            "identifier" => self.get_node_text(node),
-            "pointer_declarator"
-            | "reference_declarator"
-            | "array_declarator"
-            | "function_declarator" => node
-                .child_by_field_name("declarator")
-                .map(|d| self.extract_declarator_name(&d))
-                .unwrap_or_default(),
-            _ => self.get_node_text(node),
-        }
+        let mut name = String::new();
+        walk(*node, None, |node, target| {
+            if target.is_some_and(|n| n != node) {
+                return None;
+            }
+            match node.kind() {
+                "pointer_declarator"
+                | "reference_declarator"
+                | "array_declarator"
+                | "function_declarator" => node.child_by_field_name("declarator").map(Some),
+                _ => {
+                    name = self.get_node_text(&node);
+                    None
+                }
+            }
+        });
+        name
     }
 
     fn build_signature(&self, name: &str, params: &[Parameter], return_type: &str) -> String {
@@ -927,9 +947,13 @@ impl CppParser {
     }
 
     fn collect_classes(&self, node: &Node, classes: &mut Vec<Class>) {
-        let mut cursor = node.walk();
-
-        for child in node.children(&mut cursor) {
+        walk(*node, None, |child, target| {
+            if child == *node {
+                return Some(None);
+            }
+            if let Some(target) = target {
+                return if child == target { Some(None) } else { None };
+            }
             match child.kind() {
                 "class_specifier" | "struct_specifier" => {
                     if let Some(class) = self.parse_class(&child) {
@@ -958,15 +982,16 @@ impl CppParser {
                 }
                 "namespace_definition" => {
                     if let Some(body) = child.child_by_field_name("body") {
-                        self.collect_classes(&body, classes);
+                        return Some(Some(body));
                     }
                 }
                 "template_declaration" => {
-                    self.collect_classes(&child, classes);
+                    return Some(None);
                 }
                 _ => {}
             }
-        }
+            None
+        });
     }
 
     fn parse_enum(&self, node: &Node) -> Option<Class> {
@@ -1364,64 +1389,63 @@ impl CppParser {
         context: &str,
         fn_ptr_map: &HashMap<String, String>,
     ) {
-        let mut cursor = node.walk();
+        walk(*node, context, |node, context| {
+            let node = &node;
 
-        let child_context = match node.kind() {
-            "if_statement" => "if",
-            "for_statement" | "while_statement" | "do_statement" => "loop",
-            "switch_statement" => "switch",
-            "try_statement" => "try",
-            _ => context,
-        };
+            let child_context = match node.kind() {
+                "if_statement" => "if",
+                "for_statement" | "while_statement" | "do_statement" => "loop",
+                "switch_statement" => "switch",
+                "try_statement" => "try",
+                _ => context,
+            };
 
-        if node.kind() == "call_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let call_text = self.get_node_text(&func_node);
-                let resolved = self.resolve_callee(&call_text, fn_ptr_map);
-                let name = call_text
-                    .split(['.', '>'])
-                    .next_back()
-                    .and_then(|s| s.split("::").last())
-                    .unwrap_or(&call_text)
-                    .trim()
-                    .to_string();
+            if node.kind() == "call_expression" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let call_text = self.get_node_text(&func_node);
+                    let resolved = self.resolve_callee(&call_text, fn_ptr_map);
+                    let name = call_text
+                        .split(['.', '>'])
+                        .next_back()
+                        .and_then(|s| s.split("::").last())
+                        .unwrap_or(&call_text)
+                        .trim()
+                        .to_string();
 
-                if !name.is_empty() {
-                    let key = format!("{}:{}", name, node.start_position().row);
-                    if !seen.contains(&key) {
-                        seen.insert(key);
-                        let args = self.extract_call_arguments(node);
-                        calls.push(FunctionCall {
-                            callee: name,
-                            defined_in: None,
-                            line: node.start_position().row + 1,
-                            args,
-                            is_conditional: context != "unconditional",
-                            context: context.to_string(),
-                        });
+                    if !name.is_empty() {
+                        let key = format!("{}:{}", name, node.start_position().row);
+                        if !seen.contains(&key) {
+                            seen.insert(key);
+                            let args = self.extract_call_arguments(node);
+                            calls.push(FunctionCall {
+                                callee: name,
+                                defined_in: None,
+                                line: node.start_position().row + 1,
+                                args,
+                                is_conditional: context != "unconditional",
+                                context: context.to_string(),
+                            });
+                        }
                     }
-                }
-                if !resolved.is_empty() {
-                    let key = format!("{}:{}", resolved, node.start_position().row);
-                    if !seen.contains(&key) {
-                        seen.insert(key);
-                        let args = self.extract_call_arguments(node);
-                        calls.push(FunctionCall {
-                            callee: resolved,
-                            defined_in: None,
-                            line: node.start_position().row + 1,
-                            args,
-                            is_conditional: context != "unconditional",
-                            context: context.to_string(),
-                        });
+                    if !resolved.is_empty() {
+                        let key = format!("{}:{}", resolved, node.start_position().row);
+                        if !seen.contains(&key) {
+                            seen.insert(key);
+                            let args = self.extract_call_arguments(node);
+                            calls.push(FunctionCall {
+                                callee: resolved,
+                                defined_in: None,
+                                line: node.start_position().row + 1,
+                                args,
+                                is_conditional: context != "unconditional",
+                                context: context.to_string(),
+                            });
+                        }
                     }
                 }
             }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.find_calls_recursive(&child, calls, seen, child_context, fn_ptr_map);
-        }
+            Some(child_context)
+        });
     }
 
     fn extract_call_arguments(&self, call_node: &Node) -> Vec<String> {
@@ -1468,42 +1492,41 @@ impl CppParser {
     }
 
     fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        if node.kind() == "declaration" {
-            if let Some(decl) = node.child_by_field_name("declarator") {
-                let var_name = self.extract_declarator_name(&decl);
-                if !var_name.is_empty() {
-                    let var_type = node
-                        .child_by_field_name("type")
-                        .map(|t| self.get_node_text(&t));
-                    let line = node.start_position().row + 1;
-                    variables.entry(var_name.clone()).or_insert(Variable {
-                        name: var_name,
-                        var_type,
-                        scope: "local".to_string(),
-                        defined_at: Some(line),
-                        transformations: vec![],
-                        used_in: vec![],
-                        returned: false,
-                    });
+            if node.kind() == "declaration" {
+                if let Some(decl) = node.child_by_field_name("declarator") {
+                    let var_name = self.extract_declarator_name(&decl);
+                    if !var_name.is_empty() {
+                        let var_type = node
+                            .child_by_field_name("type")
+                            .map(|t| self.get_node_text(&t));
+                        let line = node.start_position().row + 1;
+                        variables.entry(var_name.clone()).or_insert(Variable {
+                            name: var_name,
+                            var_type,
+                            scope: "local".to_string(),
+                            defined_at: Some(line),
+                            transformations: vec![],
+                            used_in: vec![],
+                            returned: false,
+                        });
+                    }
                 }
-            }
-        } else if node.kind() == "return_statement" {
-            let mut ret_cursor = node.walk();
-            for child in node.children(&mut ret_cursor) {
-                if child.kind() == "identifier" {
-                    let vn = self.get_node_text(&child);
-                    if let Some(var) = variables.get_mut(&vn) {
-                        var.returned = true;
+            } else if node.kind() == "return_statement" {
+                let mut ret_cursor = node.walk();
+                for child in node.children(&mut ret_cursor) {
+                    if child.kind() == "identifier" {
+                        let vn = self.get_node_text(&child);
+                        if let Some(var) = variables.get_mut(&vn) {
+                            var.returned = true;
+                        }
                     }
                 }
             }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.track_variable_usage(&child, variables);
-        }
+            Some(())
+        });
     }
 
     fn build_control_flow(&self, node: &Node) -> ControlFlow {
@@ -1518,30 +1541,29 @@ impl CppParser {
     }
 
     fn extract_control_structures(&self, node: &Node, cf: &mut ControlFlow) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        match node.kind() {
-            "if_statement" => {
-                if let Some(branch) = self.parse_if(node) {
-                    cf.branches.push(branch);
+            match node.kind() {
+                "if_statement" => {
+                    if let Some(branch) = self.parse_if(node) {
+                        cf.branches.push(branch);
+                    }
                 }
-            }
-            "for_statement" | "while_statement" | "do_statement" => {
-                if let Some(lp) = self.parse_loop(node) {
-                    cf.loops.push(lp);
+                "for_statement" | "while_statement" | "do_statement" => {
+                    if let Some(lp) = self.parse_loop(node) {
+                        cf.loops.push(lp);
+                    }
                 }
-            }
-            "try_statement" => {
-                if let Some(tb) = self.parse_try(node) {
-                    cf.try_blocks.push(tb);
+                "try_statement" => {
+                    if let Some(tb) = self.parse_try(node) {
+                        cf.try_blocks.push(tb);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-
-        for child in node.children(&mut cursor) {
-            self.extract_control_structures(&child, cf);
-        }
+            Some(())
+        });
     }
 
     fn parse_if(&self, node: &Node) -> Option<Branch> {
@@ -1648,27 +1670,32 @@ impl CppParser {
     }
 
     fn find_call_names(&self, node: &Node, calls: &mut Vec<String>, seen: &mut HashSet<String>) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        if node.kind() == "call_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let name = self.get_node_text(&func_node);
-                if !seen.contains(&name) {
-                    seen.insert(name.clone());
-                    calls.push(name);
+            if node.kind() == "call_expression" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let name = self.get_node_text(&func_node);
+                    if !seen.contains(&name) {
+                        seen.insert(name.clone());
+                        calls.push(name);
+                    }
                 }
             }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.find_call_names(&child, calls, seen);
-        }
+            Some(())
+        });
     }
 
     fn find_return_value(&self, node: &Node) -> Option<String> {
-        let mut cursor = node.walk();
+        let mut result = None;
+        walk(*node, (), |child, _| {
+            if result.is_some() {
+                return None;
+            }
+            if child == *node {
+                return Some(());
+            }
 
-        for child in node.children(&mut cursor) {
             if child.kind() == "return_statement" {
                 let mut vals = Vec::new();
                 let mut rc = child.walk();
@@ -1677,20 +1704,18 @@ impl CppParser {
                         vals.push(self.get_node_text(&rc_child));
                     }
                 }
-                return Some(vals.join(", "));
+                result = Some(vals.join(", "));
+                return None;
             }
-            if let Some(v) = self.find_return_value(&child) {
-                return Some(v);
-            }
-        }
-
-        None
+            Some(())
+        });
+        result
     }
 
     fn calculate_complexity(&self, node: &Node) -> usize {
-        fn count(node: &Node) -> usize {
-            let mut c = 0;
-            let mut cursor = node.walk();
+        let mut complexity = 1;
+        walk(*node, (), |node, _| {
+            let node = &node;
             match node.kind() {
                 "if_statement"
                 | "for_statement"
@@ -1702,15 +1727,12 @@ impl CppParser {
                 | "try_statement"
                 | "catch_clause"
                 | "&&"
-                | "||" => c += 1,
+                | "||" => complexity += 1,
                 _ => {}
             }
-            for child in node.children(&mut cursor) {
-                c += count(&child);
-            }
-            c
-        }
-        1 + count(node)
+            Some(())
+        });
+        complexity
     }
 
     fn extract_docstring(&self, node: &Node) -> String {
@@ -2020,6 +2042,31 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
 #[cfg(test)]
 mod tests {
     #![expect(clippy::expect_used)]
+
+    #[test]
+    fn deep_expression_on_small_stack() {
+        // A left-associative expression must not grow the Rust call stack.
+        let expression = vec!["x"; 10_000].join(" + ");
+        let source = format!("int deep(int x) {{ return {}; }}", expression);
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let (_, data) =
+                    crate::grammar_files::parse_source(std::path::Path::new("deep.cpp"), &source)
+                        .expect("deep expression parses");
+                assert!(data.syntax.is_clean(), "deep expression is valid syntax");
+                assert!(
+                    data.functions
+                        .iter()
+                        .chain(data.classes.iter().flat_map(|c| &c.methods))
+                        .any(|f| f.name == "deep"),
+                    "deep function extracted"
+                );
+            })
+            .expect("spawn parser thread")
+            .join()
+            .expect("parser thread completes on a 2 MiB stack");
+    }
 
     use super::*;
 
