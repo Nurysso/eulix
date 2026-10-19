@@ -37,7 +37,7 @@ func mustTempDir(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
 }
 
@@ -716,7 +716,7 @@ func TestOpenForSequentialRead_permission_denied(t *testing.T) {
 
 func BenchmarkDecodeJSONFile_small(b *testing.B) {
 	dir, _ := os.MkdirTemp("", "bench_mmap_*")
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	data, _ := json.Marshal(simplePayload{Name: "bench", Count: 1})
 	path := filepath.Join(dir, "small.json")
@@ -733,7 +733,7 @@ func BenchmarkDecodeJSONFile_small(b *testing.B) {
 
 func BenchmarkDecodeJSONFile_large(b *testing.B) {
 	dir, _ := os.MkdirTemp("", "bench_mmap_large_*")
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	data := makeLargeJSON(mmapThreshold + 65536)
 	path := filepath.Join(dir, "large.json")
@@ -751,7 +751,7 @@ func BenchmarkDecodeJSONFile_large(b *testing.B) {
 
 func BenchmarkOpenForSequentialRead_large_readAll(b *testing.B) {
 	dir, _ := os.MkdirTemp("", "bench_seq_*")
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	data := makeLargeJSON(mmapThreshold + 65536)
 	path := filepath.Join(dir, "seq.json")

@@ -35,10 +35,6 @@ func withType(ct string) func(*Chunk) {
 	return func(c *Chunk) { c.ChunkType = ct }
 }
 
-func withTokens(n int) func(*Chunk) {
-	return func(c *Chunk) { c.Tokens = n }
-}
-
 func writeTempFile(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
