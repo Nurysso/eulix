@@ -249,4 +249,41 @@ mod tests {
             kb.call_graph.edges
         );
     }
+
+    #[test]
+    fn a_called_parameter_does_not_bind_to_a_global_function() {
+        // `helper` is the second parameter, so this also checks that the
+        // parameters survive slimming before the analysis runs.
+        let repo = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        fs::write(
+            repo.path().join("app.py"),
+            "def helper():\n    return 1\n\ndef dynamic(x, helper):\n    return helper()\n\ndef direct():\n    return helper()\n",
+        )
+        .unwrap();
+
+        let engine = Engine::with_threads(2).unwrap();
+        let root_str = repo.path().to_string_lossy().to_string();
+        let (kb, _stats, _spill) = parse_directory(
+            &root_str,
+            "all",
+            None,
+            false,
+            "0.8.1",
+            "test",
+            out.path(),
+            false,
+            &engine,
+        )
+        .unwrap();
+
+        let kb = analyze_and_build(kb, false, 2);
+        let edges: Vec<(&str, &str)> = kb
+            .call_graph
+            .edges
+            .iter()
+            .map(|e| (e.from.as_str(), e.to.as_str()))
+            .collect();
+        assert_eq!(edges, vec![("func_direct::app.py", "func_helper::app.py")]);
+    }
 }

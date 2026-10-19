@@ -36,7 +36,10 @@ pub fn strip_emitted(fd: &mut FileData) {
         f.signature = String::new();
         f.return_type = String::new();
         f.variables = Vec::new();
-        f.params.truncate(1); // analyzer only reads params[0] (self detection)
+        for p in &mut f.params {
+            p.type_annotation = String::new();
+            p.default_value = None;
+        }
         f.params.shrink_to_fit();
     }
     fd.todos = Vec::new();
