@@ -80,6 +80,7 @@
 //! - eulix_parser depends upon tree-sitter@latest so a newer version of language sysntax will result in partial
 //!   parse and not a complete failure
 
+mod analysis_pipeline;
 mod engine;
 mod memory;
 mod os_io;
@@ -95,6 +96,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
+use crate::analysis_pipeline::analyze_and_build;
 use crate::engine::Engine;
 use crate::memory::{default_thread_count, max_rss_mb};
 use crate::output::{output_dir, write_json_streaming, write_kb_from_spill};
@@ -269,7 +271,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    Consider using --no-analyze for faster results");
         }
 
-        kb = analyze::analyze_and_build(kb, args.verbose, args.prism);
+        kb = analyze_and_build(kb, args.verbose, args.prism);
         let rss_after_analyze = max_rss_mb();
 
         if args.verbose {

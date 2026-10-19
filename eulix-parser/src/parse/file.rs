@@ -203,9 +203,9 @@ pub fn language_label(file: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis_pipeline::analyze_and_build;
     use crate::engine::Engine;
     use crate::parse::directory::parse_directory;
-    use libeulix::analyze;
     use std::fs;
     use tempfile::TempDir;
 
@@ -238,7 +238,7 @@ mod tests {
         let fd_b = kb.structure.get("src/b.py").expect("src/b.py in structure");
         assert_eq!(fd_b.functions[0].id, "func_target::src/b.py");
 
-        let kb = analyze::analyze_and_build(kb, false, 2);
+        let kb = analyze_and_build(kb, false, 2);
         assert!(
             kb.call_graph.edges.iter().any(|e| {
                 e.edge_type == "call"

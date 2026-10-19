@@ -5,6 +5,10 @@ use crate::struc::kb_struct::KnowledgeBase;
 
 use super::{call_graph, dependencies, entry_points, patterns};
 
+#[deprecated(
+    since = "0.9.0",
+    note = "Use the individual modules directly (e.g., call_graph::prism_v2::build_call_graph_v2, patterns::detect_patterns, entry_points::find_entry_points) to build the knowledge base. This function will be removed in 1.0.0."
+)]
 pub fn analyze_and_build(mut kb: KnowledgeBase, verbose: bool, prism: u8) -> KnowledgeBase {
     let file_count = kb.structure.len();
     let is_large = file_count > 100_000;
