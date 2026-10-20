@@ -308,22 +308,25 @@ func buildSkeleton(src []string, start, end int, kids [][2]int, lang string) (ou
 		}
 	}
 
+	truncated := false
 	for _, kid := range kids {
 		if len(out) >= skeletonHeadLines {
 			break
 		}
 		if kid[0] > cursor {
 			take(cursor, kid[0]-1)
-			if cursor < kid[0] { // gap was cut short; the child lies beyond our window
+			if cursor < kid[0] {
+				truncated = true
 				break
 			}
 		}
 		out = append(out, fmt.Sprintf("%s ... lines %d-%d omitted (separate chunk)", cm, kid[0], kid[1]))
 		cursor = kid[1] + 1
 	}
-	if len(out) < skeletonHeadLines && cursor <= end {
+	if !truncated && len(out) < skeletonHeadLines && cursor <= end {
 		take(cursor, end)
 	}
+
 	if len(out) > skeletonHeadLines {
 		out = out[:skeletonHeadLines]
 		tail = true
