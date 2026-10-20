@@ -15,6 +15,148 @@ import (
 	"eulix/internal/utils"
 )
 
+// === bugs ===
+
+// Bug 1: pure function, runs identically on all OSes.
+func TestBuildSkeletonDoesNotLeakChildBodyAfterCommentHeavyGap(t *testing.T) {
+	src := []string{"type A struct {"}
+	for i := 0; i < 300; i++ {
+		src = append(src, "// filler comment") // lines 2..301
+	}
+	src = append(
+		src,
+		"func (a A) child() {", // 302
+		"\tsecretChildBody()",  // 303
+		"}",                    // 304
+		"}",                    // 305
+	)
+	kids := [][2]int{{302, 304}}
+
+	out, tail := buildSkeleton(src, 1, 305, kids, "go")
+
+	if joined := strings.Join(out, "\n"); strings.Contains(joined, "secretChildBody") {
+		t.Fatalf("child body leaked into parent skeleton:\n%s", joined)
+	}
+	if !tail {
+		t.Error("tail should be true: source was left out")
+	}
+}
+
+// Bug 2: CRLF must not leave '\r' on lines (matters on Windows checkouts).
+func TestFileCacheNormalizesCRLFAndBOM(t *testing.T) {
+	dir := t.TempDir()
+	body := "\xef\xbb\xbfpackage x\r\n\r\n// note\r\nfunc F() {}\r\n"
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fc := newFileCache()
+	lines := fc.get(filepath.Join(dir, "a.go"), nil)
+	if len(lines) == 0 {
+		t.Fatal("no lines read")
+	}
+	for i, l := range lines {
+		if strings.Contains(l, "\r") {
+			t.Errorf("line %d still has \\r: %q", i+1, l)
+		}
+	}
+	if strings.HasPrefix(lines[0], "\xef\xbb\xbf") {
+		t.Errorf("BOM left on first line: %q", lines[0])
+	}
+	for _, l := range stripSegment(lines, 1, len(lines), "go") {
+		if strings.Contains(l, "\r") {
+			t.Errorf("stripped output has \\r: %q", l)
+		}
+	}
+}
+
+func newRootedCache(t *testing.T, root string) *fileCache {
+	t.Helper()
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	fc := newFileCache()
+	fc.root, fc.rootPath = r, root
+	return fc
+}
+
+// Bug 3: only fails where the root path is a symlink (macOS /var -> /private/var).
+func TestFileCacheAbsolutePathThroughSymlinkedRoot(t *testing.T) {
+	root := t.TempDir() // macOS: /var/folders/... (unresolved)
+	if err := os.WriteFile(filepath.Join(root, "a.py"), []byte("x = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc := newRootedCache(t, root)
+
+	if lines := fc.get(filepath.Join(resolved, "a.py"), nil); len(lines) == 0 {
+		t.Fatalf("absolute path via resolved root failed (root=%s resolved=%s)", root, resolved)
+	}
+}
+
+// Regression guards for the os.Root containment fix, on every OS.
+func TestFileCacheStaysInsideRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "proj")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(base, "secret.py")
+	if err := os.WriteFile(outside, []byte("TOKEN = 'SYNTHETIC_SECRET'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ok.py"), []byte("x = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fc := newRootedCache(t, root)
+
+	if got := fc.get("../secret.py", nil); got != nil {
+		t.Errorf("../ escape returned content: %v", got)
+	}
+	if got := fc.get(outside, nil); got != nil { // absolute, outside root
+		t.Errorf("absolute outside path returned content: %v", got)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link.py")); err == nil {
+		if got := fc.get("link.py", nil); got != nil {
+			t.Errorf("escaping symlink returned content: %v", got)
+		}
+	} // else: Windows without symlink privilege, skip that case
+	if got := fc.get("ok.py", nil); len(got) == 0 {
+		t.Error("file inside root should be readable")
+	}
+	if got := fc.get(filepath.Join(root, "ok.py"), nil); len(got) == 0 {
+		t.Error("absolute path inside root should be readable")
+	}
+}
+
+// Invariant guard for the allocator: spend never exceeds the budget.
+func TestAllocateAndFitNeverExceedBudget(t *testing.T) {
+	mk := func(idx, nLines int, w float64) *hItem {
+		it := &hItem{idx: idx, weight: w}
+		it.lines = make([]string, nLines)
+		it.cum = make([]int, nLines+1)
+		for i := range it.lines {
+			it.lines[i] = strings.Repeat("x", 60)
+			it.cum[i+1] = it.cum[i] + 61
+		}
+		it.need = it.cost(nLines)
+		it.minUseful = max(minGrantTokens, int(float64(it.need)*minGrantFraction))
+		it.minUseful = min(it.minUseful, it.need)
+		return it
+	}
+	for _, budget := range []int{50, 300, 1000, 5000} {
+		items := []*hItem{mk(0, 200, 1), mk(1, 40, 0.8), mk(2, 500, 0.5), mk(3, 10, 0.3)}
+		allocateGrants(items, budget)
+		if used := fitAndTopUp(items, budget); used > budget {
+			t.Errorf("budget %d: used %d", budget, used)
+		}
+	}
+}
+
 // ========== helpers ==========
 
 func newDebugLog(t *testing.T) *utils.DebugLogger {
