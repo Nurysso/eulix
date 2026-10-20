@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"eulix/internal/checksum"
 )
 
 // ========== Lexical (grep-style) fallback ==========
@@ -84,6 +86,7 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		return "", nil
 	}
 
+	ignored := checksum.IgnoreMatcher(root)
 	var hits []fileHit
 	scanned := 0
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
@@ -95,12 +98,17 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path != root && (skipDirs[name] || strings.HasPrefix(name, ".")) {
+			if path != root && (skipDirs[name] || strings.HasPrefix(name, ".") || ignored(path)) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if !d.Type().IsRegular() {
+			return nil
+		}
+		// Hidden files (.env, .npmrc, ...) often hold credentials, and files in
+		// .euignore were left out on purpose: the fallback reads neither.
+		if strings.HasPrefix(name, ".") || ignored(path) {
 			return nil
 		}
 		info, err := d.Info()

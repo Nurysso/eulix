@@ -198,6 +198,13 @@ func (d *Detector) loadIgnorePatterns() {
 	d.ignorePatterns = append(user, defaults...)
 }
 
+// IgnoreMatcher reports whether a path under projectPath is excluded by the
+// project's .euignore or the default ignored directories, the same rules the
+// checksum scan uses. It reads .euignore once, so build one per walk.
+func IgnoreMatcher(projectPath string) func(path string) bool {
+	return newDetector(projectPath).shouldIgnore
+}
+
 func (d *Detector) shouldIgnore(path string) bool {
 	relPath, err := filepath.Rel(d.projectPath, path)
 	if err != nil {
