@@ -98,7 +98,7 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path != root && (skipDirs[name] || strings.HasPrefix(name, ".") || ignored(path)) {
+			if path != root && (skipDirs[name] || isHidden(name, d) || ignored(path)) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -182,6 +182,12 @@ outer:
 		}
 	}
 	return b.String(), nil
+}
+
+// isHidden covers both conventions: dot-prefixed names (Unix, and common
+// on Windows for .env/.npmrc) and the NTFS hidden attribute.
+func isHidden(name string, d fs.DirEntry) bool {
+	return strings.HasPrefix(name, ".") || hiddenByAttr(d)
 }
 
 // bestWindows picks up to maxWin non-overlapping windows around the
