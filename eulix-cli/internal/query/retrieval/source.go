@@ -86,7 +86,9 @@ func (fc *fileCache) get(path string, debugLog *utils.DebugLogger) []string {
 			}
 			return
 		}
-		e.lines = strings.Split(string(data), "\n")
+		s := strings.TrimPrefix(string(data), "\ufeff")
+		s = strings.ReplaceAll(s, "\r\n", "\n")
+		e.lines = strings.Split(s, "\n")
 	})
 	return e.lines
 }
