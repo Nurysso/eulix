@@ -98,6 +98,49 @@ func TestFileCacheAbsolutePathThroughSymlinkedRoot(t *testing.T) {
 	}
 }
 
+func TestFileCacheAbsolutePathThroughSymlinkedRootLinux(t *testing.T) {
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real")
+	if err := os.Mkdir(realRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realRoot, "a.py"), []byte("x = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linkRoot := filepath.Join(base, "link")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// sourceRoot is what the user configured: the symlinked path.
+	// The indexer resolved paths and stored them under realRoot.
+	fc := newRootedCache(t, linkRoot)
+	if lines := fc.get(filepath.Join(realRoot, "a.py"), nil); len(lines) == 0 {
+		t.Fatalf("resolved absolute path rejected by unresolved root (root=%s real=%s)",
+			linkRoot, realRoot)
+	}
+}
+
+func TestFileCacheSymlinkEscapeStillRejected(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "proj")
+	outside := filepath.Join(base, "secret.txt")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "leak.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	fc := newRootedCache(t, root)
+	if lines := fc.get(filepath.Join(root, "leak.txt"), nil); len(lines) != 0 {
+		t.Fatalf("symlink escaping the root was read: %v", lines)
+	}
+}
+
 // Regression guards for the os.Root containment fix, on every OS.
 func TestFileCacheStaysInsideRoot(t *testing.T) {
 	base := t.TempDir()

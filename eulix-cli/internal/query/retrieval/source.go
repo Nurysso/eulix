@@ -57,10 +57,12 @@ type fileEntry struct {
 // os.Root: a `..` path or a symlink pointing outside the project fails like a
 // missing file instead of pulling outside content into the context.
 type fileCache struct {
-	mu       sync.Mutex
-	files    map[string]*fileEntry
-	root     *os.Root
-	rootPath string
+	mu        sync.Mutex
+	files     map[string]*fileEntry
+	root      *os.Root
+	rootPath  string
+	aliasOnce sync.Once
+	aliases   []string
 }
 
 func newFileCache() *fileCache {
@@ -93,14 +95,47 @@ func (fc *fileCache) get(path string, debugLog *utils.DebugLogger) []string {
 	return e.lines
 }
 
+// rootAliases returns the spellings of the root a stored path may use. Computed once,
+// lazily, so it works however the cache was constructed.
+func (fc *fileCache) rootAliases() []string {
+	fc.aliasOnce.Do(func() {
+		fc.aliases = []string{fc.rootPath}
+		if r, err := filepath.EvalSymlinks(fc.rootPath); err == nil && r != fc.rootPath {
+			fc.aliases = append(fc.aliases, r)
+		}
+	})
+	return fc.aliases
+}
+
+// relToRoot maps an absolute path to a root-relative one. It tries the root as
+// configured and as resolved, and the path as given and as resolved, so the
+// symlink may sit on either side. os.Root still enforces containment on the read.
+func (fc *fileCache) relToRoot(name string) (string, bool) {
+	try := func(n string) (string, bool) {
+		for _, base := range fc.rootAliases() {
+			if rel, err := filepath.Rel(base, n); err == nil && filepath.IsLocal(rel) {
+				return rel, true
+			}
+		}
+		return "", false
+	}
+	if rel, ok := try(name); ok {
+		return rel, true
+	}
+	if resolved, err := filepath.EvalSymlinks(name); err == nil && resolved != name {
+		return try(resolved)
+	}
+	return "", false
+}
+
 func (fc *fileCache) read(name string) ([]byte, error) {
 	if fc.root == nil {
 		return os.ReadFile(name)
 	}
 	if filepath.IsAbs(name) {
-		rel, err := filepath.Rel(fc.rootPath, name)
-		if err != nil {
-			return nil, err
+		rel, ok := fc.relToRoot(name)
+		if !ok {
+			return nil, fmt.Errorf("%s is outside source root %s", name, fc.rootPath)
 		}
 		name = rel
 	}
