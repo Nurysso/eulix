@@ -41,15 +41,15 @@ func (cb *ContextBuilder) vectorSearchIVF(qEmb []float32, topK int, threshold fl
 	}
 
 	type centDist struct {
-		d float32
 		i int
+		d float32
 	}
 
 	// Rank centroids by similarity to query (cast to float32 to stay consistent
 	// with how centroids were built)
 	cd := make([]centDist, idx.NClusters)
 	for i, c := range idx.Centroids {
-		cd[i] = centDist{float32(dotProduct(qEmb, c)), i}
+		cd[i] = centDist{i, float32(dotProduct(qEmb, c))}
 	}
 	// Sort descending by similarity (highest first)
 	sort.Slice(cd, func(i, j int) bool { return cd[i].d > cd[j].d })

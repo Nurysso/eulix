@@ -63,11 +63,11 @@ type Checksum struct {
 // compares to whatever was previously stored (if anything).
 type Result struct {
 	Checksum      *Checksum // current state of the project (nil on first run)
-	FirstRun      bool
 	ChangedRatio  float64
 	FilesAdded    int
 	FilesDeleted  int
 	FilesModified int
+	FirstRun      bool
 }
 
 type Detector struct {
