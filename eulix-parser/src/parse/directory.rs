@@ -16,6 +16,28 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(serde::Deserialize)]
+struct SpilledClass {
+    #[serde(default)]
+    methods: Vec<serde::de::IgnoredAny>,
+}
+
+#[derive(serde::Deserialize)]
+struct SpilledFunction {
+    #[serde(default)]
+    name: String,
+}
+
+#[derive(serde::Deserialize)]
+struct SpilledFile {
+    language: String,
+    loc: usize,
+    #[serde(default)]
+    functions: Vec<SpilledFunction>,
+    #[serde(default)]
+    classes: Vec<SpilledClass>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn parse_directory(
     dir: &str,
@@ -67,6 +89,11 @@ pub fn parse_directory(
     };
 
     // Files whose path is already in the valid prefix of the spill are skipped.
+    let discovered: FxHashSet<String> = files.iter().map(|p| rel_path(p, &path)).collect();
+    let already_done: Vec<Entry> = already_done
+        .into_iter()
+        .filter(|e| discovered.contains(&e.path))
+        .collect();
     let done: FxHashSet<String> = already_done.iter().map(|e| e.path.clone()).collect();
     let to_parse: Vec<PathBuf> = files
         .into_iter()
@@ -149,11 +176,11 @@ pub fn parse_directory(
 
     let Acc {
         structure,
-        loc: total_loc,
-        functions: total_functions,
-        classes: total_classes,
-        methods: total_methods,
-        languages: languages_set,
+        loc: mut total_loc,
+        functions: mut total_functions,
+        classes: mut total_classes,
+        methods: mut total_methods,
+        languages: mut languages_set,
         stats: mut final_stats,
         mut index,
         raw_imports,
@@ -181,6 +208,23 @@ pub fn parse_directory(
             })
             .collect::<Vec<_>>()
     };
+
+    for entry in &already_done {
+        let payload = spill.read_payload(entry)?;
+        let sf: SpilledFile = serde_json::from_slice(&payload)?;
+        total_loc += sf.loc;
+        // Mirrors Acc::record_ok: a PHP file's `{main}` holds its top-level
+        // code and isn't a declared function. The spill doesn't keep tags,
+        // so match the synthetic name instead.
+        total_functions += sf.functions.iter().filter(|f| f.name != "{main}").count();
+        total_classes += sf.classes.len();
+        total_methods += sf.classes.iter().map(|c| c.methods.len()).sum::<usize>();
+        if !languages_set.contains(sf.language.as_str()) {
+            languages_set.insert(sf.language.clone());
+        }
+        // `final_stats` stays limited to this run: the spill doesn't keep
+        // the syntax health, so a resumed file can't be called clean.
+    }
 
     // Merge prior entries (from resume) with newly written ones
     // Prior entries have offsets into the *same* spill file; nothing else to do.
@@ -217,7 +261,7 @@ pub fn parse_directory(
         project_hash: project_hash.to_string(),
         parsed_at: chrono::Utc::now().format("%Y.%m.%d.%H%M%S").to_string(),
         languages: languages_set.into_iter().collect(),
-        total_files: structure.len(),
+        total_files: merged_index.len(),
         total_loc,
         total_functions,
         total_classes,
@@ -252,4 +296,129 @@ pub fn parse_directory(
             _guard: Some(guard),
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::Engine;
+    use tempfile::TempDir;
+
+    #[test]
+    fn resume_rehydrates_metadata_counts_and_languages_from_spill() {
+        let repo = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        fs::write(repo.path().join("a.py"), "def foo():\n    return 1\n").unwrap();
+        fs::write(
+            repo.path().join("b.py"),
+            "class Bar:\n    def m1(self):\n        return 2\n    def m2(self):\n        return 3\n",
+        )
+        .unwrap();
+
+        // `{main}` holds the top-level code; only `hello` is a declared function.
+        fs::write(
+            repo.path().join("d.php"),
+            "<?php\nfunction hello() { return 1; }\nhello();\n",
+        )
+        .unwrap();
+
+        let engine = Engine::with_threads(2).unwrap();
+        let root_str = repo.path().to_string_lossy().to_string();
+
+        // First run: keep the spill file alive across the drop by calling .keep() on the guard.
+        let (kb_fresh, stats_fresh, mut spill_fresh) = parse_directory(
+            &root_str,
+            "all",
+            None,
+            false,
+            "0.8.1",
+            "test",
+            out.path(),
+            false,
+            &engine,
+        )
+        .unwrap();
+        if let Some(g) = spill_fresh._guard.take() {
+            let _ = g.keep();
+        }
+
+        // Add one more file and resume from the existing spill.
+        fs::write(repo.path().join("c.rs"), "pub fn baz() {}\n").unwrap();
+        let (kb_resumed, stats_resumed, _spill_resumed) = parse_directory(
+            &root_str,
+            "all",
+            None,
+            false,
+            "0.8.1",
+            "test",
+            out.path(),
+            true,
+            &engine,
+        )
+        .unwrap();
+
+        assert_eq!(kb_fresh.metadata.total_files, 3);
+        assert_eq!(kb_fresh.metadata.total_functions, 2);
+        assert_eq!(kb_fresh.metadata.total_classes, 1);
+        assert_eq!(kb_fresh.metadata.total_methods, 2);
+        assert_eq!(stats_fresh.total(), 3);
+
+        assert_eq!(kb_resumed.metadata.total_files, 4);
+        assert_eq!(
+            kb_resumed.metadata.total_loc,
+            kb_fresh.metadata.total_loc + 1
+        );
+        assert_eq!(kb_resumed.metadata.total_functions, 3);
+        assert_eq!(kb_resumed.metadata.total_classes, 1);
+        assert_eq!(kb_resumed.metadata.total_methods, 2);
+        assert!(kb_resumed
+            .metadata
+            .languages
+            .contains(&"python".to_string()));
+        assert!(kb_resumed.metadata.languages.contains(&"rust".to_string()));
+        // Only c.rs was parsed in the resumed run.
+        assert_eq!(stats_resumed.total(), 1);
+    }
+
+    #[test]
+    fn resume_drops_spilled_files_that_no_longer_exist() {
+        let repo = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        fs::write(repo.path().join("a.py"), "def foo():\n    return 1\n").unwrap();
+        fs::write(repo.path().join("b.py"), "def bar():\n    return 2\n").unwrap();
+
+        let engine = Engine::with_threads(2).unwrap();
+        let root_str = repo.path().to_string_lossy().to_string();
+        let parse = |resume: bool| {
+            parse_directory(
+                &root_str,
+                "all",
+                None,
+                false,
+                "0.8.1",
+                "test",
+                out.path(),
+                resume,
+                &engine,
+            )
+            .unwrap()
+        };
+
+        let (_, _, mut spill_fresh) = parse(false);
+        if let Some(g) = spill_fresh._guard.take() {
+            let _ = g.keep();
+        }
+
+        fs::remove_file(repo.path().join("a.py")).unwrap();
+        let (kb_resumed, _, spill_resumed) = parse(true);
+
+        let paths: Vec<&str> = spill_resumed
+            .entries
+            .iter()
+            .map(|(p, _, _)| p.as_str())
+            .collect();
+        assert_eq!(paths, vec!["b.py"]);
+        assert_eq!(kb_resumed.metadata.total_files, 1);
+        assert_eq!(kb_resumed.metadata.total_functions, 1);
+    }
 }
