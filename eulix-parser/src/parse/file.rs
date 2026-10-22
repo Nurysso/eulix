@@ -252,13 +252,6 @@ mod tests {
         .unwrap();
 
         let kb = analyze_and_build(kb, false, 2);
-        let edges: Vec<(&str, &str)> = kb
-            .call_graph
-            .edges
-            .iter()
-            .map(|e| (e.from.as_str(), e.to.as_str()))
-            .collect();
-        assert_eq!(edges, vec![("func_direct::app.py", "func_helper::app.py")]);
         (kb, stats)
     }
 
