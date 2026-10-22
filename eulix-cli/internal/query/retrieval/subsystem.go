@@ -22,15 +22,15 @@ import (
 // SubsystemNode represents a directory node in the repository tree.
 // Built once during index construction; read-only thereafter.
 type SubsystemNode struct {
-	Path        string
-	IsNoise     bool
+	PathTokens  []string
 	Children    map[string]*SubsystemNode
+	Path        string
 	ChunkCount  int // Chunks directly under this path prefix
 	TotalChunks int // Chunks in this subtree (own + children)
 	Depth       int // 0 = repo root segment
 	// PathTokens are the lowercase split segments of Path, cached for
 	// query-time matching without repeated string splitting.
-	PathTokens []string
+	IsNoise bool
 }
 
 // subsystemScore tracks intermediate subsystem detection scores at query time.
