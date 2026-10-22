@@ -240,6 +240,23 @@ fn first_self_param(params: &[Parameter]) -> bool {
 }
 
 #[inline]
+fn is_param(params: &[Parameter], callee: &str) -> bool {
+    if split_callee(callee).0.is_some() {
+        return false;
+    }
+    params.iter().any(|p| {
+        let name = p
+            .name
+            .trim_start_matches("mut ")
+            .trim_start_matches('&')
+            .trim_start_matches('*')
+            .trim_start_matches("...")
+            .trim();
+        !SELF_NAMES.contains(&name) && name == callee
+    })
+}
+
+#[inline]
 fn is_self_qualifier(q: &str) -> bool {
     SELF_NAMES.contains(&q) || q == "Self"
 }
@@ -988,6 +1005,9 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                         continue;
                     };
                     for call in &func.calls {
+                        if !php && is_param(&func.params, &call.callee) {
+                            continue;
+                        }
                         let to = if php {
                             r.resolve_php_call(
                                 &call.callee,
@@ -1021,6 +1041,9 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                         // shortcut in `resolve_call`.
                         let has_self = first_self_param(&m.params);
                         for call in &m.calls {
+                            if !php && is_param(&m.params, &call.callee) {
+                                continue;
+                            }
                             let to = if php {
                                 let ns = php_namespace(&m.lang_info);
                                 r.resolve_php_call(&call.callee, f, Some(cidx), ns)
@@ -1173,6 +1196,53 @@ mod tests {
             for name in ["self1", "SELF", "s_elf", " self", "self ", "__self__"] {
                 assert!(!first_self_param(&[p(name)]), "{name} should NOT match");
             }
+        }
+    }
+
+    #[test]
+    fn caller_parameter_shadowing_global_function_produces_no_edge() {
+        use crate::grammar_files::parse_source;
+        use std::path::Path;
+
+        let cases = [
+            (
+                "app.py",
+                "def helper():\n    return 1\n\ndef dynamic(first, helper):\n    return helper()\n\ndef direct():\n    return helper()\n",
+            ),
+            (
+                "app.ts",
+                "export function helper(): number { return 1; }\nexport function dynamic(first: number, helper: () => number): number { return helper(); }\nexport function direct(): number { return helper(); }\n",
+            ),
+            (
+                "app.rs",
+                "pub fn helper() -> i32 { 1 }\npub fn dynamic(_first: i32, helper: fn() -> i32) -> i32 { helper() }\npub fn direct() -> i32 { helper() }\n",
+            ),
+        ];
+
+        for (file, src) in cases {
+            let (_, fd) = parse_source(Path::new(file), src).unwrap();
+            let mut structure = HashMap::new();
+            structure.insert(file.to_string(), fd);
+            let cg = build_call_graph_v2(&structure);
+
+            let dynamic_id = format!("func_dynamic::{file}");
+            let direct_id = format!("func_direct::{file}");
+            let helper_id = format!("func_helper::{file}");
+
+            assert!(
+                cg.edges
+                    .iter()
+                    .any(|e| e.from == direct_id && e.to == helper_id),
+                "expected direct -> helper in {file}, got {:?}",
+                cg.edges
+            );
+            assert!(
+                !cg.edges
+                    .iter()
+                    .any(|e| e.from == dynamic_id && e.to == helper_id),
+                "shadowed param in {file} must not resolve to global helper: {:?}",
+                cg.edges
+            );
         }
     }
 }
