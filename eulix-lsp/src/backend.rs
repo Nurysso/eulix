@@ -994,33 +994,32 @@ impl LanguageServer for Backend {
             }
         }
 
-        // Call sites elsewhere. The reverse index only gives us file+line, so
-        // the edit range has to be recovered from each file's text where we
-        // have it.
+        // Call sites, including the ones in this file. The reverse index only
+        // gives us file+line, so the edit ranges have to be recovered from
+        // each file's text where we have it, and a line can hold several.
         let sites = self.state.index.read().call_sites(&word.text);
         for site in sites {
             let Ok(site_uri) = Url::from_file_path(&site.path) else {
                 continue;
             };
-            if site_uri == uri {
-                continue;
-            }
             let Some((rope, _)) = self.context_for(&site_uri) else {
                 // The file isn't open, so we have no text to build a precise
                 // range from. A whole-line edit would be wrong, so skip it
                 // rather than corrupt the file.
                 continue;
             };
-            if let Some(range) = position::find_name_on_line(&rope, site.line, &word.text) {
-                changes.entry(site_uri).or_default().push(TextEdit {
+            for range in position::find_names_on_line(&rope, site.line, &word.text) {
+                changes.entry(site_uri.clone()).or_default().push(TextEdit {
                     range,
                     new_text: new_name.clone(),
                 });
             }
         }
 
+        // A call on a declaration line, or a line indexed twice, yields the
+        // same edit more than once.
         for edits in changes.values_mut() {
-            edits.sort_by_key(|e| e.range.start.line);
+            edits.sort_by_key(|e| (e.range.start.line, e.range.start.character));
             edits.dedup_by_key(|e| e.range.start);
         }
         Ok(Some(WorkspaceEdit {

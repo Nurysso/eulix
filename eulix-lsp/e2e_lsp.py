@@ -69,6 +69,14 @@ pub fn main() {
 }
 ''',
     "notes.md": "# not a source file\n",
+    "rename.rs": '''fn twice() -> i32 {
+    2
+}
+
+fn use_twice() -> i32 {
+    twice() + twice()
+}
+''',
 }
 
 
@@ -347,6 +355,20 @@ def main():
     r = c.wait_for_id(10)
     check("prepareRename offers a range for an unambiguous name",
           bool((r or {}).get("result")), json.dumps(r)[:250])
+
+    # rename.rs declares twice() and calls it twice on one line of the same file.
+    rename_uri = pathlib.Path(tmp, "rename.rs").as_uri()
+    c.notify("textDocument/didOpen", {"textDocument": {
+        "uri": rename_uri, "languageId": "rust", "version": 1, "text": WORKSPACE["rename.rs"]}})
+    time.sleep(0.5)
+    c.request(101, "textDocument/rename", {
+        "textDocument": {"uri": rename_uri}, "position": {"line": 0, "character": 4},
+        "newName": "double"})
+    r = c.wait_for_id(101)
+    edits = ((r or {}).get("result") or {}).get("changes", {}).get(rename_uri, [])
+    spots = sorted((e["range"]["start"]["line"], e["range"]["start"]["character"]) for e in edits)
+    check("rename edits the declaration and every call in the same file",
+          spots == [(0, 3), (5, 4), (5, 14)], str(spots))
 
     print("\n[11] didChangeWatchedFiles + call hierarchy")
     newfile = pathlib.Path(tmp, "extra.rs")

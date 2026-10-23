@@ -180,6 +180,37 @@ fn next_char(text: &str, byte_idx: usize) -> char {
     text[byte_idx..].chars().next().unwrap_or(' ')
 }
 
+// Every occurrence of `name` on a 1-based line, on identifier boundaries.
+// Rename needs all of them: `f(); f();` is two call sites on one line.
+pub fn find_names_on_line(rope: &Rope, line_1based: usize, name: &str) -> Vec<Range> {
+    let mut out = Vec::new();
+    let line = line_1based.saturating_sub(1);
+    if name.is_empty() || line >= rope.len_lines() {
+        return out;
+    }
+    let line_start = rope.line_to_char(line);
+    let text = rope.line(line).to_string();
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find(name) {
+        let start = from + rel;
+        let end = start + name.len();
+        let before_ok = start == 0 || !is_ident_char(prev_char(&text, start));
+        let after_ok = end == text.len() || !is_ident_char(next_char(&text, end));
+        if before_ok && after_ok {
+            let start_char = line_start + text[..start].chars().count();
+            out.push(chars_to_range(
+                rope,
+                start_char,
+                start_char + name.chars().count(),
+            ));
+            from = end;
+        } else {
+            from = start + text[start..].chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,6 +328,28 @@ mod tests {
         assert!(find_name_on_line(&r, 1, "café").is_some());
         assert!(find_name_on_line(&r, 99, "café").is_none());
         assert!(find_name_on_line(&r, 1, "").is_none());
+    }
+
+    #[test]
+    fn find_names_returns_every_bounded_match_on_the_line() {
+        let r = r("fn run() { helper(); rehelper(); helper(); }\n");
+        let starts: Vec<u32> = find_names_on_line(&r, 1, "helper")
+            .iter()
+            .map(|range| range.start.character)
+            .collect();
+        assert_eq!(starts, vec![11, 33], "`rehelper` must not match");
+    }
+
+    #[test]
+    fn find_names_counts_characters_and_skips_multibyte_candidates() {
+        let r = r("x = 'ção'; éa(); xéa(); éa()\n");
+        let starts: Vec<u32> = find_names_on_line(&r, 1, "éa")
+            .iter()
+            .map(|range| range.start.character)
+            .collect();
+        assert_eq!(starts, vec![11, 24]);
+        assert!(find_names_on_line(&r, 99, "éa").is_empty());
+        assert!(find_names_on_line(&r, 1, "").is_empty());
     }
 
     #[test]
