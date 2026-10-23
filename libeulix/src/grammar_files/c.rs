@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex, walk};
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
 use regex::Regex;
@@ -290,43 +290,44 @@ impl CParser {
     }
 
     fn scan_fn_ptr_assignments(&self, node: &Node, map: &mut HashMap<String, String>) {
-        let mut cursor = node.walk();
-        if node.kind() == "assignment_expression" {
-            let lhs = node.child_by_field_name("left");
-            let rhs = node.child_by_field_name("right");
-            if let (Some(l), Some(r)) = (lhs, rhs) {
-                let lhs_text = self.get_node_text(&l);
-                let rhs_text = self
-                    .get_node_text(&r)
-                    .trim_start_matches('&')
-                    .trim()
-                    .to_string();
-                // Only record if rhs looks like a plain identifier (a function name)
-                if rhs_text.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                    map.insert(lhs_text, rhs_text);
+        walk(*node, (), |node, _| {
+            let node = &node;
+            if node.kind() == "assignment_expression" {
+                let lhs = node.child_by_field_name("left");
+                let rhs = node.child_by_field_name("right");
+                if let (Some(l), Some(r)) = (lhs, rhs) {
+                    let lhs_text = self.get_node_text(&l);
+                    let rhs_text = self
+                        .get_node_text(&r)
+                        .trim_start_matches('&')
+                        .trim()
+                        .to_string();
+                    // Only record if rhs looks like a plain identifier (a function name)
+                    if rhs_text.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        map.insert(lhs_text, rhs_text);
+                    }
                 }
             }
-        }
-        // Also handle initializer:  fn_ptr_t fp = actual_func;
-        if node.kind() == "init_declarator" {
-            if let (Some(decl), Some(val)) = (
-                node.child_by_field_name("declarator"),
-                node.child_by_field_name("value"),
-            ) {
-                let name = self.extract_declarator_name(&decl);
-                let val_text = self
-                    .get_node_text(&val)
-                    .trim_start_matches('&')
-                    .trim()
-                    .to_string();
-                if !name.is_empty() && val_text.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                    map.insert(name, val_text);
+            // Also handle initializer:  fn_ptr_t fp = actual_func;
+            if node.kind() == "init_declarator" {
+                if let (Some(decl), Some(val)) = (
+                    node.child_by_field_name("declarator"),
+                    node.child_by_field_name("value"),
+                ) {
+                    let name = self.extract_declarator_name(&decl);
+                    let val_text = self
+                        .get_node_text(&val)
+                        .trim_start_matches('&')
+                        .trim()
+                        .to_string();
+                    if !name.is_empty() && val_text.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    {
+                        map.insert(name, val_text);
+                    }
                 }
             }
-        }
-        for child in node.children(&mut cursor) {
-            self.scan_fn_ptr_assignments(&child, map);
-        }
+            Some(())
+        });
     }
 
     fn count_lines(&self) -> usize {
@@ -477,51 +478,49 @@ impl CParser {
     }
 
     fn extract_function_name(&self, declarator: &Node) -> Option<String> {
-        match declarator.kind() {
-            "function_declarator" => {
-                if let Some(decl) = declarator.child_by_field_name("declarator") {
-                    self.extract_function_name(&decl)
-                } else {
+        let mut result = None;
+        walk(*declarator, None, |node, target| {
+            if result.is_some() || target.is_some_and(|n| n != node) || !node.is_named() {
+                return None;
+            }
+            match node.kind() {
+                "function_declarator" | "pointer_declarator" => {
+                    node.child_by_field_name("declarator").map(Some)
+                }
+                "parenthesized_declarator" => Some(None),
+                "identifier" => {
+                    result = Some(self.get_node_text(&node));
                     None
                 }
+                _ => None,
             }
-            "pointer_declarator" => {
-                if let Some(decl) = declarator.child_by_field_name("declarator") {
-                    self.extract_function_name(&decl)
-                } else {
-                    None
-                }
-            }
-            "parenthesized_declarator" => {
-                let mut cursor = declarator.walk();
-                for child in declarator.children(&mut cursor) {
-                    if child.is_named() {
-                        if let Some(name) = self.extract_function_name(&child) {
-                            return Some(name);
-                        }
-                    }
-                }
-                None
-            }
-            "identifier" => Some(self.get_node_text(declarator)),
-            _ => None,
-        }
+        });
+        result
     }
     fn declarator_has_pointer_return(&self, decl: &Node) -> bool {
-        match decl.kind() {
-            "pointer_declarator" => true,
-            "function_declarator" | "parenthesized_declarator" => decl
-                .child_by_field_name("declarator")
-                .map(|d| self.declarator_has_pointer_return(&d))
-                .unwrap_or(false),
-            _ => false,
-        }
+        let mut found = false;
+        walk(*decl, None, |node, target| {
+            if target.is_some_and(|n| n != node) {
+                return None;
+            }
+            match node.kind() {
+                "pointer_declarator" => {
+                    found = true;
+                    None
+                }
+                "function_declarator" | "parenthesized_declarator" => {
+                    node.child_by_field_name("declarator").map(Some)
+                }
+                _ => None,
+            }
+        });
+        found
     }
 
     fn extract_parameters(&self, declarator: &Node) -> Vec<Parameter> {
         let mut params = Vec::new();
-
-        fn find_params(node: &Node, parser: &CParser, params: &mut Vec<Parameter>) {
+        walk(*declarator, (), |node, _| {
+            let node = &node;
             if node.kind() == "parameter_list" {
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
@@ -530,11 +529,11 @@ impl CParser {
                         let declarator_node = child.child_by_field_name("declarator");
 
                         let type_annotation = type_node
-                            .map(|t| parser.get_node_text(&t))
+                            .map(|t| self.get_node_text(&t))
                             .unwrap_or_default();
 
                         let name = if let Some(decl) = declarator_node {
-                            parser.extract_declarator_name(&decl)
+                            self.extract_declarator_name(&decl)
                         } else {
                             format!("_param{}", params.len())
                         };
@@ -552,50 +551,37 @@ impl CParser {
                         });
                     }
                 }
+                None
             } else {
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    find_params(&child, parser, params);
-                }
+                Some(())
             }
-        }
-
-        find_params(declarator, self, &mut params);
+        });
         params
     }
 
     fn extract_declarator_name(&self, declarator: &Node) -> String {
-        match declarator.kind() {
-            "identifier" | "field_identifier" => self.get_node_text(declarator),
-
-            "init_declarator" => declarator
-                .child_by_field_name("declarator")
-                .map(|d| self.extract_declarator_name(&d))
-                .unwrap_or_default(),
-
-            "pointer_declarator"
-            | "array_declarator"
-            | "function_declarator"
-            | "parenthesized_declarator" => {
-                if let Some(decl) = declarator.child_by_field_name("declarator") {
-                    self.extract_declarator_name(&decl)
-                } else {
-                    // parenthesized_declarator may not expose a `declarator` field
-                    let mut cursor = declarator.walk();
-                    for child in declarator.children(&mut cursor) {
-                        if child.is_named() {
-                            let name = self.extract_declarator_name(&child);
-                            if !name.is_empty() {
-                                return name;
-                            }
-                        }
-                    }
-                    String::new()
-                }
+        let mut name = String::new();
+        walk(*declarator, None, |node, target| {
+            if !name.is_empty() || target.is_some_and(|n| n != node) || !node.is_named() {
+                return None;
             }
-
-            _ => String::new(),
-        }
+            match node.kind() {
+                "identifier" | "field_identifier" => {
+                    name = self.get_node_text(&node);
+                    None
+                }
+                "init_declarator" => node.child_by_field_name("declarator").map(Some),
+                "pointer_declarator"
+                | "array_declarator"
+                | "function_declarator"
+                | "parenthesized_declarator" => {
+                    // parenthesized_declarator may not expose a `declarator` field
+                    Some(node.child_by_field_name("declarator"))
+                }
+                _ => None,
+            }
+        });
+        name
     }
 
     fn build_signature(&self, name: &str, params: &[Parameter], return_type: &str) -> String {
@@ -634,42 +620,41 @@ impl CParser {
         context: &str,
         fn_ptr_map: &HashMap<String, String>,
     ) {
-        let child_context = match node.kind() {
-            "if_statement" => "if",
-            "for_statement" | "while_statement" | "do_statement" => "loop",
-            "switch_statement" => "switch",
-            _ => context,
-        };
+        walk(*node, context, |node, context| {
+            let node = &node;
+            let child_context = match node.kind() {
+                "if_statement" => "if",
+                "for_statement" | "while_statement" | "do_statement" => "loop",
+                "switch_statement" => "switch",
+                _ => context,
+            };
 
-        if node.kind() == "call_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let raw_callee = self.get_node_text(&func_node);
+            if node.kind() == "call_expression" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let raw_callee = self.get_node_text(&func_node);
 
-                // Resolve the actual callee name through several strategies
-                let resolved = self.resolve_callee(&raw_callee, fn_ptr_map);
+                    // Resolve the actual callee name through several strategies
+                    let resolved = self.resolve_callee(&raw_callee, fn_ptr_map);
 
-                if !resolved.is_empty() {
-                    let key = format!("{}:{}", resolved, node.start_position().row);
-                    if !seen.contains(&key) {
-                        seen.insert(key);
-                        let args = self.extract_call_arguments(node);
-                        calls.push(FunctionCall {
-                            callee: resolved,
-                            defined_in: None,
-                            line: node.start_position().row + 1,
-                            args,
-                            is_conditional: context != "unconditional",
-                            context: context.to_string(),
-                        });
+                    if !resolved.is_empty() {
+                        let key = format!("{}:{}", resolved, node.start_position().row);
+                        if !seen.contains(&key) {
+                            seen.insert(key);
+                            let args = self.extract_call_arguments(node);
+                            calls.push(FunctionCall {
+                                callee: resolved,
+                                defined_in: None,
+                                line: node.start_position().row + 1,
+                                args,
+                                is_conditional: context != "unconditional",
+                                context: context.to_string(),
+                            });
+                        }
                     }
                 }
             }
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.find_calls_recursive(&child, calls, seen, child_context, fn_ptr_map);
-        }
+            Some(child_context)
+        });
     }
 
     /// Multi-strategy callee resolution:
@@ -763,55 +748,54 @@ impl CParser {
     }
 
     fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        if node.kind() == "declaration" {
-            // A declaration may have multiple declarators:  int a = 1, b = 2;
-            let var_type = node
-                .child_by_field_name("type")
-                .map(|t| self.get_node_text(&t));
+            if node.kind() == "declaration" {
+                // A declaration may have multiple declarators:  int a = 1, b = 2;
+                let var_type = node
+                    .child_by_field_name("type")
+                    .map(|t| self.get_node_text(&t));
 
-            let mut c = node.walk();
-            for child in node.children(&mut c) {
-                let decl_node = match child.kind() {
-                    "init_declarator" => child.child_by_field_name("declarator"),
-                    k if k.ends_with("declarator") => Some(child),
-                    _ => None,
-                };
-                if let Some(decl) = decl_node {
-                    let var_name = self.extract_declarator_name(&decl);
-                    if !var_name.is_empty() && !variables.contains_key(&var_name) {
-                        let line = node.start_position().row + 1;
-                        variables.insert(
-                            var_name.clone(),
-                            Variable {
-                                name: var_name,
-                                var_type: var_type.clone(),
-                                scope: "local".to_string(),
-                                defined_at: Some(line),
-                                transformations: vec![],
-                                used_in: vec![],
-                                returned: false,
-                            },
-                        );
+                let mut c = node.walk();
+                for child in node.children(&mut c) {
+                    let decl_node = match child.kind() {
+                        "init_declarator" => child.child_by_field_name("declarator"),
+                        k if k.ends_with("declarator") => Some(child),
+                        _ => None,
+                    };
+                    if let Some(decl) = decl_node {
+                        let var_name = self.extract_declarator_name(&decl);
+                        if !var_name.is_empty() && !variables.contains_key(&var_name) {
+                            let line = node.start_position().row + 1;
+                            variables.insert(
+                                var_name.clone(),
+                                Variable {
+                                    name: var_name,
+                                    var_type: var_type.clone(),
+                                    scope: "local".to_string(),
+                                    defined_at: Some(line),
+                                    transformations: vec![],
+                                    used_in: vec![],
+                                    returned: false,
+                                },
+                            );
+                        }
+                    }
+                }
+            } else if node.kind() == "return_statement" {
+                let mut ret_cursor = node.walk();
+                for child in node.children(&mut ret_cursor) {
+                    if child.kind() == "identifier" {
+                        let var_name = self.get_node_text(&child);
+                        if let Some(var) = variables.get_mut(&var_name) {
+                            var.returned = true;
+                        }
                     }
                 }
             }
-        } else if node.kind() == "return_statement" {
-            let mut ret_cursor = node.walk();
-            for child in node.children(&mut ret_cursor) {
-                if child.kind() == "identifier" {
-                    let var_name = self.get_node_text(&child);
-                    if let Some(var) = variables.get_mut(&var_name) {
-                        var.returned = true;
-                    }
-                }
-            }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.track_variable_usage(&child, variables);
-        }
+            Some(())
+        });
     }
 
     //  Control flow
@@ -828,23 +812,23 @@ impl CParser {
     }
 
     fn extract_control_structures(&self, node: &Node, cf: &mut ControlFlow) {
-        let mut cursor = node.walk();
-        match node.kind() {
-            "if_statement" => {
-                if let Some(branch) = self.parse_if_statement(node) {
-                    cf.branches.push(branch);
+        walk(*node, (), |node, _| {
+            let node = &node;
+            match node.kind() {
+                "if_statement" => {
+                    if let Some(branch) = self.parse_if_statement(node) {
+                        cf.branches.push(branch);
+                    }
                 }
-            }
-            "for_statement" | "while_statement" | "do_statement" => {
-                if let Some(loop_info) = self.parse_loop(node) {
-                    cf.loops.push(loop_info);
+                "for_statement" | "while_statement" | "do_statement" => {
+                    if let Some(loop_info) = self.parse_loop(node) {
+                        cf.loops.push(loop_info);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-        for child in node.children(&mut cursor) {
-            self.extract_control_structures(&child, cf);
-        }
+            Some(())
+        });
     }
 
     fn parse_if_statement(&self, node: &Node) -> Option<Branch> {
@@ -883,26 +867,32 @@ impl CParser {
     }
 
     fn find_call_names(&self, node: &Node, calls: &mut Vec<String>, seen: &mut HashSet<String>) {
-        let mut cursor = node.walk();
-        if node.kind() == "call_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                // Use the same resolution logic for consistency
-                let raw = self.get_node_text(&func_node);
-                let name = self.resolve_callee(&raw, &HashMap::new());
-                if !name.is_empty() && !seen.contains(&name) {
-                    seen.insert(name.clone());
-                    calls.push(name);
+        walk(*node, (), |node, _| {
+            let node = &node;
+            if node.kind() == "call_expression" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    // Use the same resolution logic for consistency
+                    let raw = self.get_node_text(&func_node);
+                    let name = self.resolve_callee(&raw, &HashMap::new());
+                    if !name.is_empty() && !seen.contains(&name) {
+                        seen.insert(name.clone());
+                        calls.push(name);
+                    }
                 }
             }
-        }
-        for child in node.children(&mut cursor) {
-            self.find_call_names(&child, calls, seen);
-        }
+            Some(())
+        });
     }
 
     fn find_return_value(&self, node: &Node) -> Option<String> {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
+        let mut result = None;
+        walk(*node, (), |child, _| {
+            if result.is_some() {
+                return None;
+            }
+            if child == *node {
+                return Some(());
+            }
             if child.kind() == "return_statement" {
                 let mut ret_vals = Vec::new();
                 let mut ret_cursor = child.walk();
@@ -911,13 +901,12 @@ impl CParser {
                         ret_vals.push(self.get_node_text(&ret_child));
                     }
                 }
-                return Some(ret_vals.join(", "));
+                result = Some(ret_vals.join(", "));
+                return None;
             }
-            if let Some(val) = self.find_return_value(&child) {
-                return Some(val);
-            }
-        }
-        None
+            Some(())
+        });
+        result
     }
 
     fn parse_loop(&self, node: &Node) -> Option<Loop> {
@@ -1248,9 +1237,9 @@ impl CParser {
     //  Complexity
 
     fn calculate_complexity(&self, node: &Node) -> usize {
-        fn count(node: &Node) -> usize {
-            let mut c = 0;
-            let mut cursor = node.walk();
+        let mut complexity = 1;
+        walk(*node, (), |node, _| {
+            let node = &node;
             match node.kind() {
                 "if_statement"
                 | "for_statement"
@@ -1260,15 +1249,12 @@ impl CParser {
                 | "case_statement"
                 | "conditional_expression"
                 | "&&"
-                | "||" => c += 1,
+                | "||" => complexity += 1,
                 _ => {}
             }
-            for child in node.children(&mut cursor) {
-                c += count(&child);
-            }
-            c
-        }
-        1 + count(node)
+            Some(())
+        });
+        complexity
     }
 
     //  TODOs / Security
@@ -1417,6 +1403,31 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
 mod tests {
     #![expect(clippy::expect_used)]
     #![expect(clippy::unwrap_used)]
+
+    #[test]
+    fn deep_expression_on_small_stack() {
+        // A left-associative expression must not grow the Rust call stack.
+        let expression = vec!["x"; 10_000].join(" + ");
+        let source = format!("int deep(int x) {{ return {}; }}", expression);
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let (_, data) =
+                    crate::grammar_files::parse_source(std::path::Path::new("deep.c"), &source)
+                        .expect("deep expression parses");
+                assert!(data.syntax.is_clean(), "deep expression is valid syntax");
+                assert!(
+                    data.functions
+                        .iter()
+                        .chain(data.classes.iter().flat_map(|c| &c.methods))
+                        .any(|f| f.name == "deep"),
+                    "deep function extracted"
+                );
+            })
+            .expect("spawn parser thread")
+            .join()
+            .expect("parser thread completes on a 2 MiB stack");
+    }
 
     use super::*;
 
