@@ -232,27 +232,37 @@ impl TypeScriptParser {
                 "export_statement" | "ambient_declaration" => {
                     let mut ec = child.walk();
                     for inner in child.children(&mut ec) {
-                        if matches!(
-                            inner.kind(),
-                            "function_declaration" | "function" | "generator_function_declaration"
-                        ) {
-                            if let Some(func) = self.parse_function(&inner, "") {
-                                functions.push(func);
+                        match inner.kind() {
+                            "function_declaration"
+                            | "function"
+                            | "generator_function_declaration" => {
+                                if let Some(func) = self.parse_function(&inner, "") {
+                                    functions.push(func);
+                                }
                             }
+                            // `export const f = () => ...`
+                            "lexical_declaration" | "variable_declaration" => {
+                                self.collect_variable_functions(&inner, functions);
+                            }
+                            _ => {}
                         }
                     }
                 }
                 "lexical_declaration" | "variable_declaration" => {
-                    let mut vc = child.walk();
-                    for decl in child.children(&mut vc) {
-                        if decl.kind() == "variable_declarator" {
-                            if let Some(func) = self.parse_variable_function(&decl) {
-                                functions.push(func);
-                            }
-                        }
-                    }
+                    self.collect_variable_functions(&child, functions);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    fn collect_variable_functions(&self, declaration: &Node, functions: &mut Vec<Function>) {
+        let mut vc = declaration.walk();
+        for decl in declaration.children(&mut vc) {
+            if decl.kind() == "variable_declarator" {
+                if let Some(func) = self.parse_variable_function(&decl) {
+                    functions.push(func);
+                }
             }
         }
     }
@@ -266,7 +276,7 @@ impl TypeScriptParser {
 
         if !matches!(
             value.kind(),
-            "arrow_function" | "function" | "generator_function"
+            "arrow_function" | "function_expression" | "generator_function"
         ) {
             return None;
         }
@@ -649,7 +659,7 @@ impl TypeScriptParser {
                             if let Some(v) = &value {
                                 if matches!(
                                     v.kind(),
-                                    "arrow_function" | "function" | "generator_function"
+                                    "arrow_function" | "function_expression" | "generator_function"
                                 ) {
                                     continue;
                                 }
@@ -1148,6 +1158,19 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
 #[cfg(test)]
 mod tests {
     #![expect(clippy::expect_used)]
+    use super::*;
+
+    fn parse(src: &str) -> FileData {
+        TypeScriptParser::new(src.to_string(), "test.ts".to_string())
+            .parse()
+            .expect("parse should succeed")
+    }
+
+    fn names(fd: &FileData) -> Vec<&str> {
+        let mut names: Vec<&str> = fd.functions.iter().map(|f| f.name.as_str()).collect();
+        names.sort_unstable();
+        names
+    }
 
     #[test]
     fn deep_expression_on_small_stack() {
@@ -1175,5 +1198,56 @@ mod tests {
             .expect("spawn parser thread")
             .join()
             .expect("parser thread completes on a 2 MiB stack");
+    }
+
+    #[test]
+    fn functions_bound_to_variables_are_extracted() {
+        let fd = parse(
+            r#"
+export const exportedArrow = (s: string): string => s.trim();
+const localArrow = () => 2;
+const localExpr = function () { return 3; };
+export const exportedExpr = function named() { return 4; };
+export function exportedDecl() { return 5; }
+"#,
+        );
+        assert_eq!(
+            names(&fd),
+            vec![
+                "exportedArrow",
+                "exportedDecl",
+                "exportedExpr",
+                "localArrow",
+                "localExpr"
+            ]
+        );
+    }
+
+    #[test]
+    fn calls_inside_an_exported_arrow_are_recorded() {
+        let fd = parse(
+            r#"
+const helper = () => 1;
+export const run = () => helper();
+"#,
+        );
+        let run = fd
+            .functions
+            .iter()
+            .find(|f| f.name == "run")
+            .expect("run should be extracted");
+        assert!(run.calls.iter().any(|c| c.callee == "helper"));
+    }
+
+    #[test]
+    fn function_expressions_are_not_also_global_vars() {
+        let fd = parse(
+            r#"
+const limit = 10;
+const localExpr = function () { return limit; };
+"#,
+        );
+        let vars: Vec<&str> = fd.global_vars.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(vars, vec!["limit"]);
     }
 }
