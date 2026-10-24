@@ -108,7 +108,7 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		}
 		// Hidden files (.env, .npmrc, ...) often hold credentials, and files in
 		// .euignore were left out on purpose: the fallback reads neither.
-		if strings.HasPrefix(name, ".") || ignored(path) {
+		if isHidden(name, d) || ignored(path) {
 			return nil
 		}
 		info, err := d.Info()
