@@ -233,24 +233,24 @@ func (cb *ContextBuilder) prefetchFiles(chunks []Chunk, cache *fileCache) {
 
 // Hitem: one chunk plus everything needed to size and render its source
 type hItem struct {
-	chunk     Chunk
-	pointers  []skeletonPointer
-	lines     []string // cleaned candidate lines, in order
-	cum       []int    // cum[k] = chars in the first k lines, newlines included
-	lang      string
-	reason    string
-	weight    float64
-	idx       int
-	astTokens int // what the chunk costs today; freed if hydrated, kept if not
-	need      int // tokens to render every candidate line
-	minUseful int // smallest grant worth spending
-	grant     int
-	keep      int // lines kept after fitting the grant
-	used      int // tokens actually rendered
-	skip      bool
-	pinned    bool
-	tail      bool // source continues past lines[]
-	skeleton  bool // container or oversized: header + elisions only
+	chunk       Chunk
+	pointers    []skeletonPointer
+	lines       []string // cleaned candidate lines, in order
+	prefixChars []int    // prefixChars[k] = chars in the first k lines, newlines included
+	lang        string
+	reason      string
+	weight      float64
+	idx         int
+	astTokens   int // what the chunk costs today; freed if hydrated, kept if not
+	need        int // tokens to render every candidate line
+	minUseful   int // smallest grant worth spending
+	grant       int
+	keep        int // lines kept after fitting the grant
+	used        int // tokens actually rendered
+	skip        bool
+	pinned      bool
+	tail        bool // source continues past lines[]
+	skeleton    bool // container or oversized: header + elisions only
 }
 
 func estimateTokens(chars int) int {
@@ -269,7 +269,7 @@ func (it *hItem) cost(k int) int {
 	if k <= 0 {
 		return 0
 	}
-	t := estimateTokens(it.cum[k]-1) + fenceTokens
+	t := estimateTokens(it.prefixChars[k]-1) + fenceTokens
 	if k < len(it.lines) || it.tail {
 		t += markerTokens
 	}
@@ -290,7 +290,7 @@ func (it *hItem) fit(grant int) int {
 func (it *hItem) render() string {
 	cm := commentPrefix(it.lang)
 	var b strings.Builder
-	b.Grow(it.cum[it.keep] + 64)
+	b.Grow(it.prefixChars[it.keep] + 64)
 	b.WriteString("```")
 	b.WriteString(it.lang)
 	b.WriteByte('\n')
@@ -438,6 +438,16 @@ func buildSkeleton(src []string, start, end int, groups []childGroup, lang strin
 	return lines, pointers, tail || cursor <= end
 }
 
+func (it *hItem) rebuildprefixChars() {
+	if len(it.prefixChars) != len(it.lines)+1 {
+		it.prefixChars = make([]int, len(it.lines)+1)
+	}
+	it.prefixChars[0] = 0
+	for i, l := range it.lines {
+		it.prefixChars[i+1] = it.prefixChars[i] + len(l) + 1
+	}
+}
+
 // dropEvictedPointers rewrites pointer lines whose children were evicted. Without it, a
 // skeleton would claim a "separate chunk" that is no longer in the output.
 //
@@ -447,13 +457,17 @@ func buildSkeleton(src []string, start, end int, groups []childGroup, lang strin
 // do not split the pointer into multiple lines here.
 //
 // Rewriting shortens the line (the "(separate chunk)" suffix is longer than the
-// replacement), so cum and used are recomputed to keep the token accounting in
+// replacement), so prefixChars and used are recomputed to keep the token accounting in
 // sync with what render() will emit.
+// rebuildprefixChars recomputes the prefix sums from it.lines.
 func (it *hItem) dropEvictedPointers(evicted map[int]bool) {
+	if len(evicted) == 0 {
+		return
+	}
 	prefix := commentPrefix(it.lang)
 	rewritten := false
 	for _, p := range it.pointers {
-		if p.lineIdx >= it.keep || p.group.fullyBacked(evicted) {
+		if p.lineIdx >= it.keep || p.lineIdx >= len(it.lines) || p.group.fullyBacked(evicted) {
 			continue
 		}
 		it.lines[p.lineIdx] = pointerLine(prefix, p.group.startLine, p.group.endLine, false)
@@ -462,8 +476,9 @@ func (it *hItem) dropEvictedPointers(evicted map[int]bool) {
 	if !rewritten {
 		return
 	}
-	for i, l := range it.lines {
-		it.cum[i+1] = it.cum[i] + len(l) + 1
+	it.rebuildprefixChars()
+	if it.keep > len(it.lines) {
+		it.keep = len(it.lines)
 	}
 	it.used = it.cost(it.keep)
 }
@@ -501,9 +516,9 @@ func (cb *ContextBuilder) loadItem(it *hItem, cache *fileCache, chunks []Chunk, 
 		return
 	}
 
-	it.cum = make([]int, len(it.lines)+1)
+	it.prefixChars = make([]int, len(it.lines)+1)
 	for i, l := range it.lines {
-		it.cum[i+1] = it.cum[i] + len(l) + 1
+		it.prefixChars[i+1] = it.prefixChars[i] + len(l) + 1
 	}
 	it.need = it.cost(len(it.lines))
 	it.minUseful = int(float64(it.need) * minGrantFraction)

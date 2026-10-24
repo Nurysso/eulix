@@ -190,10 +190,10 @@ func TestAllocateAndFitNeverExceedBudget(t *testing.T) {
 	mk := func(idx, nLines int, w float64) *hItem {
 		it := &hItem{idx: idx, weight: w}
 		it.lines = make([]string, nLines)
-		it.cum = make([]int, nLines+1)
+		it.prefixChars = make([]int, nLines+1)
 		for i := range it.lines {
 			it.lines[i] = strings.Repeat("x", 60)
-			it.cum[i+1] = it.cum[i] + 61
+			it.prefixChars[i+1] = it.prefixChars[i] + 61
 		}
 		it.need = it.cost(nLines)
 		it.minUseful = max(minGrantTokens, int(float64(it.need)*minGrantFraction))
@@ -436,11 +436,11 @@ func TestShouldSkeleton_LargeNonFunction(t *testing.T) {
 // ========== hItem cost / fit ==========
 
 func makeHItem(lines []string) *hItem {
-	cum := make([]int, len(lines)+1)
+	prefixChars := make([]int, len(lines)+1)
 	for i, l := range lines {
-		cum[i+1] = cum[i] + len(l) + 1
+		prefixChars[i+1] = prefixChars[i] + len(l) + 1
 	}
-	return &hItem{lines: lines, cum: cum, lang: "go"}
+	return &hItem{lines: lines, prefixChars: prefixChars, lang: "go"}
 }
 
 func TestHItemCost_Zero(t *testing.T) {
@@ -1146,28 +1146,58 @@ func danglingPointers(out []Chunk) []string {
 
 func skeletonFixture(t *testing.T) *hItem {
 	t.Helper()
-	src := skeletonFixtureSrc
-	chunks := []Chunk{
-		{File: "p.go", StartLine: 1, EndLine: 10, ChunkType: "file"},
-		{File: "p.go", StartLine: 3, EndLine: 5, ChunkType: "function"}, // A
-		{File: "p.go", StartLine: 7, EndLine: 9, ChunkType: "function"}, // B
-		{File: "p.go", StartLine: 7, EndLine: 9, ChunkType: "function"}, // B, duplicate range
-	}
-	groups := childGroups(chunks, directChildren(chunks)[0], 1, 10)
 
-	it := &hItem{lang: "go"}
-	it.lines, it.pointers, it.tail = buildSkeleton(src, 1, 9, groups, "go")
-	it.keep = len(it.lines)
-	if len(it.pointers) != 2 {
-		t.Fatalf("want 2 pointers, got %d: %q", len(it.pointers), it.lines)
+	src := []string{
+		"func Foo() {",         // 1
+		"\tsetup()",            // 2
+		"\tfirst := func() {",  // 3  child A (chunk 1)
+		"\t\ta()",              // 4
+		"\t}",                  // 5
+		"\tmid()",              // 6
+		"\tsecond := func() {", // 7  child B (chunks 2 and 3, same range)
+		"\t\tb()",              // 8
+		"\t}",                  // 9
+		"}",                    // 10
 	}
+	chunks := []Chunk{
+		{File: "a.go", StartLine: 1, EndLine: 10, ChunkType: "function"},
+		{File: "a.go", StartLine: 3, EndLine: 5, ChunkType: "function"},
+		{File: "a.go", StartLine: 7, EndLine: 9, ChunkType: "function"},
+		{File: "a.go", StartLine: 7, EndLine: 9, ChunkType: "function"}, // duplicate of B
+	}
+
+	groups := childGroups(chunks, []int{1, 2, 3}, 1, 10)
+	if len(groups) != 2 || len(groups[1].children) != 2 {
+		t.Fatalf("fixture: unexpected groups %+v", groups)
+	}
+
+	lines, pointers, tail := buildSkeleton(src, 1, 10, groups, "go")
+	if len(pointers) != 2 {
+		t.Fatalf("fixture: want 2 pointers, got %d", len(pointers))
+	}
+
+	it := &hItem{
+		chunk:     chunks[0],
+		lang:      "go",
+		lines:     lines,
+		pointers:  pointers,
+		tail:      tail,
+		skeleton:  true,
+		astTokens: 50,
+	}
+	it.rebuildprefixChars()
+	it.keep = len(it.lines) // all pointer lines are inside the rendered prefix
+	it.need = it.cost(len(it.lines))
+	it.used = it.need
 	return it
 }
 
+// pointerStartingAt returns the skeleton line whose omission range begins at startLine.
 func pointerStartingAt(it *hItem, startLine int) string {
-	for _, p := range it.pointers {
-		if p.group.startLine == startLine {
-			return it.lines[p.lineIdx]
+	needle := fmt.Sprintf("lines %d-", startLine)
+	for _, l := range it.lines {
+		if strings.Contains(l, needle) {
+			return l
 		}
 	}
 	return ""
