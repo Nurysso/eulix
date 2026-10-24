@@ -61,7 +61,7 @@ pub fn categorize_files(structure: &HashMap<String, FileData>) -> HashMap<String
     for (filepath, filedata) in structure {
         let category = classify_file(filepath, filedata);
         categories
-            .entry(category)
+            .entry(category.to_string())
             .or_default()
             .push(filepath.to_string());
     }
@@ -69,7 +69,7 @@ pub fn categorize_files(structure: &HashMap<String, FileData>) -> HashMap<String
     categories
 }
 
-pub fn classify_file(path: &str, data: &FileData) -> String {
+pub fn classify_file(path: &str, data: &FileData) -> &'static str {
     let path_lower = path.to_lowercase();
 
     // Path-based checks are tried before scanning function names because
@@ -77,23 +77,23 @@ pub fn classify_file(path: &str, data: &FileData) -> String {
     // `auth/login.py` is stronger evidence than a function that happens
     // to mention "hash."
     if path_lower.contains("test") {
-        return "Tests".to_string();
+        return "Tests";
     }
     if path_lower.contains("auth") || path_lower.contains("login") {
-        return "Authentication".to_string();
+        return "Authentication";
     }
     if path_lower.contains("api") || path_lower.contains("endpoint") || path_lower.contains("route")
     {
-        return "API".to_string();
+        return "API";
     }
     if path_lower.contains("util") || path_lower.contains("helper") {
-        return "Utilities".to_string();
+        return "Utilities";
     }
     if path_lower.contains("model") || path_lower.contains("entity") {
-        return "Data Models".to_string();
+        return "Data Models";
     }
     if path_lower.contains("ui") || path_lower.contains("view") {
-        return "User Interface".to_string();
+        return "User Interface";
     }
 
     // Falls back to scanning function names for security-flavored
@@ -106,11 +106,11 @@ pub fn classify_file(path: &str, data: &FileData) -> String {
             || name_lower.contains("hash")
             || name_lower.contains("encrypt")
         {
-            return "Security".to_string();
+            return "Security";
         }
     }
 
-    "Other".to_string()
+    "Other"
 }
 
 pub fn extract_key_features(kb: &KnowledgeBase) -> Vec<String> {
