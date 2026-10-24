@@ -18,8 +18,18 @@ limitations under the License.
  -->
 
 <!DOCTYPE html>
+<!--
+  vizEulize · Call Graph Explorer
+  The running version is read from <meta name="version"> below (single source of truth).
+
+ Note to Self Never touch styles again, fixing it was a nightmare.
+ If you downloaded this file and want to make changes go ahead just be-careful,
+ css and JS blocks are written in this way to remind me not to mess with them.
+-->
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="application-name" content="vizEulize">
+<meta name="version" content="0.2.0">
 <title>vizEulize · Call Graph Explorer</title>
 <style>
 :root{--bg:#fff;--bg2:#f5f5f3;--bg3:#ebebe8;--tx:#1c1c1a;--tx2:#6b6b66;--bd:#d8d8d3;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -32,6 +42,7 @@ body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 #app{display:flex;flex-direction:column;height:100%}
 #top{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--bd);background:var(--bg2);flex-wrap:wrap}
 #top b{font-weight:600}
+#ver{color:var(--tx2);font-size:10px;border:1px solid var(--bd);border-radius:10px;padding:0 6px;margin-left:-4px}
 label.btn,button{padding:5px 11px;font:inherit;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--tx);cursor:pointer}
 label.btn{background:#7F77DD;border-color:#7F77DD;color:#fff}
 button:hover{background:var(--bg3)}
@@ -39,9 +50,11 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 #status{color:var(--tx2);flex:1;min-width:120px}
 #main{flex:1;display:flex;min-height:0}
 #side{width:280px;flex-shrink:0;border-right:1px solid var(--bd);background:var(--bg2);display:flex;flex-direction:column}
+#side.hide{display:none}
 #side .sec{padding:8px 10px;border-bottom:1px solid var(--bd);display:flex;flex-direction:column;gap:6px}
 input[type=text],select{width:100%;padding:5px 7px;font:inherit;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--tx)}
 .row{display:flex;gap:6px}.row button{flex:1;padding:5px 4px}
+.row select{flex:1 1 0;min-width:0}.row #dir{flex:2.6 1 0}
 #list{flex:1;overflow-y:auto}
 .it{padding:5px 10px;cursor:pointer;border-left:2px solid transparent}
 .it:hover{background:var(--bg3)}.it.on{border-left-color:#7F77DD;background:var(--bg3)}
@@ -50,6 +63,7 @@ input[type=text],select{width:100%;padding:5px 7px;font:inherit;border:1px solid
 .lg{display:flex;flex-wrap:wrap;gap:4px 10px;color:var(--tx2);font-size:10px}
 .lg i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
 .lg [data-et]{cursor:pointer}.lg .off{opacity:.35;text-decoration:line-through}
+.lg sup{opacity:.6;margin-left:2px;font-size:8px}
 #wrap{flex:1;position:relative;min-width:0;overflow:hidden}
 canvas{display:block;width:100%;height:100%;touch-action:none}
 #hint{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--tx2);line-height:1.8;padding:20px;pointer-events:none}
@@ -65,13 +79,29 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 #bar{position:absolute;left:0;right:0;bottom:0;padding:5px 10px;font-size:10px;color:var(--tx2);background:var(--bg2);border-top:1px solid var(--bd);display:flex;gap:14px;white-space:nowrap;overflow:hidden}
 #i3{overflow:hidden;text-overflow:ellipsis}
 #drop{outline:2px dashed #7F77DD;outline-offset:-6px}
+#toast{position:absolute;left:50%;bottom:34px;transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:4px 12px;border-radius:12px;font-size:11px;opacity:0;pointer-events:none;transition:opacity .15s;white-space:nowrap;max-width:90%;overflow:hidden;text-overflow:ellipsis}
+#toast.on{opacity:.92}
+#help{position:fixed;inset:0;z-index:20;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);padding:12px}
+#help.open{display:flex}
+#help .box{background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:10px;padding:14px 18px;width:100%;max-width:540px;max-height:100%;overflow-y:auto}
+#help .hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+#help table{border-collapse:collapse;width:100%}
+#help td{padding:3px 0;vertical-align:top}
+#help td:first-child{white-space:nowrap;padding-right:16px}
+#help p{color:var(--tx2);font-size:11px;margin-top:8px;line-height:1.5}
+kbd{font:inherit;font-size:11px;background:var(--bg3);border:1px solid var(--bd);border-bottom-width:2px;border-radius:4px;padding:0 5px;margin-right:2px}
 @media(max-width:700px){#side{width:180px}#det{width:200px}}
-</style></head>
+</style>
+<script>try{var t=localStorage.getItem('vizeulize.theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
+</head>
 <body><div id="app">
 <div id="top">
-  <b>vizEulize</b>
+  <b>vizEulize</b><span id="ver" title="vizEulize version"></span>
   <label class="btn">Load JSON files<input id="file" type="file" accept=".json,application/json" multiple hidden></label>
   <span id="status">Looking for the project's call graph…</span>
+  <button id="png" title="Save current view as PNG (s)">PNG</button>
+  <button id="theme" title="Toggle light / dark (t)">Theme</button>
+  <button id="helpb" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
 </div>
 <div id="main">
   <div id="side">
@@ -81,11 +111,19 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
       <select id="ftag"><option value="">All tags</option></select>
       <select id="show"><option value="all">All nodes</option><option value="entry">No callers (entry / unused)</option><option value="leaf">No callees (leaf)</option><option value="proj">Hide external</option></select>
       <div class="row">
-        <select id="dir" title="focus direction"><option value="both">both ways</option><option value="callees">callees →</option><option value="callers">← callers</option></select>
-        <select id="depth" title="focus depth"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>
+        <select id="dir" title="focus direction (d)">
+          <option value="all" selected>all edges</option>
+          <option value="callees">callees →</option>
+          <option value="callers">← callers</option>
+          <option value="both">calls ↔ both ways</option>
+          <option value="inh_out">inheritance →</option>
+          <option value="inh_in">← inheritance</option>
+          <option value="inh">inheritance ↔</option>
+        </select>
+        <select id="depth" title="focus depth ( [ / ] )"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>
         <select id="lim" title="max nodes drawn"><option>80</option><option selected>150</option><option>300</option><option>600</option></select>
       </div>
-      <div class="row"><button id="back">Back</button><button id="fitb">Fit</button><button id="reset">Reset</button></div>
+      <div class="row"><button id="back" title="Back (Backspace)">Back</button><button id="fitb" title="Fit (f)">Fit</button><button id="reset" title="Reset (r)">Reset</button></div>
     </div>
     <div class="sec lg" id="lg"></div>
     <div id="list"></div>
@@ -94,14 +132,25 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
     <canvas id="c"></canvas>
     <div id="hint"><div id="hm"></div><div id="pb" hidden><i></i></div></div>
     <div id="det"></div>
+    <div id="toast" role="status" aria-live="polite"></div>
     <div id="bar"><span id="i1"></span><span id="i2"></span><span id="i3"></span></div>
   </div>
 </div></div>
 
+<div id="help" role="dialog" aria-modal="true" aria-labelledby="ht">
+  <div class="box">
+    <div class="hd"><b id="ht">vizEulize <span id="hv"></span> · shortcuts</b><button id="hx" aria-label="Close help">✕</button></div>
+    <table id="hk"></table>
+    <p>Mouse: click = details · double-click = focus neighborhood · drag = pan / move node · scroll = zoom</p>
+    <p>Edges: dashed = conditional · hollow arrowhead = inheritance · red ring = no callers. Callers / callees / "no callers" use call edges only; inheritance has its own focus directions.</p>
+  </div>
+</div>
+
 <script id="wk" type="text/plain">
-const K='func|fn|method|type|struct|class|interface|var|const|file|module|package';
+const K='func|function|fn|method|ctor|ifacemethod|type|struct|class|interface|enum|trait|union|record|annotation|var|const|file|module|package';
 const A=new RegExp('^('+K+')_(.*?)::(.*)$','s'),B=new RegExp('^('+K+')_(.+)$','s');
-const CAT={function:0,func:0,fn:0,method:1,type:2,struct:2,class:2,interface:2,file:3,module:4,package:5};
+const CAT=Object.assign(Object.create(null),{function:0,func:0,fn:0,method:1,ctor:1,ifacemethod:1,type:2,struct:2,class:2,interface:2,enum:2,trait:2,union:2,record:2,annotation:2,file:3,module:4,package:5});
+const HIER=/^(inheritance|inherits?|extends|implements)$/i;
 const pid=s=>{let m=A.exec(s);if(m)return[m[1],m[2],m[3]];m=B.exec(s);return m?[m[1],m[2],'']:['',s,''];};
 onmessage=e=>{
   const{id,buf}=e.data;
@@ -112,17 +161,19 @@ onmessage=e=>{
   }catch(err){postMessage({id,kind:'error',msg:err.message});}
 };
 function graph(d,id){
-  const idx=new Map(),ids=[],names=[],files=[],cat=[];
-  const get=(k,ext)=>{let i=idx.get(k);if(i===undefined){i=ids.length;idx.set(k,i);ids.push(k);const p=pid(k);names.push(p[1]);files.push(p[2]);cat.push(ext?6:(CAT[p[0]]??6));}return i;};
+  const idx=new Map(),ids=[],names=[],files=[],cat=[],kx=[],kn=[],kIx=new Map();
+  const kid=s=>{let x=kIx.get(s);if(x===undefined){x=kn.length;kIx.set(s,x);kn.push(s);}return x;};
+  const get=(k,ext)=>{let i=idx.get(k);if(i===undefined){i=ids.length;idx.set(k,i);ids.push(k);const p=pid(k);names.push(p[1]);files.push(p[2]);cat.push(ext?6:(CAT[p[0]]??6));kx.push(kid(p[0]));}return i;};
   for(const s of d.nodes||[]){
     if(s==null||s.id==null)continue;
     const i=get(String(s.id),false);
-    if(s.name)names[i]=s.name;if(s.file)files[i]=s.file;if(s.node_type)cat[i]=CAT[s.node_type]??6;
+    if(s.name)names[i]=s.name;if(s.file)files[i]=s.file;
+    if(s.node_type){const nt=String(s.node_type).toLowerCase();cat[i]=CAT[nt]??cat[i];kx[i]=kid(nt);}
   }
   const eF=[],eT=[],eY=[],eC=[],tn=[],tm=new Map();
   for(const e of d.edges||[]){
     const f=e.from??e.source??e.caller,t=e.to??e.target??e.callee;if(f==null||t==null)continue;
-    const ty=e.edge_type||e.type||'calls';let ti=tm.get(ty);
+    const ty=String(e.edge_type||e.type||'calls');let ti=tm.get(ty);
     if(ti===undefined){ti=tn.length;tm.set(ty,ti);tn.push(ty);}
     eF.push(get(String(f),true));eT.push(get(String(t),true));eY.push(ti);eC.push(e.conditional?1:0);
   }
@@ -132,7 +183,12 @@ function graph(d,id){
   for(let i=0;i<n;i++){oS[i+1]+=oS[i];iS[i+1]+=iS[i];}
   const oE=new Int32Array(k),iE=new Int32Array(k),po=oS.slice(0,n),pi=iS.slice(0,n);
   for(let j=0;j<k;j++){oE[po[F[j]]++]=j;iE[pi[T[j]]++]=j;}
-  const Y=Uint8Array.from(eY),C=Uint8Array.from(eC),ct=Uint8Array.from(cat);
+  const Y=Uint8Array.from(eY),C=Uint8Array.from(eC),ct=Uint8Array.from(cat),KX=Uint16Array.from(kx);
+  // edge type kind: 1 = inheritance, 0 = everything else (call-like)
+  const tk=Uint8Array.from(tn,t=>HIER.test(t)?1:0);
+  // call-like in/out counts per node (inheritance excluded)
+  const ci=new Int32Array(n),co=new Int32Array(n);
+  for(let j=0;j<k;j++)if(tk[Y[j]]===0){co[F[j]]++;ci[T[j]]++;}
   // tags: {nodeId:[tag,...]}  ->  [[nodeIdx,[tagIdx,...]],...]
   const tagNames=[],tIx=new Map(),tg=[];
   for(const[nid,v]of Object.entries(d.tags||{})){
@@ -146,24 +202,60 @@ function graph(d,id){
     let x=cIx.get(cn);if(x===undefined){x=catNames.length;cIx.set(cn,x);catNames.push(cn);}
     fc[i]=x+1;
   }
-  postMessage({id,kind:'graph',n,m:k,ids,names,files,cat:ct,eF:F,eT:T,eY:Y,eC:C,tn,oS,oE,iS,iE,tagNames,tg,catNames,fc},
-    [ct.buffer,F.buffer,T.buffer,Y.buffer,C.buffer,oS.buffer,oE.buffer,iS.buffer,iE.buffer,fc.buffer]);
+  postMessage({id,kind:'graph',n,m:k,ids,names,files,cat:ct,eF:F,eT:T,eY:Y,eC:C,tn,tk,ci,co,kn,kx:KX,oS,oE,iS,iE,tagNames,tg,catNames,fc},
+    [ct.buffer,F.buffer,T.buffer,Y.buffer,C.buffer,tk.buffer,ci.buffer,co.buffer,KX.buffer,oS.buffer,oE.buffer,iS.buffer,iE.buffer,fc.buffer]);
 }
 </script>
 
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const VERSION=document.querySelector('meta[name="version"]').content;
+document.title=`vizEulize v${VERSION} · Call Graph Explorer`;
+$('ver').textContent=$('hv').textContent='v'+VERSION;
+window.vizEulize={version:VERSION};
+console.info('vizEulize v'+VERSION);
+
 const CATS=['function','method','type','file','module','package','external'];
 const COL={function:'#7F77DD',method:'#1D9E75',type:'#EF9F27',file:'#378ADD',module:'#378ADD',package:'#378ADD',external:'#888780'};
-const ECOL={calls:'#378ADD',imports:'#1D9E75',depends_on:'#D4537E'},EFB='#888780';
-const HINT='Load a call graph to begin.<br>Default view = most-connected nodes.<br>Click: details · Double-click: focus neighborhood · Drag: pan / move · Scroll: zoom<br>Keys: / search · Esc deselect';
+// edge colour by lower-cased edge type; unknown types get a palette colour (see setGraph)
+const ECOL=Object.assign(Object.create(null),{call:'#378ADD',calls:'#378ADD',inheritance:'#E07B39',inherits:'#E07B39',extends:'#E07B39',implements:'#E07B39',imports:'#1D9E75',depends_on:'#D4537E'});
+const PAL=['#8E7CC3','#2AA198','#B58900','#CB4B16'];
+// focus direction -> [follow outgoing, follow incoming] as bit masks: 1 = call-like edges, 2 = inheritance edges
+const DM=Object.assign(Object.create(null),{all:[3,3],callees:[1,0],callers:[0,1],both:[1,1],inh_out:[2,0],inh_in:[0,2],inh:[2,2]});
+// kinds that add nothing next to the category name in the details panel
+const SAME=new Set(['func','function','fn','method','type','file','module','package']);
+const HINT='Load a call graph to begin.<br>Default view = most-connected nodes.<br>Click: details · Double-click: focus neighborhood · Drag: pan / move · Scroll: zoom<br>Keys: ? all shortcuts · / search · Esc deselect';
+const KEYS=[
+  ['/ · Ctrl+K','Focus search (Enter there focuses the first match)'],
+  ['?','Show / hide this help'],
+  ['Esc','Close help · leave field · clear selection'],
+  ['j · ↓','Select next node in the list'],
+  ['k · ↑','Select previous node in the list'],
+  ['Enter','Focus neighborhood of the selected node'],
+  ['Backspace · Alt+←','Back'],
+  ['f','Fit graph to view'],
+  ['+ · −','Zoom in / out'],
+  ['Space','Re-run layout'],
+  ['[ · ]','Focus depth − / +'],
+  ['d','Cycle focus direction'],
+  ['1 – 9','Show / hide edge type (numbers in the legend)'],
+  ['r','Reset filters and view'],
+  ['b','Show / hide sidebar'],
+  ['t','Toggle light / dark theme'],
+  ['s','Save current view as PNG'],
+];
+$('hk').innerHTML=KEYS.map(([k,d])=>`<tr><td>${k.split(' · ').map(x=>`<kbd>${esc(x)}</kbd>`).join('')}</td><td>${esc(d)}</td></tr>`).join('');
+
 let G=null,vis=[],visE=[],focus=null,sel=null,hov=null,nb=new Set(),hist=[],hidE=new Set(),M=()=>true;
 let pan={x:0,y:0},zoom=1,alpha=0,dirty=true,dragN=null,panning=false,down=null,lastP=null,fitP=false;
 const status=s=>$('status').textContent=s;
 const mb=b=>(b/1048576).toFixed(1);
 const resetHint=()=>{$('hm').innerHTML=HINT;$('pb').hidden=true;};
 resetHint();
+
+let tt;
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('on'),1500);}
 
 // worker: parse + build compact CSR graph off the main thread
 const WK=new Worker(URL.createObjectURL(new Blob([$('wk').textContent])));
@@ -203,7 +295,7 @@ async function ingest(items){
   let ok=false,bad=false;
   for(const m of res)if(m&&m.kind==='unknown')bad=true;
   for(const m of res)if(m&&m.kind==='graph'){setGraph(m);ok=true;}
-  if(ok){focus=null;sel=null;hist=[];nb=new Set();}
+  if(ok){focus=null;sel=null;hov=null;hist=[];nb=new Set();}
   if(G){$('hint').style.display='none';showDet(null);rebuild();status(`Loaded ${items.map(i=>i.name).join(' + ')}`);}
   else{resetHint();if(bad)status('Unrecognized JSON: expected a call graph with nodes and edges.');}
 }
@@ -211,7 +303,9 @@ function setGraph(m){
   const n=m.n,deg=new Int32Array(n),order=new Int32Array(n);
   for(let i=0;i<n;i++){deg[i]=m.oS[i+1]-m.oS[i]+m.iS[i+1]-m.iS[i];order[i]=i;}
   order.sort((a,b)=>deg[b]-deg[a]);
-  G={...m,deg,order,lc:null,tagMap:new Map(m.tg)};
+  let u=0;const ec=m.tn.map(t=>ECOL[t.toLowerCase()]||PAL[u++%PAL.length]);
+  G={...m,deg,order,ec,lc:null,tagMap:new Map(m.tg)};
+  hidE.clear(); // edge-type indexes belong to the previous graph
   fillFilters();
 }
 // option value = index into G.catNames / G.tagNames
@@ -224,12 +318,15 @@ const tagsFor=i=>(G.tagMap.get(i)||[]).map(t=>G.tagNames[t]);
 const catFor=i=>G.fc[i]?G.catNames[G.fc[i]-1]:null;
 
 // graph helpers
-function nbrs(u,dir,fn){
-  if(dir!=='callers')for(let k=G.oS[u];k<G.oS[u+1];k++)fn(G.eT[G.oE[k]]);
-  if(dir!=='callees')for(let k=G.iS[u];k<G.iS[u+1];k++)fn(G.eF[G.iE[k]]);
+// dir: all | callees | callers | both (call-like edges) | inh_out | inh_in | inh (inheritance edges)
+function nbrs(u,dir,fn,skipHid){
+  const m=DM[dir]||DM.all,mo=m[0],mi=m[1];
+  if(mo)for(let k=G.oS[u];k<G.oS[u+1];k++){const e=G.oE[k],y=G.eY[e];if(((mo>>G.tk[y])&1)&&!(skipHid&&hidE.has(y)))fn(G.eT[e]);}
+  if(mi)for(let k=G.iS[u];k<G.iS[u+1];k++){const e=G.iE[k],y=G.eY[e];if(((mi>>G.tk[y])&1)&&!(skipHid&&hidE.has(y)))fn(G.eF[e]);}
 }
 const rad=i=>6+Math.min(12,Math.sqrt(G.deg[i])*2.2);
-const noCallers=i=>G.iS[i+1]===G.iS[i]&&G.oS[i+1]>G.oS[i];
+// call-like edges only (G.ci / G.co come from the worker and exclude inheritance)
+const noCallers=i=>G.ci[i]===0&&G.co[i]>0;
 function mk(){
   const q=$('q').value.trim().toLowerCase(),c=$('fcat').value,t=$('ftag').value,s=$('show').value;
   if(q&&!G.lc)G.lc=G.names.map((x,i)=>(x+'\n'+G.files[i]).toLowerCase());
@@ -239,7 +336,7 @@ function mk(){
     if(ci&&G.fc[i]!==ci)return false;
     if(ti>=0){const a=G.tagMap.get(i);if(!a||!a.includes(ti))return false;}
     if(s==='entry'&&!noCallers(i))return false;
-    if(s==='leaf'&&!(G.oS[i+1]===G.oS[i]&&G.iS[i+1]>G.iS[i]))return false;
+    if(s==='leaf'&&!(G.co[i]===0&&G.ci[i]>0))return false;
     if(s==='proj'&&G.cat[i]===6)return false;
     return true;
   };
@@ -271,7 +368,7 @@ function link(){
     const e=G.oE[k],t=S.get(G.eT[e]);
     if(t&&t!==o&&!hidE.has(G.eY[e]))visE.push({s:o,t,ty:G.eY[e],c:G.eC[e]});
   }
-  legend();
+  calcNb();legend();
   $('i1').textContent=`${G.n.toLocaleString()} nodes · ${G.m.toLocaleString()} edges total`;
   $('i2').textContent=`showing ${vis.length} nodes · ${visE.length} edges${focus!==null?' · focus: '+G.names[focus]:' · top by connections'}${vis.length>=+$('lim').value?' (limit reached)':''}`;
   dirty=true;
@@ -279,7 +376,7 @@ function link(){
 function legend(){
   const t=[...new Set(vis.map(o=>G.cat[o.i]))].sort();
   $('lg').innerHTML=t.map(c=>`<span><i style="background:${COL[CATS[c]]}"></i>${CATS[c]}</span>`).join('')+
-    G.tn.map((k,j)=>`<span data-et="${j}" class="${hidE.has(j)?'off':''}" title="Click to show or hide"><i style="background:${ECOL[k]||EFB};border-radius:0;height:2px;vertical-align:middle"></i>${esc(k)}</span>`).join('')+
+    G.tn.map((k,j)=>`<span data-et="${j}" class="${hidE.has(j)?'off':''}" title="Click${j<9?' or press '+(j+1):''} to show or hide"><i style="background:${G.ec[j]};border-radius:0;height:2px;vertical-align:middle"></i>${esc(k)}${j<9?'<sup>'+(j+1)+'</sup>':''}</span>`).join('')+
     '<span><i style="background:none;border:2px solid #E24B4A"></i>no callers</span>';
 }
 function buildList(){
@@ -292,30 +389,38 @@ const markList=()=>{for(const el of $('list').children)el.classList.toggle('on',
 
 function showDet(i){
   const el=$('det');if(i===null){el.style.display='none';return;}
-  const nm=G.names[i],out=[],inn=[];
-  for(let k=G.oS[i];k<G.oS[i+1];k++){const e=G.oE[k];out.push([G.eT[e],G.eC[e]]);}
-  for(let k=G.iS[i];k<G.iS[i+1];k++){const e=G.iE[k];inn.push([G.eF[e],G.eC[e]]);}
   const L=a=>a.slice(0,40).map(([v,c])=>`<div class="c" data-id="${v}">${esc(G.names[v])}${c?'<span class="cond" title="Called only inside a branch, loop or conditional, not on every path">conditional</span>':''}</div>`).join('')+(a.length>40?`<div>+${a.length-40} more</div>`:'');
-  let h=`<h4>${esc(nm)}</h4><div style="color:var(--tx2)">${CATS[G.cat[i]]}${G.files[i]?' · '+esc(G.files[i]):''}</div>`;
+  const isCall=t=>/^calls?$/i.test(G.tn[t]);
+  // group neighbours by edge type so inheritance is never listed as "calls"
+  const grp=(S,E,F,lab)=>{const m=new Map();for(let k=S[i];k<S[i+1];k++){const e=E[k],l=lab(G.eY[e]);let a=m.get(l);if(!a)m.set(l,a=[]);a.push([F[e],G.eC[e]]);}return m;};
+  const outs=grp(G.oS,G.oE,G.eT,t=>isCall(t)?'calls':G.tn[t]),ins=grp(G.iS,G.iE,G.eF,t=>isCall(t)?'called by':G.tn[t]);
+  const sec=(l,ar,a)=>`<div class="k">${esc(l)} ${ar} ${a.length}</div>${L(a)}`;
+  const kd=G.kn[G.kx[i]];
+  let h=`<h4>${esc(G.names[i])}</h4><div style="color:var(--tx2)">${CATS[G.cat[i]]}${kd&&kd!==CATS[G.cat[i]]&&!SAME.has(kd)?' ('+esc(kd)+')':''}${G.files[i]?' · '+esc(G.files[i]):''}</div>`;
   {
     const tg=tagsFor(i),cat=catFor(i);
     if(cat)h+=`<div class="k">category</div><span class="tag">${esc(cat)}</span>`;
     if(tg.length)h+=`<div class="k">tags</div>`+tg.map(t=>`<span class="tag">${esc(t)}</span>`).join('');
   }
-  h+=`<div class="k">calls → ${out.length}</div>${L(out)}<div class="k">called by ← ${inn.length}</div>${L(inn)}`;
-  h+=`<div style="margin-top:8px"><button id="fbtn">Focus neighborhood</button></div>`;
+  h+=sec('calls','→',outs.get('calls')||[])+sec('called by','←',ins.get('called by')||[]);
+  for(const[l,a]of outs)if(l!=='calls')h+=sec(l,'→',a);
+  for(const[l,a]of ins)if(l!=='called by')h+=sec(l,'←',a);
+  h+=`<div style="margin-top:8px"><button id="fbtn" title="Enter">Focus neighborhood</button></div>`;
   el.innerHTML=h;el.style.display='block';
   $('fbtn').onclick=()=>focusOn(i);
 }
+function calcNb(){nb=new Set();if(sel!==null&&G){nb.add(sel);nbrs(sel,'all',v=>nb.add(v),true);}}
 function setSel(i){
-  sel=i;nb=new Set();
-  if(i!==null){nb.add(i);nbrs(i,'both',v=>nb.add(v));}
+  sel=i;calcNb();
   showDet(i);markList();dirty=true;
 }
 function focusOn(i,noPush){
   if(!noPush&&focus!==null&&focus!==i)hist.push(focus);
   focus=i;setSel(i);rebuild();
 }
+function canBack(){return hist.length>0||focus!==null;}
+function goBack(){if(!G||!canBack())return;if(hist.length)focusOn(hist.pop(),true);else{focus=null;setSel(null);rebuild();}}
+function resetAll(){if(!G)return;focus=null;hist=[];hidE.clear();['q','fcat','ftag'].forEach(i=>$(i).value='');$('show').value='all';setSel(null);rebuild();}
 function fit(){
   if(!vis.length)return;
   let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
@@ -323,6 +428,14 @@ function fit(){
   const w=$('wrap').clientWidth,h=$('wrap').clientHeight-24,pad=40;
   zoom=Math.max(.1,Math.min(1.5,Math.min((w-pad*2)/(x1-x0||1),(h-pad*2)/(y1-y0||1))));
   pan.x=w/2-(x0+x1)/2*zoom;pan.y=h/2-(y0+y1)/2*zoom;dirty=true;
+}
+function zoomBy(f){
+  const w=$('wrap').clientWidth/2,h=($('wrap').clientHeight-24)/2,wx=(w-pan.x)/zoom,wy=(h-pan.y)/zoom;
+  zoom=Math.max(0.1,Math.min(6,zoom*f));pan.x=w-wx*zoom;pan.y=h-wy*zoom;dirty=true;
+}
+function centerOn(i){
+  const o=vis.find(o=>o.i===i);if(!o)return;
+  fitP=false;pan.x=$('wrap').clientWidth/2-o.x*zoom;pan.y=($('wrap').clientHeight-24)/2-o.y*zoom;dirty=true;
 }
 
 // simulation + drawing
@@ -342,15 +455,18 @@ function draw(){
   if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);}
   ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,cv.width,cv.height);
   ctx.setTransform(dpr*zoom,0,0,dpr*zoom,pan.x*dpr,pan.y*dpr);
-  const tx=getComputedStyle(document.documentElement).getPropertyValue('--tx').trim()||'#222',hs=sel!==null;
+  const cs=getComputedStyle(document.documentElement),tx=cs.getPropertyValue('--tx').trim()||'#222',bg=cs.getPropertyValue('--bg').trim()||'#fff',hs=sel!==null;
   for(const e of visE){
     ctx.globalAlpha=(!hs||e.s.i===sel||e.t.i===sel)?0.9:0.1;
-    const col=ECOL[G.tn[e.ty]]||EFB,dx=e.t.x-e.s.x,dy=e.t.y-e.s.y,len=Math.sqrt(dx*dx+dy*dy)||1,ux=dx/len,uy=dy/len;
+    const col=G.ec[e.ty],hier=G.tk[e.ty]===1,dx=e.t.x-e.s.x,dy=e.t.y-e.s.y,len=Math.sqrt(dx*dx+dy*dy)||1,ux=dx/len,uy=dy/len;
     const x1=e.s.x+ux*e.s.r,y1=e.s.y+uy*e.s.r,x2=e.t.x-ux*e.t.r,y2=e.t.y-uy*e.t.r;
     ctx.setLineDash(e.c?[5/zoom,4/zoom]:[]);ctx.strokeStyle=col;ctx.lineWidth=1.3/zoom;
     ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.setLineDash([]);
-    const hh=7/zoom,a=Math.atan2(dy,dx);ctx.fillStyle=col;ctx.beginPath();ctx.moveTo(x2,y2);
-    ctx.lineTo(x2-Math.cos(a-0.4)*hh,y2-Math.sin(a-0.4)*hh);ctx.lineTo(x2-Math.cos(a+0.4)*hh,y2-Math.sin(a+0.4)*hh);ctx.fill();
+    // filled arrowhead for calls, hollow triangle for inheritance
+    const hh=(hier?9:7)/zoom,a=Math.atan2(dy,dx);ctx.beginPath();ctx.moveTo(x2,y2);
+    ctx.lineTo(x2-Math.cos(a-0.4)*hh,y2-Math.sin(a-0.4)*hh);ctx.lineTo(x2-Math.cos(a+0.4)*hh,y2-Math.sin(a+0.4)*hh);
+    if(hier){ctx.closePath();ctx.fillStyle=bg;ctx.fill();ctx.stroke();}
+    else{ctx.fillStyle=col;ctx.fill();}
   }
   ctx.textAlign='center';ctx.textBaseline='top';
   for(const o of vis){
@@ -377,6 +493,10 @@ const cv=$('c');
 const pos=e=>{const r=cv.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top};};
 const world=p=>({x:(p.x-pan.x)/zoom,y:(p.y-pan.y)/zoom});
 function nodeAt(p){const w=world(p);for(let k=vis.length-1;k>=0;k--){const o=vis[k],dx=o.x-w.x,dy=o.y-w.y,r=o.r+2;if(dx*dx+dy*dy<r*r)return o;}return null;}
+function nodeInfo(h){
+  const hi=G.iS[h+1]-G.iS[h]-G.ci[h],ho=G.oS[h+1]-G.oS[h]-G.co[h];
+  return `${G.names[h]} · ${G.files[h]||'no file'} · in ${G.ci[h]} / out ${G.co[h]}`+(hi||ho?` · inheritance in ${hi} / out ${ho}`:'');
+}
 cv.addEventListener('pointerdown',e=>{if(!G)return;cv.setPointerCapture(e.pointerId);const p=pos(e);down=p;lastP=p;dragN=nodeAt(p);panning=!dragN;fitP=false;});
 cv.addEventListener('pointermove',e=>{
   if(!G)return;const p=pos(e);
@@ -384,7 +504,7 @@ cv.addEventListener('pointermove',e=>{
   else if(down&&panning){pan.x+=p.x-lastP.x;pan.y+=p.y-lastP.y;lastP=p;dirty=true;}
   else{
     const o=nodeAt(p),h=o?o.i:null;cv.style.cursor=o?'pointer':'default';
-    if(h!==hov){hov=h;dirty=true;$('i3').textContent=o?`${G.names[h]} · ${G.files[h]||'no file'} · in ${G.iS[h+1]-G.iS[h]} / out ${G.oS[h+1]-G.oS[h]}`:'';}
+    if(h!==hov){hov=h;dirty=true;$('i3').textContent=o?nodeInfo(h):'';}
   }
 });
 cv.addEventListener('pointerup',e=>{
@@ -395,18 +515,112 @@ cv.addEventListener('pointerup',e=>{
 cv.addEventListener('dblclick',e=>{if(!G)return;const o=nodeAt(pos(e));if(o)focusOn(o.i);});
 cv.addEventListener('wheel',e=>{e.preventDefault();const p=pos(e),w=world(p);zoom=Math.max(0.1,Math.min(6,zoom*(e.deltaY<0?1.12:0.89)));pan.x=p.x-w.x*zoom;pan.y=p.y-w.y*zoom;dirty=true;},{passive:false});
 document.addEventListener('click',e=>{const t=e.target.closest('[data-id]');if(t&&G)focusOn(+t.dataset.id);});
-$('lg').addEventListener('click',e=>{const s=e.target.closest('[data-et]');if(!s||!G)return;const j=+s.dataset.et;hidE.has(j)?hidE.delete(j):hidE.add(j);link();});
+function toggleEdge(j){
+  if(!G||j>=G.tn.length)return;
+  hidE.has(j)?hidE.delete(j):hidE.add(j);link();
+  toast(`${G.tn[j]}: ${hidE.has(j)?'hidden':'shown'}`);
+}
+$('lg').addEventListener('click',e=>{const s=e.target.closest('[data-et]');if(!s||!G)return;toggleEdge(+s.dataset.et);});
 let qt;['q','fcat','ftag','show'].forEach(id=>$(id).addEventListener('input',()=>{
   clearTimeout(qt);qt=setTimeout(()=>{if(!G)return;if(focus===null)rebuild();else{M=mk();buildList();dirty=true;}},200);}));
 ['dir','depth','lim'].forEach(id=>$(id).addEventListener('change',()=>rebuild()));
-$('back').onclick=()=>{if(!G)return;if(hist.length)focusOn(hist.pop(),true);else if(focus!==null){focus=null;setSel(null);rebuild();}};
+// give keyboard control back to the shortcuts once a dropdown has been used
+['fcat','ftag','show','dir','depth','lim'].forEach(id=>$(id).addEventListener('change',()=>$(id).blur()));
+// Enter in the search box focuses the first match
+$('q').addEventListener('keydown',e=>{
+  if(e.key!=='Enter'||e.isComposing||!G)return;
+  clearTimeout(qt);M=mk();buildList();
+  const el=$('list').querySelector('.it[data-id]');
+  if(el){e.preventDefault();$('q').blur();focusOn(+el.dataset.id);}
+});
+$('back').onclick=goBack;
 $('fitb').onclick=()=>fit();
-$('reset').onclick=()=>{if(!G)return;focus=null;hist=[];hidE.clear();['q','fcat','ftag'].forEach(i=>$(i).value='');$('show').value='all';setSel(null);rebuild();};
+$('reset').onclick=resetAll;
 $('file').addEventListener('change',e=>{loadFiles([...e.target.files]);e.target.value='';});
+
+// ---- extras: theme, PNG, sidebar, help, list navigation
+const effTheme=()=>document.documentElement.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+function toggleTheme(){
+  const t=effTheme()==='dark'?'light':'dark';
+  document.documentElement.setAttribute('data-theme',t);
+  try{localStorage.setItem('vizeulize.theme',t);}catch(e){}
+  dirty=true;toast('Theme: '+t);
+}
+function toggleSide(){$('side').classList.toggle('hide');if(G)fit();dirty=true;}
+function toggleHelp(f){
+  const h=$('help'),o=f===undefined?!h.classList.contains('open'):f;
+  h.classList.toggle('open',o);
+  if(o)$('hx').focus();else if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
+}
+function exportPNG(){
+  if(!G||!vis.length){toast('Nothing to export');return;}
+  draw();
+  const src=$('c'),t=document.createElement('canvas');t.width=src.width;t.height=src.height;
+  const x=t.getContext('2d');x.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()||'#fff';
+  x.fillRect(0,0,t.width,t.height);x.drawImage(src,0,0);
+  t.toBlob(b=>{
+    if(!b)return;
+    const a=document.createElement('a'),s=new Date().toISOString().slice(0,19).replace(/[-:]/g,'').replace('T','-');
+    a.href=URL.createObjectURL(b);a.download=`vizeulize-${s}.png`;document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),2000);toast('Saved '+a.download);
+  },'image/png');
+}
+// select next / previous node of the sidebar list (centres it when it is on screen)
+function step(d){
+  const els=[...$('list').querySelectorAll('.it[data-id]')];if(!els.length)return;
+  let k=els.findIndex(el=>el.dataset.id===String(sel));
+  k=k<0?(d>0?0:els.length-1):Math.max(0,Math.min(els.length-1,k+d));
+  const el=els[k],id=+el.dataset.id;
+  setSel(id);centerOn(id);el.scrollIntoView({block:'nearest'});
+}
+function bump(id,d,name){
+  const s=$(id),k=Math.max(0,Math.min(s.options.length-1,s.selectedIndex+d));
+  if(k===s.selectedIndex)return;
+  s.selectedIndex=k;toast(`${name}: ${s.options[k].text}`);if(focus!==null)rebuild();
+}
+function cycle(id,name){
+  const s=$(id);s.selectedIndex=(s.selectedIndex+1)%s.options.length;
+  toast(`${name}: ${s.options[s.selectedIndex].text}`);if(focus!==null)rebuild();
+}
+$('png').onclick=exportPNG;
+$('theme').onclick=toggleTheme;
+$('helpb').onclick=()=>toggleHelp();
+$('hx').onclick=()=>toggleHelp(false);
+$('help').addEventListener('click',e=>{if(e.target===$('help'))toggleHelp(false);});
+
 addEventListener('keydown',e=>{
-  const typing=['INPUT','SELECT'].includes(document.activeElement.tagName);
-  if(e.key==='/'&&!typing){e.preventDefault();$('q').focus();}
-  else if(e.key==='Escape'){document.activeElement.blur();if(G)setSel(null);}
+  if(e.isComposing)return;
+  const ae=document.activeElement,tag=ae?ae.tagName:'',field=tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA';
+  const helpOpen=$('help').classList.contains('open'),k=e.key.length===1?e.key.toLowerCase():e.key;
+  if(k==='Escape'){if(helpOpen)toggleHelp(false);else{if(ae&&ae.blur)ae.blur();if(G)setSel(null);}return;}
+  if((e.ctrlKey||e.metaKey)&&k==='k'){e.preventDefault();if(helpOpen)toggleHelp(false);$('q').focus();$('q').select();return;}
+  if(e.ctrlKey||e.metaKey)return;                       // leave browser shortcuts alone
+  if(helpOpen){if(k==='?'){e.preventDefault();toggleHelp(false);}return;}
+  if(e.altKey){if(k==='ArrowLeft'&&G&&canBack()){e.preventDefault();goBack();}return;}
+  if(field)return;
+  switch(k){
+    case '/':e.preventDefault();$('q').focus();return;
+    case '?':e.preventDefault();toggleHelp(true);return;
+    case 't':toggleTheme();return;
+    case 'b':toggleSide();return;
+  }
+  if(!G)return;
+  switch(k){
+    case 'j':case 'ArrowDown':e.preventDefault();step(1);return;
+    case 'k':case 'ArrowUp':e.preventDefault();step(-1);return;
+    case 'Enter':if(tag==='BUTTON')return;if(sel!==null){e.preventDefault();focusOn(sel);}return;
+    case 'Backspace':e.preventDefault();goBack();return;
+    case 'f':fit();return;
+    case 'r':resetAll();toast('Reset');return;
+    case '+':case '=':zoomBy(1.25);return;
+    case '-':case '_':zoomBy(0.8);return;
+    case ' ':if(tag==='BUTTON')return;e.preventDefault();alpha=1;dirty=true;toast('Re-running layout');return;
+    case '[':bump('depth',-1,'Depth');return;
+    case ']':bump('depth',1,'Depth');return;
+    case 'd':cycle('dir','Direction');return;
+    case 's':exportPNG();return;
+  }
+  if(/^[1-9]$/.test(k))toggleEdge(+k-1);
 });
 addEventListener('dragover',e=>{e.preventDefault();document.body.id='drop';});
 addEventListener('dragleave',()=>document.body.id='');
