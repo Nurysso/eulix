@@ -133,6 +133,10 @@ impl TypeScriptParser {
         format!("class_{}::{}", name, self.file_path)
     }
 
+    fn make_interface_id(&self, name: &str) -> String {
+        format!("interface_{}::{}", name, self.file_path)
+    }
+
     fn count_lines(&self) -> usize {
         self.source_code.lines().count()
     }
@@ -576,7 +580,7 @@ impl TypeScriptParser {
             .unwrap_or_default();
 
         Some(Class {
-            id: format!("interface_{}", name),
+            id: self.make_interface_id(&name),
             name,
             bases,
             docstring,
@@ -1158,7 +1162,13 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
 #[cfg(test)]
 mod tests {
     #![expect(clippy::expect_used)]
+
     use super::*;
+    use crate::analyze::call_graph::prism_v2::build_call_graph_v2;
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    // ---------- helpers ----------
 
     fn parse(src: &str) -> FileData {
         TypeScriptParser::new(src.to_string(), "test.ts".to_string())
@@ -1170,6 +1180,36 @@ mod tests {
         let mut names: Vec<&str> = fd.functions.iter().map(|f| f.name.as_str()).collect();
         names.sort_unstable();
         names
+    }
+
+    // ---------- tests ----------
+
+    #[test]
+    fn interfaces_include_file_path_in_id_and_do_not_collide_across_files() {
+        let (_, fd_a) = parse_source(
+            Path::new("src/a.ts"),
+            "export interface Options {\n  timeout: number;\n}\n",
+        )
+        .expect("a.ts parses");
+        let (_, fd_b) = parse_source(
+            Path::new("src/b.ts"),
+            "export interface Options {\n  retries: number;\n}\nexport interface ExtendedOptions extends Options {\n  verbose: boolean;\n}\n",
+        )
+        .expect("b.ts parses");
+
+        assert_eq!(fd_a.classes[0].id, "interface_Options::src/a.ts");
+        assert_eq!(fd_b.classes[0].id, "interface_Options::src/b.ts");
+        assert_eq!(fd_b.classes[1].id, "interface_ExtendedOptions::src/b.ts");
+
+        let mut structure = HashMap::new();
+        structure.insert("src/a.ts".to_string(), fd_a);
+        structure.insert("src/b.ts".to_string(), fd_b);
+
+        let cg = build_call_graph_v2(&structure);
+        let node_ids: Vec<&str> = cg.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(node_ids.contains(&"interface_Options::src/a.ts"));
+        assert!(node_ids.contains(&"interface_Options::src/b.ts"));
+        assert!(node_ids.contains(&"interface_ExtendedOptions::src/b.ts"));
     }
 
     #[test]
