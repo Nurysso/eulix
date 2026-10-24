@@ -24,6 +24,12 @@ type AnchorPin struct {
 	Entity         string
 }
 
+type entityInfo struct {
+	nodeType    string
+	inKB        bool
+	inCallGraph bool
+}
+
 const pinnedAnchorTopN = 3
 
 var trivialEntityWords = map[string]struct{}{
@@ -107,11 +113,6 @@ func (cb *ContextBuilder) resolveAnchorPins(query string, pool map[string]Scored
 		return nil
 	}
 
-	type entityInfo struct {
-		inKB        bool
-		inCallGraph bool
-		nodeType    string
-	}
 	info := make(map[string]entityInfo, len(entities))
 	for _, e := range entities {
 		var ei entityInfo

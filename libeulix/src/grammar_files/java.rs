@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex, walk};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
@@ -469,32 +469,27 @@ impl JavaParser {
     }
 
     fn walk_types(&self, node: &Node, stack: &mut Vec<String>, classes: &mut Vec<Class>) {
-        let is_type_decl = matches!(
-            node.kind(),
-            "class_declaration"
-                | "interface_declaration"
-                | "enum_declaration"
-                | "record_declaration"
-                | "annotation_type_declaration"
-        );
-        let pushed = if is_type_decl {
-            if let Some(class) = self.parse_type_declaration(node, stack) {
-                stack.push(class.name.clone());
-                classes.push(class);
-                true
-            } else {
-                false
+        let initial_depth = stack.len();
+        walk(*node, initial_depth, |node, depth| {
+            stack.truncate(depth);
+            let node = &node;
+            let is_type_decl = matches!(
+                node.kind(),
+                "class_declaration"
+                    | "interface_declaration"
+                    | "enum_declaration"
+                    | "record_declaration"
+                    | "annotation_type_declaration"
+            );
+            if is_type_decl {
+                if let Some(class) = self.parse_type_declaration(node, stack) {
+                    stack.push(class.name.clone());
+                    classes.push(class);
+                }
             }
-        } else {
-            false
-        };
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.walk_types(&child, stack, classes);
-        }
-        if pushed {
-            stack.pop();
-        }
+            Some(stack.len())
+        });
+        stack.truncate(initial_depth);
     }
 
     fn parse_type_declaration(&self, node: &Node, stack: &[String]) -> Option<Class> {
@@ -770,16 +765,19 @@ impl JavaParser {
     }
 
     fn contains_kind(&self, node: &Node, kind: &str) -> bool {
-        if node.kind() == kind {
-            return true;
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if self.contains_kind(&child, kind) {
-                return true;
+        let mut found = false;
+        walk(*node, (), |node, _| {
+            if found {
+                return None;
             }
-        }
-        false
+            let node = &node;
+            if node.kind() == kind {
+                found = true;
+                return None;
+            }
+            Some(())
+        });
+        found
     }
 
     fn parse_method(
@@ -995,79 +993,79 @@ impl JavaParser {
         seen: &mut HashSet<String>,
         context: &str,
     ) {
-        let child_context = match node.kind() {
-            "if_statement" => "if",
-            "for_statement" | "enhanced_for_statement" | "while_statement" | "do_statement" => {
-                "loop"
-            }
-            "switch_expression" => "switch",
-            "catch_clause" => "catch",
-            "lambda_expression" => "lambda",
-            _ => context,
-        };
-        match node.kind() {
-            "method_invocation" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    let callee = self.get_node_text(&name_node);
-                    let object = node
-                        .child_by_field_name("object")
-                        .map(|o| self.get_node_text(&o));
-                    let key = format!(
-                        "{}:{}:{}",
-                        callee,
-                        object.as_deref().unwrap_or(""),
-                        node.start_position().row
-                    );
-                    if seen.insert(key) {
-                        calls.push(FunctionCall {
+        walk(*node, context, |node, context| {
+            let node = &node;
+            let child_context = match node.kind() {
+                "if_statement" => "if",
+                "for_statement" | "enhanced_for_statement" | "while_statement" | "do_statement" => {
+                    "loop"
+                }
+                "switch_expression" => "switch",
+                "catch_clause" => "catch",
+                "lambda_expression" => "lambda",
+                _ => context,
+            };
+            match node.kind() {
+                "method_invocation" => {
+                    if let Some(name_node) = node.child_by_field_name("name") {
+                        let callee = self.get_node_text(&name_node);
+                        let object = node
+                            .child_by_field_name("object")
+                            .map(|o| self.get_node_text(&o));
+                        let key = format!(
+                            "{}:{}:{}",
                             callee,
-                            defined_in: object,
-                            line: node.start_position().row + 1,
-                            args: self.extract_call_arguments(node),
-                            is_conditional: context != "unconditional",
-                            context: context.to_string(),
-                        });
+                            object.as_deref().unwrap_or(""),
+                            node.start_position().row
+                        );
+                        if seen.insert(key) {
+                            calls.push(FunctionCall {
+                                callee,
+                                defined_in: object,
+                                line: node.start_position().row + 1,
+                                args: self.extract_call_arguments(node),
+                                is_conditional: context != "unconditional",
+                                context: context.to_string(),
+                            });
+                        }
                     }
                 }
-            }
-            "object_creation_expression" => {
-                if let Some(type_node) = node.child_by_field_name("type") {
-                    let callee = format!("new {}", self.get_node_text(&type_node));
-                    let key = format!("{}:{}", callee, node.start_position().row);
-                    if seen.insert(key) {
-                        calls.push(FunctionCall {
-                            callee,
-                            defined_in: None,
-                            line: node.start_position().row + 1,
-                            args: self.extract_call_arguments(node),
-                            is_conditional: context != "unconditional",
-                            context: context.to_string(),
-                        });
+                "object_creation_expression" => {
+                    if let Some(type_node) = node.child_by_field_name("type") {
+                        let callee = format!("new {}", self.get_node_text(&type_node));
+                        let key = format!("{}:{}", callee, node.start_position().row);
+                        if seen.insert(key) {
+                            calls.push(FunctionCall {
+                                callee,
+                                defined_in: None,
+                                line: node.start_position().row + 1,
+                                args: self.extract_call_arguments(node),
+                                is_conditional: context != "unconditional",
+                                context: context.to_string(),
+                            });
+                        }
                     }
                 }
-            }
-            "explicit_constructor_invocation" => {
-                if let Some(ctor_node) = node.child_by_field_name("constructor") {
-                    let callee = self.get_node_text(&ctor_node);
-                    let key = format!("{}:{}", callee, node.start_position().row);
-                    if seen.insert(key) {
-                        calls.push(FunctionCall {
-                            callee,
-                            defined_in: None,
-                            line: node.start_position().row + 1,
-                            args: self.extract_call_arguments(node),
-                            is_conditional: context != "unconditional",
-                            context: context.to_string(),
-                        });
+                "explicit_constructor_invocation" => {
+                    if let Some(ctor_node) = node.child_by_field_name("constructor") {
+                        let callee = self.get_node_text(&ctor_node);
+                        let key = format!("{}:{}", callee, node.start_position().row);
+                        if seen.insert(key) {
+                            calls.push(FunctionCall {
+                                callee,
+                                defined_in: None,
+                                line: node.start_position().row + 1,
+                                args: self.extract_call_arguments(node),
+                                is_conditional: context != "unconditional",
+                                context: context.to_string(),
+                            });
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.find_calls_recursive(&child, calls, seen, child_context);
-        }
+            Some(child_context)
+        });
     }
 
     fn extract_call_arguments(&self, call_node: &Node) -> Vec<String> {
@@ -1109,94 +1107,94 @@ impl JavaParser {
     }
 
     fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
-        match node.kind() {
-            "local_variable_declaration" => {
-                let var_type = node
-                    .child_by_field_name("type")
-                    .map(|t| self.get_node_text(&t));
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if child.kind() == "variable_declarator" {
-                        if let Some(name_node) = child.child_by_field_name("name") {
-                            let var_name = self.get_node_text(&name_node);
-                            if !var_name.is_empty() && !variables.contains_key(&var_name) {
-                                variables.insert(
-                                    var_name.clone(),
-                                    Variable {
-                                        name: var_name,
-                                        var_type: var_type.clone(),
-                                        scope: "local".to_string(),
-                                        defined_at: Some(node.start_position().row + 1),
-                                        transformations: vec![],
-                                        used_in: vec![],
-                                        returned: false,
-                                    },
-                                );
+        walk(*node, (), |node, _| {
+            let node = &node;
+            match node.kind() {
+                "local_variable_declaration" => {
+                    let var_type = node
+                        .child_by_field_name("type")
+                        .map(|t| self.get_node_text(&t));
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        if child.kind() == "variable_declarator" {
+                            if let Some(name_node) = child.child_by_field_name("name") {
+                                let var_name = self.get_node_text(&name_node);
+                                if !var_name.is_empty() && !variables.contains_key(&var_name) {
+                                    variables.insert(
+                                        var_name.clone(),
+                                        Variable {
+                                            name: var_name,
+                                            var_type: var_type.clone(),
+                                            scope: "local".to_string(),
+                                            defined_at: Some(node.start_position().row + 1),
+                                            transformations: vec![],
+                                            used_in: vec![],
+                                            returned: false,
+                                        },
+                                    );
+                                }
                             }
                         }
                     }
                 }
-            }
-            "enhanced_for_statement" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    let var_name = self.get_node_text(&name_node);
-                    let var_type = node
-                        .child_by_field_name("type")
-                        .map(|t| self.get_node_text(&t));
-                    if !var_name.is_empty() && !variables.contains_key(&var_name) {
-                        variables.insert(
-                            var_name.clone(),
-                            Variable {
-                                name: var_name,
-                                var_type,
-                                scope: "local".to_string(),
-                                defined_at: Some(node.start_position().row + 1),
-                                transformations: vec![],
-                                used_in: vec![],
-                                returned: false,
-                            },
-                        );
-                    }
-                }
-            }
-            "catch_formal_parameter" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    let var_name = self.get_node_text(&name_node);
-                    let var_type =
-                        find_child_by_kind(node, "catch_type").map(|t| self.get_node_text(&t));
-                    if !var_name.is_empty() && !variables.contains_key(&var_name) {
-                        variables.insert(
-                            var_name.clone(),
-                            Variable {
-                                name: var_name,
-                                var_type,
-                                scope: "local".to_string(),
-                                defined_at: Some(node.start_position().row + 1),
-                                transformations: vec![],
-                                used_in: vec![],
-                                returned: false,
-                            },
-                        );
-                    }
-                }
-            }
-            "return_statement" => {
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if child.kind() == "identifier" {
-                        let var_name = self.get_node_text(&child);
-                        if let Some(v) = variables.get_mut(&var_name) {
-                            v.returned = true;
+                "enhanced_for_statement" => {
+                    if let Some(name_node) = node.child_by_field_name("name") {
+                        let var_name = self.get_node_text(&name_node);
+                        let var_type = node
+                            .child_by_field_name("type")
+                            .map(|t| self.get_node_text(&t));
+                        if !var_name.is_empty() && !variables.contains_key(&var_name) {
+                            variables.insert(
+                                var_name.clone(),
+                                Variable {
+                                    name: var_name,
+                                    var_type,
+                                    scope: "local".to_string(),
+                                    defined_at: Some(node.start_position().row + 1),
+                                    transformations: vec![],
+                                    used_in: vec![],
+                                    returned: false,
+                                },
+                            );
                         }
                     }
                 }
+                "catch_formal_parameter" => {
+                    if let Some(name_node) = node.child_by_field_name("name") {
+                        let var_name = self.get_node_text(&name_node);
+                        let var_type =
+                            find_child_by_kind(node, "catch_type").map(|t| self.get_node_text(&t));
+                        if !var_name.is_empty() && !variables.contains_key(&var_name) {
+                            variables.insert(
+                                var_name.clone(),
+                                Variable {
+                                    name: var_name,
+                                    var_type,
+                                    scope: "local".to_string(),
+                                    defined_at: Some(node.start_position().row + 1),
+                                    transformations: vec![],
+                                    used_in: vec![],
+                                    returned: false,
+                                },
+                            );
+                        }
+                    }
+                }
+                "return_statement" => {
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        if child.kind() == "identifier" {
+                            let var_name = self.get_node_text(&child);
+                            if let Some(v) = variables.get_mut(&var_name) {
+                                v.returned = true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
-            _ => {}
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.track_variable_usage(&child, variables);
-        }
+            Some(())
+        });
     }
 
     fn build_control_flow(&self, node: &Node) -> ControlFlow {
@@ -1211,28 +1209,28 @@ impl JavaParser {
     }
 
     fn extract_control_structures(&self, node: &Node, cf: &mut ControlFlow) {
-        match node.kind() {
-            "if_statement" => {
-                if let Some(b) = self.parse_if_statement(node) {
-                    cf.branches.push(b);
+        walk(*node, (), |node, _| {
+            let node = &node;
+            match node.kind() {
+                "if_statement" => {
+                    if let Some(b) = self.parse_if_statement(node) {
+                        cf.branches.push(b);
+                    }
                 }
-            }
-            "for_statement" | "enhanced_for_statement" | "while_statement" | "do_statement" => {
-                if let Some(l) = self.parse_loop(node) {
-                    cf.loops.push(l);
+                "for_statement" | "enhanced_for_statement" | "while_statement" | "do_statement" => {
+                    if let Some(l) = self.parse_loop(node) {
+                        cf.loops.push(l);
+                    }
                 }
-            }
-            "try_statement" | "try_with_resources_statement" => {
-                if let Some(t) = self.parse_try_block(node) {
-                    cf.try_blocks.push(t);
+                "try_statement" | "try_with_resources_statement" => {
+                    if let Some(t) = self.parse_try_block(node) {
+                        cf.try_blocks.push(t);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.extract_control_structures(&child, cf);
-        }
+            Some(())
+        });
     }
 
     fn parse_if_statement(&self, node: &Node) -> Option<Branch> {
@@ -1271,52 +1269,62 @@ impl JavaParser {
     }
 
     fn collect_call_names(&self, node: &Node, names: &mut Vec<String>, seen: &mut HashSet<String>) {
-        if node.kind() == "method_invocation" {
-            if let Some(n) = node.child_by_field_name("name") {
-                let name = self.get_node_text(&n);
-                if !name.is_empty() && seen.insert(name.clone()) {
-                    names.push(name);
+        walk(*node, (), |node, _| {
+            let node = &node;
+            if node.kind() == "method_invocation" {
+                if let Some(n) = node.child_by_field_name("name") {
+                    let name = self.get_node_text(&n);
+                    if !name.is_empty() && seen.insert(name.clone()) {
+                        names.push(name);
+                    }
                 }
             }
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_call_names(&child, names, seen);
-        }
+            Some(())
+        });
     }
 
     fn find_return_value(&self, node: &Node) -> Option<String> {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
+        let mut result = None;
+        walk(*node, (), |child, _| {
+            if result.is_some() {
+                return None;
+            }
+            if child == *node {
+                return Some(());
+            }
             if child.kind() == "return_statement" {
                 let mut vals = Vec::new();
                 let mut rc = child.walk();
                 for rchild in child.named_children(&mut rc) {
                     vals.push(self.get_node_text(&rchild));
                 }
-                return Some(vals.join(", "));
+                result = Some(vals.join(", "));
+                return None;
             }
-            if let Some(v) = self.find_return_value(&child) {
-                return Some(v);
-            }
-        }
-        None
+            Some(())
+        });
+        result
     }
 
     fn find_thrown_type(&self, node: &Node) -> Option<String> {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
+        let mut result = None;
+        walk(*node, (), |child, _| {
+            if result.is_some() {
+                return None;
+            }
+            if child == *node {
+                return Some(());
+            }
             if child.kind() == "throw_statement" {
                 let mut tc = child.walk();
                 if let Some(expr) = child.named_children(&mut tc).next() {
-                    return Some(self.get_node_text(&expr));
+                    result = Some(self.get_node_text(&expr));
+                    return None;
                 };
             }
-            if let Some(v) = self.find_thrown_type(&child) {
-                return Some(v);
-            }
-        }
-        None
+            Some(())
+        });
+        result
     }
 
     fn parse_loop(&self, node: &Node) -> Option<Loop> {
@@ -1391,38 +1399,39 @@ impl JavaParser {
     }
 
     fn collect_exceptions(&self, node: &Node, raises: &mut Vec<String>, handles: &mut Vec<String>) {
-        match node.kind() {
-            "throw_statement" => {
-                let mut cursor = node.walk();
-                if let Some(expr) = node.named_children(&mut cursor).next() {
-                    let text = self.get_node_text(&expr);
-                    if !raises.contains(&text) {
-                        raises.push(text);
-                    }
-                };
-            }
-            "catch_formal_parameter" => {
-                if let Some(t) = find_child_by_kind(node, "catch_type") {
-                    let text = self.get_node_text(&t);
-                    for part in text.split('|') {
-                        let p = part.trim().to_string();
-                        if !p.is_empty() && !handles.contains(&p) {
-                            handles.push(p);
+        walk(*node, (), |node, _| {
+            let node = &node;
+            match node.kind() {
+                "throw_statement" => {
+                    let mut cursor = node.walk();
+                    if let Some(expr) = node.named_children(&mut cursor).next() {
+                        let text = self.get_node_text(&expr);
+                        if !raises.contains(&text) {
+                            raises.push(text);
+                        }
+                    };
+                }
+                "catch_formal_parameter" => {
+                    if let Some(t) = find_child_by_kind(node, "catch_type") {
+                        let text = self.get_node_text(&t);
+                        for part in text.split('|') {
+                            let p = part.trim().to_string();
+                            if !p.is_empty() && !handles.contains(&p) {
+                                handles.push(p);
+                            }
                         }
                     }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_exceptions(&child, raises, handles);
-        }
+            Some(())
+        });
     }
 
     fn calculate_complexity(&self, node: &Node) -> usize {
-        fn count(node: &Node) -> usize {
-            let mut c = 0;
+        let mut complexity = 1;
+        walk(*node, (), |node, _| {
+            let node = &node;
             match node.kind() {
                 "if_statement"
                 | "for_statement"
@@ -1434,16 +1443,12 @@ impl JavaParser {
                 | "switch_rule"
                 | "ternary_expression"
                 | "&&"
-                | "||" => c += 1,
+                | "||" => complexity += 1,
                 _ => {}
             }
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                c += count(&child);
-            }
-            c
-        }
-        1 + count(node)
+            Some(())
+        });
+        complexity
     }
 
     fn auto_tag_method(&self, input: &TagInput) -> Vec<String> {
@@ -1574,4 +1579,37 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
     parse_source(path, &source_code)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    #[test]
+    fn deep_expression_on_small_stack() {
+        // A left-associative expression must not grow the Rust call stack.
+        let expression = vec!["x"; 10_000].join(" + ");
+        let source = format!(
+            "class Deep {{ int deep(int x) {{ return {}; }} }}",
+            expression
+        );
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let (_, data) =
+                    crate::grammar_files::parse_source(std::path::Path::new("deep.java"), &source)
+                        .expect("deep expression parses");
+                assert!(data.syntax.is_clean(), "deep expression is valid syntax");
+                assert!(
+                    data.functions
+                        .iter()
+                        .chain(data.classes.iter().flat_map(|c| &c.methods))
+                        .any(|f| f.name == "deep"),
+                    "deep function extracted"
+                );
+            })
+            .expect("spawn parser thread")
+            .join()
+            .expect("parser thread completes on a 2 MiB stack");
+    }
 }

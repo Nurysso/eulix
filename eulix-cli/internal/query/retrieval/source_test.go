@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +16,198 @@ import (
 	"eulix/internal/config"
 	"eulix/internal/utils"
 )
+
+// === bugs ===
+
+// Bug 1: pure function, runs identically on all OSes.
+func TestBuildSkeletonDoesNotLeakChildBodyAfterCommentHeavyGap(t *testing.T) {
+	src := []string{"type A struct {"}
+	for i := 0; i < 300; i++ {
+		src = append(src, "// filler comment") // lines 2..301
+	}
+	src = append(
+		src,
+		"func (a A) child() {", // 302
+		"\tsecretChildBody()",  // 303
+		"}",                    // 304
+		"}",                    // 305
+	)
+	groups := []childGroup{{
+		startLine: 302,
+		endLine:   304,
+		children:  []childSpan{{chunkIdx: 1, startLine: 302, endLine: 304}},
+	}}
+
+	lines, pointers, tail := buildSkeleton(src, 1, 305, groups, "go")
+
+	if joined := strings.Join(lines, "\n"); strings.Contains(joined, "secretChildBody") {
+		t.Fatalf("child body leaked into parent skeleton:\n%s", joined)
+	}
+	if !tail {
+		t.Error("tail should be true: source was left out")
+	}
+	if len(pointers) != 0 {
+		t.Errorf("no pointer should be recorded when the scan stops before the child: %+v", pointers)
+	}
+}
+
+// Bug 2: CRLF must not leave '\r' on lines (matters on Windows checkouts).
+func TestFileCacheNormalizesCRLFAndBOM(t *testing.T) {
+	dir := t.TempDir()
+	body := "\xef\xbb\xbfpackage x\r\n\r\n// note\r\nfunc F() {}\r\n"
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fc := newFileCache()
+	lines := fc.get(filepath.Join(dir, "a.go"), nil)
+	if len(lines) == 0 {
+		t.Fatal("no lines read")
+	}
+	for i, l := range lines {
+		if strings.Contains(l, "\r") {
+			t.Errorf("line %d still has \\r: %q", i+1, l)
+		}
+	}
+	if strings.HasPrefix(lines[0], "\xef\xbb\xbf") {
+		t.Errorf("BOM left on first line: %q", lines[0])
+	}
+	for _, l := range stripSegment(lines, 1, len(lines), "go") {
+		if strings.Contains(l, "\r") {
+			t.Errorf("stripped output has \\r: %q", l)
+		}
+	}
+}
+
+func newRootedCache(t *testing.T, root string) *fileCache {
+	t.Helper()
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	fc := newFileCache()
+	fc.root, fc.rootPath = r, root
+	return fc
+}
+
+// Bug 3: only fails where the root path is a symlink (macOS /var -> /private/var).
+func TestFileCacheAbsolutePathThroughSymlinkedRoot(t *testing.T) {
+	root := t.TempDir() // macOS: /var/folders/... (unresolved)
+	if err := os.WriteFile(filepath.Join(root, "a.py"), []byte("x = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc := newRootedCache(t, root)
+
+	if lines := fc.get(filepath.Join(resolved, "a.py"), nil); len(lines) == 0 {
+		t.Fatalf("absolute path via resolved root failed (root=%s resolved=%s)", root, resolved)
+	}
+}
+
+func TestFileCacheAbsolutePathThroughSymlinkedRootLinux(t *testing.T) {
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real")
+	if err := os.Mkdir(realRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realRoot, "a.py"), []byte("x = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linkRoot := filepath.Join(base, "link")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// sourceRoot is what the user configured: the symlinked path.
+	// The indexer resolved paths and stored them under realRoot.
+	fc := newRootedCache(t, linkRoot)
+	if lines := fc.get(filepath.Join(realRoot, "a.py"), nil); len(lines) == 0 {
+		t.Fatalf("resolved absolute path rejected by unresolved root (root=%s real=%s)",
+			linkRoot, realRoot)
+	}
+}
+
+func TestFileCacheSymlinkEscapeStillRejected(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "proj")
+	outside := filepath.Join(base, "secret.txt")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "leak.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	fc := newRootedCache(t, root)
+	if lines := fc.get(filepath.Join(root, "leak.txt"), nil); len(lines) != 0 {
+		t.Fatalf("symlink escaping the root was read: %v", lines)
+	}
+}
+
+// Regression guards for the os.Root containment fix, on every OS.
+func TestFileCacheStaysInsideRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "proj")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(base, "secret.py")
+	if err := os.WriteFile(outside, []byte("TOKEN = 'SYNTHETIC_SECRET'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "ok.py"), []byte("x = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fc := newRootedCache(t, root)
+
+	if got := fc.get("../secret.py", nil); got != nil {
+		t.Errorf("../ escape returned content: %v", got)
+	}
+	if got := fc.get(outside, nil); got != nil { // absolute, outside root
+		t.Errorf("absolute outside path returned content: %v", got)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link.py")); err == nil {
+		if got := fc.get("link.py", nil); got != nil {
+			t.Errorf("escaping symlink returned content: %v", got)
+		}
+	} // else: Windows without symlink privilege, skip that case
+	if got := fc.get("ok.py", nil); len(got) == 0 {
+		t.Error("file inside root should be readable")
+	}
+	if got := fc.get(filepath.Join(root, "ok.py"), nil); len(got) == 0 {
+		t.Error("absolute path inside root should be readable")
+	}
+}
+
+// Invariant guard for the allocator: spend never exceeds the budget.
+func TestAllocateAndFitNeverExceedBudget(t *testing.T) {
+	mk := func(idx, nLines int, w float64) *hItem {
+		it := &hItem{idx: idx, weight: w}
+		it.lines = make([]string, nLines)
+		it.cum = make([]int, nLines+1)
+		for i := range it.lines {
+			it.lines[i] = strings.Repeat("x", 60)
+			it.cum[i+1] = it.cum[i] + 61
+		}
+		it.need = it.cost(nLines)
+		it.minUseful = max(minGrantTokens, int(float64(it.need)*minGrantFraction))
+		it.minUseful = min(it.minUseful, it.need)
+		return it
+	}
+	for _, budget := range []int{50, 300, 1000, 5000} {
+		items := []*hItem{mk(0, 200, 1), mk(1, 40, 0.8), mk(2, 500, 0.5), mk(3, 10, 0.3)}
+		allocateGrants(items, budget)
+		if used := fitAndTopUp(items, budget); used > budget {
+			t.Errorf("budget %d: used %d", budget, used)
+		}
+	}
+}
 
 // ========== helpers ==========
 
@@ -623,7 +817,7 @@ func TestBuildSkeleton_NoKids(t *testing.T) {
 	for i := range src {
 		src[i] = fmt.Sprintf("line %d", i+1)
 	}
-	out, tail := buildSkeleton(src, 1, 60, nil, "go")
+	out, _, tail := buildSkeleton(src, 1, 60, nil, "go")
 	if len(out) == 0 {
 		t.Error("skeleton output should not be empty")
 	}
@@ -635,11 +829,19 @@ func TestBuildSkeleton_WithKids(t *testing.T) {
 	for i := range src {
 		src[i] = fmt.Sprintf("// line %d", i+1)
 	}
-	kids := [][2]int{{20, 50}, {60, 80}}
-	out, _ := buildSkeleton(src, 1, 100, kids, "go")
+	groups := []childGroup{
+		{startLine: 20, endLine: 50, children: []childSpan{{chunkIdx: 1, startLine: 20, endLine: 50}}},
+		{startLine: 60, endLine: 80, children: []childSpan{{chunkIdx: 2, startLine: 60, endLine: 80}}},
+	}
+
+	out, pointers, _ := buildSkeleton(src, 1, 100, groups, "go")
+
 	joined := strings.Join(out, "\n")
 	if !strings.Contains(joined, "omitted") {
 		t.Error("skeleton with kids should note omitted child ranges")
+	}
+	if len(pointers) != 2 {
+		t.Errorf("want 2 pointers, got %d: %q", len(pointers), out)
 	}
 }
 
@@ -648,11 +850,18 @@ func TestBuildSkeleton_TailWhenLong(t *testing.T) {
 	for i := range src {
 		src[i] = fmt.Sprintf("line %d padding content here", i+1)
 	}
-	out, tail := buildSkeleton(src, 1, 200, nil, "go")
+
+	out, pointers, tail := buildSkeleton(src, 1, 200, nil, "go")
+
 	if len(out) > skeletonHeadLines {
 		t.Errorf("output exceeds skeletonHeadLines: %d", len(out))
 	}
-	_ = tail
+	if !tail {
+		t.Error("tail should be true: 200 lines were cut to the head size")
+	}
+	if len(pointers) != 0 {
+		t.Errorf("no children, so no pointers expected: %+v", pointers)
+	}
 }
 
 // ========== stripSegment ==========
@@ -834,5 +1043,244 @@ func TestHydrateSourceCodeSkeletonsOversizedClass(t *testing.T) {
 	}
 	if strings.Contains(out[0].Content, "buried_method") {
 		t.Fatalf("skeleton leaked the class tail:\n%s", out[0].Content)
+	}
+}
+
+// ========== Dangling Pointer Check Tests ==========
+
+// newTestBuilder is the one place to adapt to your ContextBuilder. The tests only need
+// buildItems and enforceCeiling. If DebugLogger.Log is not nil-receiver safe,
+// enforceCeiling will panic on eviction, so set a real logger here.
+func newTestBuilder() *ContextBuilder {
+	return &ContextBuilder{debugLog: utils.NewDebugLogger()}
+}
+
+var skeletonFixtureSrc = []string{
+	"package p",              // 1
+	"type T struct{ n int }", // 2
+	"func (t T) A() {",       // 3
+	"\tt.n++",                // 4
+	"}",                      // 5
+	"func (t T) B() {",       // 6
+	"\tt.n--",                // 7
+	"}",                      // 8
+	"var tail = 1",           // 9
+}
+
+var sepPointer = regexp.MustCompile(`lines (\d+)-(\d+) omitted \(separate chunk\)`)
+
+func writeGoFile(t *testing.T, lines []string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "p.go")
+	if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p // absolute path; cache has no root, so it goes through os.ReadFile
+}
+
+// runPipeline mirrors hydrateSourceCode after allocation: chunk 0 is the parent and gets its
+// full skeleton; every child gets no grant, so each stays AST (what allocateGrants does
+// when the pool can't cover them). ceilingFor picks the ceiling from what the parent
+// used and what the children cost. Returns the output chunks the way hydrateSourceCode
+// assembles them.
+func runPipeline(t *testing.T, chunks []Chunk, ceilingFor func(usedCode, childAST int) int) []Chunk {
+	t.Helper()
+	cb := newTestBuilder()
+	items := cb.buildItems(chunks, newFileCache(), 1000)
+
+	parent := items[0]
+	if parent.skip || !parent.skeleton {
+		t.Fatalf("fixture broken: parent must hydrate as a skeleton (skip=%v reason=%q)", parent.skip, parent.reason)
+	}
+	parent.grant = parent.need
+
+	usedCode := fitAndTopUp(items, parent.need)
+	childAST := 0
+	for _, it := range items[1:] {
+		if !it.skip {
+			t.Fatalf("fixture broken: child %d should have no grant", it.idx)
+		}
+		childAST += it.astTokens
+	}
+
+	evicted, _ := cb.enforceCeiling(items, ceilingFor(usedCode, childAST), usedCode)
+
+	var out []Chunk
+	for _, it := range items {
+		c := it.chunk
+		switch {
+		case evicted[it.idx]:
+			continue
+		case it.skip:
+		default:
+			it.dropEvictedPointers(evicted)
+			c.Content = it.render()
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// danglingPointers returns every "(separate chunk)" claim in the parent whose lines are
+// not fully covered by a chunk that is still in the output.
+func danglingPointers(out []Chunk) []string {
+	covered := map[int]bool{}
+	for _, c := range out[1:] {
+		for l := c.StartLine; l <= c.EndLine; l++ {
+			covered[l] = true
+		}
+	}
+	var bad []string
+	for _, m := range sepPointer.FindAllStringSubmatch(out[0].Content, -1) {
+		lo, _ := strconv.Atoi(m[1])
+		hi, _ := strconv.Atoi(m[2])
+		for l := lo; l <= hi; l++ {
+			if !covered[l] {
+				bad = append(bad, m[0])
+				break
+			}
+		}
+	}
+	return bad
+}
+
+func skeletonFixture(t *testing.T) *hItem {
+	t.Helper()
+	src := skeletonFixtureSrc
+	chunks := []Chunk{
+		{File: "p.go", StartLine: 1, EndLine: 10, ChunkType: "file"},
+		{File: "p.go", StartLine: 3, EndLine: 5, ChunkType: "function"}, // A
+		{File: "p.go", StartLine: 7, EndLine: 9, ChunkType: "function"}, // B
+		{File: "p.go", StartLine: 7, EndLine: 9, ChunkType: "function"}, // B, duplicate range
+	}
+	groups := childGroups(chunks, directChildren(chunks)[0], 1, 10)
+
+	it := &hItem{lang: "go"}
+	it.lines, it.pointers, it.tail = buildSkeleton(src, 1, 9, groups, "go")
+	it.keep = len(it.lines)
+	if len(it.pointers) != 2 {
+		t.Fatalf("want 2 pointers, got %d: %q", len(it.pointers), it.lines)
+	}
+	return it
+}
+
+func pointerStartingAt(it *hItem, startLine int) string {
+	for _, p := range it.pointers {
+		if p.group.startLine == startLine {
+			return it.lines[p.lineIdx]
+		}
+	}
+	return ""
+}
+
+func TestDropEvictedPointers(t *testing.T) {
+	tests := []struct {
+		name         string
+		evicted      map[int]bool
+		wantA, wantB bool // pointer still claims a separate chunk
+	}{
+		{"nothing evicted", nil, true, true},
+		{"A evicted", map[int]bool{1: true}, false, true},
+		{"B evicted, duplicate survives", map[int]bool{2: true}, true, true},
+		{"duplicate evicted, B survives", map[int]bool{3: true}, true, true},
+		{"both copies of B evicted", map[int]bool{2: true, 3: true}, true, false},
+		{"everything evicted", map[int]bool{1: true, 2: true, 3: true}, false, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			it := skeletonFixture(t)
+			it.dropEvictedPointers(tc.evicted)
+
+			for _, want := range []struct {
+				startLine int
+				separate  bool
+			}{{3, tc.wantA}, {7, tc.wantB}} {
+				line := pointerStartingAt(it, want.startLine)
+				if got := strings.Contains(line, "(separate chunk)"); got != want.separate {
+					t.Errorf("pointer at line %d: separate=%v, want %v (%q)", want.startLine, got, want.separate, line)
+				}
+				if !strings.Contains(line, "omitted") {
+					t.Errorf("pointer at line %d lost its omission marker: %q", want.startLine, line)
+				}
+			}
+		})
+	}
+}
+
+func TestFullyBackedMergedGroupNeedsEveryChild(t *testing.T) {
+	chunks := []Chunk{
+		{File: "p.go", StartLine: 1, EndLine: 9, ChunkType: "file"},
+		{File: "p.go", StartLine: 3, EndLine: 5, ChunkType: "function"},
+		{File: "p.go", StartLine: 6, EndLine: 8, ChunkType: "function"}, // touches the first, so they merge
+	}
+	groups := childGroups(chunks, directChildren(chunks)[0], 1, 9)
+	if len(groups) != 1 || len(groups[0].children) != 2 {
+		t.Fatalf("want one merged group with two children, got %+v", groups)
+	}
+	if !groups[0].fullyBacked(nil) {
+		t.Error("untouched group reported as not backed")
+	}
+	if groups[0].fullyBacked(map[int]bool{2: true}) {
+		t.Error("group 3-8 reported backed with child 6-8 evicted")
+	}
+}
+
+// Control: nothing is evicted, so every pointer is backed. If this fails, the
+// checker is wrong, not the code under test.
+func TestSkeletonPointers_NoEvictionIsConsistent(t *testing.T) {
+	f := writeGoFile(t, skeletonFixtureSrc)
+	out := runPipeline(t, []Chunk{
+		{File: f, StartLine: 1, EndLine: 9, ChunkType: "file"},
+		{File: f, StartLine: 3, EndLine: 5, ChunkType: "function", Tokens: 50},
+		{File: f, StartLine: 6, EndLine: 8, ChunkType: "function", Tokens: 50},
+	}, func(used, child int) int { return used + child }) // everything fits
+
+	if len(out) != 3 {
+		t.Fatalf("want 3 chunks, got %d", len(out))
+	}
+	if !strings.Contains(out[0].Content, "(separate chunk)") {
+		t.Fatalf("fixture broken: skeleton has no pointers:\n%s", out[0].Content)
+	}
+	if bad := danglingPointers(out); len(bad) != 0 {
+		t.Fatalf("unexpected dangling pointers: %v", bad)
+	}
+}
+
+// Bug: both children are evicted, but the parent still says their lines are separate chunks.
+func TestSkeletonPointers_DanglingAfterChildEvicted(t *testing.T) {
+	f := writeGoFile(t, skeletonFixtureSrc)
+	out := runPipeline(t, []Chunk{
+		{File: f, StartLine: 1, EndLine: 9, ChunkType: "file"},
+		{File: f, StartLine: 3, EndLine: 5, ChunkType: "function", Tokens: 50},
+		{File: f, StartLine: 6, EndLine: 8, ChunkType: "function", Tokens: 50},
+	}, func(used, child int) int { return used }) // ceiling forces both children out
+
+	if len(out) != 1 {
+		t.Fatalf("fixture broken: want only the parent to survive, got %d chunks", len(out))
+	}
+	if bad := danglingPointers(out); len(bad) != 0 {
+		t.Errorf("parent points at chunks that were evicted: %v\n--- parent ---\n%s", bad, out[0].Content)
+	}
+}
+
+// Bug, merged variant: A (3-5) and B (6-8) are adjacent, so childRanges merges them into
+// one pointer "lines 3-8". Evicting only B leaves lines 6-8 dangling under a pointer that
+// still looks half-true.
+func TestSkeletonPointers_DanglingOnMergedRangePartialEviction(t *testing.T) {
+	f := writeGoFile(t, skeletonFixtureSrc)
+	out := runPipeline(t, []Chunk{
+		{File: f, StartLine: 1, EndLine: 9, ChunkType: "file"},
+		{File: f, StartLine: 3, EndLine: 5, ChunkType: "function", Tokens: 50},
+		{File: f, StartLine: 6, EndLine: 8, ChunkType: "function", Tokens: 50},
+	}, func(used, child int) int { return used + 50 }) // room for one child; coldest (B) goes
+
+	if len(out) != 2 {
+		t.Fatalf("fixture broken: want parent + A to survive, got %d chunks", len(out))
+	}
+	if out[1].StartLine != 3 {
+		t.Fatalf("fixture broken: expected A to survive, got %d-%d", out[1].StartLine, out[1].EndLine)
+	}
+	if bad := danglingPointers(out); len(bad) != 0 {
+		t.Errorf("merged pointer claims evicted child B: %v\n--- parent ---\n%s", bad, out[0].Content)
 	}
 }

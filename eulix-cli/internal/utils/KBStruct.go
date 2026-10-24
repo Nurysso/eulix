@@ -46,9 +46,9 @@ type FunctionMetric struct {
 	Name            string  `json:"name"`
 	File            string  `json:"file"`
 	Complexity      int     `json:"complexity"`
-	ImportanceScore float32 `json:"importance_score"`
 	LineStart       int     `json:"line_start"`
 	LineEnd         int     `json:"line_end"`
+	ImportanceScore float32 `json:"importance_score"`
 }
 
 // ---------- Main knowledge base ----------
@@ -96,25 +96,25 @@ type Import struct {
 }
 
 type KBFunction struct {
-	ID              string               `json:"id"`
-	Name            string               `json:"name"`
-	Signature       string               `json:"signature"`
-	Params          []Parameter          `json:"params"`
-	ReturnType      string               `json:"return_type"`
-	Docstring       string               `json:"docstring"`
-	LineStart       int                  `json:"line_start"`
-	LineEnd         int                  `json:"line_end"`
 	Calls           []FunctionCall       `json:"calls"`
+	Params          []Parameter          `json:"params"`
 	CalledBy        []CallerInfo         `json:"called_by"`
 	Variables       []Variable           `json:"variables"`
 	ControlFlow     ControlFlow          `json:"control_flow"`
 	Exceptions      ExceptionInfo        `json:"exceptions"`
-	Complexity      int                  `json:"complexity"`
-	IsAsync         bool                 `json:"is_async"`
-	Decorators      []string             `json:"decorators"`
-	Tags            []string             `json:"tags"`
-	ImportanceScore float32              `json:"importance_score"`
 	LangInfo        LanguageSpecificInfo `json:"lang_info"`
+	Tags            []string             `json:"tags"`
+	Decorators      []string             `json:"decorators"`
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	Signature       string               `json:"signature"`
+	ReturnType      string               `json:"return_type"`
+	Docstring       string               `json:"docstring"`
+	LineStart       int                  `json:"line_start"`
+	LineEnd         int                  `json:"line_end"`
+	Complexity      int                  `json:"complexity"`
+	ImportanceScore float32              `json:"importance_score"`
+	IsAsync         bool                 `json:"is_async"`
 }
 
 type Parameter struct {
@@ -124,12 +124,12 @@ type Parameter struct {
 }
 
 type FunctionCall struct {
-	Callee        string   `json:"callee"`
-	DefinedIn     *string  `json:"defined_in"`
-	Line          int      `json:"line"`
 	Args          []string `json:"args"`
-	IsConditional bool     `json:"is_conditional"`
+	DefinedIn     *string  `json:"defined_in"`
+	Callee        string   `json:"callee"`
 	Context       string   `json:"context"`
+	Line          int      `json:"line"`
+	IsConditional bool     `json:"is_conditional"`
 }
 
 type CallerInfo struct {
@@ -250,16 +250,16 @@ type CallGraphNode struct {
 	ID                string `json:"id"`
 	NodeType          string `json:"node_type"`
 	File              string `json:"file"`
-	IsEntryPoint      bool   `json:"is_entry_point"`
 	CallCountEstimate int    `json:"call_count_estimate"`
+	IsEntryPoint      bool   `json:"is_entry_point"`
 }
 
 type CallGraphEdge struct {
 	From         string `json:"from"`
 	To           string `json:"to"`
 	EdgeType     string `json:"edge_type"`
-	Conditional  bool   `json:"conditional"`
 	CallSiteLine int    `json:"call_site_line"`
+	Conditional  bool   `json:"conditional"`
 }
 
 type DependencyGraph struct {
@@ -326,38 +326,46 @@ type LanguageSpecificInfo struct {
 }
 
 type RustInfo struct {
+	Supertraits          []string `json:"supertraits"`
+	UnknownAttrs         []string `json:"unknown_attrs"`
+	MacroCalls           []string `json:"macro_calls"`
+	Lifetimes            []string `json:"lifetimes"`
+	Generics             []string `json:"generics"`
+	CfgAttrs             []string `json:"cfg_attrs"`
+	Derives              []string `json:"derives"`
+	OverloadedOperator   *string  `json:"overloaded_operator"`
+	ItemKind             *string  `json:"item_kind"`
+	WhereClause          *string  `json:"where_clause"`
+	Abi                  *string  `json:"abi"`
+	TraitName            *string  `json:"trait_name"`
 	IsUnsafe             bool     `json:"is_unsafe"`
 	IsPub                bool     `json:"is_pub"`
 	IsPubCrate           bool     `json:"is_pub_crate"`
 	IsConstFn            bool     `json:"is_const_fn"`
 	IsAsync              bool     `json:"is_async"`
 	IsExtern             bool     `json:"is_extern"`
-	Abi                  *string  `json:"abi"`
-	Lifetimes            []string `json:"lifetimes"`
-	Generics             []string `json:"generics"`
-	WhereClause          *string  `json:"where_clause"`
 	IsGeneric            bool     `json:"is_generic"`
-	Derives              []string `json:"derives"`
 	IsTest               bool     `json:"is_test"`
 	IsBench              bool     `json:"is_bench"`
-	CfgAttrs             []string `json:"cfg_attrs"`
-	UnknownAttrs         []string `json:"unknown_attrs"`
-	TraitName            *string  `json:"trait_name"`
 	IsTraitImplMethod    bool     `json:"is_trait_impl_method"`
 	IsTraitDefaultMethod bool     `json:"is_trait_default_method"`
 	IsOperatorOverload   bool     `json:"is_operator_overload"`
-	OverloadedOperator   *string  `json:"overloaded_operator"`
-	ItemKind             *string  `json:"item_kind"`
-	Supertraits          []string `json:"supertraits"`
-	IsMarkerTrait        bool     `json:"is_marker_trait"`
-	UsesTryOperator      bool     `json:"uses_try_operator"`
-	MacroCalls           []string `json:"macro_calls"`
+
+	IsMarkerTrait   bool `json:"is_marker_trait"`
+	UsesTryOperator bool `json:"uses_try_operator"`
 }
 
 type GoInfo struct {
-	IsExported        bool        `json:"is_exported"`
+	TypeKind          *GoTypeKind `json:"type_kind"`
+	TypeParams        []string    `json:"type_params"`
+	TypeConstraints   []string    `json:"type_constraints"`
+	BuildTags         []string    `json:"build_tags"`
+	GoDirectives      []string    `json:"go_directives"`
+	EmbedPatterns     []string    `json:"embed_patterns"`
 	ReceiverType      *string     `json:"receiver_type"`
 	ReceiverName      *string     `json:"receiver_name"`
+	DeferCount        int         `json:"defer_count"`
+	IsExported        bool        `json:"is_exported"`
 	IsInterfaceMethod bool        `json:"is_interface_method"`
 	SpawnsGoroutines  bool        `json:"spawns_goroutines"`
 	UsesChannels      bool        `json:"uses_channels"`
@@ -368,15 +376,8 @@ type GoInfo struct {
 	ReturnsError      bool        `json:"returns_error"`
 	UsesPanic         bool        `json:"uses_panic"`
 	UsesRecover       bool        `json:"uses_recover"`
-	DeferCount        int         `json:"defer_count"`
-	TypeParams        []string    `json:"type_params"`
-	TypeConstraints   []string    `json:"type_constraints"`
-	BuildTags         []string    `json:"build_tags"`
-	GoDirectives      []string    `json:"go_directives"`
 	UsesCgo           bool        `json:"uses_cgo"`
-	EmbedPatterns     []string    `json:"embed_patterns"`
 	IsVariadic        bool        `json:"is_variadic"`
-	TypeKind          *GoTypeKind `json:"type_kind"`
 	IsPointerReceiver bool        `json:"is_pointer_receiver"`
 	HasEmbeddedTypes  bool        `json:"has_embedded_types"`
 }
@@ -391,20 +392,21 @@ const (
 )
 
 type TypeScriptInfo struct {
+	Decorators      []string `json:"decorators"`
+	GenericParams   []string `json:"generic_params"`
+	AccessModifier  *string  `json:"access_modifier"`
 	IsAsync         bool     `json:"is_async"`
 	IsExported      bool     `json:"is_exported"`
 	IsDefaultExport bool     `json:"is_default_export"`
 	IsAbstract      bool     `json:"is_abstract"`
-	AccessModifier  *string  `json:"access_modifier"`
 	IsReadonly      bool     `json:"is_readonly"`
 	IsOptional      bool     `json:"is_optional"`
-	Decorators      []string `json:"decorators"`
-	GenericParams   []string `json:"generic_params"`
 	IsArrowFn       bool     `json:"is_arrow_fn"`
 	IsOverload      bool     `json:"is_overload"`
 }
 
 type JavaScriptInfo struct {
+	ModuleSystem       *string `json:"module_system"`
 	IsAsync            bool    `json:"is_async"`
 	IsExported         bool    `json:"is_exported"`
 	IsDefaultExport    bool    `json:"is_default_export"`
@@ -412,7 +414,6 @@ type JavaScriptInfo struct {
 	IsGenerator        bool    `json:"is_generator"`
 	IsIife             bool    `json:"is_iife"`
 	IsStrictMode       bool    `json:"is_strict_mode"`
-	ModuleSystem       *string `json:"module_system"`
 	IsCommonjsExport   bool    `json:"is_commonjs_export"`
 	BindsThisLexically bool    `json:"binds_this_lexically"`
 	IsCallback         bool    `json:"is_callback"`
@@ -421,6 +422,14 @@ type JavaScriptInfo struct {
 }
 
 type JavaInfo struct {
+	PermittedSubclasses     []string `json:"permitted_subclasses"`
+	Annotations             []string `json:"annotations"`
+	Throws                  []string `json:"throws"`
+	GenericParams           []string `json:"generic_params"`
+	Implements              []string `json:"implements"`
+	AccessModifier          *string  `json:"access_modifier"`
+	Extends                 *string  `json:"extends"`
+	TypeKind                *string  `json:"type_kind"`
 	IsStatic                bool     `json:"is_static"`
 	IsFinal                 bool     `json:"is_final"`
 	IsAbstract              bool     `json:"is_abstract"`
@@ -428,13 +437,6 @@ type JavaInfo struct {
 	IsNative                bool     `json:"is_native"`
 	IsDefaultMethod         bool     `json:"is_default_method"`
 	IsConstructor           bool     `json:"is_constructor"`
-	AccessModifier          *string  `json:"access_modifier"`
-	Annotations             []string `json:"annotations"`
-	Throws                  []string `json:"throws"`
-	GenericParams           []string `json:"generic_params"`
-	Extends                 *string  `json:"extends"`
-	Implements              []string `json:"implements"`
-	TypeKind                *string  `json:"type_kind"`
 	IsFunctionalInterface   bool     `json:"is_functional_interface"`
 	IsLambda                bool     `json:"is_lambda"`
 	IsAnonymousClass        bool     `json:"is_anonymous_class"`
@@ -442,7 +444,6 @@ type JavaInfo struct {
 	IsStaticNestedClass     bool     `json:"is_static_nested_class"`
 	IsRecord                bool     `json:"is_record"`
 	IsSealed                bool     `json:"is_sealed"`
-	PermittedSubclasses     []string `json:"permitted_subclasses"`
 	OverridesEqualsHashcode bool     `json:"overrides_equals_hashcode"`
 	UsesStreams             bool     `json:"uses_streams"`
 	UsesTryWithResources    bool     `json:"uses_try_with_resources"`
@@ -450,14 +451,21 @@ type JavaInfo struct {
 }
 
 type CInfo struct {
+	CallingConvention *string `json:"calling_convention"`
 	IsStatic          bool    `json:"is_static"`
 	IsInline          bool    `json:"is_inline"`
 	IsExtern          bool    `json:"is_extern"`
 	IsVariadic        bool    `json:"is_variadic"`
-	CallingConvention *string `json:"calling_convention"`
 }
 
 type CppInfo struct {
+	TypeKind                 CppTypeKind `json:"type_kind"`
+	ConceptConstraints       []string    `json:"concept_constraints"`
+	TemplateParams           []string    `json:"template_params"`
+	OverloadedOperator       *string     `json:"overloaded_operator"`
+	AccessSpecifier          *string     `json:"access_specifier"`
+	InheritanceType          *string     `json:"inheritance_type"`
+	UnderlyingType           *string     `json:"underlying_type"`
 	IsStatic                 bool        `json:"is_static"`
 	IsInline                 bool        `json:"is_inline"`
 	IsVirtual                bool        `json:"is_virtual"`
@@ -470,27 +478,20 @@ type CppInfo struct {
 	IsConstexpr              bool        `json:"is_constexpr"`
 	IsConstructor            bool        `json:"is_constructor"`
 	IsDestructor             bool        `json:"is_destructor"`
-	AccessSpecifier          *string     `json:"access_specifier"`
-	TemplateParams           []string    `json:"template_params"`
-	TypeKind                 CppTypeKind `json:"type_kind"`
 	IsPod                    bool        `json:"is_pod"`
 	IsPacked                 bool        `json:"is_packed"`
 	HasVtable                bool        `json:"has_vtable"`
 	IsScopedEnum             bool        `json:"is_scoped_enum"`
 	IsFlagsEnum              bool        `json:"is_flags_enum"`
-	UnderlyingType           *string     `json:"underlying_type"`
 	IsTemplate               bool        `json:"is_template"`
 	IsPartialSpecialization  bool        `json:"is_partial_specialization"`
 	IsExplicitSpecialization bool        `json:"is_explicit_specialization"`
-	ConceptConstraints       []string    `json:"concept_constraints"`
 	IsExternC                bool        `json:"is_extern_c"`
 	IsThreadLocal            bool        `json:"is_thread_local"`
 	IsConsteval              bool        `json:"is_consteval"`
 	IsConstinit              bool        `json:"is_constinit"`
 	IsOperatorOverload       bool        `json:"is_operator_overload"`
-	OverloadedOperator       *string     `json:"overloaded_operator"`
 	IsAbstract               bool        `json:"is_abstract"`
-	InheritanceType          *string     `json:"inheritance_type"`
 }
 
 type CppTypeKind string
@@ -504,6 +505,8 @@ const (
 )
 
 type PythonInfo struct {
+	UnknownDecorators []string `json:"unknown_decorators"`
+	FlaskRoute        *string  `json:"flask_route"`
 	IsDataclass       bool     `json:"is_dataclass"`
 	IsStaticmethod    bool     `json:"is_staticmethod"`
 	IsClassmethod     bool     `json:"is_classmethod"`
@@ -515,6 +518,4 @@ type PythonInfo struct {
 	IsOverload        bool     `json:"is_overload"`
 	IsOverride        bool     `json:"is_override"`
 	IsFinal           bool     `json:"is_final"`
-	FlaskRoute        *string  `json:"flask_route"`
-	UnknownDecorators []string `json:"unknown_decorators"`
 }

@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex, walk};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
@@ -283,8 +283,10 @@ impl JsParser {
     }
 
     fn walk_top_level_imports(&self, node: &Node, imports: &mut Vec<Import>) {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
+        walk(*node, (), |child, _| {
+            if child == *node {
+                return Some(());
+            }
             match child.kind() {
                 "import_statement" => {
                     if let Some(source) = self.import_source_text(&child) {
@@ -305,7 +307,7 @@ impl JsParser {
                             items: vec![],
                         });
                     }
-                    self.walk_top_level_imports(&child, imports);
+                    return Some(());
                 }
                 "lexical_declaration" | "variable_declaration" => {
                     self.extract_require_calls(&child, imports);
@@ -315,7 +317,8 @@ impl JsParser {
                 }
                 _ => {}
             }
-        }
+            None
+        });
     }
 
     fn import_source_text(&self, node: &Node) -> Option<String> {
@@ -343,52 +346,51 @@ impl JsParser {
     }
 
     fn collect_import_names(&self, node: &Node, items: &mut Vec<String>) {
-        let mut cursor = node.walk();
-        match node.kind() {
-            "identifier" => items.push(self.get_node_text(node)),
-            "import_specifier" => {
-                let name = node
-                    .child_by_field_name("name")
-                    .map(|n| self.get_node_text(&n))
-                    .unwrap_or_default();
-                if !name.is_empty() {
-                    items.push(name);
+        walk(*node, (), |node, _| {
+            let node = &node;
+            match node.kind() {
+                "identifier" => items.push(self.get_node_text(node)),
+                "import_specifier" => {
+                    let name = node
+                        .child_by_field_name("name")
+                        .map(|n| self.get_node_text(&n))
+                        .unwrap_or_default();
+                    if !name.is_empty() {
+                        items.push(name);
+                    }
                 }
+                "namespace_import" => items.push(format!("* as {}", self.get_node_text(node))),
+                _ => return Some(()),
             }
-            "namespace_import" => items.push(format!("* as {}", self.get_node_text(node))),
-            _ => {
-                for child in node.children(&mut cursor) {
-                    self.collect_import_names(&child, items);
-                }
-            }
-        }
+            None
+        });
     }
 
     /// Finds `const x = require('y')` / `require('y')` call expressions.
     fn extract_require_calls(&self, node: &Node, imports: &mut Vec<Import>) {
-        let mut cursor = node.walk();
-        if node.kind() == "call_expression" {
-            if let Some(func) = node.child_by_field_name("function") {
-                if self.get_node_text(&func) == "require" {
-                    if let Some(args) = node.child_by_field_name("arguments") {
-                        let mut acur = args.walk();
-                        for arg in args.children(&mut acur) {
-                            if arg.kind() == "string" {
-                                let source = self.strip_quotes(&self.get_node_text(&arg));
-                                imports.push(Import {
-                                    import_type: self.classify_import(&source),
-                                    module: source,
-                                    items: vec![],
-                                });
+        walk(*node, (), |node, _| {
+            let node = &node;
+            if node.kind() == "call_expression" {
+                if let Some(func) = node.child_by_field_name("function") {
+                    if self.get_node_text(&func) == "require" {
+                        if let Some(args) = node.child_by_field_name("arguments") {
+                            let mut acur = args.walk();
+                            for arg in args.children(&mut acur) {
+                                if arg.kind() == "string" {
+                                    let source = self.strip_quotes(&self.get_node_text(&arg));
+                                    imports.push(Import {
+                                        import_type: self.classify_import(&source),
+                                        module: source,
+                                        items: vec![],
+                                    });
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        for child in node.children(&mut cursor) {
-            self.extract_require_calls(&child, imports);
-        }
+            Some(())
+        });
     }
 
     fn strip_quotes(&self, text: &str) -> String {
@@ -440,34 +442,38 @@ impl JsParser {
     /// Looks at a top-level (or export-wrapped) statement and pulls out any
     /// function/arrow-function declarations found directly in it.
     fn collect_function_like(&self, node: &Node, functions: &mut Vec<Function>, top_level: bool) {
-        match node.kind() {
-            "function_declaration" | "generator_function_declaration" => {
-                if let Some(f) = self.parse_function_decl(node, "") {
-                    functions.push(f);
-                }
+        walk(*node, (top_level, None), |node, (top_level, target)| {
+            if target.is_some_and(|n| n != node) {
+                return None;
             }
-            "export_statement" if top_level => {
-                if let Some(decl) = node.child_by_field_name("declaration") {
-                    self.collect_function_like(&decl, functions, true);
-                } else {
-                    let mut cursor = node.walk();
-                    for child in node.children(&mut cursor) {
-                        self.collect_function_like(&child, functions, false);
+            let node = &node;
+            match node.kind() {
+                "function_declaration" | "generator_function_declaration" => {
+                    if let Some(f) = self.parse_function_decl(node, "") {
+                        functions.push(f);
                     }
                 }
-            }
-            "lexical_declaration" | "variable_declaration" if top_level => {
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if child.kind() == "variable_declarator" {
-                        if let Some(f) = self.parse_var_bound_function(&child) {
-                            functions.push(f);
+                "export_statement" if top_level => {
+                    if let Some(decl) = node.child_by_field_name("declaration") {
+                        return Some((true, Some(decl)));
+                    } else {
+                        return Some((false, None));
+                    }
+                }
+                "lexical_declaration" | "variable_declaration" if top_level => {
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        if child.kind() == "variable_declarator" {
+                            if let Some(f) = self.parse_var_bound_function(&child) {
+                                functions.push(f);
+                            }
                         }
                     }
                 }
+                _ => {}
             }
-            _ => {}
-        }
+            None
+        });
     }
 
     fn parse_var_bound_function(&self, declarator: &Node) -> Option<Function> {
@@ -688,37 +694,37 @@ impl JsParser {
         seen: &mut HashSet<String>,
         context: &str,
     ) {
-        let child_context = match node.kind() {
-            "if_statement" => "if",
-            "for_statement" | "for_in_statement" | "while_statement" | "do_statement" => "loop",
-            "switch_statement" => "switch",
-            "try_statement" => "try",
-            _ => context,
-        };
-        if node.kind() == "call_expression" || node.kind() == "new_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let callee = self.resolve_callee(&func_node);
-                if !callee.is_empty() {
-                    let key = format!("{}:{}", callee, node.start_position().row);
-                    if !seen.contains(&key) {
-                        seen.insert(key);
-                        let args = self.extract_call_arguments(node);
-                        calls.push(FunctionCall {
-                            callee,
-                            defined_in: None,
-                            line: node.start_position().row + 1,
-                            args,
-                            is_conditional: context != "unconditional",
-                            context: context.to_string(),
-                        });
+        walk(*node, context, |node, context| {
+            let node = &node;
+            let child_context = match node.kind() {
+                "if_statement" => "if",
+                "for_statement" | "for_in_statement" | "while_statement" | "do_statement" => "loop",
+                "switch_statement" => "switch",
+                "try_statement" => "try",
+                _ => context,
+            };
+            if node.kind() == "call_expression" || node.kind() == "new_expression" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let callee = self.resolve_callee(&func_node);
+                    if !callee.is_empty() {
+                        let key = format!("{}:{}", callee, node.start_position().row);
+                        if !seen.contains(&key) {
+                            seen.insert(key);
+                            let args = self.extract_call_arguments(node);
+                            calls.push(FunctionCall {
+                                callee,
+                                defined_in: None,
+                                line: node.start_position().row + 1,
+                                args,
+                                is_conditional: context != "unconditional",
+                                context: context.to_string(),
+                            });
+                        }
                     }
                 }
             }
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.find_calls_recursive(&child, calls, seen, child_context);
-        }
+            Some(child_context)
+        });
     }
 
     /// Resolves a callee expression to a dotted name, e.g. `foo.bar` or `foo`.
@@ -784,47 +790,47 @@ impl JsParser {
     }
 
     fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
-        let mut cursor = node.walk();
-        if node.kind() == "lexical_declaration" || node.kind() == "variable_declaration" {
-            let mut c = node.walk();
-            for child in node.children(&mut c) {
-                if child.kind() == "variable_declarator" {
-                    if let Some(name_node) = child.child_by_field_name("name") {
-                        if name_node.kind() == "identifier" {
-                            let var_name = self.get_node_text(&name_node);
-                            if !variables.contains_key(&var_name) {
-                                let line = child.start_position().row + 1;
-                                variables.insert(
-                                    var_name.clone(),
-                                    Variable {
-                                        name: var_name,
-                                        var_type: None,
-                                        scope: "local".to_string(),
-                                        defined_at: Some(line),
-                                        transformations: vec![],
-                                        used_in: vec![],
-                                        returned: false,
-                                    },
-                                );
+        walk(*node, (), |node, _| {
+            let node = &node;
+            if node.kind() == "lexical_declaration" || node.kind() == "variable_declaration" {
+                let mut c = node.walk();
+                for child in node.children(&mut c) {
+                    if child.kind() == "variable_declarator" {
+                        if let Some(name_node) = child.child_by_field_name("name") {
+                            if name_node.kind() == "identifier" {
+                                let var_name = self.get_node_text(&name_node);
+                                if !variables.contains_key(&var_name) {
+                                    let line = child.start_position().row + 1;
+                                    variables.insert(
+                                        var_name.clone(),
+                                        Variable {
+                                            name: var_name,
+                                            var_type: None,
+                                            scope: "local".to_string(),
+                                            defined_at: Some(line),
+                                            transformations: vec![],
+                                            used_in: vec![],
+                                            returned: false,
+                                        },
+                                    );
+                                }
                             }
                         }
                     }
                 }
-            }
-        } else if node.kind() == "return_statement" {
-            let mut ret_cursor = node.walk();
-            for child in node.children(&mut ret_cursor) {
-                if child.kind() == "identifier" {
-                    let var_name = self.get_node_text(&child);
-                    if let Some(var) = variables.get_mut(&var_name) {
-                        var.returned = true;
+            } else if node.kind() == "return_statement" {
+                let mut ret_cursor = node.walk();
+                for child in node.children(&mut ret_cursor) {
+                    if child.kind() == "identifier" {
+                        let var_name = self.get_node_text(&child);
+                        if let Some(var) = variables.get_mut(&var_name) {
+                            var.returned = true;
+                        }
                     }
                 }
             }
-        }
-        for child in node.children(&mut cursor) {
-            self.track_variable_usage(&child, variables);
-        }
+            Some(())
+        });
     }
 
     // Control flow / exceptions
@@ -840,26 +846,26 @@ impl JsParser {
     }
 
     fn extract_control_structures(&self, node: &Node, cf: &mut ControlFlow) {
-        let mut cursor = node.walk();
-        match node.kind() {
-            "if_statement" => {
-                if let Some(branch) = self.parse_if_statement(node) {
-                    cf.branches.push(branch);
+        walk(*node, (), |node, _| {
+            let node = &node;
+            match node.kind() {
+                "if_statement" => {
+                    if let Some(branch) = self.parse_if_statement(node) {
+                        cf.branches.push(branch);
+                    }
                 }
-            }
-            "for_statement" | "for_in_statement" | "while_statement" | "do_statement" => {
-                if let Some(loop_info) = self.parse_loop(node) {
-                    cf.loops.push(loop_info);
+                "for_statement" | "for_in_statement" | "while_statement" | "do_statement" => {
+                    if let Some(loop_info) = self.parse_loop(node) {
+                        cf.loops.push(loop_info);
+                    }
                 }
+                "try_statement" => {
+                    cf.try_blocks.push(self.parse_try_statement(node));
+                }
+                _ => {}
             }
-            "try_statement" => {
-                cf.try_blocks.push(self.parse_try_statement(node));
-            }
-            _ => {}
-        }
-        for child in node.children(&mut cursor) {
-            self.extract_control_structures(&child, cf);
-        }
+            Some(())
+        });
     }
 
     fn parse_if_statement(&self, node: &Node) -> Option<Branch> {
@@ -898,24 +904,30 @@ impl JsParser {
     }
 
     fn find_call_names(&self, node: &Node, calls: &mut Vec<String>, seen: &mut HashSet<String>) {
-        let mut cursor = node.walk();
-        if node.kind() == "call_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let name = self.resolve_callee(&func_node);
-                if !name.is_empty() && !seen.contains(&name) {
-                    seen.insert(name.clone());
-                    calls.push(name);
+        walk(*node, (), |node, _| {
+            let node = &node;
+            if node.kind() == "call_expression" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let name = self.resolve_callee(&func_node);
+                    if !name.is_empty() && !seen.contains(&name) {
+                        seen.insert(name.clone());
+                        calls.push(name);
+                    }
                 }
             }
-        }
-        for child in node.children(&mut cursor) {
-            self.find_call_names(&child, calls, seen);
-        }
+            Some(())
+        });
     }
 
     fn find_return_value(&self, node: &Node) -> Option<String> {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
+        let mut result = None;
+        walk(*node, (), |child, _| {
+            if result.is_some() {
+                return None;
+            }
+            if child == *node {
+                return Some(());
+            }
             if child.kind() == "return_statement" {
                 let mut ret_vals = Vec::new();
                 let mut ret_cursor = child.walk();
@@ -924,18 +936,23 @@ impl JsParser {
                         ret_vals.push(self.get_node_text(&ret_child));
                     }
                 }
-                return Some(ret_vals.join(", "));
+                result = Some(ret_vals.join(", "));
+                return None;
             }
-            if let Some(val) = self.find_return_value(&child) {
-                return Some(val);
-            }
-        }
-        None
+            Some(())
+        });
+        result
     }
 
     fn find_throw_value(&self, node: &Node) -> Option<String> {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
+        let mut result = None;
+        walk(*node, (), |child, _| {
+            if result.is_some() {
+                return None;
+            }
+            if child == *node {
+                return Some(());
+            }
             if child.kind() == "throw_statement" {
                 let mut vals = Vec::new();
                 let mut tc = child.walk();
@@ -944,13 +961,12 @@ impl JsParser {
                         vals.push(self.get_node_text(&tchild));
                     }
                 }
-                return Some(vals.join(", "));
+                result = Some(vals.join(", "));
+                return None;
             }
-            if let Some(val) = self.find_throw_value(&child) {
-                return Some(val);
-            }
-        }
-        None
+            Some(())
+        });
+        result
     }
 
     fn parse_loop(&self, node: &Node) -> Option<Loop> {
@@ -1024,27 +1040,27 @@ impl JsParser {
     }
 
     fn collect_throws(&self, node: &Node, raises: &mut Vec<String>) {
-        let mut cursor = node.walk();
-        if node.kind() == "throw_statement" {
-            raises.push(self.get_node_text(node));
-        }
-        for child in node.children(&mut cursor) {
-            self.collect_throws(&child, raises);
-        }
+        walk(*node, (), |node, _| {
+            let node = &node;
+            if node.kind() == "throw_statement" {
+                raises.push(self.get_node_text(node));
+            }
+            Some(())
+        });
     }
 
     fn collect_catches(&self, node: &Node, handles: &mut Vec<String>) {
-        let mut cursor = node.walk();
-        if node.kind() == "catch_clause" {
-            let exception_type = node
-                .child_by_field_name("parameter")
-                .map(|p| self.get_node_text(&p))
-                .unwrap_or_else(|| "Error".to_string());
-            handles.push(exception_type);
-        }
-        for child in node.children(&mut cursor) {
-            self.collect_catches(&child, handles);
-        }
+        walk(*node, (), |node, _| {
+            let node = &node;
+            if node.kind() == "catch_clause" {
+                let exception_type = node
+                    .child_by_field_name("parameter")
+                    .map(|p| self.get_node_text(&p))
+                    .unwrap_or_else(|| "Error".to_string());
+                handles.push(exception_type);
+            }
+            Some(())
+        });
     }
 
     // Classes
@@ -1173,41 +1189,48 @@ impl JsParser {
     }
 
     fn collect_global_var_decl(&self, node: &Node, vars: &mut Vec<GlobalVar>) {
-        match node.kind() {
-            "lexical_declaration" | "variable_declaration" => {
-                let mut cursor = node.walk();
-                for child in node.children(&mut cursor) {
-                    if child.kind() == "variable_declarator" {
-                        if let Some(value) = child.child_by_field_name("value") {
-                            // skip functions - those are captured as Function entries
-                            if value.kind() == "arrow_function"
-                                || value.kind() == "function_expression"
-                            {
-                                continue;
+        walk(*node, None, |node, target| {
+            if target.is_some_and(|n| n != node) {
+                return None;
+            }
+            let node = &node;
+            match node.kind() {
+                "lexical_declaration" | "variable_declaration" => {
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        if child.kind() == "variable_declarator" {
+                            if let Some(value) = child.child_by_field_name("value") {
+                                // skip functions - those are captured as Function entries
+                                if value.kind() == "arrow_function"
+                                    || value.kind() == "function_expression"
+                                {
+                                    continue;
+                                }
                             }
-                        }
-                        if let Some(name_node) = child.child_by_field_name("name") {
-                            if name_node.kind() == "identifier" {
-                                vars.push(GlobalVar {
-                                    name: self.get_node_text(&name_node),
-                                    type_annotation: String::new(),
-                                    value: child
-                                        .child_by_field_name("value")
-                                        .map(|v| self.get_node_text(&v)),
-                                    line: node.start_position().row + 1,
-                                });
+                            if let Some(name_node) = child.child_by_field_name("name") {
+                                if name_node.kind() == "identifier" {
+                                    vars.push(GlobalVar {
+                                        name: self.get_node_text(&name_node),
+                                        type_annotation: String::new(),
+                                        value: child
+                                            .child_by_field_name("value")
+                                            .map(|v| self.get_node_text(&v)),
+                                        line: node.start_position().row + 1,
+                                    });
+                                }
                             }
                         }
                     }
                 }
-            }
-            "export_statement" => {
-                if let Some(decl) = node.child_by_field_name("declaration") {
-                    self.collect_global_var_decl(&decl, vars);
+                "export_statement" => {
+                    if let Some(decl) = node.child_by_field_name("declaration") {
+                        return Some(Some(decl));
+                    }
                 }
+                _ => {}
             }
-            _ => {}
-        }
+            None
+        });
     }
 
     // Docstrings / comments / TODOs
@@ -1261,19 +1284,22 @@ impl JsParser {
 
     // JSX / React heuristics
     fn contains_jsx(&self, node: &Node) -> bool {
-        if matches!(
-            node.kind(),
-            "jsx_element" | "jsx_self_closing_element" | "jsx_fragment"
-        ) {
-            return true;
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if self.contains_jsx(&child) {
-                return true;
+        let mut found = false;
+        walk(*node, (), |node, _| {
+            if found {
+                return None;
             }
-        }
-        false
+            let node = &node;
+            if matches!(
+                node.kind(),
+                "jsx_element" | "jsx_self_closing_element" | "jsx_fragment"
+            ) {
+                found = true;
+                return None;
+            }
+            Some(())
+        });
+        found
     }
 
     /// A function expression immediately invoked, e.g. `(function(){...})()`
@@ -1329,40 +1355,48 @@ impl JsParser {
     }
 
     fn has_var_decl(&self, node: &Node) -> bool {
-        if node.kind() == "variable_declaration" {
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if child.kind() == "var" {
-                    return true;
+        let mut found = false;
+        walk(*node, (), |node, _| {
+            if found {
+                return None;
+            }
+            let node = &node;
+            if node.kind() == "variable_declaration" {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "var" {
+                        found = true;
+                        return None;
+                    }
                 }
             }
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if self.has_var_decl(&child) {
-                return true;
-            }
-        }
-        false
+            Some(())
+        });
+        found
     }
 
     /// Does this function's body return another function (arrow/expression)?
     fn returns_function(&self, body: &Node) -> bool {
-        let mut cursor = body.walk();
-        for child in body.children(&mut cursor) {
+        let mut found = false;
+        walk(*body, (), |child, _| {
+            if found {
+                return None;
+            }
+            if child == *body {
+                return Some(());
+            }
             if child.kind() == "return_statement" {
                 let mut rc = child.walk();
                 for rchild in child.children(&mut rc) {
                     if matches!(rchild.kind(), "arrow_function" | "function_expression") {
-                        return true;
+                        found = true;
+                        return None;
                     }
                 }
             }
-            if self.returns_function(&child) {
-                return true;
-            }
-        }
-        false
+            Some(())
+        });
+        found
     }
 
     fn is_hook_name(&self, name: &str) -> bool {
@@ -1445,21 +1479,18 @@ impl JsParser {
     }
 
     fn calculate_complexity(&self, node: &Node) -> usize {
-        fn count(node: &Node) -> usize {
-            let mut c = 0;
-            let mut cursor = node.walk();
+        let mut complexity = 1;
+        walk(*node, (), |node, _| {
+            let node = &node;
             match node.kind() {
                 "if_statement" | "for_statement" | "for_in_statement" | "while_statement"
                 | "do_statement" | "switch_statement" | "switch_case" | "ternary_expression"
-                | "catch_clause" | "&&" | "||" | "??" => c += 1,
+                | "catch_clause" | "&&" | "||" | "??" => complexity += 1,
                 _ => {}
             }
-            for child in node.children(&mut cursor) {
-                c += count(&child);
-            }
-            c
-        }
-        1 + count(node)
+            Some(())
+        });
+        complexity
     }
 
     fn estimate_importance(&self, name: &str, tags: &[String]) -> f32 {
@@ -1501,4 +1532,34 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
     parse_source(path, &source_code)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    #[test]
+    fn deep_expression_on_small_stack() {
+        // A left-associative expression must not grow the Rust call stack.
+        let expression = vec!["x"; 10_000].join(" + ");
+        let source = format!("function deep(x) {{ return {}; }}", expression);
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let (_, data) =
+                    crate::grammar_files::parse_source(std::path::Path::new("deep.js"), &source)
+                        .expect("deep expression parses");
+                assert!(data.syntax.is_clean(), "deep expression is valid syntax");
+                assert!(
+                    data.functions
+                        .iter()
+                        .chain(data.classes.iter().flat_map(|c| &c.methods))
+                        .any(|f| f.name == "deep"),
+                    "deep function extracted"
+                );
+            })
+            .expect("spawn parser thread")
+            .join()
+            .expect("parser thread completes on a 2 MiB stack");
+    }
 }

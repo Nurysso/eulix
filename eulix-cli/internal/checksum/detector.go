@@ -63,11 +63,11 @@ type Checksum struct {
 // compares to whatever was previously stored (if anything).
 type Result struct {
 	Checksum      *Checksum // current state of the project (nil on first run)
-	FirstRun      bool
 	ChangedRatio  float64
 	FilesAdded    int
 	FilesDeleted  int
 	FilesModified int
+	FirstRun      bool
 }
 
 type Detector struct {
@@ -196,6 +196,13 @@ func (d *Detector) loadIgnorePatterns() {
 		}
 	}
 	d.ignorePatterns = append(user, defaults...)
+}
+
+// IgnoreMatcher reports whether a path under projectPath is excluded by the
+// project's .euignore or the default ignored directories, the same rules the
+// checksum scan uses. It reads .euignore once, so build one per walk.
+func IgnoreMatcher(projectPath string) func(path string) bool {
+	return newDetector(projectPath).shouldIgnore
 }
 
 func (d *Detector) shouldIgnore(path string) bool {
