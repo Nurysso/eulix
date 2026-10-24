@@ -244,7 +244,8 @@ function Download-Binary {
     # Verify binary checksum
     $expectedBin = Get-Checksum -TargetFilename $AssetName -ChecksumFile $tmpChecksum
     if (-not $expectedBin) {
-        Warn "Could not find $AssetName in checksum.txt - skipping binary verification."
+        Remove-Item -Force $tmpBin, $tmpHtml, $tmpChecksum -ErrorAction SilentlyContinue
+        Die "Missing checksum entry for $AssetName."
     } else {
         $actualBin = (Get-FileHash -Path $tmpBin -Algorithm SHA256).Hash.ToLower()
         if ($expectedBin.ToLower() -ne $actualBin) {
@@ -257,7 +258,8 @@ function Download-Binary {
     # Verify vizeulize.html checksum (matches 'vizeulize/vizeulize.html' in checksum.txt)
     $expectedHtml = Get-Checksum -TargetFilename $htmlAssetName -ChecksumFile $tmpChecksum
     if (-not $expectedHtml) {
-        Warn "Could not find $htmlAssetName in checksum.txt - skipping HTML verification."
+        Remove-Item -Force $tmpBin, $tmpHtml, $tmpChecksum -ErrorAction SilentlyContinue
+        Die "Missing checksum entry for $htmlAssetName."
     } else {
         $actualHtml = (Get-FileHash -Path $tmpHtml -Algorithm SHA256).Hash.ToLower()
         if ($expectedHtml.ToLower() -ne $actualHtml) {
