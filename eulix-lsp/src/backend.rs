@@ -766,6 +766,43 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let include_decl = params.context.include_declaration;
+        if parsed.language == "php" {
+            let declaration = is_php_declaration_name(&_rope, &word);
+            if !declaration && !is_call_name(&_rope, &word) {
+                return Ok(None);
+            }
+            let index = self.state.index.read();
+            let Some(def) = index.php_symbol_at(
+                &_path,
+                p.position.line as usize + 1,
+                &word.text,
+                !declaration,
+            ) else {
+                return Ok(None);
+            };
+            let mut locations = index
+                .php_call_sites(&def)
+                .into_iter()
+                .filter_map(|site| {
+                    Some(Location {
+                        uri: Url::from_file_path(site.path).ok()?,
+                        range: line_range(site.line),
+                    })
+                })
+                .collect::<Vec<_>>();
+            if include_decl {
+                if let Some(loc) = self.location_for(&def) {
+                    locations.push(loc);
+                }
+            }
+            locations.sort_by(|a, b| {
+                a.uri
+                    .cmp(&b.uri)
+                    .then(a.range.start.line.cmp(&b.range.start.line))
+            });
+            locations.dedup_by(|a, b| a.uri == b.uri && a.range.start.line == b.range.start.line);
+            return Ok(Some(locations));
+        }
 
         let mut out: Vec<Location> = Vec::new();
         let mut seen: HashSet<(String, u32)> = HashSet::new();
@@ -1056,6 +1093,22 @@ impl LanguageServer for Backend {
         let Some((word, _rope, parsed, _path)) = self.word_and_parsed(&uri, p.position) else {
             return Ok(None);
         };
+        if parsed.language == "php" {
+            let declaration = is_php_declaration_name(&_rope, &word);
+            if !declaration && !is_call_name(&_rope, &word) {
+                return Ok(None);
+            }
+            let index = self.state.index.read();
+            return Ok(index
+                .php_symbol_at(
+                    &_path,
+                    p.position.line as usize + 1,
+                    &word.text,
+                    !declaration,
+                )
+                .and_then(|def| hierarchy_item(&def))
+                .map(|item| vec![item]));
+        }
         let mut out = Vec::new();
         for f in parsed.functions.iter().filter(|f| f.name == word.text) {
             out.push(CallHierarchyItem {
@@ -1096,13 +1149,46 @@ impl LanguageServer for Backend {
     ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
         let item = params.item;
         let mut out: Vec<CallHierarchyIncomingCall> = Vec::new();
-        for site in self.state.index.read().call_sites(&item.name) {
+        let sites = {
+            let index = self.state.index.read();
+            match item.uri.to_file_path().ok().filter(|p| index.is_php(p)) {
+                Some(path) => index
+                    .php_symbol_at(&path, item.range.start.line as usize + 1, &item.name, false)
+                    .map(|def| index.php_call_sites(&def))
+                    .unwrap_or_default(),
+                None => index.call_sites(&item.name),
+            }
+        };
+        for site in sites {
             let Ok(caller_uri) = Url::from_file_path(&site.path) else {
                 continue;
             };
             let Some(caller_parsed) = self.parsed_for(&caller_uri) else {
                 continue;
             };
+            if caller_parsed.language == "php" {
+                if let Some((owner, kind)) = caller_parsed
+                    .all_callables()
+                    .filter(|(f, _)| f.line_start <= site.line && site.line <= f.line_end)
+                    .min_by_key(|(f, _)| f.line_end - f.line_start)
+                {
+                    let def = Def {
+                        name: owner.name.clone(),
+                        kind,
+                        path: site.path.clone(),
+                        line_start: owner.line_start,
+                        line_end: owner.line_end,
+                        container: owner.container.clone(),
+                    };
+                    if let Some(from) = hierarchy_item(&def) {
+                        out.push(CallHierarchyIncomingCall {
+                            from,
+                            from_ranges: vec![line_range(site.line)],
+                        });
+                    }
+                }
+                continue;
+            }
             // Figure out which function encloses the call site so we can name
             // the caller.
             let caller_name = caller_parsed
@@ -1189,7 +1275,8 @@ impl LanguageServer for Backend {
         let mut out = Vec::new();
         for call in calls {
             if let Some(path) = &from_path {
-                let Some(def) = index.resolve(&call.callee, path, root.as_deref()) else {
+                let Some(def) = index.resolve_call(&call.callee, path, call.line, root.as_deref())
+                else {
                     continue;
                 };
                 let Some(uri) = Url::from_file_path(&def.path).ok() else {
@@ -1223,4 +1310,54 @@ fn is_valid_identifier(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with(|c: char| c.is_ascii_digit())
         && s.chars().all(|c| c == '_' || c.is_alphanumeric())
+}
+
+#[cfg(test)]
+mod php_tests;
+
+// Distinguish `function foo()` from a same-line `Other::foo()` before
+// choosing a declaration by its enclosing span (which can include attributes).
+fn is_php_declaration_name(rope: &Rope, word: &WordHit) -> bool {
+    let Some((start, _)) = position::range_to_chars(rope, word.range) else {
+        return false;
+    };
+    let line_start = rope.line_to_char(word.range.start.line as usize);
+    let prefix = rope.slice(line_start..start).to_string();
+    let preceding = prefix
+        .trim_end()
+        .trim_end_matches('&')
+        .split_whitespace()
+        .next_back()
+        .unwrap_or("");
+    matches!(
+        preceding.to_ascii_lowercase().as_str(),
+        "function" | "class" | "interface" | "trait" | "enum"
+    )
+}
+
+// Parser call sites have line precision. Only accept a call-name token,
+// never an argument or receiver on the same line (including UTF-16 positions).
+fn is_call_name(rope: &Rope, word: &WordHit) -> bool {
+    let Some((start, end)) = position::range_to_chars(rope, word.range) else {
+        return false;
+    };
+    (start == 0 || rope.char(start - 1) != '$')
+        && rope.slice(end..).chars().find(|c| !c.is_whitespace()) == Some('(')
+}
+
+fn hierarchy_item(def: &Def) -> Option<CallHierarchyItem> {
+    Some(CallHierarchyItem {
+        name: def.name.clone(),
+        kind: match def.kind {
+            syntax::DefKind::Function => SymbolKind::FUNCTION,
+            syntax::DefKind::Method => SymbolKind::METHOD,
+            syntax::DefKind::Class => SymbolKind::CLASS,
+        },
+        tags: None,
+        detail: def.container.clone(),
+        uri: Url::from_file_path(&def.path).ok()?,
+        range: line_range(def.line_start),
+        selection_range: line_range(def.line_start),
+        data: None,
+    })
 }
