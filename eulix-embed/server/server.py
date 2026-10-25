@@ -76,7 +76,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     Stderr receives all human-readable/log output; stdout is protocol-only.
 
     Usage:
-        python main.py server -m sentence-transformers/all-MiniLM-L6-v2
+        python main.py server -m BAAI/bge-base-en-v1.5
     """
     _configure_logging(getattr(args, "log_level", "info"))
     max_batch_size = getattr(args, "max_batch_size", MAX_BATCH_SIZE)

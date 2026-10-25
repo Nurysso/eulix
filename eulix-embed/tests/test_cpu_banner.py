@@ -50,8 +50,14 @@ class CPUAndBannerTests(unittest.TestCase):
         hub = MagicMock()
         hub.hf_hub_download.side_effect = ValueError("stop before model download")
         with (
-            patch("embedders.onnx_embed.require_ml_onnx", return_value=(None, None, None, None)),
-            patch("embedders.onnx_embed._resolve_providers", return_value=(["CPUExecutionProvider"], "cpu")),
+            patch(
+                "embedders.onnx_embed.require_ml_onnx",
+                return_value=(None, None, None, None),
+            ),
+            patch(
+                "embedders.onnx_embed._resolve_providers",
+                return_value=(["CPUExecutionProvider"], "cpu"),
+            ),
             patch.dict(sys.modules, {"huggingface_hub": hub}),
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
