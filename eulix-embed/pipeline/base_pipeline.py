@@ -46,8 +46,6 @@ MAX_INFLIGHT = 32
 
 
 class EmbeddingGenerator(Protocol):
-    """The surface of a generator that the shared pipeline code relies on."""
-
     @property
     def model_name(self) -> str: ...
     @property
@@ -59,6 +57,7 @@ class EmbeddingGenerator(Protocol):
     @property
     def tokenizer(self) -> Any: ...
 
+    def batch_size_for(self, blen: int) -> int: ...
     def _embed_batch(self, texts: list[str], fixed_len: int | None = None) -> Sequence[Any]: ...
 
 
@@ -109,7 +108,7 @@ class BaseEmbeddingPipeline(ABC, Generic[G]):
         return tqdm
 
     def _batch_size_for(self, gen: G, blen: int) -> int:
-        return gen.batch_size
+        return gen.batch_size_for(blen)
 
     # ==== shared: token counting + embedding stream ================
     @staticmethod
@@ -190,10 +189,7 @@ class BaseEmbeddingPipeline(ABC, Generic[G]):
         if debug and out:
             s = sorted(out)
             n = len(s)
-            print(
-                f"  [tokens] total={n}  min={s[0]}  max={s[-1]}  "
-                f"median={s[n // 2]}  mean={sum(s) / n:.1f}"
-            )
+            print(f"  [tokens] total={n}  min={s[0]}  max={s[-1]}  median={s[n // 2]}  mean={sum(s) / n:.1f}")
 
         return out
 
