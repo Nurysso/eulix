@@ -76,81 +76,86 @@ class EmbeddingPipelineOnnx:
             batch_size=batch_size,
         )
 
-    def generate_vectors_streaming(
-        self,
-        gen: EmbeddingGeneratorOnnx,
-        chunks: list[Chunk],
-    ) -> Any:
+    @staticmethod
+    def _token_lengths(gen, texts, step=2048):
+        tok = gen.tokenizer
+        prev_trunc = tok.truncation   # dict | None
+        prev_pad   = tok.padding      # dict | None
+
+        # Measurement must run with BOTH truncation and padding off,
+        # otherwise lengths get clipped (truncation) or inflated to the
+        # batch max (padding). Padding is the one that was killing us:
+        # every chunk in a batch reported len = max(batch) tokens.
+        tok.no_truncation()
+        tok.no_padding()
+        try:
+            out: list[int] = []
+            for i in range(0, len(texts), step):
+                encs = tok.encode_batch(texts[i:i + step], add_special_tokens=True)
+                out.extend(len(e.ids) for e in encs)
+            return out
+        finally:
+            if prev_trunc is not None:
+                tok.enable_truncation(
+                    max_length=prev_trunc["max_length"],
+                    stride=prev_trunc["stride"],
+                    strategy=prev_trunc["strategy"],
+                    direction=prev_trunc["direction"],
+                )
+            if prev_pad is not None:
+                tok.enable_padding(
+                    direction=prev_pad.get("direction", "right"),
+                    pad_id=prev_pad["pad_id"],
+                    pad_type_id=prev_pad["pad_type_id"],
+                    pad_token=prev_pad["pad_token"],
+                    length=prev_pad.get("length"),            # None = pad-to-longest
+                    pad_to_multiple_of=prev_pad.get("pad_to_multiple_of"),
+                )
+
+    def generate_vectors_streaming(self, gen, chunks):
         from tqdm import tqdm as _tqdm
 
-        total = len(chunks)
         is_jina = "jina" in gen.model_name.lower()
         buckets = BUCKETS_JINA if is_jina else BUCKETS_STANDARD
 
-        # Build (orig_idx, est_tokens, chunk) triples
-        indexed = [(i, max(len(c.content) // 4, 1), c) for i, c in enumerate(chunks)]
-
-        # We need to yield in original order, but bucketing processes out-of-order.
-        # Collect results[(orig_idx, vec)] then sort once — same as before but
-        # we free them immediately after yielding.
-        results: list[tuple[int, np.ndarray]] = []
-
-        bar = _tqdm(
-            total=total,
-            unit="chunk",
-            desc="     Embedding",
-            dynamic_ncols=True,
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
-        )
-
-        import time as _time
-
-        t0 = _time.time()
-
+        # Build the processing plan: (fixed_len | None, batch_size, items)
         if gen.use_bucketing:
-            from collections import defaultdict as _dd
-
-            bucket_map: dict = _dd(list)
-            for orig_idx, est_tokens, chunk in indexed:
-                b = snap_to_bucket(est_tokens, buckets)
-                bucket_map[b].append((orig_idx, chunk))
-
-            for blen in sorted(bucket_map):
-                items = bucket_map[blen]
-                bsz = gen.batch_size_for(blen)
-                bar.set_postfix(bucket=blen, batch=bsz, refresh=False)
-                for start in range(0, len(items), bsz):
-                    batch = items[start : start + bsz]
-                    texts = [c.content for _, c in batch]
-                    embs = gen._embed_batch(texts, fixed_len=blen)
-                    for (orig_idx, _), emb in zip(batch, embs):
-                        results.append((orig_idx, emb))
-                    bar.update(len(batch))
+            lengths = self._token_lengths(gen, [c.content for c in chunks])   # no max_len
+            bucket_map = defaultdict(list)
+            for c, n in zip(chunks, lengths):
+                bucket_map[snap_to_bucket(n, buckets)].append(c)
+                print("bucket → count:", {b: len(bucket_map[b]) for b in sorted(bucket_map)})
+            plan = [(b, gen.batch_size_for(b), bucket_map[b]) for b in sorted(bucket_map)]
         else:
-            indexed.sort(key=lambda x: x[1], reverse=True)
-            for start in range(0, len(indexed), gen.batch_size):
-                batch = indexed[start : start + gen.batch_size]
-                texts = [c.content for _, _, c in batch]
-                embs = gen._embed_batch(texts)
-                for (orig_idx, _, _), emb in zip(batch, embs):
-                    results.append((orig_idx, emb))
-                bar.update(len(batch))
+            ordered = sorted(chunks, key=lambda c: len(c.content), reverse=True)
+            plan = [(None, gen.batch_size, ordered)]
 
-        bar.close()
-        elapsed = _time.time() - t0
+        total = len(chunks)
+        bar = _tqdm(total=total, unit="chunk", desc="     Embedding", dynamic_ncols=True,
+                    bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]")
+        seen: set[str] = set()
+        t0 = time.time()
+        try:
+            for blen, bsz, items in plan:
+                if blen is not None:
+                    bar.set_postfix(bucket=blen, batch=bsz, refresh=False)
+                for start in range(0, len(items), bsz):
+                    batch = items[start:start + bsz]
+                    texts = [c.content for c in batch]
+                    embs = (gen._embed_batch(texts, fixed_len=blen)
+                            if blen is not None else gen._embed_batch(texts))
+                    for chunk, emb in zip(batch, embs):
+                        if chunk.id in seen:
+                            continue
+                        seen.add(chunk.id)
+                        yield chunk.id, emb      # written to disk before next batch runs
+                    bar.update(len(batch))
+        finally:
+            bar.close()
+
+        elapsed = time.time() - t0
         print(f"  ✓ Completed all embeddings in {elapsed:.2f}s")
         print(f"     Average: {total / max(elapsed, 1e-6):.1f} chunks/sec")
-
-        # Sort by original index → yield in chunk order (no dict needed)
-        results.sort(key=lambda x: x[0])
-        indexed_sorted = sorted(indexed, key=lambda x: x[0])
-
-        seen: set = set()
-        for (orig_idx, vec), (i, _, chunk) in zip(results, indexed_sorted):
-            if chunk.id in seen:
-                continue  # skip duplicates (same dedup as before)
-            seen.add(chunk.id)
-            yield chunk.id, vec
 
     # shit is kinda unnecessary dontknow why i wrote this
     def _check_disk_space(self, output_dir: Path, kb_path: Path, n_chunks: int | None = None) -> None:
