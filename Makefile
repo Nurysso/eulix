@@ -142,7 +142,7 @@ embed-zip: | build-dir
 ifeq ($(DETECTED_OS),Windows)
 	powershell -Command "Compress-Archive -Path '$(EMBED_DIR)\*' -DestinationPath 'eulix-embed.zip' -Force"
 else
-	zip -r eulix-embed.zip $(EMBED_DIR)/ -x "*/.venv/*" "*__init__.py*" "*/.ruff_cache/*" "*/.pytest_cache/*" "*/.mypy_cache/*" "*/.git/*" "*/__pycache__/*" "*.pyc" ".codespell-ignore"
+	zip -r eulix-embed.zip $(EMBED_DIR)/ -x "*/.venv/*" "*/tests/*" "*__init__*" "*/.ruff_cache/*" "*/.pytest_cache/*" "*/.mypy_cache/*" "*/.git/*" "*/__pycache__/*" "*.pyc" ".codespell-ignore"
 endif
 	$(CP) eulix-embed.zip $(ASSETS_BINS_DIR)/eulix-embed.zip
 	@$(ECHO) "$(GREEN)✓ eulix-embed.zip created and copied to CLI assets$(NC)"
