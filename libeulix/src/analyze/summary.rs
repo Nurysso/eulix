@@ -61,7 +61,7 @@ pub fn categorize_files(structure: &HashMap<String, FileData>) -> HashMap<String
     for (filepath, filedata) in structure {
         let category = classify_file(filepath, filedata);
         categories
-            .entry(category)
+            .entry(category.to_string())
             .or_default()
             .push(filepath.to_string());
     }
@@ -69,7 +69,7 @@ pub fn categorize_files(structure: &HashMap<String, FileData>) -> HashMap<String
     categories
 }
 
-pub fn classify_file(path: &str, data: &FileData) -> String {
+pub fn classify_file(path: &str, data: &FileData) -> &'static str {
     let path_lower = path.to_lowercase();
 
     // Path-based checks are tried before scanning function names because
@@ -77,23 +77,23 @@ pub fn classify_file(path: &str, data: &FileData) -> String {
     // `auth/login.py` is stronger evidence than a function that happens
     // to mention "hash."
     if path_lower.contains("test") {
-        return "Tests".to_string();
+        return "Tests";
     }
     if path_lower.contains("auth") || path_lower.contains("login") {
-        return "Authentication".to_string();
+        return "Authentication";
     }
     if path_lower.contains("api") || path_lower.contains("endpoint") || path_lower.contains("route")
     {
-        return "API".to_string();
+        return "API";
     }
     if path_lower.contains("util") || path_lower.contains("helper") {
-        return "Utilities".to_string();
+        return "Utilities";
     }
     if path_lower.contains("model") || path_lower.contains("entity") {
-        return "Data Models".to_string();
+        return "Data Models";
     }
     if path_lower.contains("ui") || path_lower.contains("view") {
-        return "User Interface".to_string();
+        return "User Interface";
     }
 
     // Falls back to scanning function names for security-flavored
@@ -106,49 +106,171 @@ pub fn classify_file(path: &str, data: &FileData) -> String {
             || name_lower.contains("hash")
             || name_lower.contains("encrypt")
         {
-            return "Security".to_string();
+            return "Security";
         }
     }
 
-    "Other".to_string()
+    "Other"
 }
 
 pub fn extract_key_features(kb: &KnowledgeBase) -> Vec<String> {
-    // A HashSet dedupes near-identical docstring openers that show up
+    key_features(&kb.structure)
+}
+
+fn key_features(structure: &HashMap<String, FileData>) -> Vec<String> {
+    // Capped at 10 because this feeds a human-facing summary — an
+    // unbounded list would defeat the point of a quick overview.
+    const MAX_FEATURES: usize = 10;
+
+    // Files are walked in path order so the same project always yields the
+    // same list: HashMap and HashSet iteration order changes on every run.
+    let mut paths: Vec<&String> = structure.keys().collect();
+    paths.sort();
+
+    // The set dedupes near-identical docstring openers that show up
     // repeatedly across a codebase (boilerplate docstrings, copy-pasted
     // templates), so the feature list isn't dominated by repeats.
-    let mut features = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut features = Vec::new();
 
-    for filedata in kb.structure.values() {
-        for func in &filedata.functions {
-            // Length threshold (>20 chars) filters out placeholder or
-            // near-empty docstrings that wouldn't read as a real
-            // "feature" description anyway.
-            if !func.docstring.is_empty() && func.docstring.len() > 20 {
-                let sentences: Vec<&str> = func.docstring.split('.').collect();
-                if let Some(first) = sentences.first() {
-                    let trimmed = first.trim();
-                    if !trimmed.is_empty() {
-                        features.insert(trimmed.to_string());
-                    }
-                }
-            }
-        }
+    for path in paths {
+        let filedata = &structure[path];
+        let docstrings = filedata
+            .functions
+            .iter()
+            .map(|func| func.docstring.as_str())
+            .chain(filedata.classes.iter().map(|cls| cls.docstring.as_str()));
 
-        for cls in &filedata.classes {
-            if !cls.docstring.is_empty() && cls.docstring.len() > 20 {
-                let sentences: Vec<&str> = cls.docstring.split('.').collect();
-                if let Some(first) = sentences.first() {
-                    let trimmed = first.trim();
-                    if !trimmed.is_empty() {
-                        features.insert(trimmed.to_string());
-                    }
+        for docstring in docstrings {
+            let Some(opener) = docstring_opener(docstring) else {
+                continue;
+            };
+            if seen.insert(opener.clone()) {
+                features.push(opener);
+                if features.len() == MAX_FEATURES {
+                    return features;
                 }
             }
         }
     }
 
-    // Capped at 10 because this feeds a human-facing summary — an
-    // unbounded list would defeat the point of a quick overview.
-    features.into_iter().take(10).collect()
+    features
+}
+
+/// The first sentence of a docstring's first paragraph, with its whitespace
+/// collapsed, or `None` when it does not read as a feature description.
+fn docstring_opener(docstring: &str) -> Option<String> {
+    // Normalize CRLF and lone-CR so paragraph splitting is line-ending
+    // agnostic. Order matters: collapse \r\n first, then any remaining \r.
+    let normalized = docstring.replace("\r\n", "\n").replace('\r', "\n");
+
+    // Length threshold (>20 chars) filters out placeholder or near-empty
+    // docstrings that wouldn't read as a real "feature" description anyway.
+    if normalized.len() <= 20 {
+        return None;
+    }
+
+    // The first paragraph: lines up to the first blank one, after any
+    // leading blank lines.
+    let paragraph = normalized
+        .lines()
+        .map(str::trim)
+        .skip_while(|l| l.is_empty())
+        .take_while(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let sentence = paragraph.split('.').next()?;
+    let opener = sentence.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    // A docblock that opens with a tag (`@param`, `@see`, `{@inheritdoc}`
+    // in PHPDoc, JSDoc or Javadoc) has no prose summary to show.
+    if opener.is_empty() || opener.starts_with('@') || opener.starts_with("{@") {
+        return None;
+    }
+
+    Some(opener)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::struc::kb_struct::{Class, Function};
+
+    fn file(function_docs: &[&str], class_docs: &[&str]) -> FileData {
+        FileData {
+            functions: function_docs
+                .iter()
+                .map(|doc| Function {
+                    docstring: doc.to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+            classes: class_docs
+                .iter()
+                .map(|doc| Class {
+                    docstring: doc.to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn key_features_follow_path_order_and_stop_at_ten() {
+        let mut structure = HashMap::new();
+        for i in (0..12).rev() {
+            let doc = format!("Feature number {i:02} of the project. More text.");
+            structure.insert(format!("src/f{i:02}.py"), file(&[&doc], &[]));
+        }
+
+        let features = key_features(&structure);
+
+        let expected: Vec<String> = (0..10)
+            .map(|i| format!("Feature number {i:02} of the project"))
+            .collect();
+        assert_eq!(features, expected);
+    }
+
+    #[test]
+    fn key_features_skip_tags_and_repeats() {
+        let mut structure = HashMap::new();
+        structure.insert(
+            "a.php".to_string(),
+            file(
+                &[
+                    "@see Other::method()\n\n@param string $x",
+                    "{@inheritdoc} and nothing else here",
+                    "Registers the routes of the application\n\n@param Router $router",
+                ],
+                &["Registers the routes of the application. Again."],
+            ),
+        );
+        structure.insert(
+            "b.js".to_string(),
+            file(&["Formats a date\n   for display. Returns a string."], &[]),
+        );
+
+        assert_eq!(
+            key_features(&structure),
+            vec![
+                "Registers the routes of the application".to_string(),
+                "Formats a date for display".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn docstring_opener_ignores_the_line_ending_style() {
+        let expected = Some("Loads the configuration from disk".to_string());
+        for doc in [
+            "Loads the configuration\nfrom disk\n\n@param string $path",
+            "Loads the configuration\r\nfrom disk\r\n\r\n@param string $path",
+            "Loads the configuration\rfrom disk\r\r@param string $path",
+            "\r\n\r\nLoads the configuration\r\nfrom disk. More text.",
+        ] {
+            assert_eq!(docstring_opener(doc), expected, "{doc:?}");
+        }
+        assert_eq!(docstring_opener("\r\n\r\n@see Other::method()\r\n"), None);
+    }
 }

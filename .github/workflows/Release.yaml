@@ -42,6 +42,8 @@ jobs:
                "*/.git/*" "*.git*" \
                "*/__pycache__/*" "*__pycache__*" \
                "*.pyc" \
+               "*/test*/" \
+               "*__init__*"\
                "*/.codespell-ignore" "*.codespell-ignore" \
             || fail "'zip' failed while archiving eulix-embed/. See the log above."
 
@@ -198,7 +200,7 @@ jobs:
             echo "Building ONNX '${tag}' variant (embed_requirements=${req_file})..."
 
             go build \
-              -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${req_file}' -X 'eulix/internal/assets.embeddedParserHash=${PARSER_HASH}'" \
+              -ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=${req_file}' -X 'eulix/internal/assets.ParserHash=${PARSER_HASH}'" \
               -trimpath -o "$out" ./cmd/eulix/main.go || {
               echo "::error title=Go build failed (${{ matrix.name }}, variant ${tag})::'go build' failed. Common causes: missing file in internal/assets/bins (the //go:embed target for this OS), a compile error, or an invalid Go version. See the log above."
               exit 1
@@ -241,6 +243,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download all build outputs
         uses: actions/download-artifact@v4
         with:
@@ -254,15 +258,21 @@ jobs:
           name: embed-zip
           path: release_assets
 
+      - name: Stage web UI
+        run: |
+          set -euo pipefail
+          [ -f vizEulize/vizeulize.html ] || { echo "::error title=Missing web UI::vizEulize/vizeulize.html not found."; exit 1; }
+          cp vizEulize/vizeulize.html release_assets/vizeulize.html
+
       - name: Checksums
         working-directory: release_assets
         run: |
           set -euo pipefail
           count=$(ls | wc -l)
-          # 6 CLI binaries (2 linux, 2 windows, 1 mac) ... adjust if you change the matrix
           echo "Found $count files:"; ls -l
           [ "$count" -gt 0 ] || { echo "::error title=No release assets::release_assets/ is empty."; exit 1; }
-          sha256sum * > checksums.txt
+          sha256sum eulix-* vizeulize.html > checksums.txt
+          sha256sum -c checksums.txt
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

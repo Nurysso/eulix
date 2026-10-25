@@ -10,4 +10,5 @@ pub mod patterns;
 pub mod pipeline;
 pub mod summary;
 
+#[allow(deprecated)]
 pub use pipeline::analyze_and_build;

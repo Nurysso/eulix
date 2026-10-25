@@ -1,9 +1,8 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-// Package query provides query classification functionality.
-
 /*
+Package query provides query classification functionality.
 This file is responsible for Helpers used in Query routing.
 */
 package query
@@ -22,6 +21,8 @@ import (
 
 	"eulix/internal/query/classifier"
 	"eulix/internal/query/retrieval"
+	"eulix/internal/query/retrieval/mmap"
+	"eulix/internal/query/strip"
 	"eulix/internal/utils"
 )
 
@@ -42,6 +43,7 @@ const (
 	langTS
 	langC // covers C and C++
 	langJava
+	langPHP
 )
 
 func (r *Router) SetCurrentChecksum(checksum string) {
@@ -241,8 +243,8 @@ func extractFilePath(query string) string {
 			continue
 		}
 
-		// Valid file extension matching a known language (e.g., "main.go")
-		if ext := filepath.Ext(cleaned); ext != "" && detectLang(cleaned) != langUnknown {
+		// Recognise source paths even when their language needs content (.inc).
+		if ext := filepath.Ext(cleaned); ext != "" && (looksLikeFilePath(cleaned) || detectLang(cleaned) != langUnknown) {
 			return cleaned
 		}
 	}
@@ -461,6 +463,10 @@ func extractSignature(filePath string, startLine int) (string, error) {
 	}
 
 	lang := detectLang(filePath)
+	// .inc is shared with C and assembly; only opt into PHP after reading it.
+	if strings.EqualFold(filepath.Ext(filePath), ".inc") && strip.HasPHPOpenTag(lines) {
+		lang = langPHP
+	}
 	return parseSig(lines, startLine-1, lang) // convert to 0-based
 }
 
@@ -476,6 +482,10 @@ func detectLang(path string) language {
 		return langTS
 	case ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp":
 		return langC
+	case ".php", ".phtml":
+		return langPHP
+	case ".inc":
+		return langUnknown
 	default:
 		return langGo
 	}
@@ -486,6 +496,10 @@ func detectLang(path string) language {
 func parseSig(lines []string, idx int, lang language) (string, error) {
 	if idx >= len(lines) || idx < 0 {
 		return "", nil
+	}
+
+	if lang == langPHP {
+		return parsePHPSig(lines, idx), nil
 	}
 
 	var collected []string
@@ -542,6 +556,70 @@ func parseSig(lines []string, idx int, lang language) (string, error) {
 
 	// Hit the line limit — return what we have
 	return formatSig(collected, lang), nil
+}
+
+// parsePHPSig keeps modifiers, attributes, parameter defaults and return types.
+// It stops at the first top-level body or declaration terminator, ignoring
+// delimiters in quoted strings and comments. Like the other readers it is
+// bounded to 40 lines, not a full PHP parser (e.g. heredoc defaults).
+func parsePHPSig(lines []string, idx int) string {
+	src := strings.Join(lines[idx:min(idx+40, len(lines))], "\n")
+	depth := 0
+	var quote byte
+	blockComment := false
+	lineComment := false
+	end := len(src)
+	for i := 0; i < len(src); i++ {
+		ch := src[i]
+		var next byte
+		if i+1 < len(src) {
+			next = src[i+1]
+		}
+		if lineComment {
+			if ch == '\n' {
+				lineComment = false
+			}
+			continue
+		}
+		if blockComment {
+			if ch == '*' && next == '/' {
+				blockComment = false
+				i++
+			}
+			continue
+		}
+		if quote != 0 {
+			switch ch {
+			case '\\':
+				i++
+			case quote:
+				quote = 0
+			}
+			continue
+		}
+		switch {
+		case ch == '/' && next == '*':
+			blockComment = true
+			i++
+		case (ch == '/' && next == '/') || (ch == '#' && next != '['):
+			lineComment = true
+		case ch == '\'' || ch == '"' || ch == '`':
+			quote = ch
+		case ch == '(' || ch == '[':
+			depth++
+		case ch == ')' || ch == ']':
+			depth--
+		case depth == 0 && (ch == '{' || ch == ';'):
+			end = i
+			if ch == ';' {
+				end++ // Keep abstract/interface declarations visibly bodyless.
+			}
+		}
+		if end != len(src) {
+			break
+		}
+	}
+	return indentSig(strings.Split(src[:end], "\n"))
 }
 
 // formatSig trims the body and formats the signature block for display.
@@ -608,6 +686,10 @@ func formatSig(lines []string, lang language) string {
 		}
 	}
 
+	return indentSig(lines)
+}
+
+func indentSig(lines []string) string {
 	// Trim trailing blank lines
 	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 		lines = lines[:len(lines)-1]
@@ -793,25 +875,16 @@ const (
 	depIntentCount                    // how many deps total
 )
 
-var externalDeps []utils.ExternalDependency
-
-func getExternalDeps() []utils.ExternalDependency {
-	return externalDeps
-}
-
-func loadExternalDeps(filePath string) error {
+func readExternalDeps(filePath string) ([]utils.ExternalDependency, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to read deps file: %w", err)
+		return nil, fmt.Errorf("failed to read deps file: %w", err)
 	}
-
 	var wrapper utils.ExternalDependencyRef
 	if err := json.Unmarshal(data, &wrapper); err != nil {
-		return fmt.Errorf("failed to unmarshal JSON: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
 	}
-
-	externalDeps = wrapper.ExternalDependencies
-	return nil
+	return wrapper.ExternalDependencies, nil
 }
 
 // nolint: unused
@@ -1082,94 +1155,15 @@ func formatFileImports(file string, idx *depIndex) string {
 	return b.String()
 }
 
-// func formatMatchedDeps(query string, deps []*utils.ExternalDependency) string {
-// 	var b strings.Builder
-
-// 	if len(deps) == 1 {
-// 		d := deps[0]
-// 		ver := "(unpinned)"
-// 		if d.Version != nil {
-// 			ver = *d.Version
-// 		}
-// 		usedBy := make([]string, len(d.UsedBy))
-// 		copy(usedBy, d.UsedBy)
-// 		sort.Strings(usedBy)
-
-// 		fmt.Fprintf(&b, "Dependency  : %s\n", d.Name)
-// 		fmt.Fprintf(&b, "Version     : %s\n", ver)
-// 		fmt.Fprintf(&b, "Source      : %s\n", d.Source)
-// 		fmt.Fprintf(&b, "Import count: %d\n", d.ImportCount)
-// 		fmt.Fprintf(&b, "\nUsed by (%d file(s)):\n", len(usedBy))
-// 		for _, f := range usedBy {
-// 			fmt.Fprintf(&b, "  • %s\n", f)
-// 		}
-// 		return b.String()
-// 	}
-
-// 	// multiple matches — sort deps alphabetically, files within each dep too
-// 	fmt.Fprintf(&b, "%d dependencies matched '%s':\n\n", len(deps), query)
-// 	for _, d := range deps {
-// 		ver := "(unpinned)"
-// 		if d.Version != nil {
-// 			ver = *d.Version
-// 		}
-// 		files := make([]string, len(d.UsedBy))
-// 		copy(files, d.UsedBy)
-// 		sort.Strings(files)
-
-// 		fmt.Fprintf(&b, "  %-40s  %-12s  %d import(s)\n", d.Name, ver, d.ImportCount)
-// 		for _, f := range files {
-// 			fmt.Fprintf(&b, "      • %s\n", f)
-// 		}
-// 		b.WriteString("\n")
-// 	}
-// 	return b.String()
-// }
-
-// func formatAllExternalDeps(deps []utils.ExternalDependency) string {
-// 	var b strings.Builder
-// 	bySource := make(map[string][]utils.ExternalDependency)
-// 	for _, d := range deps {
-// 		src := d.Source
-// 		if src == "" {
-// 			src = "unknown"
-// 		}
-// 		bySource[src] = append(bySource[src], d)
-// 	}
-
-// 	sources := make([]string, 0, len(bySource))
-// 	for s := range bySource {
-// 		sources = append(sources, s)
-// 	}
-// 	sort.Strings(sources)
-
-// 	fmt.Fprintf(&b, "All dependencies (%d total):\n", len(deps))
-// 	for _, src := range sources {
-// 		group := bySource[src]
-// 		// sort deps within each source group
-// 		sort.Slice(group, func(i, j int) bool {
-// 			return group[i].Name < group[j].Name
-// 		})
-// 		fmt.Fprintf(&b, "\n[%s — %d]\n", src, len(group))
-// 		for _, d := range group {
-// 			ver := "(unpinned)"
-// 			if d.Version != nil {
-// 				ver = *d.Version
-// 			}
-// 			fmt.Fprintf(&b, "  %-40s  %-12s  %d file(s)\n", d.Name, ver, d.ImportCount)
-// 		}
-// 	}
-// 	return b.String()
-// }
-
 var sourceFileExts = []string{
 	".go", ".py", ".rs", ".ts", ".tsx", ".js", ".jsx",
-	".java", ".c", ".h", ".cpp", ".hpp", ".rb", ".php",
+	".java", ".c", ".h", ".cpp", ".hpp", ".rb", ".php", ".phtml", ".inc",
 }
 
 func looksLikeFilePath(s string) bool {
+	low := strings.ToLower(s)
 	for _, ext := range sourceFileExts {
-		if strings.HasSuffix(s, ext) {
+		if strings.HasSuffix(low, ext) {
 			return true
 		}
 	}
@@ -1194,4 +1188,22 @@ func extractDepQueryTerm(query string) string {
 		}
 	}
 	return ""
+}
+
+// ensureKB loads the full KB only for handlers that need file details.
+func (r *Router) ensureKB() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.kb != nil {
+		return nil
+	}
+	var kb utils.KnowledgeBaseSimplifiedRef
+	if err := mmap.DecodeJSONFile(filepath.Join(r.eulixDir, "kb.json"), &kb); err != nil {
+		return err
+	}
+	if kb.Metadata == nil {
+		return fmt.Errorf("kb.json has no metadata")
+	}
+	r.kb = &kb
+	return nil
 }

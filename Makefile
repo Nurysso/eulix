@@ -66,7 +66,7 @@ else
     NC := \033[0m
 endif
 
-.PHONY: all help build-dir parsers embed-zip \
+.PHONY: all help build-dir parsers parser-linux parser-windows embed-zip \
         build-linux-amd build-linux-nvidia build-win-amd build-win-nvidia \
         build-single build-all clean \
         lint lint-rust lint-go lint-python \
@@ -123,15 +123,18 @@ endif
 build-dir: $(BUILD_DIR) $(ASSETS_BINS_DIR)
 
 # Build Rust Parsers (Linux + Windows)
-parsers: | build-dir
+parsers: parser-linux parser-windows
+	@$(ECHO) "$(GREEN)✓ Rust parsers built successfully$(NC)"
+
+parser-linux: | build-dir
 	@$(ECHO) "$(BLUE)Building eulix-parser for Linux (x86_64)...$(NC)"
 	cd $(PARSER_DIR) && cargo build --release --target x86_64-unknown-linux-gnu
+	$(CP) $(PARSER_DIR)/target/x86_64-unknown-linux-gnu/release/eulix_parser $(PARSER_LINUX)
+
+parser-windows: | build-dir
 	@$(ECHO) "$(BLUE)Building eulix-parser for Windows (x86_64)...$(NC)"
 	cd $(PARSER_DIR) && RUSTFLAGS="-C link-args=-ladvapi32" cargo build --release --target x86_64-pc-windows-gnu
-	@$(ECHO) "$(BLUE)Copying parser binaries to CLI assets...$(NC)"
-	$(CP) $(PARSER_DIR)/target/x86_64-unknown-linux-gnu/release/eulix_parser $(PARSER_LINUX)
 	$(CP) $(PARSER_DIR)/target/x86_64-pc-windows-gnu/release/eulix_parser.exe $(PARSER_WINDOWS)
-	@$(ECHO) "$(GREEN)✓ Rust parsers built successfully$(NC)"
 
 # Zip Eulix Embed Python Package
 embed-zip: | build-dir
@@ -139,7 +142,7 @@ embed-zip: | build-dir
 ifeq ($(DETECTED_OS),Windows)
 	powershell -Command "Compress-Archive -Path '$(EMBED_DIR)\*' -DestinationPath 'eulix-embed.zip' -Force"
 else
-	zip -r eulix-embed.zip $(EMBED_DIR)/ -x "*/.venv/*" "*/__init__/*" "*/.ruff_cache/*" "*/.pytest_cache/*" "*/.mypy_cache/*" "*/.git/*" "*/__pycache__/*" "*.pyc" ".codespell-ignore"
+	zip -r eulix-embed.zip $(EMBED_DIR)/ -x "*/.venv/*" "*/tests/*" "*__init__*" "*/.ruff_cache/*" "*/.pytest_cache/*" "*/.mypy_cache/*" "*/.git/*" "*/__pycache__/*" "*.pyc" ".codespell-ignore"
 endif
 	$(CP) eulix-embed.zip $(ASSETS_BINS_DIR)/eulix-embed.zip
 	@$(ECHO) "$(GREEN)✓ eulix-embed.zip created and copied to CLI assets$(NC)"
@@ -156,29 +159,30 @@ define BUILD_GO_VARIANT_CMD
 		OUT_FILE="$(BUILD_DIR)/eulix_$(1)_$(3)$(if $(filter windows,$(1)),.exe,)"; \
 	fi; \
 	cd $(CLI_DIR) && GOOS=$(1) GOARCH=$(2) CGO_ENABLED=0 go build \
-		-ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=$${REQ_FILE}' -X 'eulix/internal/assets.embeddedParserHash=$${PARSER_HASH}'" \
-		-trimpath -o ../$${OUT_FILE} ./cmd/eulix/main.go; \
+		-ldflags="-s -w -X 'eulix/internal/assets.embed_requirements=$${REQ_FILE}' -X 'eulix/internal/assets.ParserHash=$${PARSER_HASH}'" \
+		-trimpath -o ../$${OUT_FILE} ./cmd/eulix/main.go || exit $$?; \
 	$(ECHO) "$(GREEN)✓ Built $${OUT_FILE}$(NC)"
 endef
 
 # Individual Variant Targets
-build-linux-amd: parsers embed-zip
+build-linux-amd: parser-linux embed-zip
 	$(call BUILD_GO_VARIANT_CMD,linux,amd64,amd,$(PARSER_LINUX))
 
-build-linux-nvidia: parsers embed-zip
+build-linux-nvidia: parser-linux embed-zip
 	$(call BUILD_GO_VARIANT_CMD,linux,amd64,nvidia,$(PARSER_LINUX))
 
-build-win-amd: parsers embed-zip
+build-win-amd: parser-windows embed-zip
 	$(call BUILD_GO_VARIANT_CMD,windows,amd64,amd,$(PARSER_WINDOWS))
 
-build-win-nvidia: parsers embed-zip
+build-win-nvidia: parser-windows embed-zip
 	$(call BUILD_GO_VARIANT_CMD,windows,amd64,nvidia,$(PARSER_WINDOWS))
 
 # Dynamic Single OS/GPU Target
-build-single: parsers embed-zip
 ifeq ($(OS_TARGET),windows)
+build-single: parser-windows embed-zip
 	$(call BUILD_GO_VARIANT_CMD,windows,amd64,$(GPU),$(PARSER_WINDOWS))
 else
+build-single: parser-linux embed-zip
 	$(call BUILD_GO_VARIANT_CMD,linux,amd64,$(GPU),$(PARSER_LINUX))
 endif
 

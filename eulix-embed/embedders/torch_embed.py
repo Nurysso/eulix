@@ -36,7 +36,7 @@ class EmbeddingGeneratorTorch:  # pylint: disable=too-many-instance-attributes
 
     def __init__(
         self,
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        model_name: str = "BAAI/bge-base-en-v1.5",
         device: str | None = None,  # "cpu" | "cuda" | "rocm" | None (auto)
         batch_size: int | None = None,
         normalize: bool = True,
@@ -157,7 +157,7 @@ class EmbeddingGeneratorTorch:  # pylint: disable=too-many-instance-attributes
             print(f"\nError: {e}", file=sys.stderr)
             print("\nTips:", file=sys.stderr)
             print(
-                "  - Use a valid model name from Hugging Face (e.g., 'sentence-transformers/all-MiniLM-L6-v2')",
+                "  - Use a valid model name from Hugging Face (e.g., 'BAAI/bge-base-en-v1.5')",
                 file=sys.stderr,
             )
             print("  - Check your internet connection", file=sys.stderr)

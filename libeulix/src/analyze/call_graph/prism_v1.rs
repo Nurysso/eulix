@@ -65,8 +65,16 @@ pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
     // resolver needs a complete `node_map` to look up targets against.
     // Building it lazily/interleaved would mean some calls resolve
     // differently depending on processing order.
-    let structure_vec: Vec<_> = structure.iter().collect();
+    let mut structure_vec: Vec<_> = structure.iter().collect();
+    structure_vec.sort_unstable_by(|a, b| a.0.cmp(b.0));
     let chunks: Vec<_> = structure_vec.chunks(CHUNK_SIZE).collect();
+
+    let file_list: Vec<String> = structure_vec.iter().map(|(k, _)| (*k).clone()).collect();
+    let file_map: HashMap<String, usize> = file_list
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.clone(), i))
+        .collect();
 
     let all_nodes: Vec<(String, CompactNode)> = chunks
         .par_iter()
@@ -74,14 +82,15 @@ pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
             // Pre-sized with a rough fan‑out estimate (functions + classes
             // + methods per file) so pushes don't repeatedly reallocate.
             let mut local_nodes = Vec::with_capacity(chunk.len() * 10);
-            for (_filepath, filedata) in chunk.iter() {
+            for (filepath, filedata) in chunk.iter() {
+                let file_idx = file_map.get(*filepath).copied().unwrap_or(0);
                 for func in &filedata.functions {
                     local_nodes.push((
                         func.id.clone(),
                         CompactNode {
                             id: func.id.clone(),
                             node_type: if func.id.starts_with("method_") { 1 } else { 0 },
-                            file_idx: 0,
+                            file_idx,
                             is_entry: func.tags.contains(&"entry-point".to_string()),
                         },
                     ));
@@ -92,7 +101,7 @@ pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
                         CompactNode {
                             id: class.id.clone(),
                             node_type: 2,
-                            file_idx: 0,
+                            file_idx,
                             is_entry: false,
                         },
                     ));
@@ -102,7 +111,7 @@ pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
                             CompactNode {
                                 id: method.id.clone(),
                                 node_type: 1,
-                                file_idx: 0,
+                                file_idx,
                                 is_entry: false,
                             },
                         ));
@@ -131,7 +140,8 @@ pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
     // without it, resolving calls in a large codebase was measured to
     // take on the order of tens of minutes.
     let mut symbol_index: HashMap<&str, usize> = HashMap::with_capacity(node_map.len());
-    for (id, &idx) in node_map.iter() {
+    for (idx, node) in unique_nodes.iter().enumerate() {
+        let id = node.id.as_str();
         let short_name = id
             .split("::")
             .last()
@@ -143,15 +153,25 @@ pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
         symbol_index.entry(short_name).or_insert(idx);
     }
 
-    // File index tracking is stubbed out here (always 0) because v1
-    // doesn't need per‑node file attribution for anything downstream —
-    // v2 does the real bookkeeping where it matters.
-    let file_list: Vec<String> = structure.keys().cloned().collect();
-    let _file_map: HashMap<String, usize> = file_list
-        .iter()
-        .enumerate()
-        .map(|(i, f)| (f.clone(), i))
-        .collect();
+    // Bases are recorded as written (`Base`, `models.Base`, `Base<T>`), not
+    // as node ids, so they are matched against class names. First wins, as
+    // in symbol_index.
+    let mut class_index: HashMap<&str, usize> = HashMap::new();
+    for (_, filedata) in &structure_vec {
+        for class in &filedata.classes {
+            if let Some(&idx) = node_map.get(&class.id) {
+                class_index.entry(class.name.as_str()).or_insert(idx);
+            }
+        }
+    }
+    let resolve_base = |base: &str| -> Option<usize> {
+        if let Some(&idx) = node_map.get(base) {
+            return Some(idx);
+        }
+        let name = base.split(['<', '[', '(']).next().unwrap_or(base).trim();
+        let name = name.rsplit(['.', ':']).next().unwrap_or(name);
+        class_index.get(name).copied()
+    };
 
     // Edges are stored as plain tuples instead of a struct so this stays
     // Copy and cheap to push across threads without extra indirection.
@@ -196,7 +216,7 @@ pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
                 for class in &filedata.classes {
                     if let Some(&from_idx) = node_map.get(&class.id) {
                         for base in &class.bases {
-                            if let Some(&to_idx) = node_map.get(base) {
+                            if let Some(to_idx) = resolve_base(base) {
                                 local_edges.push((from_idx, to_idx, 1, false, class.line_start));
                             }
                         }
@@ -322,7 +342,8 @@ pub fn resolve_indirect_call(
 /// caller list is more useful than none.
 pub fn resolve_call_locations(kb: &mut KnowledgeBase) {
     const CHUNK_SIZE: usize = 1000;
-    let structure_vec: Vec<_> = kb.structure.iter().collect();
+    let mut structure_vec: Vec<_> = kb.structure.iter().collect();
+    structure_vec.sort_unstable_by(|a, b| a.0.cmp(b.0));
     let func_info: HashMap<String, (String, String)> = structure_vec
         .par_chunks(CHUNK_SIZE)
         .map(|chunk| {
@@ -386,7 +407,8 @@ pub fn resolve_call_locations(kb: &mut KnowledgeBase) {
 pub fn populate_called_by(kb: &mut KnowledgeBase) {
     const CHUNK_SIZE: usize = 1000;
 
-    let structure_vec: Vec<_> = kb.structure.iter().collect();
+    let mut structure_vec: Vec<_> = kb.structure.iter().collect();
+    structure_vec.sort_unstable_by(|a, b| a.0.cmp(b.0));
     let chunks: Vec<_> = structure_vec.chunks(CHUNK_SIZE).collect();
 
     let all_calls: Vec<(String, CallerInfo)> = chunks
@@ -512,6 +534,137 @@ mod tests {
             let node_map: HashMap<String, usize> = HashMap::new();
             let symbol_index: HashMap<&str, usize> = HashMap::new();
             assert_eq!(resolve_indirect_call("", &node_map, &symbol_index), None);
+        }
+
+        #[test]
+        fn two_file_project_preserves_node_files_and_inheritance_edge() {
+            use crate::grammar_files::parse_source;
+            use std::path::Path;
+
+            let mut structure = HashMap::new();
+            let (_, fd_a) =
+                parse_source(Path::new("a.py"), "def caller():\n    target()\n").unwrap();
+            let (_, fd_b) = parse_source(
+                Path::new("b.py"),
+                "class Base:\n    pass\nclass Child(Base):\n    pass\ndef target():\n    pass\n",
+            )
+            .unwrap();
+            structure.insert("a.py".to_string(), fd_a);
+            structure.insert("b.py".to_string(), fd_b);
+
+            let cg = build_call_graph(&structure);
+            let file_of = |id: &str| {
+                cg.nodes
+                    .iter()
+                    .find(|n| n.id == id)
+                    .map(|n| n.file.as_str())
+                    .unwrap_or("")
+            };
+            assert_eq!(file_of("func_caller::a.py"), "a.py");
+            assert_eq!(file_of("func_target::b.py"), "b.py");
+            assert_eq!(file_of("class_Base::b.py"), "b.py");
+            assert_eq!(file_of("class_Child::b.py"), "b.py");
+
+            assert!(
+                cg.edges.iter().any(|e| {
+                    e.edge_type == "inheritance"
+                        && e.from == "class_Child::b.py"
+                        && e.to == "class_Base::b.py"
+                }),
+                "expected inheritance edge Child -> Base, got {:?}",
+                cg.edges
+            );
+        }
+
+        #[test]
+        fn different_hashmap_insertion_orders_produce_identical_call_graph() {
+            use crate::grammar_files::parse_source;
+            use crate::struc::kb_struct::{DependencyGraph, Indices, Metadata, PatternInfo};
+            use std::path::Path;
+
+            fn kb_from(structure: HashMap<String, FileData>) -> KnowledgeBase {
+                KnowledgeBase {
+                    metadata: Metadata {
+                        version: String::new(),
+                        git_hash: String::new(),
+                        project_name: String::new(),
+                        project_hash: String::new(),
+                        parsed_at: String::new(),
+                        languages: vec![],
+                        total_files: 0,
+                        total_loc: 0,
+                        total_functions: 0,
+                        total_classes: 0,
+                        total_methods: 0,
+                    },
+                    structure,
+                    call_graph: CallGraph::default(),
+                    dependency_graph: DependencyGraph::default(),
+                    indices: Indices::default(),
+                    entry_points: vec![],
+                    external_dependencies: vec![],
+                    patterns: PatternInfo::default(),
+                }
+            }
+
+            let files: Vec<(String, String)> = (0..16)
+                .map(|i| {
+                    (
+                        format!("pkg/mod_{i:02}.py"),
+                        "class Base:\n    pass\ndef helper():\n    pass\n".to_string(),
+                    )
+                })
+                .chain(std::iter::once((
+                    "pkg/caller.py".to_string(),
+                    "class Child(Base):\n    pass\ndef run():\n    helper()\n".to_string(),
+                )))
+                .collect();
+
+            let mut forward_map = HashMap::new();
+            for (path, src) in &files {
+                let (_, fd) = parse_source(Path::new(path), src).unwrap();
+                forward_map.insert(path.clone(), fd);
+            }
+
+            let mut reverse_map = HashMap::new();
+            for (path, src) in files.iter().rev() {
+                let (_, fd) = parse_source(Path::new(path), src).unwrap();
+                reverse_map.insert(path.clone(), fd);
+            }
+
+            let mut kb_forward = kb_from(forward_map);
+            resolve_call_locations(&mut kb_forward);
+            let cg_forward = build_call_graph(&kb_forward.structure);
+            populate_called_by(&mut kb_forward);
+
+            let mut kb_reverse = kb_from(reverse_map);
+            resolve_call_locations(&mut kb_reverse);
+            let cg_reverse = build_call_graph(&kb_reverse.structure);
+            populate_called_by(&mut kb_reverse);
+
+            let forward_edges: Vec<_> = cg_forward
+                .edges
+                .iter()
+                .map(|e| (&e.from, &e.to, &e.edge_type, e.call_site_line))
+                .collect();
+            let reverse_edges: Vec<_> = cg_reverse
+                .edges
+                .iter()
+                .map(|e| (&e.from, &e.to, &e.edge_type, e.call_site_line))
+                .collect();
+            assert_eq!(forward_edges, reverse_edges);
+
+            let forward_nodes: Vec<_> = cg_forward
+                .nodes
+                .iter()
+                .map(|n| (&n.id, &n.node_type, &n.file, n.call_count_estimate))
+                .collect();
+            let reverse_nodes: Vec<_> = cg_reverse
+                .nodes
+                .iter()
+                .map(|n| (&n.id, &n.node_type, &n.file, n.call_count_estimate))
+                .collect();
+            assert_eq!(forward_nodes, reverse_nodes);
         }
     }
 }

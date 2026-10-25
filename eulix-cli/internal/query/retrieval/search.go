@@ -1167,16 +1167,23 @@ func normalizeToCallGraphID(c Chunk) string {
 func (cb *ContextBuilder) vectorSearch(qEmb []float32, topK int, threshold float64) []ScoredChunk {
 	threshF := float32(threshold)
 	n := len(cb.embeddings)
-	if len(cb.chunks) < n {
-		n = len(cb.chunks)
-	}
 	if debugLevel3 {
 		cb.debugLog.Log("[vectorSearch] START: embeddingsCount=%d, threshold=%.2f, topK=%d", n, threshold, topK)
 	}
+	if len(cb.vectorMap) == 0 {
+		// Rows can only be matched to chunks through vectors.bin; without it,
+		// skipping is better than pairing rows with the wrong chunks.
+		cb.debugLog.Log("[vectorSearch] no vector map loaded, skipping vector search")
+		return nil
+	}
 	scored := make([]ScoredChunk, 0, topK*2)
-	for i := 0; i < n; i++ {
+	for _, chunk := range cb.chunks {
+		i, ok := cb.vectorMap[chunk.ID]
+		if !ok || i < 0 || i >= n {
+			continue
+		}
 		if sim := dotProduct(qEmb, cb.embeddings[i]); sim >= threshF {
-			scored = append(scored, ScoredChunk{Chunk: cb.chunks[i], Score: float64(sim)})
+			scored = append(scored, ScoredChunk{Chunk: chunk, Score: float64(sim)})
 		}
 	}
 	slices.SortFunc(scored, byScoreDesc)

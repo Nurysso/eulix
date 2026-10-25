@@ -102,8 +102,8 @@ type openAIResponse struct {
 type ollamaRequest struct {
 	Model    string        `json:"model"`
 	Messages []Message     `json:"messages"`
-	Stream   bool          `json:"stream"`
 	Options  ollamaOptions `json:"options,omitempty"`
+	Stream   bool          `json:"stream"`
 }
 
 type ollamaOptions struct {
@@ -113,8 +113,8 @@ type ollamaOptions struct {
 
 type ollamaResponse struct {
 	Message Message `json:"message"`
-	Done    bool    `json:"done"`
 	Error   string  `json:"error,omitempty"`
+	Done    bool    `json:"done"`
 }
 
 type geminiRequest struct {

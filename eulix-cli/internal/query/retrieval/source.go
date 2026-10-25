@@ -50,11 +50,87 @@ type fileEntry struct {
 	lines []string
 }
 
+// childSpan is one child chunk's line range, clamped to its parent.
+type childSpan struct {
+	chunkIdx  int
+	startLine int
+	endLine   int
+}
+
+// childGroup is a run of touching child spans, shown in a skeleton as one pointer line.
+type childGroup struct {
+	startLine int
+	endLine   int
+	children  []childSpan // ascending by startLine
+}
+
+// skeletonPointer links a pointer line in a skeleton to the children it stands for.
+type skeletonPointer struct {
+	lineIdx int
+	group   childGroup
+}
+
+// childGroups clamps child ranges to the parent, sorts them and merges touching ones.
+func childGroups(chunks []Chunk, childIdxs []int, parentStart, parentEnd int) []childGroup {
+	spans := make([]childSpan, 0, len(childIdxs))
+	for _, idx := range childIdxs {
+		start := max(chunks[idx].StartLine, parentStart)
+		end := min(chunks[idx].EndLine, parentEnd)
+		if start <= end {
+			spans = append(spans, childSpan{idx, start, end})
+		}
+	}
+	sort.Slice(spans, func(a, b int) bool { return spans[a].startLine < spans[b].startLine })
+
+	var groups []childGroup
+	for _, child := range spans {
+		last := len(groups) - 1
+		if last >= 0 && child.startLine <= groups[last].endLine+1 {
+			groups[last].endLine = max(groups[last].endLine, child.endLine)
+			groups[last].children = append(groups[last].children, child)
+			continue
+		}
+		groups = append(groups, childGroup{child.startLine, child.endLine, []childSpan{child}})
+	}
+	return groups
+}
+
+// fullyBacked reports whether the children that were not evicted still cover the whole group.
+func (g childGroup) fullyBacked(evicted map[int]bool) bool {
+	nextLine := g.startLine
+	for _, child := range g.children {
+		if evicted[child.chunkIdx] {
+			continue
+		}
+		if child.startLine > nextLine {
+			return false
+		}
+		nextLine = max(nextLine, child.endLine+1)
+	}
+	return nextLine > g.endLine
+}
+
+// pointerLine renders the omission line that stands in for a group of child lines.
+func pointerLine(prefix string, startLine, endLine int, separateChunk bool) string {
+	if separateChunk {
+		return fmt.Sprintf("%s ... lines %d-%d omitted (separate chunk)", prefix, startLine, endLine)
+	}
+	return fmt.Sprintf("%s ... lines %d-%d omitted", prefix, startLine, endLine)
+}
+
 // fileCache reads each file once. The map lock is only held to find the entry, so
 // prefetch goroutines really do read different files in parallel.
+//
+// With a root, names are relative to the project and every read goes through
+// os.Root: a `..` path or a symlink pointing outside the project fails like a
+// missing file instead of pulling outside content into the context.
 type fileCache struct {
-	mu    sync.Mutex
-	files map[string]*fileEntry
+	mu        sync.Mutex
+	files     map[string]*fileEntry
+	root      *os.Root
+	rootPath  string
+	aliasOnce sync.Once
+	aliases   []string
 }
 
 func newFileCache() *fileCache {
@@ -71,7 +147,7 @@ func (fc *fileCache) get(path string, debugLog *utils.DebugLogger) []string {
 	fc.mu.Unlock()
 
 	e.once.Do(func() {
-		data, err := os.ReadFile(path)
+		data, err := fc.read(path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				debugLog.Log("Source file not found: %s", path)
@@ -80,9 +156,58 @@ func (fc *fileCache) get(path string, debugLog *utils.DebugLogger) []string {
 			}
 			return
 		}
-		e.lines = strings.Split(string(data), "\n")
+		s := strings.TrimPrefix(string(data), "\ufeff")
+		s = strings.ReplaceAll(s, "\r\n", "\n")
+		e.lines = strings.Split(s, "\n")
 	})
 	return e.lines
+}
+
+// rootAliases returns the spellings of the root a stored path may use. Computed once,
+// lazily, so it works however the cache was constructed.
+func (fc *fileCache) rootAliases() []string {
+	fc.aliasOnce.Do(func() {
+		fc.aliases = []string{fc.rootPath}
+		if r, err := filepath.EvalSymlinks(fc.rootPath); err == nil && r != fc.rootPath {
+			fc.aliases = append(fc.aliases, r)
+		}
+	})
+	return fc.aliases
+}
+
+// relToRoot maps an absolute path to a root-relative one. It tries the root as
+// configured and as resolved, and the path as given and as resolved, so the
+// symlink may sit on either side. os.Root still enforces containment on the read.
+func (fc *fileCache) relToRoot(name string) (string, bool) {
+	try := func(n string) (string, bool) {
+		for _, base := range fc.rootAliases() {
+			if rel, err := filepath.Rel(base, n); err == nil && filepath.IsLocal(rel) {
+				return rel, true
+			}
+		}
+		return "", false
+	}
+	if rel, ok := try(name); ok {
+		return rel, true
+	}
+	if resolved, err := filepath.EvalSymlinks(name); err == nil && resolved != name {
+		return try(resolved)
+	}
+	return "", false
+}
+
+func (fc *fileCache) read(name string) ([]byte, error) {
+	if fc.root == nil {
+		return os.ReadFile(name)
+	}
+	if filepath.IsAbs(name) {
+		rel, ok := fc.relToRoot(name)
+		if !ok {
+			return nil, fmt.Errorf("%s is outside source root %s", name, fc.rootPath)
+		}
+		name = rel
+	}
+	return fc.root.ReadFile(name)
 }
 
 func (cb *ContextBuilder) prefetchFiles(chunks []Chunk, cache *fileCache) {
@@ -90,7 +215,7 @@ func (cb *ContextBuilder) prefetchFiles(chunks []Chunk, cache *fileCache) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, prefetchMaxConcurrency)
 	for _, chunk := range chunks {
-		sourceFile := filepath.Join(cb.sourceRoot, chunk.File)
+		sourceFile := chunk.File
 		if _, ok := seen[sourceFile]; ok {
 			continue
 		}
@@ -108,26 +233,24 @@ func (cb *ContextBuilder) prefetchFiles(chunks []Chunk, cache *fileCache) {
 
 // Hitem: one chunk plus everything needed to size and render its source
 type hItem struct {
-	idx       int
-	chunk     Chunk
-	lang      string
-	weight    float64
-	pinned    bool
-	astTokens int // what the chunk costs today; freed if hydrated, kept if not
-
-	skeleton bool     // container or oversized: header + elisions only
-	lines    []string // cleaned candidate lines, in order
-	cum      []int    // cum[k] = chars in the first k lines, newlines included
-	tail     bool     // source continues past lines[]
-
-	need      int // tokens to render every candidate line
-	minUseful int // smallest grant worth spending
-	grant     int
-	keep      int // lines kept after fitting the grant
-	used      int // tokens actually rendered
-
-	skip   bool
-	reason string
+	chunk       Chunk
+	pointers    []skeletonPointer
+	lines       []string // cleaned candidate lines, in order
+	prefixChars []int    // prefixChars[k] = chars in the first k lines, newlines included
+	lang        string
+	reason      string
+	weight      float64
+	idx         int
+	astTokens   int // what the chunk costs today; freed if hydrated, kept if not
+	need        int // tokens to render every candidate line
+	minUseful   int // smallest grant worth spending
+	grant       int
+	keep        int // lines kept after fitting the grant
+	used        int // tokens actually rendered
+	skip        bool
+	pinned      bool
+	tail        bool // source continues past lines[]
+	skeleton    bool // container or oversized: header + elisions only
 }
 
 func estimateTokens(chars int) int {
@@ -146,7 +269,7 @@ func (it *hItem) cost(k int) int {
 	if k <= 0 {
 		return 0
 	}
-	t := estimateTokens(it.cum[k]-1) + fenceTokens
+	t := estimateTokens(it.prefixChars[k]-1) + fenceTokens
 	if k < len(it.lines) || it.tail {
 		t += markerTokens
 	}
@@ -167,7 +290,7 @@ func (it *hItem) fit(grant int) int {
 func (it *hItem) render() string {
 	cm := commentPrefix(it.lang)
 	var b strings.Builder
-	b.Grow(it.cum[it.keep] + 64)
+	b.Grow(it.prefixChars[it.keep] + 64)
 	b.WriteString("```")
 	b.WriteString(it.lang)
 	b.WriteByte('\n')
@@ -186,6 +309,29 @@ func (it *hItem) render() string {
 }
 
 func span(c Chunk) int { return c.EndLine - c.StartLine }
+
+// shouldSkeleton reports whether a chunk must render as a header-only skeleton.
+//
+// Nested children always skeletonize so the parent does not duplicate bodies
+// already present as their own chunks. Oversized file/class spans do the same.
+// Leaf functions and methods do not: they are the unit of retrieval, and
+// pre-truncating them to skeletonHeadLines (before grants run) is what produced
+// "... rest of body omitted" on the exact hit in MCP/query output. Token
+// budget still limits them later via allocateGrants / fit.
+func shouldSkeleton(c Chunk, nKids, spanLines, maxLines int) bool {
+	if nKids > 0 {
+		return true
+	}
+	if spanLines <= maxLines {
+		return false
+	}
+	switch strings.ToLower(c.ChunkType) {
+	case "function", "method":
+		return false
+	default:
+		return true
+	}
+}
 
 // directChildren maps each chunk to the chunks whose innermost enclosing chunk it is.
 func directChildren(chunks []Chunk) [][]int {
@@ -247,50 +393,99 @@ func stripSegment(src []string, from, to int, lang string) []string {
 	return strip.StripCommentsAndDocs(src[from-1:to], lang)
 }
 
-// buildSkeleton renders the first skeletonHeadLines cleaned lines of [start, end], replacing
-// each child range with a one-line pointer. tail reports whether source was left out.
-func buildSkeleton(src []string, start, end int, kids [][2]int, lang string) (out []string, tail bool) {
-	cm := commentPrefix(lang)
-	out = make([]string, 0, skeletonHeadLines+4)
+// buildSkeleton renders the first skeletonHeadLines cleaned lines of [start, end], with a
+// pointer line per child group, and records where those pointers sit.
+func buildSkeleton(src []string, start, end int, groups []childGroup, lang string) (lines []string, pointers []skeletonPointer, tail bool) {
+	prefix := commentPrefix(lang)
+	lines = make([]string, 0, skeletonHeadLines+4)
 	cursor := start
 
-	// Scan at most 4x the head size per gap so a 1,600-line class body costs almost nothing.
-	take := func(from, to int) {
+	// Scans at most 4x the head size per gap so a huge class body stays cheap.
+	appendSource := func(from, to int) {
 		if limit := from + skeletonHeadLines*4 - 1; to > limit {
 			to = limit
 		}
 		if from <= to {
-			out = append(out, stripSegment(src, from, to, lang)...)
+			lines = append(lines, stripSegment(src, from, to, lang)...)
 			cursor = to + 1
 		}
 	}
 
-	for _, kid := range kids {
-		if len(out) >= skeletonHeadLines {
+	cutShort := false
+	for _, group := range groups {
+		if len(lines) >= skeletonHeadLines {
 			break
 		}
-		if kid[0] > cursor {
-			take(cursor, kid[0]-1)
-			if cursor < kid[0] { // gap was cut short; the child lies beyond our window
+		if group.startLine > cursor {
+			appendSource(cursor, group.startLine-1)
+			if cursor < group.startLine {
+				cutShort = true
 				break
 			}
 		}
-		out = append(out, fmt.Sprintf("%s ... lines %d-%d omitted (separate chunk)", cm, kid[0], kid[1]))
-		cursor = kid[1] + 1
+		pointers = append(pointers, skeletonPointer{lineIdx: len(lines), group: group})
+		lines = append(lines, pointerLine(prefix, group.startLine, group.endLine, true))
+		cursor = group.endLine + 1
 	}
-	if len(out) < skeletonHeadLines && cursor <= end {
-		take(cursor, end)
+	if !cutShort && len(lines) < skeletonHeadLines && cursor <= end {
+		appendSource(cursor, end)
 	}
-	if len(out) > skeletonHeadLines {
-		out = out[:skeletonHeadLines]
+
+	if len(lines) > skeletonHeadLines {
+		lines = lines[:skeletonHeadLines]
 		tail = true
 	}
-	return out, tail || cursor <= end
+	return lines, pointers, tail || cursor <= end
+}
+
+func (it *hItem) rebuildprefixChars() {
+	if len(it.prefixChars) != len(it.lines)+1 {
+		it.prefixChars = make([]int, len(it.lines)+1)
+	}
+	it.prefixChars[0] = 0
+	for i, l := range it.lines {
+		it.prefixChars[i+1] = it.prefixChars[i] + len(l) + 1
+	}
+}
+
+// dropEvictedPointers rewrites pointer lines whose children were evicted. Without it, a
+// skeleton would claim a "separate chunk" that is no longer in the output.
+//
+// A pointer is rewritten as a whole even if only some of its children were evicted:
+// dropping "(separate chunk)" is conservative, because a partially-backed merged
+// group would otherwise claim availability for its evicted tail. We deliberately
+// do not split the pointer into multiple lines here.
+//
+// Rewriting shortens the line (the "(separate chunk)" suffix is longer than the
+// replacement), so prefixChars and used are recomputed to keep the token accounting in
+// sync with what render() will emit.
+// rebuildprefixChars recomputes the prefix sums from it.lines.
+func (it *hItem) dropEvictedPointers(evicted map[int]bool) {
+	if len(evicted) == 0 {
+		return
+	}
+	prefix := commentPrefix(it.lang)
+	rewritten := false
+	for _, p := range it.pointers {
+		if p.lineIdx >= it.keep || p.lineIdx >= len(it.lines) || p.group.fullyBacked(evicted) {
+			continue
+		}
+		it.lines[p.lineIdx] = pointerLine(prefix, p.group.startLine, p.group.endLine, false)
+		rewritten = true
+	}
+	if !rewritten {
+		return
+	}
+	it.rebuildprefixChars()
+	if it.keep > len(it.lines) {
+		it.keep = len(it.lines)
+	}
+	it.used = it.cost(it.keep)
 }
 
 func (cb *ContextBuilder) loadItem(it *hItem, cache *fileCache, chunks []Chunk, kidIdx []int, maxLines int) {
 	c := it.chunk
-	src := cache.get(filepath.Join(cb.sourceRoot, c.File), cb.debugLog)
+	src := cache.get(c.File, cb.debugLog)
 	if src == nil {
 		it.skip, it.reason = true, "source unavailable"
 		return
@@ -304,10 +499,10 @@ func (cb *ContextBuilder) loadItem(it *hItem, cache *fileCache, chunks []Chunk, 
 		return
 	}
 
-	kids := childRanges(chunks, kidIdx, c.StartLine, end)
-	if len(kids) > 0 || end-c.StartLine+1 > maxLines {
+	kids := childGroups(chunks, kidIdx, c.StartLine, end)
+	if shouldSkeleton(c, len(kids), end-c.StartLine+1, maxLines) {
 		it.skeleton = true
-		it.lines, it.tail = buildSkeleton(src, c.StartLine, end, kids, it.lang)
+		it.lines, it.pointers, it.tail = buildSkeleton(src, c.StartLine, end, kids, it.lang)
 	} else {
 		it.lines = stripSegment(src, c.StartLine, end, it.lang)
 	}
@@ -316,9 +511,9 @@ func (cb *ContextBuilder) loadItem(it *hItem, cache *fileCache, chunks []Chunk, 
 		return
 	}
 
-	it.cum = make([]int, len(it.lines)+1)
+	it.prefixChars = make([]int, len(it.lines)+1)
 	for i, l := range it.lines {
-		it.cum[i+1] = it.cum[i] + len(l) + 1
+		it.prefixChars[i+1] = it.prefixChars[i] + len(l) + 1
 	}
 	it.need = it.cost(len(it.lines))
 	it.minUseful = int(float64(it.need) * minGrantFraction)
@@ -516,8 +711,44 @@ func (cb *ContextBuilder) enforceCeiling(items []*hItem, ceiling, usedCode int) 
 	return evicted, total
 }
 
+// assembleOutput renders hydrated items into the final chunk list, applying any
+// pointer rewrites for evicted children. Evicted chunks are omitted from the
+// result; AST chunks are passed through unchanged. Preserves input order.
+// Returns the output chunks and the number that rendered source (vs stayed AST).
+func (cb *ContextBuilder) assembleOutput(items []*hItem, evicted map[int]bool) ([]Chunk, int) {
+	result := make([]Chunk, 0, len(items))
+	hydrated := 0
+	for _, it := range items {
+		c := it.chunk
+		id := fmt.Sprintf("Chunk %d (%s:%d-%d)", it.idx, c.File, c.StartLine, c.EndLine)
+		switch {
+		case evicted[it.idx]:
+			continue
+		case it.skip:
+			cb.debugLog.Log("%s: kept as AST, %d tokens (%s)", id, it.astTokens, it.reason)
+		default:
+			mode := "full"
+			switch {
+			case it.skeleton:
+				mode = "skeleton"
+			case it.keep < len(it.lines):
+				mode = "partial"
+			}
+			cb.debugLog.Log("%s: %s %d/%d lines, %d tokens (need %d, grant %d, weight %.2f, replaces %d AST)",
+				id, mode, it.keep, len(it.lines), it.used, it.need, it.grant, it.weight, it.astTokens)
+			it.dropEvictedPointers(evicted)
+			c.Content = it.render()
+			c.Tokens = it.used
+			hydrated++
+		}
+		result = append(result, c)
+	}
+	return result, hydrated
+}
+
 // hydrateSourceCode swaps AST content for real source where the budget allows.
-// maxLinesDefault is the largest raw span rendered in full; bigger chunks become skeletons.
+// maxLinesDefault is the largest raw span a file/class chunk may occupy before
+// it is skeletonized. Leaf function/method chunks hydrate in full (budget willing).
 // The returned slice keeps input order and may be shorter if cold chunks were evicted.
 func (cb *ContextBuilder) hydrateSourceCode(
 	chunks []Chunk,
@@ -546,7 +777,14 @@ func (cb *ContextBuilder) hydrateSourceCode(
 		return chunks
 	}
 
+	root, err := os.OpenRoot(cb.sourceRoot)
+	if err != nil {
+		cb.debugLog.Log("Source hydration skipped: cannot open source root: %v", err)
+		return chunks
+	}
+	defer func() { _ = root.Close() }()
 	cache := newFileCache()
+	cache.root, cache.rootPath = root, cb.sourceRoot
 	cb.prefetchFiles(chunks, cache)
 
 	items := cb.buildItems(chunks, cache, maxLines)
@@ -564,32 +802,7 @@ func (cb *ContextBuilder) hydrateSourceCode(
 	usedCode := fitAndTopUp(items, codeBudget)
 	evicted, total := cb.enforceCeiling(items, sourceBudget, usedCode)
 
-	result := make([]Chunk, 0, len(chunks))
-	hydrated := 0
-	for _, it := range items {
-		c := it.chunk
-		id := fmt.Sprintf("Chunk %d (%s:%d-%d)", it.idx, c.File, c.StartLine, c.EndLine)
-		switch {
-		case evicted[it.idx]:
-			continue
-		case it.skip:
-			cb.debugLog.Log("%s: kept as AST, %d tokens (%s)", id, it.astTokens, it.reason)
-		default:
-			mode := "full"
-			switch {
-			case it.skeleton:
-				mode = "skeleton"
-			case it.keep < len(it.lines):
-				mode = "partial"
-			}
-			cb.debugLog.Log("%s: %s %d/%d lines, %d tokens (need %d, grant %d, weight %.2f, replaces %d AST)",
-				id, mode, it.keep, len(it.lines), it.used, it.need, it.grant, it.weight, it.astTokens)
-			c.Content = it.render()
-			c.Tokens = it.used
-			hydrated++
-		}
-		result = append(result, c)
-	}
+	result, hydrated := cb.assembleOutput(items, evicted)
 
 	cb.debugLog.Log("=== SOURCE HYDRATION COMPLETE ===")
 	cb.debugLog.Log("Hydrated: %d/%d chunks | Code: %d/%d tokens | Evicted: %d | Context: %d/%d tokens",

@@ -364,6 +364,8 @@ pub struct LanguageSpecificInfo {
     pub cpp: Option<Box<CppInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub java: Option<Box<JavaInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub php: Option<Box<PhpInfo>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -631,4 +633,34 @@ pub struct PythonInfo {
     pub is_final: bool,                  // typing.final
     pub flask_route: Option<String>,     // e.g. "/users/<id>"
     pub unknown_decorators: Vec<String>, // catch-all for anything unrecognized
+}
+
+/// Which kind of class-like declaration a PHP `Class` entry is.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PhpTypeKind {
+    #[default]
+    Class,
+    Interface,
+    Trait,
+    Enum,
+}
+
+/// PHP-specific metadata for a function, method or class-like declaration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PhpInfo {
+    pub namespace: Option<String>,
+    pub access_modifier: Option<String>, // "public" | "protected" | "private"
+    pub is_static: bool,
+    pub is_abstract: bool,
+    pub is_final: bool,
+    /// True for the synthetic `{main}` function that holds a file's top-level code.
+    pub is_script: bool,
+
+    // Class-like entries
+    pub type_kind: Option<PhpTypeKind>,
+    pub extends: Vec<String>, // fully qualified, e.g. `\App\Model`; several for interfaces
+    pub implements: Vec<String>,
+    pub traits: Vec<String>, // `use SomeTrait;` inside the body
 }

@@ -3,11 +3,10 @@
 // Package classifier deterministically categorizes incoming queries to streamline CoT routing and short-circuit non-LLM requests.
 
 /*
-Package query provides query classification functionality.
+Package classifier provides query classification functionality.
 This file is responsible for classifying user queries into different
 types such as location, usage, debugging, architecture, etc.
 */
-
 package classifier
 
 import (

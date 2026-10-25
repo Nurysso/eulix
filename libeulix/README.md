@@ -1,8 +1,8 @@
 # libeulix
 
 > Multi-language static analysis for Rust. Parses C, C++, Go, Java,
-> JavaScript, Python, Rust, and TypeScript into a structured knowledge base
-> with a project-wide resolved call graph.
+> JavaScript, PHP, Python, Rust, and TypeScript into a structured knowledge
+> base with a project-wide resolved call graph.
 
 `libeulix` is the analysis engine behind the [Eulix](../README.md) toolchain.
 It takes source text and turns it into structured code data: files, symbols,
@@ -190,6 +190,7 @@ Both are `Serialize` / `Deserialize`, so they round-trip through JSON.
 | TypeScript / TSX | `.ts`, `.tsx`, `.mts`, `.cts`         | Stable         |
 | JavaScript / JSX | `.js`, `.mjs`, `.cjs`, `.jsx`         | Needs testing  |
 | Java             | `.java`                               | Needs testing  |
+| PHP              | `.php`, `.phtml`, `.inc`              | Needs testing  |
 | Ruby             | `.rb`                                 | In development |
 
 Language support is not just syntax support. Some language features make

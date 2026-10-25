@@ -50,21 +50,21 @@ type Embedder struct {
 	stdout         *bufio.Scanner
 	enc            *json.Encoder
 	mu             sync.Mutex
+	requestTimeout time.Duration
+	stderrTail     *stderrTail
 	model          string
 	dim            int
 	closed         bool
-	requestTimeout time.Duration
-	stderrTail     *stderrTail
 	debug          bool
 }
 
 // serverReadyMsg is what the server command writes to stdout as its first line
 // when the model is loaded and ready.
 type serveReadyMsg struct {
-	Ready bool   `json:"ready"`
 	Model string `json:"model"`
-	Dim   int    `json:"dim"`
 	Error string `json:"error"`
+	Dim   int    `json:"dim"`
+	Ready bool   `json:"ready"`
 }
 
 // serveRequest is what we send to the process on stdin.

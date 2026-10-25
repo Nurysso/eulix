@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 pub type SpillLoc = (u64, u32);
-pub type ParsedFileResult = (String, FileData, SpillLoc);
+pub type ParsedFileResult = (String, FileData, SpillLoc, Vec<(String, String, String)>);
 
 const FLUSH_EVERY: u64 = 512;
 
@@ -149,7 +149,6 @@ impl Spill {
 
     /// Read one payload back, verifying the CRC. Used by resume to rehydrate
     /// `FileData` for entries that were already spilled.
-    #[allow(dead_code)]
     pub fn read_payload(&self, entry: &Entry) -> std::io::Result<Vec<u8>> {
         let mut f = File::open(&self.path)?;
         use std::io::Seek;

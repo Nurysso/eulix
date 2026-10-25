@@ -185,6 +185,9 @@ func edge(from, to string) M { return M{"From": from, "To": to, "EdgeType": "cal
 func newRouter(t testing.TB) *Router {
 	t.Helper()
 	dir := t.TempDir()
+	if externalDeps != nil {
+		writeJSON(t, filepath.Join(dir, "kb_external_deps.json"), &utils.ExternalDependencyRef{ExternalDependencies: externalDeps})
+	}
 	cfg := &config.Config{}
 	fill(t, cfg, M{"Project": M{"Path": dir}, "RetrievalConfig": M{"CodeToAstRatio": 0.5}})
 	cl, err := classifier.QuerySheriff("")
@@ -230,6 +233,19 @@ func (r *Router) setKB(t testing.TB, files M) {
 		"Structure": files,
 	})
 	r.kb = kb
+}
+
+// Legacy helper tests keep their fixtures separate from production routers.
+var externalDeps []utils.ExternalDependency
+
+func getExternalDeps() []utils.ExternalDependency { return externalDeps }
+func loadExternalDeps(path string) error {
+	deps, err := readExternalDeps(path)
+	if err != nil {
+		return err
+	}
+	externalDeps = deps
+	return nil
 }
 
 func setDeps(t testing.TB, deps []utils.ExternalDependency) {
@@ -1538,14 +1554,15 @@ func TestHandleDependency(t *testing.T) {
 			}
 		}
 	})
-	t.Run("lazy-loads external_deps.json from the working directory", func(t *testing.T) {
+	t.Run("loads kb_external_deps.json from the router directory", func(t *testing.T) {
 		setDeps(t, nil)
 		ref := &utils.ExternalDependencyRef{}
 		fill(t, ref, M{"ExternalDependencies": S{M{"Name": "lazydep", "Source": "pip", "ImportCount": 1}}})
 		dir := t.TempDir()
-		writeJSON(t, filepath.Join(dir, "external_deps.json"), ref)
+		r := newRouter(t)
+		writeJSON(t, filepath.Join(r.eulixDir, "kb_external_deps.json"), ref)
 		chdir(t, dir)
-		got, err := newRouter(t).handleDependency("who imports lazydep", nil)
+		got, err := r.handleDependency("who imports lazydep", nil)
 		if err != nil || !strings.Contains(got, "lazydep") {
 			t.Errorf("got (%q, %v)", got, err)
 		}

@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex, walk};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
@@ -168,8 +168,10 @@ impl RustParser {
     }
 
     fn collect_use_declarations(&self, node: &Node, imports: &mut Vec<Import>) {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
+        walk(*node, (), |child, _| {
+            if child == *node {
+                return Some(());
+            }
             if child.kind() == "use_declaration" {
                 let text = self.get_node_text(&child);
                 let module = text
@@ -177,17 +179,17 @@ impl RustParser {
                     .trim_end_matches(';')
                     .trim()
                     .to_string();
-
                 let import_type = self.classify_import(&module);
                 imports.push(Import {
                     module,
                     items: vec![],
                     import_type,
                 });
+                None
             } else {
-                self.collect_use_declarations(&child, imports);
+                Some(())
             }
-        }
+        });
     }
 
     fn classify_import(&self, module: &str) -> String {
@@ -287,8 +289,9 @@ impl RustParser {
 
                     if inner.starts_with("derive") {
                         if let Some(s) = inner.find('(') {
-                            let end = inner.rfind(')').unwrap_or(inner.len());
-                            for d in inner[s + 1..end].split(',') {
+                            let rest = &inner[s + 1..];
+                            let inside = rest.rfind(')').map_or(rest, |e| &rest[..e]);
+                            for d in inside.split(',') {
                                 let d = d.trim().to_string();
                                 if !d.is_empty() {
                                     derives.push(d);
@@ -608,7 +611,11 @@ impl RustParser {
                     let trait_type = child.child_by_field_name("trait");
                     let self_type = child
                         .child_by_field_name("type")
-                        .map(|t| self.get_node_text(&t))
+                        .map(|t| {
+                            let raw = self.get_node_text(&t);
+                            let base = raw.split('<').next().unwrap_or(&raw).trim();
+                            base.rsplit("::").next().unwrap_or(base).trim().to_string()
+                        })
                         .unwrap_or_default();
 
                     let (impl_trait_name, key) = match &trait_type {
@@ -972,49 +979,48 @@ impl RustParser {
         seen: &mut HashSet<String>,
         context: &str,
     ) {
-        let mut cursor = node.walk();
+        walk(*node, context, |node, context| {
+            let node = &node;
 
-        let child_context = match node.kind() {
-            "if_expression" => "if",
-            "loop_expression" | "while_expression" | "for_expression" => "loop",
-            "match_expression" => "match",
-            _ => context,
-        };
+            let child_context = match node.kind() {
+                "if_expression" => "if",
+                "loop_expression" | "while_expression" | "for_expression" => "loop",
+                "match_expression" => "match",
+                _ => context,
+            };
 
-        if node.kind() == "call_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let call_text = self.get_node_text(&func_node);
-                let name = call_text
-                    .split("::")
-                    .last()
-                    .unwrap_or(&call_text)
-                    .split('.')
-                    .next_back()
-                    .unwrap_or(&call_text)
-                    .trim()
-                    .to_string();
+            if node.kind() == "call_expression" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let call_text = self.get_node_text(&func_node);
+                    let name = call_text
+                        .split("::")
+                        .last()
+                        .unwrap_or(&call_text)
+                        .split('.')
+                        .next_back()
+                        .unwrap_or(&call_text)
+                        .trim()
+                        .to_string();
 
-                if !name.is_empty() {
-                    let key = format!("{}:{}", name, node.start_position().row);
-                    if !seen.contains(&key) {
-                        seen.insert(key);
-                        let args = self.extract_call_arguments(node);
-                        calls.push(FunctionCall {
-                            callee: name,
-                            defined_in: None,
-                            line: node.start_position().row + 1,
-                            args,
-                            is_conditional: context != "unconditional",
-                            context: context.to_string(),
-                        });
+                    if !name.is_empty() {
+                        let key = format!("{}:{}", name, node.start_position().row);
+                        if !seen.contains(&key) {
+                            seen.insert(key);
+                            let args = self.extract_call_arguments(node);
+                            calls.push(FunctionCall {
+                                callee: name,
+                                defined_in: None,
+                                line: node.start_position().row + 1,
+                                args,
+                                is_conditional: context != "unconditional",
+                                context: context.to_string(),
+                            });
+                        }
                     }
                 }
             }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.find_calls_recursive(&child, calls, seen, child_context);
-        }
+            Some(child_context)
+        });
     }
 
     fn extract_call_arguments(&self, call_node: &Node) -> Vec<String> {
@@ -1034,16 +1040,19 @@ impl RustParser {
 
     /// Returns `true` if the `?` try operator appears anywhere in `node`.
     fn detect_try_operator(&self, node: &Node) -> bool {
-        if node.kind() == "try_expression" {
-            return true;
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if self.detect_try_operator(&child) {
-                return true;
+        let mut found = false;
+        walk(*node, (), |node, _| {
+            if found {
+                return None;
             }
-        }
-        false
+            let node = &node;
+            if node.kind() == "try_expression" {
+                found = true;
+                return None;
+            }
+            Some(())
+        });
+        found
     }
 
     /// Collects unique macro invocation names from `node` (e.g. `vec!`, `println!`).
@@ -1060,19 +1069,19 @@ impl RustParser {
         seen: &mut HashSet<String>,
         result: &mut Vec<String>,
     ) {
-        // tree-sitter-rust names macro invocations "macro_invocation"
-        if node.kind() == "macro_invocation" {
-            if let Some(macro_name_node) = node.child_by_field_name("macro") {
-                let name = self.get_node_text(&macro_name_node);
-                if seen.insert(name.clone()) {
-                    result.push(name);
+        walk(*node, (), |node, _| {
+            let node = &node;
+            // tree-sitter-rust names macro invocations "macro_invocation"
+            if node.kind() == "macro_invocation" {
+                if let Some(macro_name_node) = node.child_by_field_name("macro") {
+                    let name = self.get_node_text(&macro_name_node);
+                    if seen.insert(name.clone()) {
+                        result.push(name);
+                    }
                 }
             }
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.collect_macro_calls(&child, seen, result);
-        }
+            Some(())
+        });
     }
 
     fn extract_variables(&self, node: &Node, params: &[Parameter]) -> Vec<Variable> {
@@ -1107,51 +1116,50 @@ impl RustParser {
     }
 
     fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        match node.kind() {
-            "let_declaration" => {
-                let name = node
-                    .child_by_field_name("pattern")
-                    .map(|n| self.get_node_text(&n))
-                    .unwrap_or_default()
-                    .trim_start_matches("mut ")
-                    .to_string();
+            match node.kind() {
+                "let_declaration" => {
+                    let name = node
+                        .child_by_field_name("pattern")
+                        .map(|n| self.get_node_text(&n))
+                        .unwrap_or_default()
+                        .trim_start_matches("mut ")
+                        .to_string();
 
-                if !name.is_empty() {
-                    let var_type = node
-                        .child_by_field_name("type")
-                        .map(|t| self.get_node_text(&t));
-                    let line = node.start_position().row + 1;
+                    if !name.is_empty() {
+                        let var_type = node
+                            .child_by_field_name("type")
+                            .map(|t| self.get_node_text(&t));
+                        let line = node.start_position().row + 1;
 
-                    variables.entry(name.clone()).or_insert(Variable {
-                        name,
-                        var_type,
-                        scope: "local".to_string(),
-                        defined_at: Some(line),
-                        transformations: vec![],
-                        used_in: vec![],
-                        returned: false,
-                    });
+                        variables.entry(name.clone()).or_insert(Variable {
+                            name,
+                            var_type,
+                            scope: "local".to_string(),
+                            defined_at: Some(line),
+                            transformations: vec![],
+                            used_in: vec![],
+                            returned: false,
+                        });
+                    }
                 }
-            }
-            "return_expression" => {
-                let mut ret_cursor = node.walk();
-                for child in node.children(&mut ret_cursor) {
-                    if child.kind() == "identifier" {
-                        let var_name = self.get_node_text(&child);
-                        if let Some(var) = variables.get_mut(&var_name) {
-                            var.returned = true;
+                "return_expression" => {
+                    let mut ret_cursor = node.walk();
+                    for child in node.children(&mut ret_cursor) {
+                        if child.kind() == "identifier" {
+                            let var_name = self.get_node_text(&child);
+                            if let Some(var) = variables.get_mut(&var_name) {
+                                var.returned = true;
+                            }
                         }
                     }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-
-        for child in node.children(&mut cursor) {
-            self.track_variable_usage(&child, variables);
-        }
+            Some(())
+        });
     }
 
     fn build_control_flow(&self, node: &Node) -> ControlFlow {
@@ -1166,25 +1174,24 @@ impl RustParser {
     }
 
     fn extract_control_structures(&self, node: &Node, cf: &mut ControlFlow) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        match node.kind() {
-            "if_expression" => {
-                if let Some(branch) = self.parse_if(node) {
-                    cf.branches.push(branch);
+            match node.kind() {
+                "if_expression" => {
+                    if let Some(branch) = self.parse_if(node) {
+                        cf.branches.push(branch);
+                    }
                 }
-            }
-            "loop_expression" | "while_expression" | "for_expression" => {
-                if let Some(lp) = self.parse_loop(node) {
-                    cf.loops.push(lp);
+                "loop_expression" | "while_expression" | "for_expression" => {
+                    if let Some(lp) = self.parse_loop(node) {
+                        cf.loops.push(lp);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-
-        for child in node.children(&mut cursor) {
-            self.extract_control_structures(&child, cf);
-        }
+            Some(())
+        });
     }
 
     fn parse_if(&self, node: &Node) -> Option<Branch> {
@@ -1227,37 +1234,40 @@ impl RustParser {
     }
 
     fn find_call_names(&self, node: &Node, calls: &mut Vec<String>, seen: &mut HashSet<String>) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        if node.kind() == "call_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let name = self.get_node_text(&func_node);
-                if !seen.contains(&name) {
-                    seen.insert(name.clone());
-                    calls.push(name);
+            if node.kind() == "call_expression" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let name = self.get_node_text(&func_node);
+                    if !seen.contains(&name) {
+                        seen.insert(name.clone());
+                        calls.push(name);
+                    }
                 }
             }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.find_call_names(&child, calls, seen);
-        }
+            Some(())
+        });
     }
 
     fn find_return_value(&self, node: &Node) -> Option<String> {
-        let mut cursor = node.walk();
+        let mut result = None;
+        walk(*node, (), |child, _| {
+            if result.is_some() {
+                return None;
+            }
+            if child == *node {
+                return Some(());
+            }
 
-        for child in node.children(&mut cursor) {
             if child.kind() == "return_expression" {
                 let text = self.get_node_text(&child);
-                return Some(text.trim_start_matches("return").trim().to_string());
+                result = Some(text.trim_start_matches("return").trim().to_string());
+                return None;
             }
-            if let Some(val) = self.find_return_value(&child) {
-                return Some(val);
-            }
-        }
-
-        None
+            Some(())
+        });
+        result
     }
 
     fn parse_loop(&self, node: &Node) -> Option<Loop> {
@@ -1283,20 +1293,17 @@ impl RustParser {
     }
 
     fn calculate_complexity(&self, node: &Node) -> usize {
-        fn count(node: &Node) -> usize {
-            let mut c = 0;
-            let mut cursor = node.walk();
+        let mut complexity = 1;
+        walk(*node, (), |node, _| {
+            let node = &node;
             match node.kind() {
                 "if_expression" | "match_expression" | "loop_expression" | "while_expression"
-                | "for_expression" | "binary_expression" => c += 1,
+                | "for_expression" | "binary_expression" => complexity += 1,
                 _ => {}
             }
-            for child in node.children(&mut cursor) {
-                c += count(&child);
-            }
-            c
-        }
-        1 + count(node)
+            Some(())
+        });
+        complexity
     }
 
     fn extract_docstring(&self, node: &Node) -> String {
@@ -1433,4 +1440,110 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
     parse_source(path, &source_code)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    #[test]
+    fn deep_expression_on_small_stack() {
+        // A left-associative expression must not grow the Rust call stack.
+        let expression = vec!["x"; 10_000].join(" + ");
+        let source = format!("fn deep(x: i32) -> i32 {{ {} }}", expression);
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let (_, data) =
+                    crate::grammar_files::parse_source(std::path::Path::new("deep.rs"), &source)
+                        .expect("deep expression parses");
+                assert!(data.syntax.is_clean(), "deep expression is valid syntax");
+                assert!(
+                    data.functions
+                        .iter()
+                        .chain(data.classes.iter().flat_map(|c| &c.methods))
+                        .any(|f| f.name == "deep"),
+                    "deep function extracted"
+                );
+            })
+            .expect("spawn parser thread")
+            .join()
+            .expect("parser thread completes on a 2 MiB stack");
+    }
+
+    use super::*;
+
+    #[test]
+    fn malformed_derive_does_not_panic_and_valid_derive_extracts_traits() {
+        let broken = "#[derive)(]\nstruct Broken;\n#[derive)Clone(]\nenum AlsoBroken { A }\n";
+        let fd = parse_source(Path::new("broken.rs"), broken)
+            .expect("malformed derive must not panic")
+            .1;
+        assert_eq!(fd.classes.len(), 2);
+
+        let valid = "#[derive(Debug, Clone, PartialEq)]\npub struct Good {\n    pub x: i32,\n}\n";
+        let fd_valid = parse_source(Path::new("good.rs"), valid)
+            .expect("valid rust parses")
+            .1;
+        let info = fd_valid.classes[0]
+            .lang_info
+            .rust
+            .as_deref()
+            .expect("rust info present");
+        assert_eq!(info.derives, vec!["Debug", "Clone", "PartialEq"]);
+    }
+
+    #[test]
+    fn generic_and_path_qualified_impl_methods_attach_to_type() {
+        let src = r#"
+pub struct Wrapper<T> {
+    value: T,
+}
+
+impl<T> Wrapper<T> {
+    pub fn new(value: T) -> Self {
+        Self { value }
+    }
+}
+
+impl<T: Clone> Clone for Wrapper<T> {
+    fn clone(&self) -> Self {
+        Self { value: self.value.clone() }
+    }
+}
+
+impl<T> crate::m::Wrapper<T> {
+    pub fn get(&self) -> &T {
+        &self.value
+    }
+}
+"#;
+        let fd = parse_source(Path::new("wrapper.rs"), src)
+            .expect("valid rust parses")
+            .1;
+        assert_eq!(fd.classes.len(), 1);
+        let wrapper = &fd.classes[0];
+        assert_eq!(wrapper.name, "Wrapper");
+
+        let method_names: Vec<&str> = wrapper.methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(method_names, vec!["new", "clone", "get"]);
+
+        let method_ids: Vec<&str> = wrapper.methods.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            method_ids,
+            vec![
+                "method_Wrapper_new::wrapper.rs",
+                "method_Wrapper_clone::wrapper.rs",
+                "method_Wrapper_get::wrapper.rs",
+            ]
+        );
+
+        let clone_info = wrapper.methods[1]
+            .lang_info
+            .rust
+            .as_deref()
+            .expect("rust info on clone");
+        assert!(clone_info.is_trait_impl_method);
+        assert_eq!(clone_info.trait_name.as_deref(), Some("Clone"));
+    }
 }
