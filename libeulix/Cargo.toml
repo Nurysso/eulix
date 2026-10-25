@@ -3,7 +3,7 @@
 
 [package]
 name = "libeulix"
-version = "0.8.2"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.98.1"
 description = "Multi-language static analysis library: parses C, C++, Go, Java, JavaScript, PHP, Python, Rust, and TypeScript into a knowledge base with a project-wide resolved call graph."
