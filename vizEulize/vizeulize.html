@@ -151,7 +151,8 @@ const K='func|function|fn|method|ctor|ifacemethod|type|struct|class|interface|en
 const A=new RegExp('^('+K+')_(.*?)::(.*)$','s'),B=new RegExp('^('+K+')_(.+)$','s');
 const CAT=Object.assign(Object.create(null),{function:0,func:0,fn:0,method:1,ctor:1,ifacemethod:1,type:2,struct:2,class:2,interface:2,enum:2,trait:2,union:2,record:2,annotation:2,file:3,module:4,package:5});
 const HIER=/^(inheritance|inherits?|extends|implements)$/i;
-const pid=s=>{let m=A.exec(s);if(m)return[m[1],m[2],m[3]];m=B.exec(s);return m?[m[1],m[2],'']:['',s,''];};
+const nest=(k,n)=>{const r=k==='method'?n.slice(n.indexOf('_')+1):n;return /^(func|function|fn|method)$/.test(k)&&r.includes('.')?r.slice(r.lastIndexOf('.')+1).replace(/@\d+$/,''):n;};
+const pid=s=>{let m=A.exec(s);if(m)return[m[1],nest(m[1],m[2]),m[3]];m=B.exec(s);return m?[m[1],nest(m[1],m[2]),'']:['',s,''];};
 onmessage=e=>{
   const{id,buf}=e.data;
   try{
