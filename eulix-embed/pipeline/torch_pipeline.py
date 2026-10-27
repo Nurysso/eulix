@@ -17,6 +17,3 @@ class EmbeddingPipelineTorch(BaseEmbeddingPipeline[EmbeddingGeneratorTorch]):
 
     def _make_generator(self, model_name: str, device: str | None, batch_size: int | None) -> EmbeddingGeneratorTorch:
         return EmbeddingGeneratorTorch(model_name=model_name, device=device, batch_size=batch_size)
-
-    def _bacth_size_for(self, gen: EmbeddingGeneratorTorch, blen: int) -> int:
-        return gen.batch_size_for(blen)

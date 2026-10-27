@@ -12,13 +12,14 @@ import time
 from collections import defaultdict
 from typing import Any
 
+from embedders.mixins import BucketBatchMixin
 from utils.buckets import snap_to_bucket
 from utils.constants import BUCKETS_JINA, BUCKETS_STANDARD
 from utils.req import require_ml
 from utils.types import Chunk
 
 
-class EmbeddingGeneratorTorch:  # pylint: disable=too-many-instance-attributes
+class EmbeddingGeneratorTorch(BucketBatchMixin):  # pylint: disable=too-many-instance-attributes
     """
     Thin wrapper around a HuggingFace encoder model for batched embedding
     generation. Auto-detects the best available accelerator (CUDA, ROCm/HIP

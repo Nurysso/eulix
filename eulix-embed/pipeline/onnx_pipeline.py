@@ -19,6 +19,3 @@ class EmbeddingPipelineOnnx(BaseEmbeddingPipeline[EmbeddingGeneratorOnnx]):
 
     def _make_generator(self, model_name: str, device: str | None, batch_size: int | None) -> EmbeddingGeneratorOnnx:
         return EmbeddingGeneratorOnnx(model_name=model_name, device=device, batch_size=batch_size)
-
-    def _bacth_size_for(self, gen: EmbeddingGeneratorOnnx, blen: int) -> int:
-        return gen.batch_size_for(blen)
