@@ -250,11 +250,14 @@ func (cb *ContextBuilder) lookupCallGraphNode(entity string) (string, bool) {
 		if i := strings.Index(key, "::"); i != -1 {
 			key = key[:i]
 		}
+		if i := strings.Index(key, "@"); i != -1 {
+			key = key[:i]
+		}
 		if strings.ToLower(key) == entityLow {
 			return n.NodeType, true
 		}
 		for i := 0; i < len(key); i++ {
-			if key[i] == '_' && strings.ToLower(key[i+1:]) == entityLow {
+			if (key[i] == '_' || key[i] == '.') && strings.ToLower(key[i+1:]) == entityLow {
 				return n.NodeType, true
 			}
 		}

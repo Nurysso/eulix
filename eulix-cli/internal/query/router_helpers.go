@@ -122,13 +122,28 @@ func bareID(id string) string {
 			s := strings.TrimPrefix(id, prefix)
 			if prefix == "method_" {
 				if i := strings.Index(s, "_"); i != -1 {
+					if rest := s[i+1:]; strings.Contains(rest, ".") {
+						return nestedName(rest)
+					}
 					return s[:i] + "." + s[i+1:]
 				}
+			}
+			if prefix == "func_" {
+				return nestedName(s)
 			}
 			return s
 		}
 	}
 	return id
+}
+
+// nestedName reduces a nested function's scoped name ("outer.inner@12") to "inner".
+func nestedName(s string) string {
+	s = s[strings.LastIndex(s, ".")+1:]
+	if i := strings.Index(s, "@"); i != -1 {
+		s = s[:i]
+	}
+	return s
 }
 
 // hasSourceCode checks whether any context chunk contains an actual code fence.
@@ -849,8 +864,11 @@ func callGraphShortName(key string) string {
 		// For methods: "method_ClassName_methodName" → strip "ClassName_" too.
 		if prefix == "method_" {
 			if idx := strings.Index(after, "_"); idx != -1 {
-				return after[idx+1:] // "Analyzer_build_call_graph" → "build_call_graph"
+				return nestedName(after[idx+1:]) // "Analyzer_build_call_graph" → "build_call_graph"
 			}
+		}
+		if prefix == "func_" {
+			return nestedName(after)
 		}
 		return after
 	}
