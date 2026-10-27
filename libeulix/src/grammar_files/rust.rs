@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex, walk};
+use super::utils::{extract_todos, static_regex, walk, Nested};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
@@ -104,9 +104,12 @@ static OPERATOR_TRAIT_MAP: LazyLock<HashMap<&'static str, &'static str>> = LazyL
     m
 });
 
+const NESTED_KINDS: &[&str] = &["function_item"];
+
 pub struct RustParser {
     source_code: String,
     file_path: String,
+    nested: Nested,
 }
 
 impl RustParser {
@@ -114,6 +117,7 @@ impl RustParser {
         Self {
             source_code,
             file_path,
+            nested: Nested::default(),
         }
     }
 
@@ -128,13 +132,16 @@ impl RustParser {
             .ok_or_else(|| "Failed to parse Rust file".to_string())?;
 
         let root = tree.root_node();
+        let mut functions = self.extract_functions(&root);
+        let classes = self.extract_structs_and_enums(&root);
+        functions.extend(self.nested.take());
 
         Ok(FileData {
             language: "rust".to_string(),
             loc: self.count_lines(),
             imports: self.extract_imports(&root),
-            functions: self.extract_functions(&root),
-            classes: self.extract_structs_and_enums(&root),
+            functions,
+            classes,
             global_vars: self.extract_global_vars(&root),
             todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
@@ -448,10 +455,16 @@ impl RustParser {
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
         let signature = self.build_signature(&name, &params, &return_type, is_async);
-        let id = self.make_function_id(&name, struct_context);
+        let id = self
+            .nested
+            .id(|| self.make_function_id(&name, struct_context));
 
         let (calls, variables, control_flow, complexity, uses_try_operator, macro_calls) =
             if let Some(body) = node.child_by_field_name("body") {
+                self.nested
+                    .collect(body, NESTED_KINDS, &id, &self.source_code, |n| {
+                        self.parse_function(&n, "", None)
+                    });
                 (
                     self.extract_function_calls_detailed(&body),
                     self.extract_variables(&body, &params),
@@ -980,6 +993,9 @@ impl RustParser {
         context: &str,
     ) {
         walk(*node, context, |node, context| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             let child_context = match node.kind() {
@@ -1042,6 +1058,9 @@ impl RustParser {
     fn detect_try_operator(&self, node: &Node) -> bool {
         let mut found = false;
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             if found {
                 return None;
             }
@@ -1070,6 +1089,9 @@ impl RustParser {
         result: &mut Vec<String>,
     ) {
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
             // tree-sitter-rust names macro invocations "macro_invocation"
             if node.kind() == "macro_invocation" {
@@ -1117,6 +1139,9 @@ impl RustParser {
 
     fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             match node.kind() {
@@ -1175,6 +1200,9 @@ impl RustParser {
 
     fn extract_control_structures(&self, node: &Node, cf: &mut ControlFlow) {
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             match node.kind() {
@@ -1235,6 +1263,9 @@ impl RustParser {
 
     fn find_call_names(&self, node: &Node, calls: &mut Vec<String>, seen: &mut HashSet<String>) {
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             if node.kind() == "call_expression" {
@@ -1253,6 +1284,9 @@ impl RustParser {
     fn find_return_value(&self, node: &Node) -> Option<String> {
         let mut result = None;
         walk(*node, (), |child, _| {
+            if NESTED_KINDS.contains(&child.kind()) {
+                return None;
+            }
             if result.is_some() {
                 return None;
             }
@@ -1295,6 +1329,9 @@ impl RustParser {
     fn calculate_complexity(&self, node: &Node) -> usize {
         let mut complexity = 1;
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
             match node.kind() {
                 "if_expression" | "match_expression" | "loop_expression" | "while_expression"
