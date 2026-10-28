@@ -93,6 +93,31 @@ mod tests {
         }
     }
 
+    fn kb(structure: HashMap<String, FileData>) -> KnowledgeBase {
+        KnowledgeBase {
+            metadata: crate::struc::kb_struct::Metadata {
+                version: "1.0".to_string(),
+                git_hash: "".to_string(),
+                project_name: "test".to_string(),
+                project_hash: "".to_string(),
+                parsed_at: "".to_string(),
+                languages: vec![],
+                total_files: 1,
+                total_loc: 20,
+                total_functions: 0,
+                total_classes: 1,
+                total_methods: 1,
+            },
+            structure,
+            call_graph: Default::default(),
+            dependency_graph: Default::default(),
+            indices: Default::default(),
+            entry_points: vec![],
+            external_dependencies: vec![],
+            patterns: Default::default(),
+        }
+    }
+
     #[test]
     fn test_generate_indices_view_files_by_category_and_method_calls() {
         let mut structure = BTreeMap::new();
