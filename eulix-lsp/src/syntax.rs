@@ -82,6 +82,8 @@ pub struct Func {
     pub id: String,
     pub name: String,
     pub signature: String,
+    // PHP declaration namespace, without a leading separator.
+    pub php_namespace: String,
     pub doc: String,
     // Rendered `name: type` pairs, for hover and completion detail.
     pub params: Vec<Param>,
@@ -131,6 +133,9 @@ pub struct Klass {
     pub id: String,
     pub name: String,
     pub bases: Vec<String>,
+    pub php_namespace: String,
+    // Unlike bases, excludes interfaces and traits.
+    pub php_parent: Option<String>,
     pub doc: String,
     pub line_start: usize,
     pub line_end: usize,
@@ -351,6 +356,7 @@ fn convert_function(f: &libeulix::struc::kb_struct::Function) -> Func {
         id: f.id.clone(),
         name: f.name.clone(),
         signature: f.signature.clone(),
+        php_namespace: php.and_then(|i| i.namespace.clone()).unwrap_or_default(),
         doc: f.docstring.clone(),
         params: f
             .params
@@ -449,6 +455,8 @@ fn convert_class(c: &libeulix::struc::kb_struct::Class) -> Klass {
         id: c.id.clone(),
         name: c.name.clone(),
         bases: c.bases.clone(),
+        php_namespace: php.and_then(|i| i.namespace.clone()).unwrap_or_default(),
+        php_parent: php.and_then(|i| i.extends.first().cloned()),
         doc: c.docstring.clone(),
         line_start: c.line_start,
         line_end: c.line_end,
