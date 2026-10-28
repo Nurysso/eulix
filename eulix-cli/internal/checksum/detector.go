@@ -3,7 +3,8 @@
 
 // Package checksum handles project-level source file hashing and change detection.
 /*
-It walks the configured project directory, hashes each source file with xxh3,
+It walks the configured project directory, hashes each source file's size and
+mtime with xxh3 (matching the Rust parser, which never reads contents here),
 and produces a combined project hash used by eulix to detect whether
 re-analysis is needed.
 
@@ -19,9 +20,9 @@ package checksum
 
 import (
 	"bufio"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -38,8 +39,7 @@ import (
 	"eulix/internal/utils"
 )
 
-// FileEntry stores enough metadata per file to allow cheap "did this file
-// possibly change" checks (mtime/size) before paying for a full xxh3 hash.
+// FileEntry stores per-file metadata; Hash is MetaHash(Size, ModTime).
 type FileEntry struct {
 	Hash    string `json:"hash"`
 	Size    int64  `json:"size"`
@@ -393,9 +393,8 @@ func slashKeys(m map[string]FileEntry) map[string]FileEntry {
 	return out
 }
 
-func (d *Detector) scan(stored *Checksum) (*Checksum, error) {
+func (d *Detector) scan(_ *Checksum) (*Checksum, error) {
 	files := make(map[string]FileEntry)
-	prev := slashKeys(stored.Files)
 
 	root := d.projectPath
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
@@ -437,15 +436,7 @@ func (d *Detector) scan(stored *Checksum) (*Checksum, error) {
 
 		key := filepath.ToSlash(rel)
 		entry := FileEntry{Size: info.Size(), ModTime: info.ModTime().UnixNano()}
-		if old, ok := prev[key]; ok && old.Size == entry.Size && old.ModTime == entry.ModTime {
-			entry.Hash = old.Hash
-		} else {
-			h, err := hashFile(p)
-			if err != nil {
-				return nil
-			}
-			entry.Hash = h
-		}
+		entry.Hash = MetaHash(entry.Size, entry.ModTime)
 		files[key] = entry
 		return nil
 	})
@@ -545,16 +536,10 @@ func compare(stored, current *Checksum) (added, deleted, modified int, ratio flo
 	return
 }
 
-func hashFile(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = f.Close() }()
-
-	h := xxh3.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%016x", h.Sum64()), nil
+// MetaHash must match the Rust FileWalker: xxh3 of size then mtime, both little-endian.
+func MetaHash(size, modTime int64) string {
+	var b [16]byte
+	binary.LittleEndian.PutUint64(b[:8], uint64(size))
+	binary.LittleEndian.PutUint64(b[8:], uint64(modTime))
+	return fmt.Sprintf("%016x", xxh3.Hash(b[:]))
 }
