@@ -81,6 +81,7 @@
 //!   parse and not a complete failure
 
 mod analysis_pipeline;
+mod cache;
 mod engine;
 mod memory;
 mod os_io;
@@ -151,11 +152,6 @@ pub struct Args {
     /// Write a TSV report listing every partial and failed file (useful for diffing runs)
     #[arg(short = 'P', long)]
     parse_report: Option<String>,
-
-    /// Resume from a previous interrupted run by reusing the spill file
-    /// (only valid with --no-analyze)
-    #[arg(short = 'u', long)]
-    resume: bool,
 }
 
 pub fn validate_prism_input(val: &str) -> Result<u8, String> {
@@ -232,12 +228,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", "═".repeat(64));
     }
 
-    if args.resume && !args.no_analyze {
-        return Err(
-            "--resume requires --no-analyze (analysis needs a full in-memory FileData map)".into(),
-        );
-    }
-
     if args.verbose {
         println!("\n PHASE 1: FILE DISCOVERY & PARSING");
         println!("{}", "─".repeat(64));
@@ -251,7 +241,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         version,
         bin_hash,
         &write_dir,
-        args.resume,
         &engine,
     )?;
     if std::env::var_os("EULIX_FIELD_REPORT").is_some() {

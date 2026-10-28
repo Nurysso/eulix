@@ -44,17 +44,18 @@ fn write_go_fixture(root: &Path) {
     fs::write(root.join("orphans.go"), format!("package p\n\n{methods}")).unwrap();
 }
 
-fn run_parser(root: &Path, out: &Path, threads: &str) {
+fn run_parser(root: &Path, out: &Path, threads: &str) -> String {
     fs::create_dir_all(out).unwrap();
-    let status = Command::new(env!("CARGO_BIN_EXE_eulix_parser"))
+    let output = Command::new(env!("CARGO_BIN_EXE_eulix_parser"))
         .arg("-r")
         .arg(root)
         .arg("-o")
         .arg(out.join("kb.json"))
-        .args(["-t", threads, "-p", "2"])
-        .status()
+        .args(["-t", threads, "-p", "2", "-v"])
+        .output()
         .unwrap();
-    assert!(status.success());
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap()
 }
 
 // Blanks the value of each volatile key in place, so every other byte is still compared.
@@ -81,8 +82,55 @@ fn output_is_identical_across_thread_counts() {
     let (one, eight) = (tmp.path().join("t1"), tmp.path().join("t8"));
     run_parser(&root, &one, "1");
     run_parser(&root, &eight, "8");
+    assert_same_outputs(&one, &eight);
+}
 
-    let mut names: Vec<_> = fs::read_dir(&one)
+#[test]
+fn incremental_run_matches_a_fresh_full_parse() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proj");
+    write_fixture(&root);
+    write_go_fixture(&root);
+    fs::write(
+        root.join("app.php"),
+        "<?php\nrequire_once __DIR__ . '/lib.php';\nfunction main() { return helper(); }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("lib.php"),
+        "<?php\nfunction helper() { return 1; }\n",
+    )
+    .unwrap();
+
+    let (inc, full) = (tmp.path().join("inc"), tmp.path().join("full"));
+    assert!(run_parser(&root, &inc, "4").contains("Reused 0 cached files"));
+
+    fs::write(
+        root.join("pkg0/m0.py"),
+        "def handler_0(x):\n    return helper(x)\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("lib.php"),
+        "<?php\nfunction helper() { return extra(); }\nfunction extra() { return 2; }\n",
+    )
+    .unwrap();
+    fs::remove_file(root.join("pkg1/m1.py")).unwrap();
+    fs::write(
+        root.join("pkg2/added.rs"),
+        "pub fn added() -> i32 { run() }\n",
+    )
+    .unwrap();
+
+    // 363 files: one added, two modified, the rest unchanged.
+    let stdout = run_parser(&root, &inc, "4");
+    assert!(stdout.contains("Reused 360 cached files"), "{stdout}");
+    run_parser(&root, &full, "4");
+    assert_same_outputs(&inc, &full);
+}
+
+fn assert_same_outputs(a: &Path, b: &Path) {
+    let mut names: Vec<_> = fs::read_dir(a)
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .filter(|n| n.ends_with(".json"))
@@ -91,8 +139,8 @@ fn output_is_identical_across_thread_counts() {
     assert_eq!(names.len(), 8, "{names:?}");
 
     for name in names {
-        let a = blank_volatile(fs::read_to_string(one.join(&name)).unwrap());
-        let b = blank_volatile(fs::read_to_string(eight.join(&name)).unwrap());
-        assert!(a == b, "{name} differs between -t 1 and -t 8");
+        let x = blank_volatile(fs::read_to_string(a.join(&name)).unwrap());
+        let y = blank_volatile(fs::read_to_string(b.join(&name)).unwrap());
+        assert!(x == y, "{name} differs between {a:?} and {b:?}");
     }
 }

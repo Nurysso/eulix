@@ -8,23 +8,39 @@ use rustc_hash::FxHashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::cache::{self, Cached, ParseCache};
 use crate::os_io;
 use crate::parse::slim::{slim, strip_emitted};
-use crate::spill::{ParsedFileResult, Spill};
+use crate::spill::Spill;
 use crate::views::FileDataSimpleView;
 
 use libeulix::grammar_files;
 use libeulix::grammar_files::language::Language;
 use libeulix::grammar_files::php;
+use libeulix::struc::kb_struct::FileData;
 use libeulix::utils::file_walker::FileWalker;
+use xxhash_rust::xxh3::xxh3_128;
 
+/// The `bool` is true when the file came from the cache instead of a parse.
 pub fn parse_file(
     file_path: &Path,
     root: &Path,
     spill: &Spill,
-) -> Result<ParsedFileResult, Box<dyn std::error::Error>> {
-    // ) -> Result<(String, FileData, SpillLoc, Vec<(String, String)>), Box<dyn std::error::Error>> {
+    slim_spill: &Spill,
+    cache: &ParseCache,
+) -> Result<(String, FileData, Cached, bool), Box<dyn std::error::Error>> {
     let relative_path = rel_path(file_path, root);
+
+    // Stat before reading: an edit in between leaves a newer mtime, which
+    // the next run catches.
+    let (size, mtime) =
+        std::fs::metadata(file_path).map_or((0, 0), |m| (m.len(), cache::mtime(&m)));
+    let cached = cache.lookup(&relative_path);
+    if let Some(c) = cached.filter(|c| cache.fresh(c, size, mtime)) {
+        if let Some((fd, c)) = cache.reuse(&relative_path, c, size, mtime, spill, slim_spill) {
+            return Ok((relative_path, fd, c, true));
+        }
+    }
 
     // Open once, for the OS-level read hints. Read the bytes through this
     // handle so the fadvise / sequential-scan flags actually apply.
@@ -33,6 +49,13 @@ pub fn parse_file(
     {
         let mut reader = std::io::BufReader::new(&file);
         reader.read_to_end(&mut bytes)?;
+    }
+
+    let hash = xxh3_128(&bytes);
+    if let Some(c) = cached.filter(|c| c.hash == hash) {
+        if let Some((fd, c)) = cache.reuse(&relative_path, c, size, mtime, spill, slim_spill) {
+            return Ok((relative_path, fd, c, true));
+        }
     }
 
     // Older code often has Latin-1 comments or strings. Replacing the
@@ -91,7 +114,16 @@ pub fn parse_file(
     slim(&mut result);
     strip_emitted(&mut result);
 
-    Ok((relative_path, result, loc, raw_imports))
+    let cached = Cached {
+        size,
+        mtime,
+        hash,
+        syntax: result.syntax,
+        raw_imports,
+        emit: loc,
+        slim: slim_spill.append(&relative_path, &serde_json::to_vec(&result)?)?,
+    };
+    Ok((relative_path, result, cached, false))
 }
 
 pub fn collect_source_files_and_hash(
@@ -247,7 +279,6 @@ mod tests {
             "0.8.1",
             "test",
             out.path(),
-            false,
             &engine,
         )
         .unwrap();
@@ -275,7 +306,6 @@ mod tests {
             "0.8.1",
             "test",
             out.path(),
-            false,
             &engine,
         )
         .unwrap();
@@ -319,7 +349,6 @@ mod tests {
             "0.8.1",
             "test",
             out.path(),
-            false,
             &engine,
         )
         .unwrap();
