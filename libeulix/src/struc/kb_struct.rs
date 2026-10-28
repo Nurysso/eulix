@@ -3,15 +3,15 @@
 
 use crate::utils::syntax::SyntaxHealth;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Serialize, Default)]
 pub struct IndicesView<'a> {
-    pub functions_by_name: HashMap<&'a str, Vec<String>>,
-    pub functions_calling: HashMap<&'a str, Vec<&'a str>>,
-    pub functions_by_tag: HashMap<&'a str, Vec<&'a str>>,
-    pub types_by_name: HashMap<&'a str, Vec<String>>,
-    pub files_by_category: HashMap<&'a str, Vec<&'a str>>,
+    pub functions_by_name: BTreeMap<&'a str, Vec<String>>,
+    pub functions_calling: BTreeMap<&'a str, Vec<&'a str>>,
+    pub functions_by_tag: BTreeMap<&'a str, Vec<&'a str>>,
+    pub types_by_name: BTreeMap<&'a str, Vec<String>>,
+    pub files_by_category: BTreeMap<&'a str, Vec<&'a str>>,
 }
 
 /// kb_metrics.json metadata + top-K complex functions
@@ -34,7 +34,7 @@ pub struct FunctionMetric<'a> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KnowledgeBase {
     pub metadata: Metadata,
-    pub structure: HashMap<String, FileData>,
+    pub structure: BTreeMap<String, FileData>,
     pub call_graph: CallGraph,
     pub dependency_graph: DependencyGraph,
     pub indices: Indices,
@@ -310,11 +310,11 @@ pub struct GraphEdge {
 // Fast lookup indices
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Indices {
-    pub functions_by_name: HashMap<String, Vec<String>>, // name -> [file:line]
-    pub functions_calling: HashMap<String, Vec<String>>, // callee -> [callers]
-    pub functions_by_tag: HashMap<String, Vec<String>>,
-    pub types_by_name: HashMap<String, Vec<String>>,
-    pub files_by_category: HashMap<String, Vec<String>>,
+    pub functions_by_name: BTreeMap<String, Vec<String>>, // name -> [file:line]
+    pub functions_calling: BTreeMap<String, Vec<String>>, // callee -> [callers]
+    pub functions_by_tag: BTreeMap<String, Vec<String>>,
+    pub types_by_name: BTreeMap<String, Vec<String>>,
+    pub files_by_category: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

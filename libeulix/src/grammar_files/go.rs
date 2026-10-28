@@ -6,7 +6,7 @@ use super::utils::{extract_todos, walk};
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use tree_sitter::{Node, Parser};
 
@@ -765,7 +765,7 @@ impl GoParser {
     }
 
     fn extract_variables(&self, node: &Node, params: &[Parameter]) -> Vec<Variable> {
-        let mut variables: HashMap<String, Variable> = HashMap::new();
+        let mut variables: BTreeMap<String, Variable> = BTreeMap::new();
 
         for param in params {
             variables.insert(
@@ -800,7 +800,7 @@ impl GoParser {
             .collect()
     }
 
-    fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
+    fn track_variable_usage(&self, node: &Node, variables: &mut BTreeMap<String, Variable>) {
         walk(*node, (), |node, _| {
             let node = &node;
             match node.kind() {
@@ -1053,7 +1053,7 @@ impl GoParser {
         }
 
         // Second pass: find methods for structs
-        let mut methods_map: HashMap<String, Vec<Function>> = HashMap::new();
+        let mut methods_map: BTreeMap<String, Vec<Function>> = BTreeMap::new();
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {

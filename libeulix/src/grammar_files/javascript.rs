@@ -6,7 +6,7 @@ use super::utils::{extract_todos, static_regex, walk};
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::str;
 use std::sync::LazyLock;
@@ -768,7 +768,7 @@ impl JsParser {
 
     // Variables
     fn extract_variables(&self, body: &Node, params: &[Parameter]) -> Vec<Variable> {
-        let mut variables: HashMap<String, Variable> = HashMap::new();
+        let mut variables: BTreeMap<String, Variable> = BTreeMap::new();
         for param in params {
             if param.type_annotation != "destructured" {
                 variables.insert(
@@ -789,7 +789,7 @@ impl JsParser {
         variables.into_values().collect()
     }
 
-    fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
+    fn track_variable_usage(&self, node: &Node, variables: &mut BTreeMap<String, Variable>) {
         walk(*node, (), |node, _| {
             let node = &node;
             if node.kind() == "lexical_declaration" || node.kind() == "variable_declaration" {

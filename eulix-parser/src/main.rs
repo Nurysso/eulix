@@ -169,7 +169,27 @@ pub fn validate_prism_input(val: &str) -> Result<u8, String> {
     }
 }
 
-pub fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub fn main() {
+    let code = match run() {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("Error: {e:?}");
+            1
+        }
+    };
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    // rpmalloc's exit-time finalizer unmaps heaps while detached rayon workers
+    // are still finalizing theirs (SIGSEGV on large runs); the OS reclaims it all anyway.
+    #[cfg(unix)]
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::_exit(code)
+    }
+    #[cfg(not(unix))]
+    std::process::exit(code)
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(unix)]
     #[allow(unsafe_code)]
     unsafe {

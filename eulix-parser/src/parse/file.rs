@@ -24,11 +24,7 @@ pub fn parse_file(
     spill: &Spill,
 ) -> Result<ParsedFileResult, Box<dyn std::error::Error>> {
     // ) -> Result<(String, FileData, SpillLoc, Vec<(String, String)>), Box<dyn std::error::Error>> {
-    let relative_path = file_path
-        .strip_prefix(root)
-        .unwrap_or(file_path)
-        .to_string_lossy()
-        .to_string();
+    let relative_path = rel_path(file_path, root);
 
     // Open once, for the OS-level read hints. Read the bytes through this
     // handle so the fadvise / sequential-scan flags actually apply.
@@ -215,11 +211,14 @@ pub fn open_source_file(path: &Path) -> std::io::Result<std::fs::File> {
 
 pub fn rel_path(file: &Path, root: &Path) -> String {
     // Relative path as a String. If the file isn't under root, fall back
-    // to the original path instead of failing.
-    file.strip_prefix(root)
-        .unwrap_or(file)
-        .to_string_lossy()
-        .into_owned()
+    // to the original path instead of failing. Always `/`-separated so
+    // keys and sort order match across platforms.
+    let rel = file.strip_prefix(root).unwrap_or(file).to_string_lossy();
+    if std::path::MAIN_SEPARATOR == '\\' {
+        rel.replace('\\', "/")
+    } else {
+        rel.into_owned()
+    }
 }
 
 pub fn language_label(file: &Path) -> String {

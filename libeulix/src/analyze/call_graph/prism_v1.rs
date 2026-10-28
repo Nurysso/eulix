@@ -16,7 +16,7 @@ use crate::struc::kb_struct::{
     CallGraph, CallGraphEdge, CallGraphNode, CallerInfo, FileData, KnowledgeBase,
 };
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Internal, compact representation of a node.
 ///
@@ -58,7 +58,7 @@ struct CompactNode {
 /// exactly the extra work v2 exists to do. Recording but not using them
 /// keeps this path's cost profile flat while still leaving the data
 /// available to callers who want it.
-pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
+pub fn build_call_graph(structure: &BTreeMap<String, FileData>) -> CallGraph {
     const CHUNK_SIZE: usize = 2000;
 
     // Node collection happens before edge resolution because every edge
@@ -484,7 +484,7 @@ mod tests {
     use super::*;
     mod resolve_indirect_call_tests {
         use super::*;
-        use std::collections::HashMap;
+        use std::collections::{BTreeMap, HashMap};
 
         #[test]
         fn direct_hit_wins_over_symbol_index() {
@@ -541,7 +541,7 @@ mod tests {
             use crate::grammar_files::parse_source;
             use std::path::Path;
 
-            let mut structure = HashMap::new();
+            let mut structure = BTreeMap::new();
             let (_, fd_a) =
                 parse_source(Path::new("a.py"), "def caller():\n    target()\n").unwrap();
             let (_, fd_b) = parse_source(
@@ -582,7 +582,7 @@ mod tests {
             use crate::struc::kb_struct::{DependencyGraph, Indices, Metadata, PatternInfo};
             use std::path::Path;
 
-            fn kb_from(structure: HashMap<String, FileData>) -> KnowledgeBase {
+            fn kb_from(structure: BTreeMap<String, FileData>) -> KnowledgeBase {
                 KnowledgeBase {
                     metadata: Metadata {
                         version: String::new(),
@@ -620,13 +620,13 @@ mod tests {
                 )))
                 .collect();
 
-            let mut forward_map = HashMap::new();
+            let mut forward_map = BTreeMap::new();
             for (path, src) in &files {
                 let (_, fd) = parse_source(Path::new(path), src).unwrap();
                 forward_map.insert(path.clone(), fd);
             }
 
-            let mut reverse_map = HashMap::new();
+            let mut reverse_map = BTreeMap::new();
             for (path, src) in files.iter().rev() {
                 let (_, fd) = parse_source(Path::new(path), src).unwrap();
                 reverse_map.insert(path.clone(), fd);

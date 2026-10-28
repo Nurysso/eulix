@@ -4,7 +4,8 @@
 use crate::stats::{lang_counts, FailedFile, ParseStats, PartialFile};
 use libeulix::grammar_files::php;
 use libeulix::struc::kb_struct::FileData;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
+use std::collections::BTreeSet;
 
 /// Per-rayon-worker accumulator (fold) that is later merged (reduce).
 #[derive(Default)]
@@ -14,7 +15,7 @@ pub struct Acc {
     pub functions: usize,
     pub classes: usize,
     pub methods: usize,
-    pub languages: FxHashSet<String>,
+    pub languages: BTreeSet<String>,
     pub stats: ParseStats,
     pub index: Vec<(String, u64, u32)>,
     pub raw_imports: Vec<(String, String, String)>,

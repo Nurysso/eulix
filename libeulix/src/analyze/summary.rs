@@ -3,7 +3,7 @@
 
 use crate::struc::kb_struct::{FileData, KnowledgeBase, PatternInfo};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ProjectSummary {
@@ -11,7 +11,7 @@ pub struct ProjectSummary {
     pub total_files: usize,
     pub total_loc: usize,
     pub languages: Vec<String>,
-    pub categories: HashMap<String, Vec<String>>,
+    pub categories: BTreeMap<String, Vec<String>>,
     pub key_features: Vec<String>,
     pub entry_points: Vec<String>,
     pub dependencies: DependencyInfo,
@@ -55,8 +55,8 @@ pub fn generate_summary(kb: &KnowledgeBase) -> ProjectSummary {
     }
 }
 
-pub fn categorize_files(structure: &HashMap<String, FileData>) -> HashMap<String, Vec<String>> {
-    let mut categories: HashMap<String, Vec<String>> = HashMap::new();
+pub fn categorize_files(structure: &BTreeMap<String, FileData>) -> BTreeMap<String, Vec<String>> {
+    let mut categories: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     for (filepath, filedata) in structure {
         let category = classify_file(filepath, filedata);
@@ -117,15 +117,10 @@ pub fn extract_key_features(kb: &KnowledgeBase) -> Vec<String> {
     key_features(&kb.structure)
 }
 
-fn key_features(structure: &HashMap<String, FileData>) -> Vec<String> {
+fn key_features(structure: &BTreeMap<String, FileData>) -> Vec<String> {
     // Capped at 10 because this feeds a human-facing summary — an
     // unbounded list would defeat the point of a quick overview.
     const MAX_FEATURES: usize = 10;
-
-    // Files are walked in path order so the same project always yields the
-    // same list: HashMap and HashSet iteration order changes on every run.
-    let mut paths: Vec<&String> = structure.keys().collect();
-    paths.sort();
 
     // The set dedupes near-identical docstring openers that show up
     // repeatedly across a codebase (boilerplate docstrings, copy-pasted
@@ -133,8 +128,7 @@ fn key_features(structure: &HashMap<String, FileData>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut features = Vec::new();
 
-    for path in paths {
-        let filedata = &structure[path];
+    for filedata in structure.values() {
         let docstrings = filedata
             .functions
             .iter()
@@ -218,7 +212,7 @@ mod tests {
 
     #[test]
     fn key_features_follow_path_order_and_stop_at_ten() {
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         for i in (0..12).rev() {
             let doc = format!("Feature number {i:02} of the project. More text.");
             structure.insert(format!("src/f{i:02}.py"), file(&[&doc], &[]));
@@ -234,7 +228,7 @@ mod tests {
 
     #[test]
     fn key_features_skip_tags_and_repeats() {
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert(
             "a.php".to_string(),
             file(

@@ -63,11 +63,11 @@ pub fn generate_indices_view(kb: &KnowledgeBase) -> IndicesView<'_> {
 mod tests {
     use super::*;
     use crate::struc::kb_struct::{Class, FileData, Function, FunctionCall};
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_generate_indices_view_files_by_category_and_method_calls() {
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
 
         let mut class = Class {
             id: "src/api_handler.py::Handler".to_string(),
