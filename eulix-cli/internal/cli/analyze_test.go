@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/zeebo/xxh3"
 
 	"eulix/internal/checksum"
 	"eulix/internal/config"
@@ -60,16 +59,12 @@ func (f *analysisFixture) pipeline(_ string, _ *config.Config) error {
 	for _, name := range []string{"kb.json", "kb_index.json", "kb_call_graph.json"} {
 		f.write(filepath.Join(utils.EulixDir, name), "{\"complete\":true}\n")
 	}
-	source, err := os.ReadFile(filepath.Join(f.root, "app.go"))
-	if err != nil {
-		f.t.Fatal(err)
-	}
 	info, err := os.Stat(filepath.Join(f.root, "app.go"))
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	baseline := checksum.Checksum{Files: map[string]checksum.FileEntry{
-		"app.go": {Hash: fmt.Sprintf("%016x", xxh3.Hash(source)), Size: info.Size(), ModTime: info.ModTime().UnixNano()},
+		"app.go": {Hash: checksum.MetaHash(info.Size(), info.ModTime().UnixNano()), Size: info.Size(), ModTime: info.ModTime().UnixNano()},
 	}}
 	data, err := json.Marshal(baseline)
 	if err != nil {
