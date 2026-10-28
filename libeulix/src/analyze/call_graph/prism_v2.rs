@@ -40,6 +40,7 @@ use std::collections::{BTreeMap, HashMap};
 
 mod php;
 use crate::grammar_files::php::FALLBACK_TAG;
+use crate::grammar_files::utils::NESTED_TAG;
 use php::{include_closures, php_name, php_namespace, IncludeIndex, PhpHierarchy};
 
 type Map<K, V> = HashMap<K, V>;
@@ -131,6 +132,8 @@ struct Node<'a> {
     /// PHP `static` method.
     php_static: bool,
     owner: Option<&'a str>,
+    /// Declared in another function's body, see `NESTED_TAG`.
+    nested: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -502,6 +505,15 @@ impl<'a> Resolver<'a> {
         (best.map(|k| k.3), eligible)
     }
 
+    /// A function declared in `caller`'s body: only `caller` can call it.
+    fn nested_in(&self, caller: &str, callee: &str) -> Option<u32> {
+        let (scope, file) = caller.split_once("::")?;
+        let &i = self
+            .node_map
+            .get(format!("{scope}.{callee}::{file}").as_str())?;
+        self.nodes[i as usize].nested.then_some(i)
+    }
+
     /// Restrict a name lookup to files belonging to a resolved import.
     /// `fs` is sorted, so the inner filter is a binary search per candidate.
     fn lookup_in_files(
@@ -797,6 +809,7 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                     .push(build_file_imports(fd, &module_index, &include_index, path));
                 let php = fd.language == "php";
                 for func in &fd.functions {
+                    let nested = func.tags.iter().any(|t| t.as_str() == NESTED_TAG);
                     ex.nodes.push(Node {
                         id: &func.id,
                         name: if php {
@@ -804,7 +817,7 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                         } else {
                             Cow::Borrowed(bare_name(&func.id))
                         },
-                        kind: if func.id.starts_with("method_") {
+                        kind: if func.id.starts_with("method_") && !nested {
                             Kind::Method
                         } else {
                             Kind::Function
@@ -814,6 +827,7 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                         fallback: func.tags.iter().any(|t| t.as_str() == FALLBACK_TAG),
                         php_static: false,
                         owner: None,
+                        nested,
                     });
                 }
                 for class in &fd.classes {
@@ -830,6 +844,7 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                         fallback: false,
                         php_static: false,
                         owner: None,
+                        nested: false,
                     });
                     for base in &class.bases {
                         ex.bases.push(BaseRef {
@@ -874,6 +889,7 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                             fallback: false,
                             php_static: m.lang_info.php.as_ref().is_some_and(|p| p.is_static),
                             owner: Some(&class.id),
+                            nested: false,
                         });
                     }
                 }
@@ -918,7 +934,7 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
 
     let php: Vec<bool> = files.iter().map(|f| f.1.language == "php").collect();
     let mut by_name: Map<&str, Vec<u32>> = Map::with_capacity(nodes.len());
-    for (i, n) in nodes.iter().enumerate() {
+    for (i, n) in nodes.iter().enumerate().filter(|(_, n)| !n.nested) {
         by_name.entry(n.name.as_ref()).or_default().push(i as u32);
     }
     // Class-method index, sorted for binary search by (class, name).
@@ -1016,7 +1032,8 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                                 php_namespace(&func.lang_info),
                             )
                         } else {
-                            r.resolve_call(&call.callee, f, None, false)
+                            r.nested_in(&func.id, &call.callee)
+                                .or_else(|| r.resolve_call(&call.callee, f, None, false))
                         };
                         if let Some(to) = to {
                             buf.push(RawEdge {
@@ -1048,7 +1065,9 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                                 let ns = php_namespace(&m.lang_info);
                                 r.resolve_php_call(&call.callee, f, Some(cidx), ns)
                             } else {
-                                r.resolve_call(&call.callee, f, Some(cidx), has_self)
+                                r.nested_in(&m.id, &call.callee).or_else(|| {
+                                    r.resolve_call(&call.callee, f, Some(cidx), has_self)
+                                })
                             };
                             if let Some(to) = to {
                                 buf.push(RawEdge {

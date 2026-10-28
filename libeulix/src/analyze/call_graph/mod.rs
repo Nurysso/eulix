@@ -10,6 +10,7 @@ mod tests {
 
     use crate::analyze::call_graph::prism_v1::build_call_graph;
     use crate::analyze::call_graph::prism_v2::build_call_graph_v2;
+    use crate::grammar_files::utils::NESTED_TAG;
     use crate::struc::kb_struct::{Class, FileData, Function, FunctionCall};
 
     fn func(id: &str, name: &str, calls: Vec<&str>) -> Function {
@@ -234,5 +235,80 @@ mod tests {
             .filter(|e| e.from == "func_f::a.c" && e.to == "func_g::a.c")
             .count();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn nested_function_is_only_visible_to_its_parent() {
+        let mut nested = func("func_outer.helper::a.rs", "helper", vec![]);
+        nested.tags.push(NESTED_TAG.to_string());
+        let mut structure = BTreeMap::new();
+        structure.insert(
+            "a.rs".to_string(),
+            filedata(
+                vec![
+                    nested,
+                    func("func_outer::a.rs", "outer", vec!["helper"]),
+                    func("func_helper::a.rs", "helper", vec![]),
+                    func("func_main::a.rs", "main", vec!["helper"]),
+                ],
+                vec![],
+            ),
+        );
+        let g = build_call_graph_v2(&structure);
+        let to = |from: &str| -> Vec<&str> {
+            g.edges
+                .iter()
+                .filter(|e| e.from == from)
+                .map(|e| e.to.as_str())
+                .collect()
+        };
+        assert_eq!(to("func_outer::a.rs"), ["func_outer.helper::a.rs"]);
+        assert_eq!(to("func_main::a.rs"), ["func_helper::a.rs"]);
+    }
+
+    fn nested(id: &str, name: &str) -> Function {
+        let mut f = func(id, name, vec![]);
+        f.tags.push(NESTED_TAG.to_string());
+        f
+    }
+
+    #[test]
+    fn nested_function_is_not_visible_from_other_files() {
+        let mut structure = BTreeMap::new();
+        structure.insert(
+            "a.rs".to_string(),
+            filedata(vec![nested("func_outer.helper::a.rs", "helper")], vec![]),
+        );
+        structure.insert(
+            "b.rs".to_string(),
+            filedata(
+                vec![func("func_main::b.rs", "main", vec!["helper"])],
+                vec![],
+            ),
+        );
+        let g = build_call_graph_v2(&structure);
+        assert!(!g.edges.iter().any(|e| e.from == "func_main::b.rs"));
+    }
+
+    #[test]
+    fn function_nested_in_a_method_is_a_function_called_by_that_method() {
+        let class = Class {
+            id: "struct_S::a.rs".to_string(),
+            name: "S".to_string(),
+            methods: vec![func("method_S_m::a.rs", "m", vec!["h"])],
+            ..Default::default()
+        };
+        let mut structure = BTreeMap::new();
+        structure.insert(
+            "a.rs".to_string(),
+            filedata(vec![nested("method_S_m.h::a.rs", "h")], vec![class]),
+        );
+        let g = build_call_graph_v2(&structure);
+        assert!(g
+            .edges
+            .iter()
+            .any(|e| e.from == "method_S_m::a.rs" && e.to == "method_S_m.h::a.rs"));
+        let h = g.nodes.iter().find(|n| n.id == "method_S_m.h::a.rs");
+        assert_eq!(h.map(|n| n.node_type.as_str()), Some("function"));
     }
 }
