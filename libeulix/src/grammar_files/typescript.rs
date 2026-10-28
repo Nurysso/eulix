@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex};
+use super::utils::{extract_todos, static_regex, walk};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
@@ -133,6 +133,10 @@ impl TypeScriptParser {
         format!("class_{}::{}", name, self.file_path)
     }
 
+    fn make_interface_id(&self, name: &str) -> String {
+        format!("interface_{}::{}", name, self.file_path)
+    }
+
     fn count_lines(&self) -> usize {
         self.source_code.lines().count()
     }
@@ -232,27 +236,37 @@ impl TypeScriptParser {
                 "export_statement" | "ambient_declaration" => {
                     let mut ec = child.walk();
                     for inner in child.children(&mut ec) {
-                        if matches!(
-                            inner.kind(),
-                            "function_declaration" | "function" | "generator_function_declaration"
-                        ) {
-                            if let Some(func) = self.parse_function(&inner, "") {
-                                functions.push(func);
+                        match inner.kind() {
+                            "function_declaration"
+                            | "function"
+                            | "generator_function_declaration" => {
+                                if let Some(func) = self.parse_function(&inner, "") {
+                                    functions.push(func);
+                                }
                             }
+                            // `export const f = () => ...`
+                            "lexical_declaration" | "variable_declaration" => {
+                                self.collect_variable_functions(&inner, functions);
+                            }
+                            _ => {}
                         }
                     }
                 }
                 "lexical_declaration" | "variable_declaration" => {
-                    let mut vc = child.walk();
-                    for decl in child.children(&mut vc) {
-                        if decl.kind() == "variable_declarator" {
-                            if let Some(func) = self.parse_variable_function(&decl) {
-                                functions.push(func);
-                            }
-                        }
-                    }
+                    self.collect_variable_functions(&child, functions);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    fn collect_variable_functions(&self, declaration: &Node, functions: &mut Vec<Function>) {
+        let mut vc = declaration.walk();
+        for decl in declaration.children(&mut vc) {
+            if decl.kind() == "variable_declarator" {
+                if let Some(func) = self.parse_variable_function(&decl) {
+                    functions.push(func);
+                }
             }
         }
     }
@@ -266,7 +280,7 @@ impl TypeScriptParser {
 
         if !matches!(
             value.kind(),
-            "arrow_function" | "function" | "generator_function"
+            "arrow_function" | "function_expression" | "generator_function"
         ) {
             return None;
         }
@@ -566,7 +580,7 @@ impl TypeScriptParser {
             .unwrap_or_default();
 
         Some(Class {
-            id: format!("interface_{}", name),
+            id: self.make_interface_id(&name),
             name,
             bases,
             docstring,
@@ -649,7 +663,7 @@ impl TypeScriptParser {
                             if let Some(v) = &value {
                                 if matches!(
                                     v.kind(),
-                                    "arrow_function" | "function" | "generator_function"
+                                    "arrow_function" | "function_expression" | "generator_function"
                                 ) {
                                     continue;
                                 }
@@ -690,49 +704,48 @@ impl TypeScriptParser {
         seen: &mut HashSet<String>,
         context: &str,
     ) {
-        let mut cursor = node.walk();
+        walk(*node, context, |node, context| {
+            let node = &node;
 
-        let child_context = match node.kind() {
-            "if_statement" => "if",
-            "for_statement" | "for_in_statement" | "for_of_statement" | "while_statement"
-            | "do_statement" => "loop",
-            "switch_statement" => "switch",
-            "try_statement" => "try",
-            _ => context,
-        };
+            let child_context = match node.kind() {
+                "if_statement" => "if",
+                "for_statement" | "for_in_statement" | "for_of_statement" | "while_statement"
+                | "do_statement" => "loop",
+                "switch_statement" => "switch",
+                "try_statement" => "try",
+                _ => context,
+            };
 
-        if node.kind() == "call_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let call_text = self.get_node_text(&func_node);
-                let name = call_text
-                    .trim_start_matches("await ")
-                    .split('.')
-                    .next_back()
-                    .unwrap_or(&call_text)
-                    .trim()
-                    .to_string();
+            if node.kind() == "call_expression" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let call_text = self.get_node_text(&func_node);
+                    let name = call_text
+                        .trim_start_matches("await ")
+                        .split('.')
+                        .next_back()
+                        .unwrap_or(&call_text)
+                        .trim()
+                        .to_string();
 
-                if !name.is_empty() {
-                    let key = format!("{}:{}", name, node.start_position().row);
-                    if !seen.contains(&key) {
-                        seen.insert(key);
-                        let args = self.extract_call_arguments(node);
-                        calls.push(FunctionCall {
-                            callee: name,
-                            defined_in: None,
-                            line: node.start_position().row + 1,
-                            args,
-                            is_conditional: context != "unconditional",
-                            context: context.to_string(),
-                        });
+                    if !name.is_empty() {
+                        let key = format!("{}:{}", name, node.start_position().row);
+                        if !seen.contains(&key) {
+                            seen.insert(key);
+                            let args = self.extract_call_arguments(node);
+                            calls.push(FunctionCall {
+                                callee: name,
+                                defined_in: None,
+                                line: node.start_position().row + 1,
+                                args,
+                                is_conditional: context != "unconditional",
+                                context: context.to_string(),
+                            });
+                        }
                     }
                 }
             }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.find_calls_recursive(&child, calls, seen, child_context);
-        }
+            Some(child_context)
+        });
     }
 
     fn extract_call_arguments(&self, call_node: &Node) -> Vec<String> {
@@ -777,53 +790,52 @@ impl TypeScriptParser {
     }
 
     fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        match node.kind() {
-            "lexical_declaration" | "variable_declaration" => {
-                let mut vc = node.walk();
-                for decl in node.children(&mut vc) {
-                    if decl.kind() == "variable_declarator" {
-                        let name = decl
-                            .child_by_field_name("name")
-                            .map(|n| self.get_node_text(&n))
-                            .unwrap_or_default();
+            match node.kind() {
+                "lexical_declaration" | "variable_declaration" => {
+                    let mut vc = node.walk();
+                    for decl in node.children(&mut vc) {
+                        if decl.kind() == "variable_declarator" {
+                            let name = decl
+                                .child_by_field_name("name")
+                                .map(|n| self.get_node_text(&n))
+                                .unwrap_or_default();
 
-                        if !name.is_empty() {
-                            let var_type = decl
-                                .child_by_field_name("type")
-                                .map(|t| self.get_node_text(&t));
+                            if !name.is_empty() {
+                                let var_type = decl
+                                    .child_by_field_name("type")
+                                    .map(|t| self.get_node_text(&t));
 
-                            variables.entry(name.clone()).or_insert(Variable {
-                                name,
-                                var_type,
-                                scope: "local".to_string(),
-                                defined_at: Some(decl.start_position().row + 1),
-                                transformations: vec![],
-                                used_in: vec![],
-                                returned: false,
-                            });
+                                variables.entry(name.clone()).or_insert(Variable {
+                                    name,
+                                    var_type,
+                                    scope: "local".to_string(),
+                                    defined_at: Some(decl.start_position().row + 1),
+                                    transformations: vec![],
+                                    used_in: vec![],
+                                    returned: false,
+                                });
+                            }
                         }
                     }
                 }
-            }
-            "return_statement" => {
-                let mut rc = node.walk();
-                for child in node.children(&mut rc) {
-                    if child.kind() == "identifier" {
-                        let vn = self.get_node_text(&child);
-                        if let Some(var) = variables.get_mut(&vn) {
-                            var.returned = true;
+                "return_statement" => {
+                    let mut rc = node.walk();
+                    for child in node.children(&mut rc) {
+                        if child.kind() == "identifier" {
+                            let vn = self.get_node_text(&child);
+                            if let Some(var) = variables.get_mut(&vn) {
+                                var.returned = true;
+                            }
                         }
                     }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-
-        for child in node.children(&mut cursor) {
-            self.track_variable_usage(&child, variables);
-        }
+            Some(())
+        });
     }
 
     fn build_control_flow(&self, node: &Node) -> ControlFlow {
@@ -838,31 +850,30 @@ impl TypeScriptParser {
     }
 
     fn extract_control_structures(&self, node: &Node, cf: &mut ControlFlow) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        match node.kind() {
-            "if_statement" => {
-                if let Some(branch) = self.parse_if(node) {
-                    cf.branches.push(branch);
+            match node.kind() {
+                "if_statement" => {
+                    if let Some(branch) = self.parse_if(node) {
+                        cf.branches.push(branch);
+                    }
                 }
-            }
-            "for_statement" | "for_in_statement" | "for_of_statement" | "while_statement"
-            | "do_statement" => {
-                if let Some(lp) = self.parse_loop(node) {
-                    cf.loops.push(lp);
+                "for_statement" | "for_in_statement" | "for_of_statement" | "while_statement"
+                | "do_statement" => {
+                    if let Some(lp) = self.parse_loop(node) {
+                        cf.loops.push(lp);
+                    }
                 }
-            }
-            "try_statement" => {
-                if let Some(tb) = self.parse_try(node) {
-                    cf.try_blocks.push(tb);
+                "try_statement" => {
+                    if let Some(tb) = self.parse_try(node) {
+                        cf.try_blocks.push(tb);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-
-        for child in node.children(&mut cursor) {
-            self.extract_control_structures(&child, cf);
-        }
+            Some(())
+        });
     }
 
     fn parse_if(&self, node: &Node) -> Option<Branch> {
@@ -974,27 +985,32 @@ impl TypeScriptParser {
     }
 
     fn find_call_names(&self, node: &Node, calls: &mut Vec<String>, seen: &mut HashSet<String>) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        if node.kind() == "call_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let name = self.get_node_text(&func_node);
-                if !seen.contains(&name) {
-                    seen.insert(name.clone());
-                    calls.push(name);
+            if node.kind() == "call_expression" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let name = self.get_node_text(&func_node);
+                    if !seen.contains(&name) {
+                        seen.insert(name.clone());
+                        calls.push(name);
+                    }
                 }
             }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.find_call_names(&child, calls, seen);
-        }
+            Some(())
+        });
     }
 
     fn find_return_value(&self, node: &Node) -> Option<String> {
-        let mut cursor = node.walk();
+        let mut result = None;
+        walk(*node, (), |child, _| {
+            if result.is_some() {
+                return None;
+            }
+            if child == *node {
+                return Some(());
+            }
 
-        for child in node.children(&mut cursor) {
             if child.kind() == "return_statement" {
                 let mut vals = Vec::new();
                 let mut rc = child.walk();
@@ -1003,32 +1019,27 @@ impl TypeScriptParser {
                         vals.push(self.get_node_text(&rc_child));
                     }
                 }
-                return Some(vals.join(", "));
+                result = Some(vals.join(", "));
+                return None;
             }
-            if let Some(v) = self.find_return_value(&child) {
-                return Some(v);
-            }
-        }
-
-        None
+            Some(())
+        });
+        result
     }
 
     fn calculate_complexity(&self, node: &Node) -> usize {
-        fn count(node: &Node) -> usize {
-            let mut c = 0;
-            let mut cursor = node.walk();
+        let mut complexity = 1;
+        walk(*node, (), |node, _| {
+            let node = &node;
             match node.kind() {
                 "if_statement" | "for_statement" | "for_in_statement" | "for_of_statement"
                 | "while_statement" | "do_statement" | "switch_statement" | "switch_case"
-                | "ternary_expression" | "try_statement" | "catch_clause" => c += 1,
+                | "ternary_expression" | "try_statement" | "catch_clause" => complexity += 1,
                 _ => {}
             }
-            for child in node.children(&mut cursor) {
-                c += count(&child);
-            }
-            c
-        }
-        1 + count(node)
+            Some(())
+        });
+        complexity
     }
 
     fn extract_docstring(&self, node: &Node) -> String {
@@ -1146,4 +1157,137 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
     parse_source(path, &source_code)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use super::*;
+    use crate::analyze::call_graph::prism_v2::build_call_graph_v2;
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    // ---------- helpers ----------
+
+    fn parse(src: &str) -> FileData {
+        TypeScriptParser::new(src.to_string(), "test.ts".to_string())
+            .parse()
+            .expect("parse should succeed")
+    }
+
+    fn names(fd: &FileData) -> Vec<&str> {
+        let mut names: Vec<&str> = fd.functions.iter().map(|f| f.name.as_str()).collect();
+        names.sort_unstable();
+        names
+    }
+
+    // ---------- tests ----------
+
+    #[test]
+    fn interfaces_include_file_path_in_id_and_do_not_collide_across_files() {
+        let (_, fd_a) = parse_source(
+            Path::new("src/a.ts"),
+            "export interface Options {\n  timeout: number;\n}\n",
+        )
+        .expect("a.ts parses");
+        let (_, fd_b) = parse_source(
+            Path::new("src/b.ts"),
+            "export interface Options {\n  retries: number;\n}\nexport interface ExtendedOptions extends Options {\n  verbose: boolean;\n}\n",
+        )
+        .expect("b.ts parses");
+
+        assert_eq!(fd_a.classes[0].id, "interface_Options::src/a.ts");
+        assert_eq!(fd_b.classes[0].id, "interface_Options::src/b.ts");
+        assert_eq!(fd_b.classes[1].id, "interface_ExtendedOptions::src/b.ts");
+
+        let mut structure = HashMap::new();
+        structure.insert("src/a.ts".to_string(), fd_a);
+        structure.insert("src/b.ts".to_string(), fd_b);
+
+        let cg = build_call_graph_v2(&structure);
+        let node_ids: Vec<&str> = cg.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(node_ids.contains(&"interface_Options::src/a.ts"));
+        assert!(node_ids.contains(&"interface_Options::src/b.ts"));
+        assert!(node_ids.contains(&"interface_ExtendedOptions::src/b.ts"));
+    }
+
+    #[test]
+    fn deep_expression_on_small_stack() {
+        // A left-associative expression must not grow the Rust call stack.
+        let expression = vec!["x"; 10_000].join(" + ");
+        let source = format!(
+            "function deep(x: number): number {{ return {}; }}",
+            expression
+        );
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let (_, data) =
+                    crate::grammar_files::parse_source(std::path::Path::new("deep.ts"), &source)
+                        .expect("deep expression parses");
+                assert!(data.syntax.is_clean(), "deep expression is valid syntax");
+                assert!(
+                    data.functions
+                        .iter()
+                        .chain(data.classes.iter().flat_map(|c| &c.methods))
+                        .any(|f| f.name == "deep"),
+                    "deep function extracted"
+                );
+            })
+            .expect("spawn parser thread")
+            .join()
+            .expect("parser thread completes on a 2 MiB stack");
+    }
+
+    #[test]
+    fn functions_bound_to_variables_are_extracted() {
+        let fd = parse(
+            r#"
+export const exportedArrow = (s: string): string => s.trim();
+const localArrow = () => 2;
+const localExpr = function () { return 3; };
+export const exportedExpr = function named() { return 4; };
+export function exportedDecl() { return 5; }
+"#,
+        );
+        assert_eq!(
+            names(&fd),
+            vec![
+                "exportedArrow",
+                "exportedDecl",
+                "exportedExpr",
+                "localArrow",
+                "localExpr"
+            ]
+        );
+    }
+
+    #[test]
+    fn calls_inside_an_exported_arrow_are_recorded() {
+        let fd = parse(
+            r#"
+const helper = () => 1;
+export const run = () => helper();
+"#,
+        );
+        let run = fd
+            .functions
+            .iter()
+            .find(|f| f.name == "run")
+            .expect("run should be extracted");
+        assert!(run.calls.iter().any(|c| c.callee == "helper"));
+    }
+
+    #[test]
+    fn function_expressions_are_not_also_global_vars() {
+        let fd = parse(
+            r#"
+const limit = 10;
+const localExpr = function () { return limit; };
+"#,
+        );
+        let vars: Vec<&str> = fd.global_vars.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(vars, vec!["limit"]);
+    }
 }

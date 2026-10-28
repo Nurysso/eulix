@@ -23,7 +23,7 @@
 //! synthetic `{main}` function (PHP's own name for it in stack traces), so
 //! the calls a page script makes still show up in the call graph.
 
-use super::utils::extract_todos;
+use super::utils::{extract_todos, walk};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
@@ -194,37 +194,6 @@ static TAG_RULES: LazyLock<Vec<TagRule>> = LazyLock::new(|| {
         },
     ]
 });
-
-/// Pre-order walk of `root`'s subtree without recursion: template code builds
-/// `.` concatenation chains deep enough to overflow a worker thread's stack
-/// with a recursive walk. `enter` gets each node with the context inherited
-/// from its parent and returns the context for the node's children, or `None`
-/// to skip them.
-fn walk<'t, C: Copy>(root: Node<'t>, ctx: C, mut enter: impl FnMut(Node<'t>, C) -> Option<C>) {
-    let mut cursor = root.walk();
-    // Context handed to the children of each node on the current path.
-    let mut stack: Vec<C> = Vec::new();
-    let mut next = enter(root, ctx);
-    loop {
-        if let Some(c) = next {
-            if cursor.goto_first_child() {
-                stack.push(c);
-                next = enter(cursor.node(), c);
-                continue;
-            }
-        }
-        loop {
-            if cursor.goto_next_sibling() {
-                next = enter(cursor.node(), stack.last().copied().unwrap_or(ctx));
-                break;
-            }
-            if !cursor.goto_parent() {
-                return;
-            }
-            stack.pop();
-        }
-    }
-}
 
 fn is_definition(n: Node) -> bool {
     match n.kind() {

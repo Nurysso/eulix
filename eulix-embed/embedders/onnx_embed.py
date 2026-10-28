@@ -15,6 +15,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from embedders.mixins import BucketBatchMixin
 from utils.buckets import snap_to_bucket
 from utils.constants import BUCKETS_JINA, BUCKETS_STANDARD
 from utils.req import require_ml_onnx, require_numpy
@@ -281,7 +282,7 @@ def _resolve_onnx_model(model_name: str, trust_remote_code: bool = False, force_
     return exported
 
 
-class EmbeddingGeneratorOnnx:
+class EmbeddingGeneratorOnnx(BucketBatchMixin):
     """
     Thin wrapper around an ONNX Runtime InferenceSession for batched
     embedding generation. No PyTorch or transformers dependency at
@@ -301,7 +302,7 @@ class EmbeddingGeneratorOnnx:
 
     def __init__(
         self,
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        model_name: str = "BAAI/bge-base-en-v1.5",
         device: str | None = None,  # "cpu" | "cuda" | "rocm" | None (auto)
         batch_size: int | None = None,
         normalize: bool = True,
@@ -325,7 +326,7 @@ class EmbeddingGeneratorOnnx:
             self.batch_size = batch_size
 
             self.use_bucketing = use_bucketing and self.device in ("cuda", "rocm")
-            print("Using ONNX-RUNTIME")
+            print("Using ONNX-RUNTIME", file=sys.stderr)
             print(f"     Model:      {model_name}", file=sys.stderr)
             print(f"     Provider:   {self.providers[0]}", file=sys.stderr)
             print(f"     Batch size: {self.batch_size}", file=sys.stderr)
@@ -470,7 +471,7 @@ class EmbeddingGeneratorOnnx:
             print(f"\nError: {e}", file=sys.stderr)
             print("\nTips:", file=sys.stderr)
             print(
-                "  - Use a valid model name from Hugging Face (e.g., 'sentence-transformers/all-MiniLM-L6-v2')",
+                "  - Use a valid model name from Hugging Face (e.g., 'BAAI/bge-base-en-v1.5')",
                 file=sys.stderr,
             )
             print("  - Check your internet connection", file=sys.stderr)
@@ -488,17 +489,6 @@ class EmbeddingGeneratorOnnx:
     @property
     def dimension(self) -> int:
         return self._dimension
-
-    def batch_size_for(self, seq_len: int) -> int:
-        """
-        Bucket-aware batch size. self.batch_size is tuned for a reference
-        sequence length of 512 tokens; scale down linearly for longer
-        buckets (attention memory scales with sequence length), floor at 1.
-        """
-        ref_len = 512
-        if seq_len <= ref_len:
-            return self.batch_size
-        return max(1, (self.batch_size * ref_len) // seq_len)
 
     @staticmethod
     def _mean_pool(last_hidden: Any, attention_mask: Any) -> Any:

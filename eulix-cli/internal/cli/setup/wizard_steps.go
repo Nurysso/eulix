@@ -166,6 +166,9 @@ func llmModeStep() Step {
 		Options: []string{"Local", "Remote"},
 		Apply: func(answer string, cfg *config.Config, env *EnvFile) error {
 			cfg.LLM.Local = answer == "Local"
+			if !cfg.LLM.Local {
+				cfg.LLM.BaseURL = ""
+			}
 			return nil
 		},
 		Next: func(answer string, a Answers) []Step {

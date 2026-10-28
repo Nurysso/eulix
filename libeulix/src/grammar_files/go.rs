@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::extract_todos;
+use super::utils::{extract_todos, walk};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
@@ -475,43 +475,58 @@ impl GoParser {
 
     /// True if any descendant node has the given kind.
     fn body_contains_kind(&self, node: &Node, kind: &str) -> bool {
-        if node.kind() == kind {
-            return true;
-        }
-        let mut cursor = node.walk();
-        let children: Vec<_> = node.children(&mut cursor).collect();
-        children.iter().any(|c| self.body_contains_kind(c, kind))
+        let mut found = false;
+        walk(*node, (), |node, _| {
+            if found {
+                return None;
+            }
+            let node = &node;
+            if node.kind() == kind {
+                found = true;
+                return None;
+            }
+            Some(())
+        });
+        found
     }
 
     /// True if the body sends to or receives from a channel (`<-` operator).
     fn body_contains_channel_ops(&self, node: &Node) -> bool {
-        if node.kind() == "send_statement" || node.kind() == "receive_statement" {
-            return true;
-        }
-        // Also catch `<-` used in expressions
-        if node.kind() == "unary_expression" {
-            let op = node.child(0).map(|c| self.get_node_text(&c));
-            if op.as_deref() == Some("<-") {
-                return true;
+        let mut found = false;
+        walk(*node, (), |node, _| {
+            if found {
+                return None;
             }
-        }
-        let mut cursor = node.walk();
-        let children: Vec<_> = node.children(&mut cursor).collect();
-        children.iter().any(|c| self.body_contains_channel_ops(c))
+            let node = &node;
+            if node.kind() == "send_statement" || node.kind() == "receive_statement" {
+                found = true;
+                return None;
+            }
+            // Also catch `<-` used in expressions
+            if node.kind() == "unary_expression" {
+                let op = node.child(0).map(|c| self.get_node_text(&c));
+                if op.as_deref() == Some("<-") {
+                    found = true;
+                    return None;
+                }
+            }
+            Some(())
+        });
+        found
     }
 
     /// Counts direct descendant nodes of `kind` (non-recursive, one level for
     /// statements like defer that appear at statement-list level).
     fn count_kind_in_body(&self, node: &Node, kind: &str) -> usize {
         let mut count = 0;
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if child.kind() == kind {
+        walk(*node, (), |child, _| {
+            if child != *node && child.kind() == kind {
                 count += 1;
+                None
             } else {
-                count += self.count_kind_in_body(&child, kind);
+                Some(())
             }
-        }
+        });
         count
     }
 
@@ -657,46 +672,29 @@ impl GoParser {
         seen: &mut HashSet<String>,
         context: &str,
     ) {
-        let current_context = match node.kind() {
-            "if_statement" => "if",
-            "for_statement" => "loop",
-            "expression_switch_statement" | "type_switch_statement" => "switch",
-            "select_statement" => "select",
-            _ => context,
-        };
-
-        match node.kind() {
-            // ── goroutine: extract inner call, mark as "goroutine", skip subtree
-            "go_statement" => {
-                let mut gc = node.walk();
-                for child in node.children(&mut gc) {
-                    self.find_calls_recursive(&child, calls, seen, "goroutine");
+        walk(*node, context, |node, context| {
+            let node = &node;
+            let current_context = match node.kind() {
+                "if_statement" => "if",
+                "for_statement" => "loop",
+                "expression_switch_statement" | "type_switch_statement" => "switch",
+                "select_statement" => "select",
+                _ => context,
+            };
+            match node.kind() {
+                // ── goroutine: extract inner call, mark as "goroutine", skip subtree
+                "go_statement" => Some("goroutine"), // don't recurse further — the call is already captured
+                // ── defer: same treatment
+                "defer_statement" => Some("defer"),
+                // ── normal call expression
+                "call_expression" => {
+                    self.push_call(node, calls, seen, current_context);
+                    // still recurse: the arguments may contain nested calls
+                    Some(current_context)
                 }
-                return; // don't recurse further — the call is already captured
+                _ => Some(current_context),
             }
-
-            // ── defer: same treatment
-            "defer_statement" => {
-                let mut dc = node.walk();
-                for child in node.children(&mut dc) {
-                    self.find_calls_recursive(&child, calls, seen, "defer");
-                }
-                return;
-            }
-
-            // ── normal call expression
-            "call_expression" => {
-                self.push_call(node, calls, seen, current_context);
-                // still recurse: the arguments may contain nested calls
-            }
-
-            _ => {}
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.find_calls_recursive(&child, calls, seen, current_context);
-        }
+        });
     }
 
     /// Helper — extracts callee name and pushes a FunctionCall if not already seen.
@@ -803,50 +801,21 @@ impl GoParser {
     }
 
     fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
-        let mut cursor = node.walk();
-        match node.kind() {
-            "short_var_declaration" => {
-                if let Some(left) = node.child_by_field_name("left") {
-                    let line = node.start_position().row + 1;
-                    for name_node in self.identifier_children(&left) {
-                        let var_name = self.get_node_text(&name_node);
-                        if var_name == "_" {
-                            continue;
-                        }
-                        variables.entry(var_name.clone()).or_insert(Variable {
-                            name: var_name,
-                            var_type: None,
-                            scope: "local".to_string(),
-                            defined_at: Some(line),
-                            transformations: vec![],
-                            used_in: vec![],
-                            returned: false,
-                        });
-                    }
-                }
-            }
-            "var_declaration" | "const_declaration" => {
-                let scope = if node.kind() == "const_declaration" {
-                    "const"
-                } else {
-                    "local"
-                };
-                let mut decl_cursor = node.walk();
-                for spec in node.children(&mut decl_cursor) {
-                    if spec.kind() == "var_spec" || spec.kind() == "const_spec" {
-                        let line = spec.start_position().row + 1;
-                        let var_type = spec
-                            .child_by_field_name("type")
-                            .map(|t| self.get_node_text(&t));
-
-                        for var_name in self.collect_spec_names(&spec) {
+        walk(*node, (), |node, _| {
+            let node = &node;
+            match node.kind() {
+                "short_var_declaration" => {
+                    if let Some(left) = node.child_by_field_name("left") {
+                        let line = node.start_position().row + 1;
+                        for name_node in self.identifier_children(&left) {
+                            let var_name = self.get_node_text(&name_node);
                             if var_name == "_" {
                                 continue;
                             }
                             variables.entry(var_name.clone()).or_insert(Variable {
                                 name: var_name,
-                                var_type: var_type.clone(),
-                                scope: scope.to_string(),
+                                var_type: None,
+                                scope: "local".to_string(),
                                 defined_at: Some(line),
                                 transformations: vec![],
                                 used_in: vec![],
@@ -855,23 +824,52 @@ impl GoParser {
                         }
                     }
                 }
-            }
-            "return_statement" => {
-                let mut ret_cursor = node.walk();
-                for child in node.children(&mut ret_cursor) {
-                    if child.kind() == "identifier" {
-                        let var_name = self.get_node_text(&child);
-                        if let Some(var) = variables.get_mut(&var_name) {
-                            var.returned = true;
+                "var_declaration" | "const_declaration" => {
+                    let scope = if node.kind() == "const_declaration" {
+                        "const"
+                    } else {
+                        "local"
+                    };
+                    let mut decl_cursor = node.walk();
+                    for spec in node.children(&mut decl_cursor) {
+                        if spec.kind() == "var_spec" || spec.kind() == "const_spec" {
+                            let line = spec.start_position().row + 1;
+                            let var_type = spec
+                                .child_by_field_name("type")
+                                .map(|t| self.get_node_text(&t));
+
+                            for var_name in self.collect_spec_names(&spec) {
+                                if var_name == "_" {
+                                    continue;
+                                }
+                                variables.entry(var_name.clone()).or_insert(Variable {
+                                    name: var_name,
+                                    var_type: var_type.clone(),
+                                    scope: scope.to_string(),
+                                    defined_at: Some(line),
+                                    transformations: vec![],
+                                    used_in: vec![],
+                                    returned: false,
+                                });
+                            }
                         }
                     }
                 }
+                "return_statement" => {
+                    let mut ret_cursor = node.walk();
+                    for child in node.children(&mut ret_cursor) {
+                        if child.kind() == "identifier" {
+                            let var_name = self.get_node_text(&child);
+                            if let Some(var) = variables.get_mut(&var_name) {
+                                var.returned = true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
-            _ => {}
-        }
-        for child in node.children(&mut cursor) {
-            self.track_variable_usage(&child, variables);
-        }
+            Some(())
+        });
     }
 
     fn build_control_flow(&self, node: &Node) -> ControlFlow {
@@ -887,25 +885,24 @@ impl GoParser {
     }
 
     fn extract_control_structures(&self, node: &Node, cf: &mut ControlFlow) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        match node.kind() {
-            "if_statement" => {
-                if let Some(branch) = self.parse_if_statement(node) {
-                    cf.branches.push(branch);
+            match node.kind() {
+                "if_statement" => {
+                    if let Some(branch) = self.parse_if_statement(node) {
+                        cf.branches.push(branch);
+                    }
                 }
-            }
-            "for_statement" => {
-                if let Some(loop_info) = self.parse_loop(node) {
-                    cf.loops.push(loop_info);
+                "for_statement" => {
+                    if let Some(loop_info) = self.parse_loop(node) {
+                        cf.loops.push(loop_info);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-
-        for child in node.children(&mut cursor) {
-            self.extract_control_structures(&child, cf);
-        }
+            Some(())
+        });
     }
 
     fn parse_if_statement(&self, node: &Node) -> Option<Branch> {
@@ -951,21 +948,20 @@ impl GoParser {
     }
 
     fn find_call_names(&self, node: &Node, calls: &mut Vec<String>, seen: &mut HashSet<String>) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        if node.kind() == "call_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let name = self.get_node_text(&func_node);
-                if !seen.contains(&name) {
-                    seen.insert(name.clone());
-                    calls.push(name);
+            if node.kind() == "call_expression" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let name = self.get_node_text(&func_node);
+                    if !seen.contains(&name) {
+                        seen.insert(name.clone());
+                        calls.push(name);
+                    }
                 }
             }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.find_call_names(&child, calls, seen);
-        }
+            Some(())
+        });
     }
 
     fn find_return_value(&self, node: &Node) -> Option<String> {
@@ -1011,20 +1007,19 @@ impl GoParser {
     }
 
     fn find_panics(&self, node: &Node, info: &mut ExceptionInfo) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        if node.kind() == "call_expression" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let func_name = self.get_node_text(&func_node);
-                if func_name == "panic" {
-                    info.raises.push("panic".to_string());
+            if node.kind() == "call_expression" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let func_name = self.get_node_text(&func_node);
+                    if func_name == "panic" {
+                        info.raises.push("panic".to_string());
+                    }
                 }
             }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.find_panics(&child, info);
-        }
+            Some(())
+        });
     }
 
     fn extract_structs(&self, root: &Node) -> (Vec<Class>, Vec<Function>) {
@@ -1383,35 +1378,28 @@ impl GoParser {
 
     fn calculate_complexity(&self, node: &Node) -> usize {
         let mut complexity = 1;
-
-        fn count_complexity_nodes(node: &Node, get_text: &dyn Fn(&Node) -> String) -> usize {
-            let mut count = 0;
-            let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
             match node.kind() {
                 "if_statement"
                 | "for_statement"
                 | "expression_switch_statement"
                 | "type_switch_statement"
                 | "select_statement" => {
-                    count += 1;
+                    complexity += 1;
                 }
                 "binary_expression" => {
                     if let Some(op) = node.child_by_field_name("operator") {
-                        let op_text = get_text(&op);
+                        let op_text = self.get_node_text(&op);
                         if op_text == "&&" || op_text == "||" {
-                            count += 1;
+                            complexity += 1;
                         }
                     }
                 }
                 _ => {}
             }
-            for child in node.children(&mut cursor) {
-                count += count_complexity_nodes(&child, get_text);
-            }
-            count
-        }
-        let get_text = |n: &Node| self.get_node_text(n);
-        complexity += count_complexity_nodes(node, &get_text);
+            Some(())
+        });
         complexity
     }
 
@@ -1707,6 +1695,34 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
 mod tests {
     #![expect(clippy::expect_used)]
     #![expect(clippy::unwrap_used)]
+
+    #[test]
+    fn deep_expression_on_small_stack() {
+        // A left-associative expression must not grow the Rust call stack.
+        let expression = vec!["x"; 10_000].join(" + ");
+        let source = format!(
+            "package main\nfunc deep(x int) int {{ return {} }}",
+            expression
+        );
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let (_, data) =
+                    crate::grammar_files::parse_source(std::path::Path::new("deep.go"), &source)
+                        .expect("deep expression parses");
+                assert!(data.syntax.is_clean(), "deep expression is valid syntax");
+                assert!(
+                    data.functions
+                        .iter()
+                        .chain(data.classes.iter().flat_map(|c| &c.methods))
+                        .any(|f| f.name == "deep"),
+                    "deep function extracted"
+                );
+            })
+            .expect("spawn parser thread")
+            .join()
+            .expect("parser thread completes on a 2 MiB stack");
+    }
 
     use super::*;
 

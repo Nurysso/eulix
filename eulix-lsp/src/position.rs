@@ -163,11 +163,15 @@ pub fn find_name_on_line(rope: &Rope, line_1based: usize, name: &str) -> Option<
         let before_ok = start == 0 || !is_ident_char(prev_char(&text, start));
         let after_ok = end == bytes.len() || !is_ident_char(next_char(&text, end));
         if before_ok && after_ok {
-            return Some(chars_to_range(rope, line_start + start, line_start + end));
+            // `start` and `end` are byte offsets into the line; the rope
+            // and `chars_to_range` count characters.
+            let start_char = line_start + text[..start].chars().count();
+            let end_char = start_char + name.chars().count();
+            return Some(chars_to_range(rope, start_char, end_char));
         }
-        // Keep searching from one byte later so overlapping candidates are
-        // still considered.
-        from = start + 1;
+        // Keep searching from the next character so overlapping candidates
+        // are still considered, without slicing inside a multi-byte one.
+        from = start + text[start..].chars().next().map_or(1, char::len_utf8);
     }
     None
 }
@@ -352,6 +356,24 @@ mod tests {
         assert!(find_names_on_line(&r, 1, "").is_empty());
     }
 
+    #[test]
+    fn find_name_range_counts_chars_after_multibyte_text() {
+        // `ç` and `ã` are two bytes each; the range is in characters.
+        let r = r("s = 'ção'; run()\n");
+        let hit = find_name_on_line(&r, 1, "run").expect("should find run");
+        assert_eq!(hit.start, Position::new(0, 11));
+        assert_eq!(hit.end, Position::new(0, 14));
+    }
+
+    #[test]
+    fn find_name_skips_a_rejected_multibyte_candidate_without_panicking() {
+        // The first `éa` is inside `xéa`; moving one byte past it would land
+        // inside `é`.
+        let r = r("éa = 1\nxéa = éa\n");
+        let hit = find_name_on_line(&r, 2, "éa").expect("should find the second éa");
+        assert_eq!(hit.start, Position::new(1, 6));
+        assert_eq!(hit.end, Position::new(1, 8));
+    }
     #[test]
     fn full_line_range_is_clamped_to_the_line() {
         let r = r("ab\ncd\n");

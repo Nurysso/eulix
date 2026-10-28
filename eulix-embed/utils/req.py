@@ -18,7 +18,8 @@ def require_ml():
     from tqdm import tqdm
     from transformers import AutoModel, AutoTokenizer
 
-    torch.cuda.set_per_process_memory_fraction(0.85)
+    if torch.cuda.is_available():
+        torch.cuda.set_per_process_memory_fraction(0.85)
 
     return np, torch, F, AutoModel, AutoTokenizer, tqdm
 

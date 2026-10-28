@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex};
+use super::utils::{static_regex, todo_in_comment, walk};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
@@ -123,7 +123,7 @@ impl PythonParser {
             functions: self.extract_functions(&root),
             classes: self.extract_classes(&root),
             global_vars: self.extract_global_vars(&root),
-            todos: extract_todos(&self.source_code),
+            todos: self.collect_todos(&root),
             security_notes: self.detect_security_patterns(),
             syntax: syntax::inspect(&tree),
         })
@@ -254,7 +254,7 @@ impl PythonParser {
     fn parse_function(&self, node: &Node, class_context: &str) -> Option<Function> {
         let mut cursor = node.walk();
         let mut name = String::new();
-        let is_async = node.kind() == "async_function_definition";
+        let is_async = node.children(&mut cursor).any(|ch| ch.kind() == "async");
 
         let mut decorators = Vec::new();
         if let Some(parent) = node.parent() {
@@ -453,52 +453,51 @@ impl PythonParser {
         seen: &mut HashSet<String>,
         context: &str,
     ) {
-        let mut cursor = node.walk();
+        walk(*node, context, |node, context| {
+            let node = &node;
 
-        let child_context = match node.kind() {
-            "if_statement" => "if",
-            "elif_clause" => "elif",
-            "else_clause" => "else",
-            "while_statement" | "for_statement" => "loop",
-            "try_statement" => "try",
-            "except_clause" => "except",
-            _ => context,
-        };
+            let child_context = match node.kind() {
+                "if_statement" => "if",
+                "elif_clause" => "elif",
+                "else_clause" => "else",
+                "while_statement" | "for_statement" => "loop",
+                "try_statement" => "try",
+                "except_clause" => "except",
+                _ => context,
+            };
 
-        if node.kind() == "call" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                if let Ok(call_name) = func_node.utf8_text(self.source_code.as_bytes()) {
-                    let name = call_name
-                        .split('.')
-                        .next_back()
-                        .unwrap_or(call_name)
-                        .trim()
-                        .to_string();
+            if node.kind() == "call" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    if let Ok(call_name) = func_node.utf8_text(self.source_code.as_bytes()) {
+                        let name = call_name
+                            .split('.')
+                            .next_back()
+                            .unwrap_or(call_name)
+                            .trim()
+                            .to_string();
 
-                    if !name.is_empty() {
-                        let key = format!("{}:{}", name, node.start_position().row);
-                        if !seen.contains(&key) {
-                            seen.insert(key);
+                        if !name.is_empty() {
+                            let key = format!("{}:{}", name, node.start_position().row);
+                            if !seen.contains(&key) {
+                                seen.insert(key);
 
-                            let args = self.extract_call_arguments(node);
+                                let args = self.extract_call_arguments(node);
 
-                            calls.push(FunctionCall {
-                                callee: name,
-                                defined_in: None, // Will be resolved in post-processing
-                                line: node.start_position().row + 1,
-                                args,
-                                is_conditional: context != "unconditional",
-                                context: context.to_string(),
-                            });
+                                calls.push(FunctionCall {
+                                    callee: name,
+                                    defined_in: None, // Will be resolved in post-processing
+                                    line: node.start_position().row + 1,
+                                    args,
+                                    is_conditional: context != "unconditional",
+                                    context: context.to_string(),
+                                });
+                            }
                         }
                     }
                 }
             }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.find_calls_recursive(&child, calls, seen, child_context);
-        }
+            Some(child_context)
+        });
     }
 
     fn extract_call_arguments(&self, call_node: &Node) -> Vec<String> {
@@ -547,25 +546,42 @@ impl PythonParser {
     }
 
     fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        if node.kind() == "assignment" {
-            if let Some(left) = node.child_by_field_name("left") {
-                if let Some(right) = node.child_by_field_name("right") {
-                    let var_name = self.get_node_text(&left);
-                    let line = node.start_position().row + 1;
+            if node.kind() == "assignment" {
+                if let Some(left) = node.child_by_field_name("left") {
+                    if let Some(right) = node.child_by_field_name("right") {
+                        let var_name = self.get_node_text(&left);
+                        let line = node.start_position().row + 1;
 
-                    if right.kind() == "call" {
-                        if let Some(func_node) = right.child_by_field_name("function") {
-                            let func_name = self.get_node_text(&func_node);
+                        if right.kind() == "call" {
+                            if let Some(func_node) = right.child_by_field_name("function") {
+                                let func_name = self.get_node_text(&func_node);
 
-                            if let Some(var) = variables.get_mut(&var_name) {
-                                var.transformations.push(VarTransformation {
-                                    line,
-                                    via: func_name.clone(),
-                                    becomes: var_name.clone(),
-                                });
-                            } else {
+                                if let Some(var) = variables.get_mut(&var_name) {
+                                    var.transformations.push(VarTransformation {
+                                        line,
+                                        via: func_name.clone(),
+                                        becomes: var_name.clone(),
+                                    });
+                                } else {
+                                    variables.insert(
+                                        var_name.clone(),
+                                        Variable {
+                                            name: var_name.clone(),
+                                            var_type: None,
+                                            scope: "local".to_string(),
+                                            defined_at: Some(line),
+                                            transformations: vec![],
+                                            used_in: vec![],
+                                            returned: false,
+                                        },
+                                    );
+                                }
+                            }
+                        } else {
+                            if !variables.contains_key(&var_name) {
                                 variables.insert(
                                     var_name.clone(),
                                     Variable {
@@ -580,38 +596,20 @@ impl PythonParser {
                                 );
                             }
                         }
-                    } else {
-                        if !variables.contains_key(&var_name) {
-                            variables.insert(
-                                var_name.clone(),
-                                Variable {
-                                    name: var_name.clone(),
-                                    var_type: None,
-                                    scope: "local".to_string(),
-                                    defined_at: Some(line),
-                                    transformations: vec![],
-                                    used_in: vec![],
-                                    returned: false,
-                                },
-                            );
-                        }
                     }
                 }
             }
-        }
 
-        if node.kind() == "return_statement" {
-            if let Some(value) = node.child(1) {
-                let returned_var = self.get_node_text(&value);
-                if let Some(var) = variables.get_mut(&returned_var) {
-                    var.returned = true;
+            if node.kind() == "return_statement" {
+                if let Some(value) = node.child(1) {
+                    let returned_var = self.get_node_text(&value);
+                    if let Some(var) = variables.get_mut(&returned_var) {
+                        var.returned = true;
+                    }
                 }
             }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.track_variable_usage(&child, variables);
-        }
+            Some(())
+        });
     }
 
     fn build_control_flow(&self, node: &Node) -> ControlFlow {
@@ -627,30 +625,29 @@ impl PythonParser {
     }
 
     fn extract_control_structures(&self, node: &Node, cf: &mut ControlFlow) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        match node.kind() {
-            "if_statement" => {
-                if let Some(branch) = self.parse_if_statement(node) {
-                    cf.branches.push(branch);
+            match node.kind() {
+                "if_statement" => {
+                    if let Some(branch) = self.parse_if_statement(node) {
+                        cf.branches.push(branch);
+                    }
                 }
-            }
-            "while_statement" | "for_statement" => {
-                if let Some(loop_info) = self.parse_loop(node) {
-                    cf.loops.push(loop_info);
+                "while_statement" | "for_statement" => {
+                    if let Some(loop_info) = self.parse_loop(node) {
+                        cf.loops.push(loop_info);
+                    }
                 }
-            }
-            "try_statement" => {
-                if let Some(try_block) = self.parse_try_statement(node) {
-                    cf.try_blocks.push(try_block);
+                "try_statement" => {
+                    if let Some(try_block) = self.parse_try_statement(node) {
+                        cf.try_blocks.push(try_block);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-
-        for child in node.children(&mut cursor) {
-            self.extract_control_structures(&child, cf);
-        }
+            Some(())
+        });
     }
 
     fn parse_if_statement(&self, node: &Node) -> Option<Branch> {
@@ -695,21 +692,20 @@ impl PythonParser {
     }
 
     fn find_call_names(&self, node: &Node, calls: &mut Vec<String>, seen: &mut HashSet<String>) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        if node.kind() == "call" {
-            if let Some(func_node) = node.child_by_field_name("function") {
-                let name = self.get_node_text(&func_node);
-                if !seen.contains(&name) {
-                    seen.insert(name.clone());
-                    calls.push(name);
+            if node.kind() == "call" {
+                if let Some(func_node) = node.child_by_field_name("function") {
+                    let name = self.get_node_text(&func_node);
+                    if !seen.contains(&name) {
+                        seen.insert(name.clone());
+                        calls.push(name);
+                    }
                 }
             }
-        }
-
-        for child in node.children(&mut cursor) {
-            self.find_call_names(&child, calls, seen);
-        }
+            Some(())
+        });
     }
 
     fn find_return_value(&self, node: &Node) -> Option<String> {
@@ -815,31 +811,30 @@ impl PythonParser {
     }
 
     fn find_exceptions(&self, node: &Node, info: &mut ExceptionInfo) {
-        let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
-        match node.kind() {
-            "raise_statement" => {
-                if let Some(exc) = node.child(1) {
-                    let exc_type = self.get_node_text(&exc);
-                    if !info.raises.contains(&exc_type) {
-                        info.raises.push(exc_type);
+            match node.kind() {
+                "raise_statement" => {
+                    if let Some(exc) = node.child(1) {
+                        let exc_type = self.get_node_text(&exc);
+                        if !info.raises.contains(&exc_type) {
+                            info.raises.push(exc_type);
+                        }
                     }
                 }
-            }
-            "except_clause" => {
-                if let Some(exc) = node.child(1) {
-                    let exc_type = self.get_node_text(&exc);
-                    if !info.handles.contains(&exc_type) {
-                        info.handles.push(exc_type);
+                "except_clause" => {
+                    if let Some(exc) = node.child(1) {
+                        let exc_type = self.get_node_text(&exc);
+                        if !info.handles.contains(&exc_type) {
+                            info.handles.push(exc_type);
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-
-        for child in node.children(&mut cursor) {
-            self.find_exceptions(&child, info);
-        }
+            Some(())
+        });
     }
 
     fn extract_classes(&self, root: &Node) -> Vec<Class> {
@@ -1045,6 +1040,16 @@ impl PythonParser {
                         methods.push(method);
                     }
                 }
+                "decorated_definition" => {
+                    let mut inner_cursor = child.walk();
+                    for inner in child.children(&mut inner_cursor) {
+                        if inner.kind() == "function_definition" {
+                            if let Some(method) = self.parse_function(&inner, class_name) {
+                                methods.push(method);
+                            }
+                        }
+                    }
+                }
                 "expression_statement" => {
                     if let Some(attr) = self.parse_attribute(&child) {
                         attributes.push(attr);
@@ -1162,27 +1167,19 @@ impl PythonParser {
 
     fn calculate_complexity(&self, node: &Node) -> usize {
         let mut complexity = 1;
-
-        fn count_complexity_nodes(node: &Node) -> usize {
-            let mut count = 0;
-            let mut cursor = node.walk();
+        walk(*node, (), |node, _| {
+            let node = &node;
 
             match node.kind() {
                 "if_statement" | "elif_clause" | "while_statement" | "for_statement"
                 | "except_clause" | "with_statement" | "and" | "or" => {
-                    count += 1;
+                    complexity += 1;
                 }
                 _ => {}
             }
 
-            for child in node.children(&mut cursor) {
-                count += count_complexity_nodes(&child);
-            }
-
-            count
-        }
-
-        complexity += count_complexity_nodes(node);
+            Some(())
+        });
         complexity
     }
 
@@ -1448,6 +1445,29 @@ impl PythonParser {
             .unwrap_or("")
             .to_string()
     }
+
+    // Python comments start with `#`, which `extract_todos` doesn't look
+    // for, so walk the comment nodes instead. That also keeps a "# TODO"
+    // inside a string from counting.
+    fn collect_todos(&self, root: &Node) -> Vec<Todo> {
+        let mut todos = Vec::new();
+        let mut stack = vec![*root];
+        while let Some(n) = stack.pop() {
+            if n.kind() == "comment" {
+                let text = self.get_node_text(&n);
+                if let Some(body) = text.strip_prefix('#') {
+                    todos.extend(todo_in_comment(n.start_position().row + 1, body));
+                }
+                continue;
+            }
+            let mut cursor = n.walk();
+            for child in n.children(&mut cursor) {
+                stack.push(child);
+            }
+        }
+        todos.sort_by_key(|t| t.line);
+        todos
+    }
 }
 
 pub fn parse_source(path: &Path, source_code: &str) -> Result<(String, FileData), String> {
@@ -1465,4 +1485,108 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
     let source_code = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
     parse_source(path, &source_code)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    #[test]
+    fn deep_expression_on_small_stack() {
+        // A left-associative expression must not grow the Rust call stack.
+        let expression = vec!["x"; 10_000].join(" + ");
+        let source = format!("def deep(x):\n    return {}\n", expression);
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let (_, data) =
+                    crate::grammar_files::parse_source(std::path::Path::new("deep.py"), &source)
+                        .expect("deep expression parses");
+                assert!(data.syntax.is_clean(), "deep expression is valid syntax");
+                assert!(
+                    data.functions
+                        .iter()
+                        .chain(data.classes.iter().flat_map(|c| &c.methods))
+                        .any(|f| f.name == "deep"),
+                    "deep function extracted"
+                );
+            })
+            .expect("spawn parser thread")
+            .join()
+            .expect("parser thread completes on a 2 MiB stack");
+    }
+
+    use super::*;
+
+    #[test]
+    fn decorated_methods_async_def_and_hash_todos_are_extracted() {
+        let src = r##"# TODO: handle urgent retries
+# FIXME: minor cleanup
+
+async def top_async():
+    return "# TODO: inside string, not a comment"
+
+class Service:
+    def plain(self, x: int) -> int:
+        return x
+
+    @staticmethod
+    def build():
+        pass
+
+    @classmethod
+    def create(cls):
+        pass
+
+    @property
+    def title(self) -> str:
+        return "svc"
+
+    async def execute(self):
+        pass
+"##;
+        let fd = parse_source(Path::new("service.py"), src)
+            .expect("python parses")
+            .1;
+
+        assert_eq!(fd.functions.len(), 1);
+        assert_eq!(fd.functions[0].name, "top_async");
+        assert!(fd.functions[0].is_async, "top_async should be marked async");
+
+        let svc = &fd.classes[0];
+        let method_names: Vec<&str> = svc.methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(
+            method_names,
+            vec!["plain", "build", "create", "title", "execute"]
+        );
+
+        let build_info = svc.methods[1]
+            .lang_info
+            .python
+            .as_deref()
+            .expect("python info");
+        assert!(build_info.is_staticmethod);
+        let create_info = svc.methods[2]
+            .lang_info
+            .python
+            .as_deref()
+            .expect("python info");
+        assert!(create_info.is_classmethod);
+        let title_info = svc.methods[3]
+            .lang_info
+            .python
+            .as_deref()
+            .expect("python info");
+        assert!(title_info.is_property);
+
+        assert!(!svc.methods[0].is_async);
+        assert!(svc.methods[4].is_async, "execute should be marked async");
+
+        assert_eq!(fd.todos.len(), 2);
+        assert_eq!(fd.todos[0].line, 1);
+        assert_eq!(fd.todos[0].text, "handle urgent retries");
+        assert_eq!(fd.todos[0].priority, "high");
+        assert_eq!(fd.todos[1].line, 2);
+        assert_eq!(fd.todos[1].priority, "low");
+    }
 }

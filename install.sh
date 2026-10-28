@@ -180,7 +180,7 @@ download_binary() {
 
     local asset_url="${RELEASE_BASE}/${ASSET_NAME}"
     local html_url="${RELEASE_BASE}/${html_asset_name}"
-    local checksums_url="${RELEASE_BASE}/checksum.txt"
+    local checksums_url="${RELEASE_BASE}/checksums.txt"
 
     local tmp_bin="/tmp/${ASSET_NAME}"
     local tmp_html="/tmp/${html_asset_name}"
@@ -204,7 +204,8 @@ download_binary() {
     local expected_bin actual_bin
     expected_bin="$(get_checksum "$ASSET_NAME" "$tmp_checksums")"
     if [[ -z "$expected_bin" ]]; then
-        warn "Could not find ${ASSET_NAME} in checksums.txt — skipping binary verification."
+        rm -f "$tmp_bin" "$tmp_html" "$tmp_checksums"
+        die "Missing checksum entry for ${ASSET_NAME}."
     else
         actual_bin="$(sha256sum "$tmp_bin" | awk '{print $1}')"
         if [[ "$expected_bin" != "$actual_bin" ]]; then
@@ -218,7 +219,8 @@ download_binary() {
     local expected_html actual_html
     expected_html="$(get_checksum "$html_asset_name" "$tmp_checksums")"
     if [[ -z "$expected_html" ]]; then
-        warn "Could not find ${html_asset_name} in checksums.txt — skipping HTML verification."
+        rm -f "$tmp_bin" "$tmp_html" "$tmp_checksums"
+        die "Missing checksum entry for ${html_asset_name}."
     else
         actual_html="$(sha256sum "$tmp_html" | awk '{print $1}')"
         if [[ "$expected_html" != "$actual_html" ]]; then

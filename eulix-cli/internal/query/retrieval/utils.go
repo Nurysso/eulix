@@ -11,7 +11,9 @@ package retrieval
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -33,6 +35,7 @@ func (cb *ContextBuilder) Close() error {
 	if cb == nil {
 		return nil
 	}
+	cb.ivfBuild.Wait()
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
@@ -40,6 +43,18 @@ func (cb *ContextBuilder) Close() error {
 		cb.debugLog.Log("Closing ContextBuilder...")
 		cb.debugLog.Close()
 	}
+	var releaseErr error
+	if cb.embeddingRelease != nil {
+		releaseErr = cb.embeddingRelease()
+		if releaseErr == nil {
+			cb.embeddingRelease = nil
+		}
+	}
+	var closeErr error
+	if closer, ok := cb.queryEmbedder.(io.Closer); ok {
+		closeErr = closer.Close()
+	}
+	cb.queryEmbedder = nil
 	cb.chunks = nil
 	cb.embeddings = nil
 	cb.vectorMap = nil
@@ -56,7 +71,7 @@ func (cb *ContextBuilder) Close() error {
 	cb.kbIdx = nil
 	cb.kbData = nil
 	cb.boilerplate = nil
-	return nil
+	return errors.Join(releaseErr, closeErr)
 }
 
 func getHeapAlloc() uint64 {

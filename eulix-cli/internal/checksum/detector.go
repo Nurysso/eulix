@@ -24,8 +24,11 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -63,11 +66,11 @@ type Checksum struct {
 // compares to whatever was previously stored (if anything).
 type Result struct {
 	Checksum      *Checksum // current state of the project (nil on first run)
-	FirstRun      bool
 	ChangedRatio  float64
 	FilesAdded    int
 	FilesDeleted  int
 	FilesModified int
+	FirstRun      bool
 }
 
 type Detector struct {
@@ -143,9 +146,18 @@ func (d *Detector) Load() (*Checksum, error) {
 	return &c, nil
 }
 
-// Only track the extensions Rust actually tracked.
+// Track supported source extensions as well as those present in the baseline.
 func extsFromBaseline(stored *Checksum) map[string]bool {
-	set := make(map[string]bool)
+	// Match the "all" filter in eulix-parser/src/parse/file.rs and the selected
+	// extensions in libeulix/src/grammar_files/language.rs. Keep both in sync.
+	set := map[string]bool{
+		".py": true, ".pyw": true, ".pyi": true,
+		".js": true, ".mjs": true, ".cjs": true,
+		".ts": true, ".mts": true, ".cts": true,
+		".go": true, ".rs": true, ".java": true,
+		".c": true, ".h": true, ".cpp": true, ".cc": true, ".cxx": true,
+		".hpp": true, ".hxx": true, ".h++": true, ".c++": true,
+	}
 	for p := range stored.Files {
 		base := filepath.Base(p)
 		// A leading-dot-only basename (".gitignore") is not an extension.
@@ -173,8 +185,14 @@ func (d *Detector) loadIgnorePatterns() {
 		defer func() { _ = f.Close() }()
 
 		sc := bufio.NewScanner(f)
+		first := true
 		for sc.Scan() {
-			line := strings.TrimSpace(sc.Text())
+			text := sc.Text()
+			if first {
+				text = strings.TrimPrefix(text, "\ufeff")
+				first = false
+			}
+			line := strings.TrimSpace(text)
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
@@ -183,10 +201,17 @@ func (d *Detector) loadIgnorePatterns() {
 
 		// Check for read errors after scanning finishes
 		if err := sc.Err(); err != nil {
-			fmt.Println("reading euignore file: %w", err)
+			fmt.Printf("reading euignore file: %v\n", err)
 		}
 	}
 	d.ignorePatterns = append(user, defaults...)
+}
+
+// IgnoreMatcher reports whether a path under projectPath is excluded by the
+// project's .euignore or the default ignored directories, the same rules the
+// checksum scan uses. It reads .euignore once, so build one per walk.
+func IgnoreMatcher(projectPath string) func(path string) bool {
+	return newDetector(projectPath).shouldIgnore
 }
 
 func (d *Detector) shouldIgnore(path string) bool {
@@ -197,48 +222,188 @@ func (d *Detector) shouldIgnore(path string) bool {
 
 	// Normalize to forward slashes for consistent matching
 	relPath = filepath.ToSlash(relPath)
+	if relPath == ".." || strings.HasPrefix(relPath, "../") {
+		return false
+	}
+
 	pathParts := strings.Split(relPath, "/")
 
 	for _, pattern := range d.ignorePatterns {
 		pattern = filepath.ToSlash(pattern)
+		pattern = strings.TrimPrefix(pattern, "./")
 
-		// Handle directory patterns
-		if strings.HasSuffix(pattern, "/") {
-			dirPattern := strings.TrimSuffix(pattern, "/")
+		isDirOnly := strings.HasSuffix(pattern, "/")
+		if isDirOnly {
+			pattern = strings.TrimSuffix(pattern, "/")
+		}
 
-			// Check if any path component matches
-			for _, part := range pathParts {
-				if matched, _ := filepath.Match(dirPattern, part); matched {
-					return true
-				}
-			}
+		isAnchored := strings.HasPrefix(pattern, "/")
+		if isAnchored {
+			pattern = strings.TrimPrefix(pattern, "/")
+		}
 
-			// Check if path starts with this directory
-			if relPath == dirPattern || strings.HasPrefix(relPath, dirPattern+"/") {
-				return true
-			}
-		} else {
-			// File pattern - check full path and each component
-			if matched, _ := filepath.Match(pattern, relPath); matched {
-				return true
-			}
-
-			for _, part := range pathParts {
-				if matched, _ := filepath.Match(pattern, part); matched {
-					return true
-				}
-			}
+		if matchIgnorePattern(pattern, relPath, pathParts, isAnchored, isDirOnly) {
+			return true
 		}
 	}
 
 	return false
 }
 
+func matchIgnorePattern(pattern, relPath string, pathParts []string, isAnchored, isDirOnly bool) bool {
+	// If pattern contains a slash (other than trailing/leading which were stripped),
+	// or if it was anchored, it matches against relPath (or prefixes).
+	// Otherwise, it can match against individual path components or relPath.
+	hasSlash := strings.Contains(pattern, "/")
+
+	if strings.HasPrefix(pattern, "**/") {
+		subPattern := strings.TrimPrefix(pattern, "**/")
+		// Match against full relPath
+		if matchGlob(subPattern, relPath) {
+			return true
+		}
+		// Match against any path component if subPattern has no slash
+		if !strings.Contains(subPattern, "/") {
+			for _, part := range pathParts {
+				if matchGlob(subPattern, part) {
+					return true
+				}
+			}
+		}
+		// Also match any directory prefix
+		curr := ""
+		for _, part := range pathParts {
+			if curr == "" {
+				curr = part
+			} else {
+				curr = curr + "/" + part
+			}
+			if matchGlob(subPattern, curr) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if isAnchored || hasSlash {
+		if matchGlob(pattern, relPath) {
+			return true
+		}
+		// If it's a directory pattern or prefix match
+		if relPath == pattern || strings.HasPrefix(relPath, pattern+"/") {
+			return true
+		}
+		return false
+	}
+
+	// Pattern has no slashes and is unanchored (e.g. "secret.py", "build", ".*", "*.log")
+	for _, part := range pathParts {
+		if matchGlob(pattern, part) {
+			// If it's dir-only, it matches if part is a directory (i.e. not the last part or path is dir)
+			// But shouldIgnore is called for both files and dirs.
+			// When called on "/repo/node_modules/x.js", part "node_modules" matches.
+			return true
+		}
+	}
+
+	return matchGlob(pattern, relPath)
+}
+
+func matchGlob(pattern, target string) bool {
+	if strings.Contains(pattern, "**") {
+		// Convert gitignore globstar to regex
+		var re strings.Builder
+		re.WriteString("^")
+		i := 0
+		for i < len(pattern) {
+			if i+2 < len(pattern) && pattern[i:i+3] == "/**" {
+				// check if followed by / or end
+				if i+3 == len(pattern) {
+					re.WriteString("(/.*)?")
+					i += 3
+					continue
+				} else if pattern[i+3] == '/' {
+					re.WriteString("(/.*)?")
+					i += 4
+					continue
+				}
+			}
+			if i+2 <= len(pattern) && pattern[i:i+2] == "**" {
+				if i+2 < len(pattern) && pattern[i+2] == '/' {
+					re.WriteString("(?:.*/)?")
+					i += 3
+					continue
+				}
+				re.WriteString(".*")
+				i += 2
+				continue
+			}
+			c := pattern[i]
+			switch c {
+			case '*':
+				re.WriteString("[^/]*")
+			case '?':
+				re.WriteString("[^/]")
+			case '.', '+', '(', ')', '|', '^', '$', '[', ']', '{', '}', '\\':
+				re.WriteByte('\\')
+				re.WriteByte(c)
+			default:
+				re.WriteByte(c)
+			}
+			i++
+		}
+		re.WriteString("$")
+		matched, _ := path.Match(pattern, target)
+		return matched
+	}
+
+	matched, _ := filepath.Match(pattern, target)
+	return matched
+}
+
+// nolint: unused
+var (
+	regexCache   = make(map[string]*regexp.Regexp)
+	regexCacheMu sync.RWMutex
+)
+
+// nolint: unused
+func regexpMatch(pattern, s string) (bool, error) {
+	regexCacheMu.RLock()
+	re, ok := regexCache[pattern]
+	regexCacheMu.RUnlock()
+	if !ok {
+		var err error
+		re, err = regexp.Compile(pattern)
+		if err != nil {
+			return false, err
+		}
+		regexCacheMu.Lock()
+		regexCache[pattern] = re
+		regexCacheMu.Unlock()
+	}
+	return re.MatchString(s), nil
+}
+
+func slashKeys(m map[string]FileEntry) map[string]FileEntry {
+	out := make(map[string]FileEntry, len(m))
+	for k, v := range m {
+		out[filepath.ToSlash(k)] = v
+	}
+	return out
+}
+
 func (d *Detector) scan(stored *Checksum) (*Checksum, error) {
 	files := make(map[string]FileEntry)
+	prev := slashKeys(stored.Files)
 
-	err := filepath.WalkDir(d.projectPath, func(path string, e fs.DirEntry, err error) error {
-		if path == d.projectPath {
+	root := d.projectPath
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+
+	err := filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
+		if p == root {
 			return err
 		}
 		skip := func() error {
@@ -254,7 +419,11 @@ func (d *Detector) scan(stored *Checksum) (*Checksum, error) {
 		if strings.HasPrefix(e.Name(), ".") || e.Type()&fs.ModeSymlink != 0 {
 			return skip()
 		}
-		if d.shouldIgnore(path) {
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return skip()
+		}
+		if d.shouldIgnore(filepath.Join(d.projectPath, rel)) {
 			return skip()
 		}
 		if e.IsDir() || !d.exts[filepath.Ext(e.Name())] {
@@ -265,22 +434,19 @@ func (d *Detector) scan(stored *Checksum) (*Checksum, error) {
 		if err != nil {
 			return nil
 		}
-		rel, err := filepath.Rel(d.projectPath, path)
-		if err != nil {
-			return nil
-		}
 
+		key := filepath.ToSlash(rel)
 		entry := FileEntry{Size: info.Size(), ModTime: info.ModTime().UnixNano()}
-		if old, ok := stored.Files[rel]; ok && old.Size == entry.Size && old.ModTime == entry.ModTime {
-			entry.Hash = old.Hash // unchanged, no need to read the file
+		if old, ok := prev[key]; ok && old.Size == entry.Size && old.ModTime == entry.ModTime {
+			entry.Hash = old.Hash
 		} else {
-			h, err := hashFile(path)
+			h, err := hashFile(p)
 			if err != nil {
 				return nil
 			}
 			entry.Hash = h
 		}
-		files[rel] = entry
+		files[key] = entry
 		return nil
 	})
 	if err != nil {
@@ -352,8 +518,9 @@ func decompressZstd(data []byte) ([]byte, error) {
 // correctly instead of being able to exceed 1.0 or hide against a stale
 // denominator).
 func compare(stored, current *Checksum) (added, deleted, modified int, ratio float64) {
+	storedFiles := slashKeys(stored.Files)
 	for file, entry := range current.Files {
-		old, ok := stored.Files[file]
+		old, ok := storedFiles[file]
 		switch {
 		case !ok:
 			added++
@@ -361,13 +528,13 @@ func compare(stored, current *Checksum) (added, deleted, modified int, ratio flo
 			modified++
 		}
 	}
-	for file := range stored.Files {
+	for file := range storedFiles {
 		if _, ok := current.Files[file]; !ok {
 			deleted++
 		}
 	}
 
-	denom := max(len(stored.Files), len(current.Files))
+	denom := max(len(storedFiles), len(current.Files))
 	if denom == 0 {
 		return added, deleted, modified, 0
 	}

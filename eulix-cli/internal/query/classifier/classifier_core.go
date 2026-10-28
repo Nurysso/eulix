@@ -3,11 +3,10 @@
 // Package classifier deterministically categorizes incoming queries to streamline CoT routing and short-circuit non-LLM requests.
 
 /*
-Package query provides query classification functionality.
+Package classifier provides query classification functionality.
 This file is responsible for core classifying logic with 3 layers of query identification
 Pattern -> symbol -> keyword
 */
-
 package classifier
 
 import (
@@ -44,13 +43,13 @@ type Classifier struct {
 
 type Classification struct {
 	Type         QueryType
-	Confidence   float64
+	Entities     []Entity
 	Symbols      []string
 	Keywords     []string
 	Reasoning    string
+	Confidence   float64
 	Priority     int
 	NeedsContext bool
-	Entities     []Entity
 }
 
 // maxQueryLen caps input size for Classify. Inputs exceeding this limit skip

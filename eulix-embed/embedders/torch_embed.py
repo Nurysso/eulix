@@ -12,13 +12,14 @@ import time
 from collections import defaultdict
 from typing import Any
 
+from embedders.mixins import BucketBatchMixin
 from utils.buckets import snap_to_bucket
 from utils.constants import BUCKETS_JINA, BUCKETS_STANDARD
 from utils.req import require_ml
 from utils.types import Chunk
 
 
-class EmbeddingGeneratorTorch:  # pylint: disable=too-many-instance-attributes
+class EmbeddingGeneratorTorch(BucketBatchMixin):  # pylint: disable=too-many-instance-attributes
     """
     Thin wrapper around a HuggingFace encoder model for batched embedding
     generation. Auto-detects the best available accelerator (CUDA, ROCm/HIP
@@ -36,7 +37,7 @@ class EmbeddingGeneratorTorch:  # pylint: disable=too-many-instance-attributes
 
     def __init__(
         self,
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        model_name: str = "BAAI/bge-base-en-v1.5",
         device: str | None = None,  # "cpu" | "cuda" | "rocm" | None (auto)
         batch_size: int | None = None,
         normalize: bool = True,
@@ -157,7 +158,7 @@ class EmbeddingGeneratorTorch:  # pylint: disable=too-many-instance-attributes
             print(f"\nError: {e}", file=sys.stderr)
             print("\nTips:", file=sys.stderr)
             print(
-                "  - Use a valid model name from Hugging Face (e.g., 'sentence-transformers/all-MiniLM-L6-v2')",
+                "  - Use a valid model name from Hugging Face (e.g., 'BAAI/bge-base-en-v1.5')",
                 file=sys.stderr,
             )
             print("  - Check your internet connection", file=sys.stderr)

@@ -41,15 +41,15 @@ func (cb *ContextBuilder) vectorSearchIVF(qEmb []float32, topK int, threshold fl
 	}
 
 	type centDist struct {
-		d float32
 		i int
+		d float32
 	}
 
 	// Rank centroids by similarity to query (cast to float32 to stay consistent
 	// with how centroids were built)
 	cd := make([]centDist, idx.NClusters)
 	for i, c := range idx.Centroids {
-		cd[i] = centDist{float32(dotProduct(qEmb, c)), i}
+		cd[i] = centDist{i, float32(dotProduct(qEmb, c))}
 	}
 	// Sort descending by similarity (highest first)
 	sort.Slice(cd, func(i, j int) bool { return cd[i].d > cd[j].d })
@@ -63,19 +63,27 @@ func (cb *ContextBuilder) vectorSearchIVF(qEmb []float32, topK int, threshold fl
 	scored := make([]ScoredChunk, 0, topK*2)
 	seen := make(map[int32]bool, topK*4)
 
+	chunkByVector := make(map[int]int, len(cb.chunks))
+	for i, chunk := range cb.chunks {
+		if row, ok := cb.vectorMap[chunk.ID]; ok {
+			chunkByVector[row] = i
+		}
+	}
+
 	for p := 0; p < nProbe; p++ {
 		for _, embIdx := range idx.Lists[cd[p].i] {
 			if seen[embIdx] {
 				continue
 			}
 			seen[embIdx] = true
-			if int(embIdx) >= len(cb.chunks) || int(embIdx) >= len(cb.embeddings) {
+			chunkIdx, ok := chunkByVector[int(embIdx)]
+			if !ok || embIdx < 0 || int(embIdx) >= len(cb.embeddings) {
 				continue
 			}
 			sim := float32(dotProduct(qEmb, cb.embeddings[embIdx]))
 			if sim >= threshF {
 				scored = append(scored, ScoredChunk{
-					Chunk: cb.chunks[embIdx],
+					Chunk: cb.chunks[chunkIdx],
 					Score: float64(sim),
 				})
 			}

@@ -292,12 +292,9 @@ func (r *Router) handleDependency(query string, _ *c.Classification) (string, er
 		return "Could not identify an entity for dependency analysis.", nil
 	}
 
-	deps := getExternalDeps()
-	if len(deps) == 0 {
-		if err := loadExternalDeps("external_deps.json"); err != nil {
-			return "", fmt.Errorf("could not load external deps: %w", err)
-		}
-		deps = getExternalDeps()
+	deps, err := readExternalDeps(filepath.Join(r.eulixDir, "kb_external_deps.json"))
+	if err != nil {
+		return "", fmt.Errorf("could not load external deps: %w", err)
 	}
 
 	idx := buildDepIndex(deps)
@@ -556,8 +553,11 @@ func (r *Router) handleEntryPoints(_ string, _ *c.Classification) (string, error
 }
 
 func (r *Router) handleFileStructure(query string) (string, error) {
-	if r.kb == nil {
-		return "Full KB (kb.json) not loaded — file structure query requires it.", nil
+	if err := r.ensureKB(); err != nil {
+		if os.IsNotExist(err) {
+			return "Full KB (kb.json) not loaded — file structure query requires it.", nil
+		}
+		return "", fmt.Errorf("could not load full KB: %w", err)
 	}
 
 	// Extract file path keys and sort them deterministically
@@ -593,8 +593,11 @@ func (r *Router) handleFileStructure(query string) (string, error) {
 }
 
 func (r *Router) handleTodosQuery(_ string, _ *c.Classification) (string, error) {
-	if r.kb == nil {
-		return "Full KB (kb.json) not loaded — TODO query requires it.", nil
+	if err := r.ensureKB(); err != nil {
+		if os.IsNotExist(err) {
+			return "Full KB (kb.json) not loaded — TODO query requires it.", nil
+		}
+		return "", fmt.Errorf("could not load full KB: %w", err)
 	}
 
 	var high, medium, low []todoItem

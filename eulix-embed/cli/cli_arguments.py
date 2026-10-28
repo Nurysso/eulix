@@ -40,7 +40,7 @@ def parse_args() -> argparse.ArgumentParser:
     ep.add_argument(
         "-m",
         "--model",
-        default="sentence-transformers/all-MiniLM-L6-v2",
+        default="BAAI/bge-base-en-v1.5",
         metavar="NAME",
         help="HuggingFace model name",
     )
@@ -85,7 +85,7 @@ def parse_args() -> argparse.ArgumentParser:
     qp.add_argument(
         "-m",
         "--model",
-        default="sentence-transformers/all-MiniLM-L6-v2",
+        default="BAAI/bge-base-en-v1.5",
         metavar="NAME",
         help="HuggingFace model name",
     )
@@ -108,7 +108,7 @@ def parse_args() -> argparse.ArgumentParser:
     sp.add_argument(
         "-m",
         "--model",
-        default="sentence-transformers/all-MiniLM-L6-v2",
+        default="BAAI/bge-base-en-v1.5",
         metavar="NAME",
         help="HuggingFace model name  [default: all-MiniLM-L6-v2]",
     )
