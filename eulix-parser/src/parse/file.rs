@@ -104,6 +104,7 @@ pub fn collect_source_files_and_hash(
     euignore_path: Option<&Path>,
     verbose: bool,
     write_dir: &Path,
+    threads: usize,
 ) -> Result<(Vec<PathBuf>, String), Box<dyn std::error::Error>> {
     // Turn the comma-separated CLI value into Language enums.
     // `all` is just a shortcut; otherwise we parse each token and ignore
@@ -160,7 +161,8 @@ pub fn collect_source_files_and_hash(
         FileWalker::new(root.to_path_buf()).with_euignore(ignore_path.to_path_buf())
     } else {
         FileWalker::new(root.to_path_buf())
-    };
+    }
+    .with_threads(threads);
 
     // Walk the tree, keep files whose extension matches, and compute the
     // project hash while we're at it.

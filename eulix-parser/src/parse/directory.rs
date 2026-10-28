@@ -61,8 +61,14 @@ pub fn parse_directory(
         }
     }
 
-    let (files, project_hash) =
-        collect_source_files_and_hash(&path, languages, euignore.as_deref(), verbose, write_dir)?;
+    let (files, project_hash) = collect_source_files_and_hash(
+        &path,
+        languages,
+        euignore.as_deref(),
+        verbose,
+        write_dir,
+        engine.threads(),
+    )?;
 
     if verbose {
         println!("      • Discovered {} source files", files.len());
