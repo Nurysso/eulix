@@ -279,21 +279,25 @@ func fileSpec() M {
 
 func TestBareID(t *testing.T) {
 	cases := map[string]string{
-		"func_foo":             "foo",
-		"method_Router_handle": "Router.handle",
-		"method_A_b_c":         "A.b_c",
-		"method_nounderscore":  "nounderscore",
-		"class_Foo":            "Foo",
-		"struct_S":             "S",
-		"enum_E":               "E",
-		"interface_I":          "I",
-		"type_T":               "T",
-		"foo":                  "foo",
-		"function_foo":         "function_foo",
-		"func_foo::a.go:12":    "foo",
-		"func_":                "",
-		"::x":                  "",
-		"":                     "",
+		"func_foo":               "foo",
+		"method_Router_handle":   "Router.handle",
+		"method_A_b_c":           "A.b_c",
+		"method_nounderscore":    "nounderscore",
+		"class_Foo":              "Foo",
+		"struct_S":               "S",
+		"enum_E":                 "E",
+		"interface_I":            "I",
+		"type_T":                 "T",
+		"foo":                    "foo",
+		"function_foo":           "function_foo",
+		"func_foo::a.go:12":      "foo",
+		"func_outer.inner::a.rs": "inner",
+		"func_a.b.c@7::a.py":     "c",
+		"method_PrinterPath_as_path.imp@42::u.rs": "imp",
+		"method_com.foo.Bar_baz::B.java":          "com.foo.Bar.baz",
+		"func_":                                   "",
+		"::x":                                     "",
+		"":                                        "",
 	}
 	for in, want := range cases {
 		if got := bareID(in); got != want {
@@ -304,14 +308,16 @@ func TestBareID(t *testing.T) {
 
 func TestCallGraphShortName(t *testing.T) {
 	cases := map[string]string{
-		"func_x":               "x",
-		"method_Router_handle": "handle",
-		"method_A_b_c":         "b_c",
-		"method_nounderscore":  "nounderscore",
-		"class_Foo::a.py":      "Foo",
-		"x::y":                 "x",
-		"plain":                "plain",
-		"":                     "",
+		"func_x":                 "x",
+		"method_Router_handle":   "handle",
+		"method_A_b_c":           "b_c",
+		"method_nounderscore":    "nounderscore",
+		"func_outer.inner::a.rs": "inner",
+		"method_PrinterPath_as_path.imp@42::u.rs": "imp",
+		"class_Foo::a.py":                         "Foo",
+		"x::y":                                    "x",
+		"plain":                                   "plain",
+		"":                                        "",
 	}
 	for in, want := range cases {
 		if got := callGraphShortName(in); got != want {
