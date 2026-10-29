@@ -1076,7 +1076,14 @@ impl GoParser {
             }
         }
 
-        let orphaned_methods: Vec<Function> = methods_map.into_values().flatten().collect();
+        // Methods whose receiver is declared in another file. Sort by
+        // receiver so they're appended in the same order on every run.
+        let mut orphaned: Vec<(String, Vec<Function>)> = methods_map.into_iter().collect();
+        orphaned.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let orphaned_methods: Vec<Function> = orphaned
+            .into_iter()
+            .flat_map(|(_, methods)| methods)
+            .collect();
         (structs, orphaned_methods)
     }
 
@@ -2076,5 +2083,31 @@ type Runner interface {
             .find(|m| m.name == "Run")
             .expect("Run method found");
         assert!(run_method.tags.contains(&"interface-method".to_string()));
+    }
+
+    #[test]
+    fn methods_on_types_from_other_files_come_out_in_receiver_order() {
+        // These receivers are declared elsewhere, so their methods end up
+        // as functions of this file. Their order used to follow a HashMap.
+        let mut src = String::from("package p\n");
+        for name in ["Zeta", "Alpha", "Mu", "Kappa", "Beta", "Omega", "Delta"] {
+            src.push_str(&format!("\nfunc (x *{name}) Run() {{}}\n"));
+        }
+        let fd = parse(&src);
+        let receivers: Vec<&str> = fd
+            .functions
+            .iter()
+            .filter_map(|f| f.id.strip_prefix("method_"))
+            .filter_map(|id| id.split('_').next())
+            .collect();
+        let mut sorted = receivers.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            receivers.len(),
+            7,
+            "got {:?}",
+            fd.functions.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+        assert_eq!(receivers, sorted);
     }
 }

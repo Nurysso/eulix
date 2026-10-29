@@ -7,7 +7,7 @@ use libeulix::struc::kb_struct::{
 };
 use serde::ser::{SerializeStruct, Serializer};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 //borrow the full types, emit only the simplified fields.
 pub struct FileDataSimpleView<'a>(pub &'a FileData);
@@ -75,7 +75,7 @@ impl<'a> Serialize for FileDataSimpleView<'a> {
 
 impl<'a> CallGraphRef<'a> {
     pub fn new(kb: &'a KnowledgeBase, indices: &IndicesView<'a>) -> Self {
-        let mut tags: HashMap<&'a str, &'a [String]> = HashMap::new();
+        let mut tags: BTreeMap<&'a str, &'a [String]> = BTreeMap::new();
         for fd in kb.structure.values() {
             let methods = fd.classes.iter().flat_map(|c| c.methods.iter());
             for f in fd.functions.iter().chain(methods) {
@@ -85,7 +85,7 @@ impl<'a> CallGraphRef<'a> {
             }
         }
 
-        let mut file_categories: HashMap<&'a str, &'a str> = HashMap::new();
+        let mut file_categories: BTreeMap<&'a str, &'a str> = BTreeMap::new();
         for (cat, files) in &indices.files_by_category {
             for file in files {
                 file_categories.insert(*file, *cat);
@@ -110,12 +110,12 @@ pub struct IndexViewRef<'a> {
 pub struct CallGraphRef<'a> {
     pub nodes: &'a [CallGraphNode],
     pub edges: &'a [CallGraphEdge],
-    /// node id -> tags
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub tags: HashMap<&'a str, &'a [String]>,
+    /// node id -> tags, sorted so the file is the same on every run
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub tags: BTreeMap<&'a str, &'a [String]>,
     /// file path -> category
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub file_categories: HashMap<&'a str, &'a str>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub file_categories: BTreeMap<&'a str, &'a str>,
 }
 
 //kb_call_graph.json

@@ -13,7 +13,10 @@ use crate::struc::kb_struct::{EntryPoint, KnowledgeBase};
 pub fn find_entry_points(kb: &KnowledgeBase) -> Vec<EntryPoint> {
     let mut entry_points = Vec::new();
 
-    for (filepath, filedata) in &kb.structure {
+    // Path order, so the list is the same on every run.
+    let mut files: Vec<_> = kb.structure.iter().collect();
+    files.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    for (filepath, filedata) in files {
         for func in &filedata.functions {
             if func.name == "main" || func.name == "run" || func.name == "start" {
                 entry_points.push(EntryPoint {

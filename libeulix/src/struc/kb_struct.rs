@@ -3,15 +3,16 @@
 
 use crate::utils::syntax::SyntaxHealth;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Serialize, Default)]
+// BTreeMap so the keys come out in the same order on every run.
 pub struct IndicesView<'a> {
-    pub functions_by_name: HashMap<&'a str, Vec<String>>,
-    pub functions_calling: HashMap<&'a str, Vec<&'a str>>,
-    pub functions_by_tag: HashMap<&'a str, Vec<&'a str>>,
-    pub types_by_name: HashMap<&'a str, Vec<String>>,
-    pub files_by_category: HashMap<&'a str, Vec<&'a str>>,
+    pub functions_by_name: BTreeMap<&'a str, Vec<String>>,
+    pub functions_calling: BTreeMap<&'a str, Vec<&'a str>>,
+    pub functions_by_tag: BTreeMap<&'a str, Vec<&'a str>>,
+    pub types_by_name: BTreeMap<&'a str, Vec<String>>,
+    pub files_by_category: BTreeMap<&'a str, Vec<&'a str>>,
 }
 
 /// kb_metrics.json metadata + top-K complex functions

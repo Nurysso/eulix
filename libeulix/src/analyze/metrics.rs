@@ -48,11 +48,83 @@ pub fn generate_metrics<'a>(kb: &'a KnowledgeBase, k: usize) -> MetricsReport<'a
                     .unwrap_or(Ordering::Equal)
             })
             .then_with(|| a.name.cmp(b.name))
+            .then_with(|| a.file.cmp(b.file))
+            .then_with(|| a.line_start.cmp(&b.line_start))
     });
     metrics.truncate(k);
 
     MetricsReport {
         metadata: &kb.metadata,
         top_complex_functions: metrics,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::struc::kb_struct::{
+        CallGraph, DependencyGraph, FileData, Function, Indices, Metadata, PatternInfo,
+    };
+    use std::collections::HashMap;
+
+    #[test]
+    fn same_named_ties_are_broken_by_file() {
+        // Locale files with an identical `error` function: the top-K cut
+        // used to keep an arbitrary one of them.
+        let mut structure = HashMap::new();
+        for path in [
+            "locales/zh.ts",
+            "locales/ps.ts",
+            "locales/az.ts",
+            "locales/sl.ts",
+            "locales/fi.ts",
+            "locales/hu.ts",
+            "locales/fa.ts",
+        ] {
+            let f = Function {
+                name: "error".to_string(),
+                complexity: 29,
+                ..Default::default()
+            };
+            structure.insert(
+                path.to_string(),
+                FileData {
+                    functions: vec![f],
+                    ..Default::default()
+                },
+            );
+        }
+        let kb = KnowledgeBase {
+            metadata: Metadata {
+                version: String::new(),
+                git_hash: String::new(),
+                project_name: String::new(),
+                project_hash: String::new(),
+                parsed_at: String::new(),
+                languages: vec![],
+                total_files: 0,
+                total_loc: 0,
+                total_functions: 0,
+                total_classes: 0,
+                total_methods: 0,
+            },
+            structure,
+            call_graph: CallGraph::default(),
+            dependency_graph: DependencyGraph::default(),
+            indices: Indices::default(),
+            entry_points: vec![],
+            external_dependencies: vec![],
+            patterns: PatternInfo::default(),
+        };
+        let report = generate_metrics(&kb, 3);
+        let files: Vec<&str> = report
+            .top_complex_functions
+            .iter()
+            .map(|m| m.file)
+            .collect();
+        assert_eq!(
+            files,
+            vec!["locales/az.ts", "locales/fa.ts", "locales/fi.ts"]
+        );
     }
 }

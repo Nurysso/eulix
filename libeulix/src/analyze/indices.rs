@@ -7,7 +7,10 @@ use crate::struc::kb_struct::{IndicesView, KnowledgeBase};
 
 pub fn generate_indices_view(kb: &KnowledgeBase) -> IndicesView<'_> {
     let mut ix = IndicesView::default();
-    for (path, fd) in &kb.structure {
+    // Path order, so each list in the view is the same on every run.
+    let mut files: Vec<_> = kb.structure.iter().collect();
+    files.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    for (path, fd) in files {
         let cat = classify_file(path.as_str(), fd);
         ix.files_by_category
             .entry(cat)

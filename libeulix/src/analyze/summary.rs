@@ -3,7 +3,7 @@
 
 use crate::struc::kb_struct::{FileData, KnowledgeBase, PatternInfo};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ProjectSummary {
@@ -11,7 +11,7 @@ pub struct ProjectSummary {
     pub total_files: usize,
     pub total_loc: usize,
     pub languages: Vec<String>,
-    pub categories: HashMap<String, Vec<String>>,
+    pub categories: BTreeMap<String, Vec<String>>,
     pub key_features: Vec<String>,
     pub entry_points: Vec<String>,
     pub dependencies: DependencyInfo,
@@ -55,10 +55,13 @@ pub fn generate_summary(kb: &KnowledgeBase) -> ProjectSummary {
     }
 }
 
-pub fn categorize_files(structure: &HashMap<String, FileData>) -> HashMap<String, Vec<String>> {
-    let mut categories: HashMap<String, Vec<String>> = HashMap::new();
+pub fn categorize_files(structure: &HashMap<String, FileData>) -> BTreeMap<String, Vec<String>> {
+    let mut categories: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
-    for (filepath, filedata) in structure {
+    // Path order, so each category lists its files the same way every run.
+    let mut files: Vec<_> = structure.iter().collect();
+    files.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    for (filepath, filedata) in files {
         let category = classify_file(filepath, filedata);
         categories
             .entry(category.to_string())
@@ -272,5 +275,34 @@ mod tests {
             assert_eq!(docstring_opener(doc), expected, "{doc:?}");
         }
         assert_eq!(docstring_opener("\r\n\r\n@see Other::method()\r\n"), None);
+    }
+
+    #[test]
+    fn categories_list_files_in_path_order() {
+        let mut structure = HashMap::new();
+        for path in [
+            "z/test_g.py",
+            "a/test_a.py",
+            "m/test_d.py",
+            "c/test_b.py",
+            "x/test_f.py",
+            "q/test_e.py",
+            "d/test_c.py",
+        ] {
+            structure.insert(path.to_string(), FileData::default());
+        }
+        let categories = categorize_files(&structure);
+        assert_eq!(
+            categories["Tests"],
+            vec![
+                "a/test_a.py",
+                "c/test_b.py",
+                "d/test_c.py",
+                "m/test_d.py",
+                "q/test_e.py",
+                "x/test_f.py",
+                "z/test_g.py",
+            ]
+        );
     }
 }

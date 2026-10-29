@@ -12,7 +12,7 @@ use libeulix::struc::kb_struct::{
 };
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -196,11 +196,13 @@ pub fn parse_directory(
     // logic in dependencies.rs but runs here so we don't need kb.structure
     // to be populated during analyze_and_build.
     let external_dependencies = {
-        let mut deps_map: HashMap<String, (HashSet<String>, String)> = HashMap::new();
+        // Ordered maps, so the dependencies and their files come out in
+        // the same order on every run.
+        let mut deps_map: BTreeMap<String, (BTreeSet<String>, String)> = BTreeMap::new();
         for (module, filepath, import_type) in raw_imports {
             let entry = deps_map
                 .entry(module)
-                .or_insert_with(|| (HashSet::new(), import_type));
+                .or_insert_with(|| (BTreeSet::new(), import_type));
             entry.0.insert(filepath);
         }
         deps_map
@@ -266,7 +268,11 @@ pub fn parse_directory(
         project_name,
         project_hash: project_hash.to_string(),
         parsed_at: chrono::Utc::now().format("%Y.%m.%d.%H%M%S").to_string(),
-        languages: languages_set.into_iter().collect(),
+        languages: {
+            let mut languages: Vec<String> = languages_set.into_iter().collect();
+            languages.sort_unstable();
+            languages
+        },
         total_files: merged_index.len(),
         total_loc,
         total_functions,
