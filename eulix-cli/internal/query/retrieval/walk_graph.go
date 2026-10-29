@@ -20,29 +20,29 @@ import (
 // =============================================================================
 
 const (
-	mediumSymbol = "symbol"
-	mediumCall   = "call"
-	mediumLex    = "lex"
+	layerSymbol = "symbol"
+	layerCall   = "call"
+	layerLex    = "lex"
 )
 
 const (
-	scatterSymbol       = 0.42
-	scatterCall         = 0.33
-	scatterLex          = 0.25
-	symbolMediumMaxDF   = 128 // 512
-	callMediumMaxFanout = 64
-	lexMediumMaxDF      = 24
-	lexMediumMaxNbrs    = 24
+	scatterSymbol      = 0.42
+	scatterCall        = 0.33
+	scatterLex         = 0.25
+	symbolLayerMaxDF   = 128 // 512
+	callLayerMaxFanout = 64
+	lexLayerMaxDF      = 24
+	lexLayerMaxNbrs    = 24
 )
 
-type mediumEdge struct {
+type walkEdge struct {
 	to int
 	w  float32
 }
 
-type medium struct {
+type walkLayer struct {
 	name  string
-	edges [][]mediumEdge
+	edges [][]walkEdge
 }
 
 // -----------------------------------------------------------------------------
@@ -97,7 +97,7 @@ type mcDiag struct {
 	rngFirst []float64
 }
 
-func newMcDiag(media []*medium) *mcDiag {
+func newMcDiag(media []*walkLayer) *mcDiag {
 	d := &mcDiag{
 		seedFiles:     map[string]int{},
 		fileFlux:      map[string]int{},
@@ -129,7 +129,7 @@ func (cb *ContextBuilder) chunkFileAt(i int) string {
 	return cb.chunks[i].File
 }
 
-func (d *mcDiag) profileMedia(cb *ContextBuilder, media []*medium) {
+func (d *mcDiag) profileLayers(cb *ContextBuilder, media []*walkLayer) {
 	// diag: structural profile of each medium — edge totals, isolated nodes,
 	// diag: and the cross-file fraction that H1 is about.
 	for ci, m := range media {
@@ -170,7 +170,7 @@ func (d *mcDiag) profileSeeds(cb *ContextBuilder, seedIdxs []int, cross []float6
 	}
 }
 
-func (d *mcDiag) noteAbsorb(p float64) {
+func (d *mcDiag) noteStop(p float64) {
 	d.absorbProbSum += p
 	d.absorbProbN++
 	if p < d.absorbProbMin {
@@ -179,7 +179,7 @@ func (d *mcDiag) noteAbsorb(p float64) {
 	if p > d.absorbProbMax {
 		d.absorbProbMax = p
 	}
-	// mcAbsorbBase(0.30) + cap(0.45) = 0.75; anything at the cap means
+	// mcStopBase(0.30) + cap(0.45) = 0.75; anything at the cap means
 	// cross/5000 >= 0.45, i.e. cross >= 2250, i.e. the term is saturated.
 	if p >= 0.7499 {
 		d.absorbSatCount++
@@ -238,7 +238,7 @@ func (d *mcDiag) report(cb *ContextBuilder, flux map[int]float64, scored int) {
 		for i := 0; i < n5; i++ {
 			t5 += int(flux[keys[i]])
 		}
-		cb.debugLog.Log("%s flux top5=%v share=%.1f%% distinctFilesWithFlux=%d", P, topFluxList(cb, flux, keys, 5), pct(t5, top), len(d.fileFlux))
+		cb.debugLog.Log("%s flux top5=%v share=%.1f%% distinctFilesWithFlux=%d", P, topVisitList(cb, flux, keys, 5), pct(t5, top), len(d.fileFlux))
 	}
 
 	// ---- depth
@@ -268,7 +268,7 @@ func (d *mcDiag) report(cb *ContextBuilder, flux map[int]float64, scored int) {
 	cb.debugLog.Log("%s rngSeed=%d firstDraws=%v", P, d.rngSeed, d.rngFirst)
 }
 
-func topFluxList(cb *ContextBuilder, flux map[int]float64, keys []int, n int) []string {
+func topVisitList(cb *ContextBuilder, flux map[int]float64, keys []int, n int) []string {
 	if len(keys) > n {
 		keys = keys[:n]
 	}
@@ -290,16 +290,16 @@ func pct(n, of int) float64 {
 // original code
 // -----------------------------------------------------------------------------
 
-func topEdges(acc map[int]float32, cap int) []mediumEdge {
+func topEdges(acc map[int]float32, cap int) []walkEdge {
 	if len(acc) == 0 || cap <= 0 {
 		return nil
 	}
-	out := make([]mediumEdge, 0, len(acc))
+	out := make([]walkEdge, 0, len(acc))
 	for to, w := range acc {
 		if to < 0 {
 			continue
 		}
-		out = append(out, mediumEdge{to: to, w: w})
+		out = append(out, walkEdge{to: to, w: w})
 	}
 	if len(out) > cap {
 		sort.Slice(out, func(i, j int) bool {
@@ -314,11 +314,11 @@ func topEdges(acc map[int]float32, cap int) []mediumEdge {
 	return out
 }
 
-func buildSymbolMedium(cb *ContextBuilder) *medium {
+func buildSymbolLayer(cb *ContextBuilder) *walkLayer {
 	if cb.medSymbol != nil {
 		return cb.medSymbol
 	}
-	m := &medium{name: mediumSymbol, edges: make([][]mediumEdge, len(cb.chunks))}
+	m := &walkLayer{name: layerSymbol, edges: make([][]walkEdge, len(cb.chunks))}
 	cb.medSymbol = m
 
 	acc := make(map[int]float32, mcMaxNeighbors)
@@ -328,7 +328,7 @@ func buildSymbolMedium(cb *ContextBuilder) *medium {
 			low := strings.ToLower(sym)
 			postings := cb.symbolIndex[low]
 			df := len(postings)
-			if df == 0 || df > symbolMediumMaxDF {
+			if df == 0 || df > symbolLayerMaxDF {
 				continue
 			}
 			w := float32(1.0 / math.Sqrt(float64(df)))
@@ -343,17 +343,17 @@ func buildSymbolMedium(cb *ContextBuilder) *medium {
 	return m
 }
 
-func buildCallMedium(cb *ContextBuilder) *medium {
+func buildCallLayer(cb *ContextBuilder) *walkLayer {
 	if cb.medCall != nil {
 		return cb.medCall
 	}
-	m := &medium{name: mediumCall, edges: make([][]mediumEdge, len(cb.chunks))}
+	m := &walkLayer{name: layerCall, edges: make([][]walkEdge, len(cb.chunks))}
 	cb.medCall = m
 
 	acc := make([]map[int]float32, len(cb.chunks))
 	get := func(i int) map[int]float32 {
 		if acc[i] == nil {
-			acc[i] = make(map[int]float32, callMediumMaxFanout)
+			acc[i] = make(map[int]float32, callLayerMaxFanout)
 		}
 		return acc[i]
 	}
@@ -367,7 +367,7 @@ func buildCallMedium(cb *ContextBuilder) *medium {
 	inRange := func(i int) bool { return i >= 0 && i < len(cb.chunks) }
 
 	for _, callers := range cb.callSites {
-		if len(callers) < 2 || len(callers) > callMediumMaxFanout {
+		if len(callers) < 2 || len(callers) > callLayerMaxFanout {
 			continue
 		}
 		w := float32(1.0 / math.Sqrt(float64(len(callers))))
@@ -391,7 +391,7 @@ func buildCallMedium(cb *ContextBuilder) *medium {
 		if len(callers) == 0 {
 			callers = cb.symbolIndex[strings.ToLower(sym)]
 		}
-		if len(callers) == 0 || len(callers) > callMediumMaxFanout {
+		if len(callers) == 0 || len(callers) > callLayerMaxFanout {
 			continue
 		}
 		for _, r := range rels {
@@ -399,7 +399,7 @@ func buildCallMedium(cb *ContextBuilder) *medium {
 				continue
 			}
 			callees := cb.symbolIndex[strings.ToLower(r.Target)]
-			if len(callees) == 0 || len(callees) > callMediumMaxFanout {
+			if len(callees) == 0 || len(callees) > callLayerMaxFanout {
 				continue
 			}
 			d := r.Distance
@@ -426,11 +426,11 @@ func buildCallMedium(cb *ContextBuilder) *medium {
 	return m
 }
 
-func buildLexMedium(cb *ContextBuilder) *medium {
+func buildLexLayer(cb *ContextBuilder) *walkLayer {
 	if cb.medLex != nil {
 		return cb.medLex
 	}
-	m := &medium{name: mediumLex, edges: make([][]mediumEdge, len(cb.chunks))}
+	m := &walkLayer{name: layerLex, edges: make([][]walkEdge, len(cb.chunks))}
 	cb.medLex = m
 
 	idx := cb.invertedIdx
@@ -440,14 +440,14 @@ func buildLexMedium(cb *ContextBuilder) *medium {
 	acc := make([]map[int]float32, len(cb.chunks))
 	get := func(i int) map[int]float32 {
 		if acc[i] == nil {
-			acc[i] = make(map[int]float32, lexMediumMaxNbrs)
+			acc[i] = make(map[int]float32, lexLayerMaxNbrs)
 		}
 		return acc[i]
 	}
 
 	for _, postings := range idx.Postings {
 		df := len(postings)
-		if df < 2 || df > lexMediumMaxDF {
+		if df < 2 || df > lexLayerMaxDF {
 			continue
 		}
 		w := float32(1.0 / math.Sqrt(float64(df)))
@@ -468,50 +468,50 @@ func buildLexMedium(cb *ContextBuilder) *medium {
 	}
 
 	for i := range m.edges {
-		m.edges[i] = topEdges(acc[i], lexMediumMaxNbrs)
+		m.edges[i] = topEdges(acc[i], lexLayerMaxNbrs)
 	}
 	return m
 }
 
-func (cb *ContextBuilder) transportMedia() []*medium {
-	var out []*medium
+func (cb *ContextBuilder) walkLayers() []*walkLayer {
+	var out []*walkLayer
 	if cb.hasCallGraph {
-		if m := buildCallMedium(cb); m != nil && len(m.edges) > 0 {
+		if m := buildCallLayer(cb); m != nil && len(m.edges) > 0 {
 			out = append(out, m)
 		}
 	}
-	if m := buildLexMedium(cb); m != nil && len(m.edges) > 0 {
+	if m := buildLexLayer(cb); m != nil && len(m.edges) > 0 {
 		out = append(out, m)
 	}
-	if m := buildSymbolMedium(cb); m != nil && len(m.edges) > 0 {
+	if m := buildSymbolLayer(cb); m != nil && len(m.edges) > 0 {
 		out = append(out, m)
 	}
 	return out
 }
 
-func mediumPreference(name string) float64 {
+func layerPreference(name string) float64 {
 	switch name {
-	case mediumSymbol:
+	case layerSymbol:
 		return scatterSymbol
-	case mediumCall:
+	case layerCall:
 		return scatterCall
 	default:
 		return scatterLex
 	}
 }
 
-func (cb *ContextBuilder) monteCarloTransport(seedIdxs []int, topK int) []ScoredChunk {
-	return cb.monteCarloTransportWithQuery(seedIdxs, topK, "")
+func (cb *ContextBuilder) monteCarloWalk(seedIdxs []int, topK int) []ScoredChunk {
+	return cb.monteCarloWalkWithQuery(seedIdxs, topK, "")
 }
 
-// monteCarloTransportWithQuery is monteCarloTransport plus an optional query
+// monteCarloWalkWithQuery is monteCarloWalk plus an optional query
 // string used ONLY for the RNG fingerprint log and the commented-out fix. Pass
 // "" to reproduce the original behaviour exactly.
-func (cb *ContextBuilder) monteCarloTransportWithQuery(seedIdxs []int, topK int, query string) []ScoredChunk {
+func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, query string) []ScoredChunk {
 	if len(seedIdxs) == 0 {
 		return nil
 	}
-	media := cb.transportMedia()
+	media := cb.walkLayers()
 	if len(media) == 0 {
 		cb.debugLog.Log("[transport] no scattering channels available — walk skipped")
 		return nil
@@ -526,7 +526,7 @@ func (cb *ContextBuilder) monteCarloTransportWithQuery(seedIdxs []int, topK int,
 				chanFlux += float64(e.w)
 			}
 		}
-		pref[i] = mediumPreference(m.name) * math.Log1p(math.Sqrt(chanFlux))
+		pref[i] = layerPreference(m.name) * math.Log1p(math.Sqrt(chanFlux))
 		wsum += pref[i]
 	}
 	if wsum <= 0 {
@@ -567,7 +567,7 @@ func (cb *ContextBuilder) monteCarloTransportWithQuery(seedIdxs []int, topK int,
 		for i := 0; i < 4; i++ {
 			diag.rngFirst = append(diag.rngFirst, probe.Float64())
 		}
-		diag.profileMedia(cb, media)
+		diag.profileLayers(cb, media)
 		for i := range media {
 			diag.chanPref[i] = pref[i] / wsum
 			diag.chanCum[i] = cum[i]
@@ -591,7 +591,7 @@ func (cb *ContextBuilder) monteCarloTransportWithQuery(seedIdxs []int, topK int,
 		}
 		return len(media) - 1
 	}
-	pickNeighbour := func(es []mediumEdge) int {
+	pickNeighbour := func(es []walkEdge) int {
 		var tot float32
 		for _, e := range es {
 			tot += e.w
@@ -631,7 +631,7 @@ func (cb *ContextBuilder) monteCarloTransportWithQuery(seedIdxs []int, topK int,
 
 	if mcDiagEnabled {
 		diag.profileSeeds(cb, seedIdxs, cross, deg)
-		diag.particles = mcParticles
+		diag.particles = mcWalkers
 	}
 
 	seedSet := map[int]bool{}
@@ -645,7 +645,7 @@ func (cb *ContextBuilder) monteCarloTransportWithQuery(seedIdxs []int, topK int,
 	visits := make([]int, len(media))
 
 	type walker struct{ idx, steps int }
-	for p := 0; p < mcParticles; p++ {
+	for p := 0; p < mcWalkers; p++ {
 		seed := seedIdxs[rng.Intn(len(seedIdxs))]
 		queue := []walker{{idx: seed, steps: 0}}
 		for len(queue) > 0 {
@@ -687,9 +687,9 @@ func (cb *ContextBuilder) monteCarloTransportWithQuery(seedIdxs []int, topK int,
 				diag.chanLive[ci]++
 			}
 
-			absorb := mcAbsorbBase + math.Min(0.45, cross[w.idx]/5000.0)
+			absorb := mcStopBase + math.Min(0.45, cross[w.idx]/5000.0)
 			if mcDiagEnabled {
-				diag.noteAbsorb(absorb)
+				diag.noteStop(absorb)
 			}
 			if rng.Float64() < absorb {
 				if mcDiagEnabled {
@@ -712,7 +712,7 @@ func (cb *ContextBuilder) monteCarloTransportWithQuery(seedIdxs []int, topK int,
 				if mcDiagEnabled {
 					diag.fissions++
 				}
-				for b := 0; b < mcHubFission-1; b++ {
+				for b := 0; b < mcHubBranch-1; b++ {
 					queue = append(queue, nw)
 					if mcDiagEnabled {
 						diag.walkPushes++
@@ -730,7 +730,7 @@ func (cb *ContextBuilder) monteCarloTransportWithQuery(seedIdxs []int, topK int,
 		}
 		scored = append(scored, ScoredChunk{
 			Chunk:        cb.chunks[idx],
-			Score:        f * mcFluxScoreScale,
+			Score:        f * mcVisitScoreScale,
 			MatchDetails: fmt.Sprintf("mc-flux: %.0f particles", f),
 		})
 	}
@@ -748,7 +748,7 @@ func (cb *ContextBuilder) monteCarloTransportWithQuery(seedIdxs []int, topK int,
 				if len(scored) == 0 {
 					return 0
 				}
-				return scored[0].Score / mcFluxScoreScale
+				return scored[0].Score / mcVisitScoreScale
 			}())
 	}
 	if mcDiagEnabled && diag != nil {

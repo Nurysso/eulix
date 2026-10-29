@@ -65,10 +65,10 @@ type ContextBuilder struct {
 	kbIdx            *utils.Indices
 	lastTrace        *DebugTrace
 	llmClient        *llm.Client
-	isospin          *isospinLattice
-	medCall          *medium
-	medLex           *medium
-	medSymbol        *medium
+	twins            *twinIndex
+	medCall          *walkLayer
+	medLex           *walkLayer
+	medSymbol        *walkLayer
 	mu               sync.Mutex
 	symbolIndex      map[string][]int
 	vectorMap        map[string]int
@@ -277,14 +277,14 @@ type SelectorMode int
 const (
 	SelectorGreedy SelectorMode = iota
 	SelectorQueryMMR
-	SelectorIsospinMMR
+	SelectorStructuralMMR
 )
 
 func (m SelectorMode) MmmrSelector() string {
 	switch m {
 	case SelectorQueryMMR:
 		return "mmr"
-	case SelectorIsospinMMR:
+	case SelectorStructuralMMR:
 		return "isospin_mmr"
 	default:
 		return "greedy"

@@ -44,15 +44,15 @@ import (
 //	               matched sources that reach it.
 
 const (
-	isoMinTwinSymbols = 2  // a 1-symbol signature is coincidence, not structure
-	isoMaxTwinDF      = 24 // above this the signature is a hub, not a twin
-	isoDensFloor      = 1e-6
-	isoDensClamp      = 1.8 // a score may be damped, never erased
-	isoBridgeFloor    = 40.0
-	isoBridgeDecay    = 0.55
+	twinMinSymbols  = 2  // a 1-symbol signature is coincidence, not structure
+	twinMaxDF       = 24 // above this the signature is a hub, not a twin
+	twinDensFloor   = 1e-6
+	twinDensClamp   = 1.8 // a score may be damped, never erased
+	twinBridgeFloor = 40.0
+	twinBridgeDecay = 0.55
 )
 
-// isospinLattice is the precomputed, query-free structure that lets the
+// twinIndex is the precomputed, query-free structure that lets the
 // selector and the bridge work in O(1) per chunk instead of scanning the
 // corpus or calling a vector index.
 //
@@ -61,7 +61,7 @@ const (
 //	twin       signature → chunk indices that share it
 //	twinDF     signature → number of chunks that share it, i.e. the class size
 //	twinClass  per-chunk class label; -1 for chunks with no class
-type isospinLattice struct {
+type twinIndex struct {
 	density   map[string]float64 // per-language expected score density
 	relDens   map[string]float64 // density[lang] / mean(density); the divisor
 	sig       []uint64           // per-chunk structural signature; 0 = not a twin
@@ -70,26 +70,26 @@ type isospinLattice struct {
 	twinClass []int
 }
 
-// isospinLatticeOrBuild returns the lattice, building it on first use. The
-// result is cached on the builder; call resetIsospinIndex when chunks change.
-func (cb *ContextBuilder) isospinLatticeOrBuild() *isospinLattice {
-	if cb.isospin == nil {
-		cb.isospin = buildIsospinLattice(cb)
+// twinIndexOrBuild returns the lattice, building it on first use. The
+// result is cached on the builder; call resetTwinIndex when chunks change.
+func (cb *ContextBuilder) twinIndexOrBuild() *twinIndex {
+	if cb.twins == nil {
+		cb.twins = buildTwinIndex(cb)
 	}
-	return cb.isospin
+	return cb.twins
 }
 
-// resetIsospinIndex drops every cached isospin and transport structure. Call
+// resetTwinIndex drops every cached isospin and transport structure. Call
 // this from the same place that rebuilds cb.chunks / cb.symbolIndex.
 // nolint: unused
-func (cb *ContextBuilder) resetIsospinIndex() {
-	cb.isospin = nil
+func (cb *ContextBuilder) resetTwinIndex() {
+	cb.twins = nil
 	cb.medSymbol = nil
 	cb.medCall = nil
 	cb.medLex = nil
 }
 
-// buildIsospinLattice does the work the old per-query alignment loop did, once.
+// buildTwinIndex does the work the old per-query alignment loop did, once.
 //
 // Pass 1 scores each chunk's expected exposure under a random-symbol query and
 // averages that per language. The result is that language's natural scoring
@@ -97,8 +97,8 @@ func (cb *ContextBuilder) resetIsospinIndex() {
 //
 // Pass 2 hashes every chunk's declaration into a language-independent
 // structural fingerprint.
-func buildIsospinLattice(cb *ContextBuilder) *isospinLattice {
-	lat := &isospinLattice{
+func buildTwinIndex(cb *ContextBuilder) *twinIndex {
+	lat := &twinIndex{
 		density: make(map[string]float64),
 		relDens: make(map[string]float64),
 		sig:     make([]uint64, len(cb.chunks)),
@@ -148,15 +148,15 @@ func buildIsospinLattice(cb *ContextBuilder) *isospinLattice {
 		return lat
 	}
 	mean := total / float64(langs)
-	if mean < isoDensFloor {
-		mean = isoDensFloor
+	if mean < twinDensFloor {
+		mean = twinDensFloor
 	}
 	for lang, d := range lat.density {
 		rel := d / mean
-		if rel < 1/isoDensClamp {
-			rel = 1 / isoDensClamp
-		} else if rel > isoDensClamp {
-			rel = isoDensClamp
+		if rel < 1/twinDensClamp {
+			rel = 1 / twinDensClamp
+		} else if rel > twinDensClamp {
+			rel = twinDensClamp
 		}
 		lat.relDens[lang] = rel
 	}
@@ -175,7 +175,7 @@ func buildIsospinLattice(cb *ContextBuilder) *isospinLattice {
 	// Drops a signature shared by hundreds of chunks carries no
 	// structural information and would just be a slow way to return noise.
 	for sig, df := range lat.twinDF {
-		if df < 2 || df > isoMaxTwinDF {
+		if df < 2 || df > twinMaxDF {
 			delete(lat.twin, sig)
 			delete(lat.twinDF, sig)
 		}
@@ -194,7 +194,7 @@ func buildIsospinLattice(cb *ContextBuilder) *isospinLattice {
 // structural state. (The function is named for "structural", not "struct",
 // for exactly this reason.)
 func structuralSignature(c Chunk) (uint64, bool) {
-	if len(c.Symbols) < isoMinTwinSymbols {
+	if len(c.Symbols) < twinMinSymbols {
 		return 0, false
 	}
 	norm := make([]string, 0, len(c.Symbols))
@@ -207,7 +207,7 @@ func structuralSignature(c Chunk) (uint64, bool) {
 		seen[n] = true
 		norm = append(norm, n)
 	}
-	if len(norm) < isoMinTwinSymbols {
+	if len(norm) < twinMinSymbols {
 		return 0, false
 	}
 	sort.Strings(norm)
@@ -221,7 +221,7 @@ func structuralSignature(c Chunk) (uint64, bool) {
 	return h.Sum64(), true
 }
 
-// isospinBridgeSeek crosses the doublet.
+// crossLangTwinSearch crosses the doublet.
 //
 // For every chunk the lexical and graph strategies already love, emit the
 // chunks that are the same structural state in a *different* language. This
@@ -232,8 +232,8 @@ func structuralSignature(c Chunk) (uint64, bool) {
 // Flux accumulates a twin reachable from three strong sources resonates
 // harder than one reachable from a single source. That is transport, not
 // first-come-first-served.
-func (cb *ContextBuilder) isospinBridgeSeek(sources map[string]ScoredChunk, topK int) []ScoredChunk {
-	lat := cb.isospinLatticeOrBuild()
+func (cb *ContextBuilder) crossLangTwinSearch(sources map[string]ScoredChunk, topK int) []ScoredChunk {
+	lat := cb.twinIndexOrBuild()
 	if lat == nil || len(lat.twin) == 0 || len(sources) == 0 {
 		return nil
 	}
@@ -245,7 +245,7 @@ func (cb *ContextBuilder) isospinBridgeSeek(sources map[string]ScoredChunk, topK
 	detail := make(map[int]string, topK*2)
 
 	for _, src := range sources {
-		if src.Pinned || src.Score < isoBridgeFloor {
+		if src.Pinned || src.Score < twinBridgeFloor {
 			continue
 		}
 		si := cb.chunkIdx[src.ID]
@@ -260,8 +260,8 @@ func (cb *ContextBuilder) isospinBridgeSeek(sources map[string]ScoredChunk, topK
 		if len(peers) < 2 {
 			continue
 		}
-		hop := src.Score * isoBridgeDecay / math.Sqrt(float64(lat.twinDF[sig]))
-		if hop < isoBridgeFloor*0.25 {
+		hop := src.Score * twinBridgeDecay / math.Sqrt(float64(lat.twinDF[sig]))
+		if hop < twinBridgeFloor*0.25 {
 			continue
 		}
 		from := chunkLanguage(src.File)
@@ -316,15 +316,15 @@ func nameOf(c Chunk) string {
 	return c.ID
 }
 
-// isoNormalizeScores divides out each language's relative density, so a chunk
+// langNormalizeScores divides out each language's relative density, so a chunk
 // in a lexically dense projection (C: short symbols, high df, dense
 // declarations) cannot out-rank one in a sparse projection purely for being
 // dense. Exact and pinned hits are exempt and those already mean what they say.
 //
 // Applied before subsystem boosting so an intentional subsystem boost
 // survives normalization instead of being averaged away.
-func isoNormalizeScores(cands []ScoredChunk, cb *ContextBuilder) []ScoredChunk {
-	lat := cb.isospinLatticeOrBuild()
+func langNormalizeScores(cands []ScoredChunk, cb *ContextBuilder) []ScoredChunk {
+	lat := cb.twinIndexOrBuild()
 	if lat == nil || len(lat.relDens) == 0 {
 		return cands
 	}

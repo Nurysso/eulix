@@ -69,7 +69,7 @@ func ResolveEngine(raw string) (Engine, error) {
 func (cb *ContextBuilder) SelectorFor() SelectorMode {
 	switch {
 	case cb.Engine() == EngineEHNAS:
-		return SelectorIsospinMMR
+		return SelectorStructuralMMR
 	case cb.hasEmbeddings:
 		return SelectorQueryMMR
 	default:
@@ -140,7 +140,7 @@ func (cb *ContextBuilder) runSearch(
 // MMR needs a query vector for its relevance-weighted redundancy term, so
 // Ehnas — which by construction has none — always selects greedily. Worth
 // knowing that this is a real quality difference and not a free choice:
-// fermiDiracPack gates redundancy before selection, but greedy can still
+// noveltyPack gates redundancy before selection, but greedy can still
 // re-adjacent blocks that fermi let through. A query-free MMR (redundancy
 // measured only between already-selected chunks, e.g. token Jaccard) would
 // close that gap without reintroducing a single embedding. That is the next
@@ -247,7 +247,7 @@ func (cb *ContextBuilder) loadEhnasArtifacts() error {
 	//
 	// The transport media stay lazy. The lexical medium is O(Σ df²) and
 	// should not be paid for until a query actually needs a walk.
-	cb.isospin = buildIsospinLattice(cb)
+	cb.twins = buildTwinIndex(cb)
 
 	cb.hasEmbeddings = false
 	cb.reportEhnasIndex()
@@ -274,7 +274,7 @@ func (cb *ContextBuilder) buildChunkIndex() {
 }
 
 func (cb *ContextBuilder) reportEhnasIndex() {
-	lat := cb.isospin
+	lat := cb.twins
 	if lat != nil {
 		projs := make([]string, 0, len(lat.density))
 		for lang, d := range lat.density {

@@ -6,7 +6,7 @@
 /*
 Package retrieval provides context window creation for Eulix's RAG system.
 
-This file defines isospinMMR, a query-free, MMR-family context selector.
+This file defines structuralMMR, a query-free, MMR-family context selector.
 It is not textbook MMR: relevance is a fused multi-strategy score rather
 than a query cosine, and redundancy is a multipole expansion over symbol,
 spatial, and isospin (structural-twin) channels rather than an embedding
@@ -66,23 +66,23 @@ const (
 	// Multipole weights. They sum above 1.0 on purpose a chunk that is
 	// simultaneously adjacent, symbol-overlapping and a structural twin
 	// really is fully redundant, and the clamp handles the overshoot.
-	multipoleMonopole   = 0.45 // shared symbol surface
-	multipoleDipole     = 0.20 // spatial relation within a file
-	multipoleQuadrupole = 0.55 // isospin structural state
+	wSymbolOverlap = 0.45 // shared symbol surface
+	wLineProximity = 0.20 // spatial relation within a file
+	wSameTwin      = 0.55 // isospin structural state
 
 	// Dipole response by line gap, same file. Adjacent blocks merge for
 	// almost no marginal token cost, so they are cheap to carry together and
 	// should not be treated as redundant. Distant blocks in the same file
 	// cost real budget and share a file header, so they are.
-	dipoleAdjacent   = 0.15 // gap <= canMerge threshold: merges, nearly free
-	dipoleNear       = 0.50 // gap <= distantLineThreshold
-	dipoleFar        = 0.85 // same file, far apart
-	dipoleNone       = 0.0  // different file
-	dipoleSameAsFile = 0.65 // same file, overlapping or interleaved
+	proximityAdjacent   = 0.15 // gap <= canMerge threshold: merges, nearly free
+	proximityNear       = 0.50 // gap <= distantLineThreshold
+	proximityFar        = 0.85 // same file, far apart
+	proximityNone       = 0.0  // different file
+	proximitySameAsFile = 0.65 // same file, overlapping or interleaved
 
 	// File saturation. Every additional chunk from an already-represented
 	// file raises the redundancy floor, so a long file cannot quietly eat
-	// the whole window. fermiDiracPack gates redundancy at the candidate
+	// the whole window. noveltyPack gates redundancy at the candidate
 	// stage; this is the selection-stage counterpart.
 	fileSatPerChunk = 0.07
 	fileSatCeiling  = 0.30
@@ -98,10 +98,10 @@ const (
 	ehnasRankShare = 0.30
 )
 
-// isospinCand is one candidate's working state during selection. maxRed is
+// structCand is one candidate's working state during selection. maxRed is
 // updated incrementally as chunks are picked, so the similarity matrix is
 // never materialised.
-type isospinCand struct {
+type structCand struct {
 	sc        ScoredChunk
 	syms      []string
 	symW      map[string]float64 // symbol → idf weight
@@ -111,7 +111,7 @@ type isospinCand struct {
 	twinClass int
 }
 
-// isospinMMR is the query-free context selector for the EHNAS engine.
+// structuralMMR is the query-free context selector for the EHNAS engine.
 //
 // Algorithm (MMR-family, query-free):
 //
@@ -119,14 +119,14 @@ type isospinCand struct {
 //
 // relevance comes from fillQueryFreeRelevance (fused score, log + rank blend,
 // no query involved). redundancy is the max over already-selected chunks of
-// multipoleRedundancy, floored by fileSaturation so a single file cannot
+// chunkRedundancy, floored by fileSaturation so a single file cannot
 // dominate the window. Pinned anchors are seeded before the loop and the top
 // pin is always kept regardless of budget.
 //
 // "Isospin" in the name refers to the twin-class channel (k=2) that treats
 // cross-language structural twins as the same particle in different
 // projections. See the file-level comment above for the full glossary.
-func (cb *ContextBuilder) isospinMMR(
+func (cb *ContextBuilder) structuralMMR(
 	candidates []ScoredChunk,
 	budget int,
 	anchorFiles map[string]bool,
@@ -153,8 +153,8 @@ func (cb *ContextBuilder) isospinMMR(
 	if maxChunks <= 0 {
 		maxChunks = 30
 	}
-	lat := cb.isospinLatticeOrBuild()
-	cb.debugLog.Log("[isospinMMR] lambda=%.2f budget=%d maxChunks=%d candidates=%d twins=%d classes=%d",
+	lat := cb.twinIndexOrBuild()
+	cb.debugLog.Log("[structuralMMR] lambda=%.2f budget=%d maxChunks=%d candidates=%d twins=%d classes=%d",
 		lambda, budget, maxChunks, len(candidates), len(lat.twin), len(lat.twin))
 
 	//               pinned first, before anything is normalised
@@ -181,10 +181,10 @@ func (cb *ContextBuilder) isospinMMR(
 	}
 
 	//               candidate state
-	cs := make([]isospinCand, len(pool))
+	cs := make([]structCand, len(pool))
 	for i, c := range pool {
 		syms := cb.nonBoilerplate(c.Symbols)
-		cs[i] = isospinCand{
+		cs[i] = structCand{
 			sc:        c,
 			syms:      syms,
 			symW:      cb.symWeights(syms),
@@ -213,13 +213,13 @@ func (cb *ContextBuilder) isospinMMR(
 	tokenSum := 0
 
 	// fold a newly selected chunk into every live candidate's maxRed
-	noteSelected := func(p *isospinCand, damp float64) {
+	noteSelected := func(p *structCand, damp float64) {
 		for i := range cs {
 			c := &cs[i]
 			if !c.alive {
 				continue
 			}
-			if r := multipoleRedundancy(c, p) * damp; r > c.maxRed {
+			if r := chunkRedundancy(c, p) * damp; r > c.maxRed {
 				c.maxRed = r
 			}
 		}
@@ -242,7 +242,7 @@ func (cb *ContextBuilder) isospinMMR(
 		selected = append(selected, p.Chunk)
 		tokenSum += cost
 		chunkTraces = append(chunkTraces, ct)
-		pc := isospinCand{
+		pc := structCand{
 			sc:   p,
 			symW: cb.symWeights(cb.nonBoilerplate(p.Symbols)),
 		}
@@ -324,7 +324,7 @@ func (cb *ContextBuilder) isospinMMR(
 	}
 
 	//               diagnostics
-	cb.multipoleStats(cs)
+	cb.redundancyStats(cs)
 	if debugLevel3 {
 		excluded := 0
 		for _, t := range chunkTraces {
@@ -332,13 +332,13 @@ func (cb *ContextBuilder) isospinMMR(
 				excluded++
 			}
 		}
-		cb.debugLog.Log("[isospinMMR] selected=%d tokens=%d/%d traces=%d excluded=%d stop=%q",
+		cb.debugLog.Log("[structuralMMR] selected=%d tokens=%d/%d traces=%d excluded=%d stop=%q",
 			len(selected), tokenSum, budget, len(chunkTraces), excluded, stop)
 	}
 	if trace != nil {
 		trace.ChunkTraces = chunkTraces
 		trace.Warnings = append(trace.Warnings,
-			fmt.Sprintf("isospinMMR: %d chunks, %d tokens, %s", len(selected), tokenSum, stop))
+			fmt.Sprintf("structuralMMR: %d chunks, %d tokens, %s", len(selected), tokenSum, stop))
 	}
 	return selected
 }
@@ -349,7 +349,7 @@ func (cb *ContextBuilder) isospinMMR(
 
 // fillQueryFreeRelevance normalizes fused scores into [0,1] without letting
 // one outlier destroy the scale. This is the "query-free relevance" term of
-// isospinMMR: there is no query to take a cosine against, so the fused
+// structuralMMR: there is no query to take a cosine against, so the fused
 // multi-strategy score stands in for one.
 //
 // Min-max alone is wrong here and the failure is quiet. EHNAS's score
@@ -364,7 +364,7 @@ func (cb *ContextBuilder) isospinMMR(
 // function deliberately does not consult the isospin lattice, the twin-class
 // channel belongs to redundancy, not relevance. cs is expected to already be
 // sorted by score descending.
-func fillQueryFreeRelevance(cs []isospinCand, anchorFiles map[string]bool) {
+func fillQueryFreeRelevance(cs []structCand, anchorFiles map[string]bool) {
 	if len(cs) == 0 {
 		return
 	}
@@ -404,28 +404,28 @@ func fillQueryFreeRelevance(cs []isospinCand, anchorFiles map[string]bool) {
 // Redundancy: The multipole expansion
 // ---------------------------------------------------------------------------
 
-// multipoleRedundancy returns the combined redundancy of a and b in [0,1].
+// chunkRedundancy returns the combined redundancy of a and b in [0,1].
 //
 // Channels are independent rather than averaged. Two chunks that are the same
 // structural state in different languages score high on quadrupole and zero
 // on monopole, which is the entire point; averaging would dilute exactly the
 // signal the k=2 term exists to provide.
-func multipoleRedundancy(a, b *isospinCand) float64 {
-	r := multipoleMonopole*monopole(a, b) +
-		multipoleDipole*dipole(a, b) +
-		multipoleQuadrupole*quadrupole(a, b)
+func chunkRedundancy(a, b *structCand) float64 {
+	r := wSymbolOverlap*symbolOverlap(a, b) +
+		wLineProximity*lineProximity(a, b) +
+		wSameTwin*sameTwin(a, b)
 	if r > 1.0 {
 		return 1.0
 	}
 	return r
 }
 
-// monopole (k=0): weighted Jaccard over non-boilerplate symbols.
+// symbolOverlap (k=0): weighted Jaccard over non-boilerplate symbols.
 //
 // Weighted rather than raw: a shared rare identifier means the two chunks
 // are doing the same specific thing, a shared common one means little.
 // unweighted Jaccard scores `error` and `parse_config` as equally redundant.
-func monopole(a, b *isospinCand) float64 {
+func symbolOverlap(a, b *structCand) float64 {
 	if len(a.symW) == 0 || len(b.symW) == 0 {
 		return 0.0
 	}
@@ -460,16 +460,16 @@ func monopole(a, b *isospinCand) float64 {
 	return inter / union
 }
 
-// dipole (k=1): spatial relation within a file.
+// lineProximity (k=1): spatial relation within a file.
 //
 // The response is inverted relative to intuition: adjacent blocks are cheap
 // to carry together (addChunk merges them, so the marginal token cost is a
 // few lines and no new file header) and should not be treated as redundant.
 // Two distant blocks in the same file cost a full header each and share no
 // lines, so they are the redundant pair.
-func dipole(a, b *isospinCand) float64 {
+func lineProximity(a, b *structCand) float64 {
 	if a.sc.File != b.sc.File {
-		return dipoleNone
+		return proximityNone
 	}
 	gap := 0
 	if a.sc.EndLine < b.sc.StartLine {
@@ -479,26 +479,26 @@ func dipole(a, b *isospinCand) float64 {
 	}
 	switch {
 	case gap == 0:
-		return dipoleSameAsFile // overlapping or interleaved
+		return proximitySameAsFile // overlapping or interleaved
 	case canMerge(a.sc.Chunk, b.sc.Chunk):
 		// Ask addChunk's own predicate rather than hardcoding its line
 		// threshold here. If that constant moves and this does not, the
 		// dipole term silently starts scoring free merges as redundant.
-		return dipoleAdjacent
+		return proximityAdjacent
 	case gap <= distantLineThreshold:
-		return dipoleNear
+		return proximityNear
 	default:
-		return dipoleFar
+		return proximityFar
 	}
 }
 
-// quadrupole (k=2): isospin structural state.
+// sameTwin (k=2): isospin structural state.
 //
 // Two chunks whose declared surface hashes to the same signature are the same
 // nuclear state in different projections. This channel is the whole reason
 // the selector exists: a language-agnostic measure of "these are the same
 // thing", which a symbol-set measure structurally cannot express.
-func quadrupole(a, b *isospinCand) float64 {
+func sameTwin(a, b *structCand) float64 {
 	if a.twinClass < 0 || a.twinClass != b.twinClass {
 		return 0.0
 	}
@@ -508,7 +508,7 @@ func quadrupole(a, b *isospinCand) float64 {
 // fileSaturation returns the redundancy floor contributed by a file that has
 // already placed n chunks in the window. It is a floor rather than an added
 // term so it can outrank a genuinely high-relevance chunk from a file that is
-// already well represented; see the main loop in isospinMMR.
+// already well represented; see the main loop in structuralMMR.
 func fileSaturation(n int) float64 {
 	if n <= 0 {
 		return 0.0
@@ -521,7 +521,7 @@ func fileSaturation(n int) float64 {
 }
 
 // symWeights builds the idf-weighted symbol set for a candidate, computed
-// once per candidate rather than per pair. Without this, multipoleRedundancy
+// once per candidate rather than per pair. Without this, chunkRedundancy
 // would rebuild two maps on every call and the selection loop would be
 // quadratic in a very expensive way.
 func (cb *ContextBuilder) symWeights(syms []string) map[string]float64 {
@@ -541,10 +541,10 @@ func (cb *ContextBuilder) symWeights(syms []string) map[string]float64 {
 	return out
 }
 
-// multipoleStats logs how much of the selection was driven by which channel.
+// redundancyStats logs how much of the selection was driven by which channel.
 // If no candidate carries a twin class the k=2 channel is inert and the
 // selector has quietly degraded to a symbol Jaccard with a spatial term.
-func (cb *ContextBuilder) multipoleStats(cs []isospinCand) {
+func (cb *ContextBuilder) redundancyStats(cs []structCand) {
 	if !debugLevel3 || len(cs) == 0 {
 		return
 	}
@@ -554,6 +554,6 @@ func (cb *ContextBuilder) multipoleStats(cs []isospinCand) {
 			twined++
 		}
 	}
-	cb.debugLog.Log("[isospinMMR] twin coverage: %d/%d candidates in a structural class "+
+	cb.debugLog.Log("[structuralMMR] twin coverage: %d/%d candidates in a structural class "+
 		"(if 0, the k=2 channel is inert)", twined, len(cs))
 }

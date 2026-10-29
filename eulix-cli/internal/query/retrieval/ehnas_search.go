@@ -320,7 +320,7 @@ func (cb *ContextBuilder) EhnasSearch(
 	// semantic block was — a cross-language twin of a caller set is still
 	// useful, and transport handles the precision cases.
 	// ---------------------------------------------------------------------
-	if lat := cb.isospinLatticeOrBuild(); len(lat.twin) > 0 {
+	if lat := cb.twinIndexOrBuild(); len(lat.twin) > 0 {
 		bridgeTopK := int(float64(topK) * (0.3 + 0.4*weights["isospin"]))
 		if bridgeTopK < 8 {
 			bridgeTopK = 8
@@ -328,7 +328,7 @@ func (cb *ContextBuilder) EhnasSearch(
 		cb.debugLog.Log("[Step 2.6] Executing isospin bridge strategy (bridgeTopK=%d, %d signatures, %d languages)",
 			bridgeTopK, len(lat.twin), len(lat.density))
 		run("isospin", func() []ScoredChunk {
-			return cb.isospinBridgeSeek(all, bridgeTopK)
+			return cb.crossLangTwinSearch(all, bridgeTopK)
 		}, 1.2)
 	}
 	// ---------------------------------------------------------------------
@@ -343,7 +343,7 @@ func (cb *ContextBuilder) EhnasSearch(
 		if len(seeds) > 0 {
 			cb.debugLog.Log("[Step 3.5] Monte Carlo transport: %d seeds emitted into medium", len(seeds))
 			run("monte_carlo", func() []ScoredChunk {
-				return cb.monteCarloTransportWithQuery(seeds, topK, query)
+				return cb.monteCarloWalkWithQuery(seeds, topK, query)
 			}, 1.0)
 		} else {
 			cb.debugLog.Log("[Step 3.5] Monte Carlo transport skipped: no seeds (no anchors/grep hits)")
@@ -395,8 +395,8 @@ func (cb *ContextBuilder) EhnasSearch(
 	// code did in 768 dimensions, done in score space.
 	preBoost := len(result)
 	cb.debugLog.Log("[Step 3.9] Isospin score normalization over %d candidates, %d languages",
-		preBoost, len(cb.isospinLatticeOrBuild().relDens))
-	result = isoNormalizeScores(result, cb)
+		preBoost, len(cb.twinIndexOrBuild().relDens))
+	result = langNormalizeScores(result, cb)
 
 	var detected []subsystemScore
 	if cb.config.RetrievalConfig.EnableSubsystemBoosting {
@@ -503,7 +503,7 @@ func (cb *ContextBuilder) EhnasSearch(
 	// freely. Temperature anneals from hot exploration to degenerate packing.
 	// ---------------------------------------------------------------------
 	tFermi := time.Now()
-	result = fermiDiracPack(result, topK, cb)
+	result = noveltyPack(result, topK, cb)
 	cb.debugLog.Log("[Timing] Fermi-Dirac packing took %v", time.Since(tFermi))
 
 	if len(result) > topK {
@@ -578,12 +578,12 @@ func (r *mcRNG) Intn(n int) int {
 }
 
 const (
-	mcParticles      = 256 // emitted "neutrons" per search
-	mcMaxSteps       = 20  // max mean-free-path length before forced absorption
-	mcAbsorbBase     = 0.30
-	mcHubFission     = 3  // branch factor at critical hub chunks
-	mcMaxNeighbors   = 96 // 48 // cap adjacency fanout per chunk
-	mcFluxScoreScale = 12.0
+	mcWalkers         = 256 // emitted "neutrons" per search
+	mcMaxSteps        = 20  // max mean-free-path length before forced absorption
+	mcStopBase        = 0.30
+	mcHubBranch       = 3  // branch factor at critical hub chunks
+	mcMaxNeighbors    = 96 // 48 // cap adjacency fanout per chunk
+	mcVisitScoreScale = 12.0
 )
 
 // chunkLanguage derives a coarse language group from the file extension,
@@ -676,12 +676,12 @@ func (cb *ContextBuilder) chunkIndexByID(id string) int {
 // 	return out
 // }
 
-// monteCarloContextWalk emits mcParticles random walkers from the seed chunks.
+// monteCarloContextWalk emits mcWalkers random walkers from the seed chunks.
 // At each step a walker scatters to a random neighbor with probability
 // (1 - absorb), absorbs (dies) at boilerplate boundaries with probability
 // proportional to how common the chunk's symbols are, and fissions (spawns
-// mcHubFission daughters) when it lands on a hub chunk. Chunks accumulate
-// flux; flux × mcFluxScoreScale is the relevance score. Hidden long-range
+// mcHubBranch daughters) when it lands on a hub chunk. Chunks accumulate
+// flux; flux × mcVisitScoreScale is the relevance score. Hidden long-range
 // cross-file dependencies surface because walkers bridge multiple hops that
 // no single-hop strategy connects.
 // func (cb *ContextBuilder) monteCarloContextWalk(seedIdxs []int, topK int) []ScoredChunk {
@@ -703,7 +703,7 @@ func (cb *ContextBuilder) chunkIndexByID(id string) int {
 // 	}
 
 // 	type walker struct{ idx, steps int }
-// 	for p := 0; p < mcParticles; p++ {
+// 	for p := 0; p < mcWalkers; p++ {
 // 		seed := seedIdxs[rng.Intn(len(seedIdxs))]
 // 		queue := []walker{{idx: seed, steps: 0}}
 // 		for len(queue) > 0 {
@@ -718,7 +718,7 @@ func (cb *ContextBuilder) chunkIndexByID(id string) int {
 // 				continue
 // 			}
 // 			// Absorption: cross-section rises with symbol commonality.
-// 			absorb := mcAbsorbBase + math.Min(0.45, symDF(w.idx)/5000.0)
+// 			absorb := mcStopBase + math.Min(0.45, symDF(w.idx)/5000.0)
 // 			if rng.Float64() < absorb {
 // 				continue // absorbed at boundary
 // 			}
@@ -726,7 +726,7 @@ func (cb *ContextBuilder) chunkIndexByID(id string) int {
 // 			nw := walker{idx: next, steps: w.steps + 1}
 // 			// Fission: hub chunks (high fanout) are critical interfaces.
 // 			if len(adj[next]) >= mcMaxNeighbors/2 && rng.Float64() < 0.25 {
-// 				for b := 0; b < mcHubFission-1; b++ {
+// 				for b := 0; b < mcHubBranch-1; b++ {
 // 					queue = append(queue, nw)
 // 				}
 // 			}
@@ -741,7 +741,7 @@ func (cb *ContextBuilder) chunkIndexByID(id string) int {
 // 		}
 // 		scored = append(scored, ScoredChunk{
 // 			Chunk:        cb.chunks[idx],
-// 			Score:        f * mcFluxScoreScale,
+// 			Score:        f * mcVisitScoreScale,
 // 			MatchDetails: fmt.Sprintf("mc-flux: %.0f particles", f),
 // 		})
 // 	}
@@ -755,7 +755,7 @@ func (cb *ContextBuilder) chunkIndexByID(id string) int {
 // 				if len(scored) == 0 {
 // 					return 0
 // 				}
-// 				return scored[0].Score / mcFluxScoreScale
+// 				return scored[0].Score / mcVisitScoreScale
 // 			}())
 // 	}
 // 	return scored
@@ -765,22 +765,22 @@ func (cb *ContextBuilder) chunkIndexByID(id string) int {
 // Fermi-Dirac context packing
 // ---------------------------------------------------------------------------
 
-// fermiDiracPack gates the sorted candidate list through the Fermi-Dirac
+// noveltyPack gates the sorted candidate list through the Fermi-Dirac
 // occupancy function. Each block's energy ε = -ln(novelty), where novelty is
 // the fraction of its symbols not already represented in the selected window.
-// Bosonic symbols (document frequency above bosonDFThreshold) behave like
+// Bosonic symbols (document frequency above commonSymbolDF) behave like
 // condensate connectors — repeated error checks/imports — and never raise ε.
-// Temperature anneals linearly from kT0 to kTMin over the packing progress,
+// Temperature anneals linearly from temp0 to tempMin over the packing progress,
 // so early picks explore broadly and late picks form a degenerate core.
-func fermiDiracPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredChunk {
+func noveltyPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredChunk {
 	if len(cands) == 0 {
 		return cands
 	}
 	const (
-		bosonDFThreshold = 200  // df above which a symbol is a bosonic connector
-		kT0              = 0.50 // hot: exploration
-		kTMin            = 0.05 // degenerate: sharp Pauli cutoff
-		fermiGain        = 0.85 // max score amplification for novel blocks
+		commonSymbolDF = 200  // df above which a symbol is a bosonic connector
+		temp0          = 0.50 // hot: exploration
+		tempMin        = 0.05 // degenerate: sharp Pauli cutoff
+		noveltyGain    = 0.85 // max score amplification for novel blocks
 	)
 	mu := math.Ln2 // chemical potential: half-filled baseline
 
@@ -803,7 +803,7 @@ func fermiDiracPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredC
 		if progress > 1 {
 			progress = 1
 		}
-		kT := kT0 + (kTMin-kT0)*progress // annealing schedule
+		kT := temp0 + (tempMin-temp0)*progress // annealing schedule
 
 		syms := sc.Symbols
 		if len(syms) == 0 {
@@ -813,7 +813,7 @@ func fermiDiracPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredC
 		redundant, total := 0, 0
 		for _, sym := range syms {
 			low := strings.ToLower(sym)
-			if df(low) > bosonDFThreshold {
+			if df(low) > commonSymbolDF {
 				continue // bosonic: condenses, no exclusion cost
 			}
 			total++
@@ -832,7 +832,7 @@ func fermiDiracPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredC
 			epsilon := -math.Log(novelty) // redundancy energy
 			occupancy = 1.0 / (math.Exp((epsilon-mu)/kT) + 1.0)
 		}
-		// Rescale: occupancy 1 → +fermiGain boost, occupancy 0 → deep cut,
+		// Rescale: occupancy 1 → +noveltyGain boost, occupancy 0 → deep cut,
 		// but never zero a demotion-surviving exact-ish candidate entirely.
 		// around line 810 in the original file:
 		if math.IsNaN(occupancy) || math.IsInf(occupancy, 0) {
@@ -840,7 +840,7 @@ func fermiDiracPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredC
 			// Keep the score rather than propagating NaN.
 			occupancy = 1.0
 		}
-		cands[i].Score *= (1.0 - fermiGain) + fermiGain*occupancy
+		cands[i].Score *= (1.0 - noveltyGain) + noveltyGain*occupancy
 		cands[i].MatchDetails = fmt.Sprintf("%s; fermi: n=%.2f", cands[i].MatchDetails, occupancy)
 
 		for _, sym := range syms {
@@ -857,8 +857,8 @@ func fermiDiracPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredC
 		return cands[i].Score > cands[j].Score
 	})
 	if debugLevel3 {
-		cb.debugLog.Log("[fermiDiracPack] Annealed kT %.2f→%.2f, μ=%.2f over %d slots",
-			kT0, kTMin, mu, packed)
+		cb.debugLog.Log("[noveltyPack] Annealed kT %.2f→%.2f, μ=%.2f over %d slots",
+			temp0, tempMin, mu, packed)
 	}
 	return cands
 }

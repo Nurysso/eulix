@@ -190,8 +190,8 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	switch mode {
 	case SelectorQueryMMR:
 		selected = cb.mmrSelect(expanded, budget.ContextBudget, qEmb, anchorFiles, trace, gate)
-	case SelectorIsospinMMR:
-		selected = cb.isospinMMR(expanded, budget.ContextBudget, anchorFiles, trace, gate)
+	case SelectorStructuralMMR:
+		selected = cb.structuralMMR(expanded, budget.ContextBudget, anchorFiles, trace, gate)
 	default:
 		if gate.active {
 			filtered := make([]ScoredChunk, 0, len(expanded))
