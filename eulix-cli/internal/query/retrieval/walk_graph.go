@@ -629,6 +629,7 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 		}
 	}
 
+	mcWalkers := cb.config.RetrievalConfig.Ehnas.MCWalkers
 	if mcDiagEnabled {
 		diag.profileSeeds(cb, seedIdxs, symDF, deg)
 		diag.walkers = mcWalkers

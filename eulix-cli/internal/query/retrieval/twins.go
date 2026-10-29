@@ -286,10 +286,16 @@ func (cb *ContextBuilder) crossLangTwinSearch(sources map[string]ScoredChunk, to
 			MatchDetails: detail[j],
 		})
 	}
+	// Sort before truncating: out was built from a map, so truncating first drops random twins.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].ID < out[j].ID
+	})
 	if len(out) > topK*2 {
 		out = out[:topK*2]
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	if debugLevel3 {
 		cb.debugLog.Log("[crossLangTwinSearch] %d structural signatures, %d cross-language hits",
 			len(ti.twin), len(out))

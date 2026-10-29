@@ -488,7 +488,10 @@ func (cb *ContextBuilder) EhnasSearch(
 		if result[i].IsExact != result[j].IsExact {
 			return result[i].IsExact
 		}
-		return result[i].Score > result[j].Score
+		if result[i].Score != result[j].Score {
+			return result[i].Score > result[j].Score
+		}
+		return result[i].ID < result[j].ID // result came from a map; ties need a fixed order
 	})
 	cb.debugLog.Log("[Timing] Sorting took %v", time.Since(tSort))
 
@@ -575,8 +578,7 @@ func (r *mcRNG) Intn(n int) int {
 }
 
 const (
-	mcWalkers         = 256 // walkers started per search
-	mcMaxSteps        = 20  // max walk length before a forced stop
+	mcMaxSteps        = 20 // max walk length before a forced stop
 	mcStopBase        = 0.30
 	mcHubBranch       = 3  // branch factor at hub chunks
 	mcMaxNeighbors    = 96 // 48 // cap adjacency fanout per chunk
@@ -773,12 +775,12 @@ func noveltyPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredChun
 		return cands
 	}
 	const (
-		commonSymbolDF = 200  // df above which a symbol is a common connector
-		temp0          = 0.50 // loose: exploration
-		tempMin        = 0.05 // tight: sharp cutoff
-		noveltyGain    = 0.85 // max score amplification for novel blocks
+		temp0   = 0.50 // loose: exploration
+		tempMin = 0.05 // tight: sharp cutoff
 	)
-	midpoint := math.Ln2 // logistic midpoint: half-novel baseline
+	commonSymbolDF := cb.config.RetrievalConfig.Ehnas.CommonSymbolDF // df above which a symbol is a common connector
+	noveltyGain := cb.config.RetrievalConfig.Ehnas.NoveltyGain       // max score amplification for novel blocks
+	midpoint := math.Ln2                                             // logistic midpoint: half-novel baseline
 
 	// Pre-compute df for common-symbol classification.
 	df := func(sym string) int { return len(cb.symbolIndex[strings.ToLower(sym)]) }
@@ -850,7 +852,10 @@ func noveltyPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredChun
 		if cands[i].IsExact != cands[j].IsExact {
 			return cands[i].IsExact
 		}
-		return cands[i].Score > cands[j].Score
+		if cands[i].Score != cands[j].Score {
+			return cands[i].Score > cands[j].Score
+		}
+		return cands[i].ID < cands[j].ID
 	})
 	if debugLevel3 {
 		cb.debugLog.Log("[noveltyPack] Annealed temp %.2f→%.2f, midpoint=%.2f over %d slots",

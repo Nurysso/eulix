@@ -111,6 +111,12 @@ func (cb *ContextBuilder) InitEngine() error {
 	}
 	cb.engine = eng                        // store on the builder
 	cb.config.Project.Engine = string(eng) // <-- explicit conversion
+
+	// Resolve [retrievalConfig.<engine>] overrides once, on a copy so the
+	// caller's config keeps the unresolved values.
+	resolved := *cb.config
+	resolved.RetrievalConfig = resolved.RetrievalConfig.ForEngine(string(eng))
+	cb.config = &resolved
 	return nil
 }
 
@@ -295,14 +301,14 @@ func (cb *ContextBuilder) reportEhnasIndex() {
 
 	// The one silent-failure mode in Ehnas. Both the pseudo-relevance
 	// feedback pass and the lexical walk layer read invertedIdx, and
-	// buildDerivedIndices only builds it above invIdxThreshold chunks. Below
+	// buildDerivedIndices only builds it above inverted_index_min_chunks. Below
 	// that, Ehnas still runs and still returns results — it just loses the
 	// paraphrase channel and the lexical layer without a word in the logs.
 	if cb.invertedIdx == nil {
 		cb.debugLog.Log("[EHNAS] WARNING: no inverted index (%d chunks ≤ %d threshold) — "+
 			"PRF has no corpus to vote with and the lexical walk layer is empty. "+
-			"Lower invIdxThreshold or accept lexical-only retrieval.",
-			len(cb.chunks), invIdxThreshold)
+			"Lower [retrievalConfig.ehnas] inverted_index_min_chunks or accept lexical-only retrieval.",
+			len(cb.chunks), cb.config.RetrievalConfig.Ehnas.InvertedIndexMinChunks)
 	}
 	if !cb.hasCallGraph {
 		cb.debugLog.Log("[EHNAS] WARNING: no call graph — call layer unavailable, " +

@@ -240,10 +240,11 @@ func ApplyPreMMRFloor(candidates []ScoredChunk, cfg *config.RetrievalConfig) []S
 		return candidates
 	}
 
-	// Find the maximum score among all current candidates
+	// Find the maximum score among unpinned candidates. Pins score 5000+ and
+	// would set a cutoff that drops nearly every ordinary hit; they always pass.
 	maxScore := 0.0
 	for _, c := range candidates {
-		if c.Score > maxScore {
+		if !c.Pinned && c.Score > maxScore {
 			maxScore = c.Score
 		}
 	}
@@ -253,7 +254,7 @@ func ApplyPreMMRFloor(candidates []ScoredChunk, cfg *config.RetrievalConfig) []S
 
 	filtered := make([]ScoredChunk, 0, len(candidates))
 	for _, c := range candidates {
-		if c.Score >= cutoff {
+		if c.Pinned || c.Score >= cutoff {
 			filtered = append(filtered, c)
 		}
 	}

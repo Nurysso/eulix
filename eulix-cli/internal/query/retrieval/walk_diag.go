@@ -15,10 +15,10 @@ func boolToInt(b bool) int {
 // mcSeedIndices with diagnostics.
 //
 // Two things the original hides:
-//   - how many candidates existed BEFORE the Score>=60 filter (a near-empty
+//   - how many candidates existed BEFORE the mc_seed_min_score filter (a near-empty
 //     candidate list means the walk is starved, which is a different problem
 //     from the walk being broken)
-//   - how many distinct files the 16 retained seeds cover (1 file = the walk
+//   - how many distinct files the mc_seed_cap retained seeds cover (1 file = the walk
 //     starts entirely inside one file, and with a query-independent RNG it
 //     tends to stay there)
 func mcSeedIndices(cb *ContextBuilder, all map[string]ScoredChunk) []int {
@@ -26,6 +26,7 @@ func mcSeedIndices(cb *ContextBuilder, all map[string]ScoredChunk) []int {
 		idx   int
 		score float64
 	}
+	ecfg := cb.config.RetrievalConfig.Ehnas
 	var seeds []seed
 	candidates := 0
 	unmapped := 0
@@ -37,7 +38,7 @@ func mcSeedIndices(cb *ContextBuilder, all map[string]ScoredChunk) []int {
 		if sc.Score > maxScore {
 			maxScore = sc.Score
 		}
-		if sc.Score < 60.0 {
+		if sc.Score < ecfg.MCSeedMinScore {
 			belowThreshold++
 			continue
 		}
@@ -50,11 +51,17 @@ func mcSeedIndices(cb *ContextBuilder, all map[string]ScoredChunk) []int {
 		seeds = append(seeds, seed{i, sc.Score})
 		files[cb.chunkFileAt(i)]++
 	}
-	sort.Slice(seeds, func(a, b int) bool { return seeds[a].score > seeds[b].score })
+	// Index tie-break: `all` is a map, so equal scores would otherwise pick a random top mc_seed_cap.
+	sort.Slice(seeds, func(a, b int) bool {
+		if seeds[a].score != seeds[b].score {
+			return seeds[a].score > seeds[b].score
+		}
+		return seeds[a].idx < seeds[b].idx
+	})
 
-	capped := len(seeds) > 16
+	capped := len(seeds) > ecfg.MCSeedCap
 	if capped {
-		seeds = seeds[:16]
+		seeds = seeds[:ecfg.MCSeedCap]
 		// recount distinct files after the cap
 		files = map[string]int{}
 		for _, s := range seeds {
@@ -64,7 +71,7 @@ func mcSeedIndices(cb *ContextBuilder, all map[string]ScoredChunk) []int {
 
 	if mcDiagEnabled {
 		// Usage in your log statement:
-		cb.debugLog.Log("[MC-DIAG] seedCandidates: all=%d >=60=%d mapped=%d unmapped=%d below60=%d maxScore=%.0f cap16Hit=%v",
+		cb.debugLog.Log("[MC-DIAG] seedCandidates: all=%d >=min=%d mapped=%d unmapped=%d belowMin=%d maxScore=%.0f capHit=%v",
 			len(all), candidates+boolToInt(capped), candidates, unmapped, belowThreshold, maxScore, capped)
 		if len(seeds) > 0 {
 			cb.debugLog.Log("[MC-DIAG] seedFiles: %v", files)

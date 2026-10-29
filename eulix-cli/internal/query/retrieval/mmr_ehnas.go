@@ -76,12 +76,6 @@ const (
 	fileSatPerChunk = 0.07
 	fileSatCeiling  = 0.30
 
-	// Stop when nothing left can beat having nothing. lambda*rel is always
-	// >= 0 and (1-lambda)*maxRed is at most (1-lambda), so a non-positive
-	// marginal value means every remaining candidate costs more budget than
-	// the diversity it buys. Set to a large negative number to disable.
-	mmrStopFloor = 0.0
-
 	// The no-embedding relevance blend from the old path, reused so the two
 	// selectors stay comparable under the same MMRDiversityFactor.
 	ehnasRankShare = 0.30
@@ -275,8 +269,10 @@ func (cb *ContextBuilder) structuralMMR(
 			stop = "candidates exhausted"
 			break
 		}
-		if bestVal <= mmrStopFloor {
-			stop = fmt.Sprintf("no candidate has positive marginal value (best=%.4f)", bestVal)
+		// Stop when nothing left beats the configured floor (mmr_stop_floor);
+		// at 0, every remaining candidate costs more than the diversity it buys.
+		if bestVal <= cb.config.RetrievalConfig.Ehnas.MMRStopFloor {
+			stop = fmt.Sprintf("no candidate above mmr_stop_floor (best=%.4f)", bestVal)
 			break
 		}
 

@@ -261,11 +261,46 @@ The MC walk is the only stage whose cost is _constant_ in corpus size — the la
 
 ## 6. Configuration Surface
 
-All new tunables live in the code as constants (no config struct changes needed):
+### `eulix.toml`
+
+`[retrievalConfig]` holds keys shared by both engines. `[retrievalConfig.etiya]` and `[retrievalConfig.ehnas]` override a few of them per engine; a key left out of an engine section inherits the shared value. Overrides are resolved once, in `InitEngine`.
+
+```toml
+[retrievalConfig]
+pre_mmr_score_floor_ratio = 0.05   # shared fallback
+max_context_chunks = 30
+mmr_diversity_factor = 0.65
+
+[retrievalConfig.etiya]            # optional overrides
+# pre_mmr_score_floor_ratio, mmr_diversity_factor, max_context_chunks, semantic_min_similarity
+
+[retrievalConfig.ehnas]
+# pre_mmr_score_floor_ratio = 0.3  # optional overrides: also mmr_diversity_factor, max_context_chunks
+mmr_stop_floor = 0.0
+novelty_gain = 0.85
+mc_seed_min_score = 60
+mc_walkers = 256
+mc_seed_cap = 16
+common_symbol_df = 200
+inverted_index_min_chunks = 5000   # 0 = always build (enables PRF + lexical walk layer)
+```
+
+| EHNAS key                   | Default | Meaning                                                  |
+| --------------------------- | ------- | -------------------------------------------------------- |
+| `mmr_stop_floor`            | 0.0     | structuralMMR stops once the best marginal value is ≤ this |
+| `novelty_gain`              | 0.85    | Max boost for fully novel blocks in novelty packing      |
+| `mc_seed_min_score`         | 60      | Min score for a hit to seed the Monte Carlo walk         |
+| `mc_walkers`                | 256     | Walkers started per query                                |
+| `mc_seed_cap`               | 16      | Max Monte Carlo seeds                                    |
+| `common_symbol_df`          | 200     | df cutoff for common symbols                             |
+| `inverted_index_min_chunks` | 5000    | Build the inverted index above this many chunks          |
+
+### Code constants
+
+The rest stays in code:
 
 | Constant            | Default     | Meaning                                |
 | ------------------- | ----------- | -------------------------------------- |
-| `mcWalkers`         | 256         | Walkers started per query              |
 | `mcMaxSteps`        | 20          | Max walk length                        |
 | `mcStopBase`        | 0.30        | Baseline stop probability              |
 | `mcHubBranch`       | 3           | Branch factor at hubs                  |
@@ -273,9 +308,7 @@ All new tunables live in the code as constants (no config struct changes needed)
 | `twinBridgeFloor`   | 40.0        | Min source score for twin search       |
 | `twinBridgeDecay`   | 0.55        | Share of source score passed to a twin |
 | `twinMaxDF`         | 24          | Max chunks per twin class              |
-| `commonSymbolDF`    | 200         | df cutoff for common symbols           |
 | `temp0` / `tempMin` | 0.50 / 0.05 | Annealing schedule                     |
-| `noveltyGain`       | 0.85        | Max boost for fully novel blocks       |
 
 ### Debug log tags
 

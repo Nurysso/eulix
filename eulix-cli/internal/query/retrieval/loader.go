@@ -231,8 +231,12 @@ func (cb *ContextBuilder) buildDerivedIndices() {
 			cb.symbolIndex[sym] = append(cb.symbolIndex[sym], i)
 		}
 	}
-	// Inverted index (large corpora only)
-	if len(cb.chunks) > invIdxThreshold {
+	// Inverted index (large corpora only; EHNAS reads its threshold from config)
+	minChunks := invIdxThreshold
+	if cb.Engine() == EngineEHNAS {
+		minChunks = cb.config.RetrievalConfig.Ehnas.InvertedIndexMinChunks
+	}
+	if len(cb.chunks) > minChunks {
 		cb.invertedIdx = cb.buildInvertedIndex()
 	}
 }

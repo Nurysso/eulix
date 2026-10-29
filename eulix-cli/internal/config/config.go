@@ -76,6 +76,66 @@ type RetrievalConfig struct {
 	MaxGraphExpansions     int `toml:"max_graph_expansions"`      // Maximum number of call-graph relationship edges to expand (default 15).
 	MaxExactAnchors        int `toml:"max_exact_anchors"`         // Maximum number of exact symbol anchors to pin to context (default 2).
 	MaxContextChunks       int `toml:"max_context_chunks"`        // Maximum number of chunks allowed in the final context window (default 30).
+
+	Etiya EtiyaConfig `toml:"etiya"` // [retrievalConfig.etiya] overrides, applied by ForEngine.
+	Ehnas EhnasConfig `toml:"ehnas"` // [retrievalConfig.ehnas] overrides and EHNAS-only tuning.
+}
+
+// EtiyaConfig overrides shared retrieval keys for the etiya engine. A nil
+// field (key absent from eulix.toml) inherits the shared [retrievalConfig] value.
+type EtiyaConfig struct {
+	PreMMRScoreFloorRatio *float64 `toml:"pre_mmr_score_floor_ratio,omitempty"`
+	MMRDiversityFactor    *float32 `toml:"mmr_diversity_factor,omitempty"`
+	SemanticMinSimilarity *float64 `toml:"semantic_min_similarity,omitempty"`
+	MaxContextChunks      *int     `toml:"max_context_chunks,omitempty"`
+}
+
+// EhnasConfig overrides shared retrieval keys for the ehnas engine (nil =
+// inherit, as in EtiyaConfig) and carries the EHNAS-only tuning knobs.
+type EhnasConfig struct {
+	PreMMRScoreFloorRatio *float64 `toml:"pre_mmr_score_floor_ratio,omitempty"`
+	MMRDiversityFactor    *float32 `toml:"mmr_diversity_factor,omitempty"`
+	MaxContextChunks      *int     `toml:"max_context_chunks,omitempty"`
+
+	MMRStopFloor           float64 `toml:"mmr_stop_floor"`            // structuralMMR stops once the best marginal value is <= this (default 0.0).
+	NoveltyGain            float64 `toml:"novelty_gain"`              // Max score swing noveltyPack applies to novel vs redundant blocks (default 0.85).
+	MCSeedMinScore         float64 `toml:"mc_seed_min_score"`         // Minimum score for a hit to seed the Monte Carlo walk (default 60).
+	MCWalkers              int     `toml:"mc_walkers"`                // Monte Carlo walkers started per query (default 256).
+	MCSeedCap              int     `toml:"mc_seed_cap"`               // Maximum number of Monte Carlo seeds (default 16).
+	CommonSymbolDF         int     `toml:"common_symbol_df"`          // Symbols in more chunks than this carry no novelty cost (default 200).
+	InvertedIndexMinChunks int     `toml:"inverted_index_min_chunks"` // Build the inverted index (PRF, lexical walk layer) above this many chunks; 0 = always (default 5000).
+}
+
+// ForEngine returns a copy of rc with the engine's [retrievalConfig.<engine>]
+// overrides applied to the shared fields, so callers read one resolved value.
+func (rc RetrievalConfig) ForEngine(engine string) RetrievalConfig {
+	switch engine {
+	case "etiya":
+		e := rc.Etiya
+		override(&rc.PreMMRScoreFloorRatio, e.PreMMRScoreFloorRatio)
+		override(&rc.MMRDiversityFactor, e.MMRDiversityFactor)
+		override(&rc.SemanticMinSimilarity, e.SemanticMinSimilarity)
+		override(&rc.MaxContextChunks, e.MaxContextChunks)
+	case "ehnas":
+		e := rc.Ehnas
+		override(&rc.PreMMRScoreFloorRatio, e.PreMMRScoreFloorRatio)
+		override(&rc.MMRDiversityFactor, e.MMRDiversityFactor)
+		override(&rc.MaxContextChunks, e.MaxContextChunks)
+	}
+	return rc
+}
+
+func override[T any](dst *T, src *T) {
+	if src != nil {
+		*dst = *src
+	}
+}
+
+// clampPtr clamps *p in place when the key was set.
+func clampPtr[T cmp.Ordered](p *T, lo, hi T) {
+	if p != nil {
+		*p = clamp(*p, lo, hi)
+	}
 }
 
 type CacheConfig struct {
@@ -155,6 +215,28 @@ func validateAndClampConfig(cfg *Config) *Config {
 	rc.MaxExactAnchors = max(rc.MaxExactAnchors, 1)
 	rc.TestFilePenalty = clamp(rc.TestFilePenalty, 0.0, 1.0)
 	rc.MaxContextChunks = max(rc.MaxContextChunks, 1)
+
+	for _, ov := range []struct {
+		floor *float64
+		div   *float32
+		maxCh *int
+	}{
+		{rc.Etiya.PreMMRScoreFloorRatio, rc.Etiya.MMRDiversityFactor, rc.Etiya.MaxContextChunks},
+		{rc.Ehnas.PreMMRScoreFloorRatio, rc.Ehnas.MMRDiversityFactor, rc.Ehnas.MaxContextChunks},
+	} {
+		clampPtr(ov.floor, 0.0, 1.0)
+		clampPtr(ov.div, 0.0, 1.0)
+		clampPtr(ov.maxCh, 1, 1<<30)
+	}
+	clampPtr(rc.Etiya.SemanticMinSimilarity, 0.0, 1.0)
+
+	eh := &rc.Ehnas
+	eh.NoveltyGain = clamp(eh.NoveltyGain, 0.0, 1.0)
+	eh.MCSeedMinScore = max(eh.MCSeedMinScore, 0.0)
+	eh.MCWalkers = max(eh.MCWalkers, 1)
+	eh.MCSeedCap = max(eh.MCSeedCap, 1)
+	eh.CommonSymbolDF = max(eh.CommonSymbolDF, 1)
+	eh.InvertedIndexMinChunks = max(eh.InvertedIndexMinChunks, 0)
 
 	// Checksum Configuration
 	cs := &cfg.Checksum
@@ -272,6 +354,15 @@ func DefaultConfig() *Config {
 			TestFilePenalty:         0.30,
 			EnableSubsystemBoosting: true,
 			MaxContextChunks:        30,
+			Ehnas: EhnasConfig{
+				MMRStopFloor:           0.0,
+				NoveltyGain:            0.85,
+				MCSeedMinScore:         60,
+				MCWalkers:              256,
+				MCSeedCap:              16,
+				CommonSymbolDF:         200,
+				InvertedIndexMinChunks: 5000,
+			},
 		},
 		Cache: CacheConfig{
 			Enable: true,
