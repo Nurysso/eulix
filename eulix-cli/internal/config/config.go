@@ -31,6 +31,7 @@ type Config struct {
 
 type ProjectConfig struct {
 	Path        string `toml:"path"`
+	Engine      string `toml:"engine"`
 	MaxLines    int    `toml:"Max_Lines"`
 	DebugConfig bool   `toml:"DebugConfig"`
 }

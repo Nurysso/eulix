@@ -9,11 +9,11 @@ import (
 )
 
 // =============================================================================
-// DIAGNOSTIC BUILD — Monte-Carlo transport
+// DIAGNOSTIC BUILD — Monte Carlo walk
 //
 // The walk logic below is BYTE-IDENTICAL to the original except for counter
-// increments marked `//diag:`. Nothing that touches channel selection, absorption,
-// neighbour choice, fission, or flux accumulation has been changed, so the
+// increments marked `//diag:`. Nothing that touches channel selection, stopping,
+// neighbour choice, branching, or visit counting has been changed, so the
 // measurements describe the behaviour you are actually getting.
 //
 // Set mcDiagEnabled = false to compile the counters out of the hot path.
@@ -26,9 +26,9 @@ const (
 )
 
 const (
-	scatterSymbol      = 0.42
-	scatterCall        = 0.33
-	scatterLex         = 0.25
+	prefSymbol         = 0.42
+	prefCall           = 0.33
+	prefLex            = 0.25
 	symbolLayerMaxDF   = 128 // 512
 	callLayerMaxFanout = 64
 	lexLayerMaxDF      = 24
@@ -50,21 +50,21 @@ type walkLayer struct {
 // -----------------------------------------------------------------------------
 
 // mcDiagEnabled gates all instrumentation. The counters are observation-only:
-// they never feed back into channel preference, absorption, or neighbour choice.
+// they never feed back into channel preference, stopping, or neighbour choice.
 const mcDiagEnabled = true
 
 type mcDiag struct {
 	seedCount int
 	seedFiles map[string]int
 	seedFileN int
-	seedCross float64
+	seedDF    float64
 	seedDeg   float64
 
 	// per-channel
 	chanNames   []string
 	chanPref    []float64
 	chanCum     []float64
-	chanFlux    []float64
+	chanWeight  []float64
 	chanPicked  []int
 	chanDead    []int
 	chanLive    []int
@@ -72,43 +72,43 @@ type mcDiag struct {
 	chanEdgeTot []int
 	chanXFile   []int
 
-	// particles
-	particles      int
-	fluxTotal      int
-	fluxOnSeeds    int
-	absorbed       int
-	absorbedAtSeed int
-	absorbProbSum  float64
-	absorbProbN    int
-	absorbProbMin  float64
-	absorbProbMax  float64
-	absorbSatCount int // absorb was at/over the 0.75 cap
-	walkPushes     int
-	fissions       int
-	maxDepth       int
-	depthHist      []int
+	// walkers
+	walkers       int
+	visitTotal    int
+	visitsOnSeeds int
+	stopped       int
+	stoppedAtSeed int
+	stopProbSum   float64
+	stopProbN     int
+	stopProbMin   float64
+	stopProbMax   float64
+	stopSatCount  int // stopP was at/over the 0.75 cap
+	walkPushes    int
+	branches      int
+	maxDepth      int
+	depthHist     []int
 
 	// movement
-	fileSteps int
-	fileFlux  map[string]int
+	fileSteps  int
+	fileVisits map[string]int
 
 	// reproducibility
 	rngSeed  uint64
 	rngFirst []float64
 }
 
-func newMcDiag(media []*walkLayer) *mcDiag {
+func newMcDiag(layers []*walkLayer) *mcDiag {
 	d := &mcDiag{
-		seedFiles:     map[string]int{},
-		fileFlux:      map[string]int{},
-		depthHist:     make([]int, mcMaxSteps+2),
-		absorbProbMin: 1e9,
+		seedFiles:   map[string]int{},
+		fileVisits:  map[string]int{},
+		depthHist:   make([]int, mcMaxSteps+2),
+		stopProbMin: 1e9,
 	}
-	for _, m := range media {
+	for _, m := range layers {
 		d.chanNames = append(d.chanNames, m.name)
 		d.chanPref = append(d.chanPref, 0)
 		d.chanCum = append(d.chanCum, 0)
-		d.chanFlux = append(d.chanFlux, 0)
+		d.chanWeight = append(d.chanWeight, 0)
 		d.chanPicked = append(d.chanPicked, 0)
 		d.chanDead = append(d.chanDead, 0)
 		d.chanLive = append(d.chanLive, 0)
@@ -129,10 +129,10 @@ func (cb *ContextBuilder) chunkFileAt(i int) string {
 	return cb.chunks[i].File
 }
 
-func (d *mcDiag) profileLayers(cb *ContextBuilder, media []*walkLayer) {
-	// diag: structural profile of each medium — edge totals, isolated nodes,
+func (d *mcDiag) profileLayers(cb *ContextBuilder, layers []*walkLayer) {
+	// diag: structural profile of each layer — edge totals, isolated nodes,
 	// diag: and the cross-file fraction that H1 is about.
-	for ci, m := range media {
+	for ci, m := range layers {
 		for i := range m.edges {
 			if len(m.edges[i]) == 0 {
 				d.chanNodes0[ci]++
@@ -149,7 +149,7 @@ func (d *mcDiag) profileLayers(cb *ContextBuilder, media []*walkLayer) {
 	}
 }
 
-func (d *mcDiag) profileSeeds(cb *ContextBuilder, seedIdxs []int, cross []float64, deg []int) {
+func (d *mcDiag) profileSeeds(cb *ContextBuilder, seedIdxs []int, symDF []float64, deg []int) {
 	d.seedCount = len(seedIdxs)
 	for _, i := range seedIdxs {
 		f := cb.chunkFileAt(i)
@@ -157,36 +157,36 @@ func (d *mcDiag) profileSeeds(cb *ContextBuilder, seedIdxs []int, cross []float6
 			d.seedFileN++
 		}
 		d.seedFiles[f]++
-		if i >= 0 && i < len(cross) {
-			d.seedCross += cross[i]
+		if i >= 0 && i < len(symDF) {
+			d.seedDF += symDF[i]
 		}
 		if i >= 0 && i < len(deg) {
 			d.seedDeg += float64(deg[i])
 		}
 	}
 	if d.seedCount > 0 {
-		d.seedCross /= float64(d.seedCount)
+		d.seedDF /= float64(d.seedCount)
 		d.seedDeg /= float64(d.seedCount)
 	}
 }
 
 func (d *mcDiag) noteStop(p float64) {
-	d.absorbProbSum += p
-	d.absorbProbN++
-	if p < d.absorbProbMin {
-		d.absorbProbMin = p
+	d.stopProbSum += p
+	d.stopProbN++
+	if p < d.stopProbMin {
+		d.stopProbMin = p
 	}
-	if p > d.absorbProbMax {
-		d.absorbProbMax = p
+	if p > d.stopProbMax {
+		d.stopProbMax = p
 	}
 	// mcStopBase(0.30) + cap(0.45) = 0.75; anything at the cap means
-	// cross/5000 >= 0.45, i.e. cross >= 2250, i.e. the term is saturated.
+	// symDF/5000 >= 0.45, i.e. symDF >= 2250, i.e. the term is saturated.
 	if p >= 0.7499 {
-		d.absorbSatCount++
+		d.stopSatCount++
 	}
 }
 
-func (d *mcDiag) report(cb *ContextBuilder, flux map[int]float64, scored int) {
+func (d *mcDiag) report(cb *ContextBuilder, visits map[int]float64, scored int) {
 	const P = "[MC-DIAG]"
 
 	// ---- seeds
@@ -195,11 +195,11 @@ func (d *mcDiag) report(cb *ContextBuilder, flux map[int]float64, scored int) {
 		files = append(files, fmt.Sprintf("%s:%d", f, n))
 	}
 	sort.Strings(files)
-	cb.debugLog.Log("%s seeds=%d distinctSeedFiles=%d avgCross=%.0f avgDeg=%.1f", P, d.seedCount, d.seedFileN, d.seedCross, d.seedDeg)
+	cb.debugLog.Log("%s seeds=%d distinctSeedFiles=%d avgDF=%.0f avgDeg=%.1f", P, d.seedCount, d.seedFileN, d.seedDF, d.seedDeg)
 	cb.debugLog.Log("%s seedFiles=%v", P, files)
 
 	// ---- channels
-	cb.debugLog.Log("%s channel        picked   dead  live  nodes0    edges   xFile%%   chanFlux  pref    cum",
+	cb.debugLog.Log("%s channel        picked   dead  live  nodes0    edges   xFile%%   chanWeight  pref    cum",
 		P)
 	for i, n := range d.chanNames {
 		xpc := 0.0
@@ -208,27 +208,27 @@ func (d *mcDiag) report(cb *ContextBuilder, flux map[int]float64, scored int) {
 		}
 		cb.debugLog.Log("%s   %-12s %6d %6d %5d %6d %8d %7.1f%% %9.0f %6.3f %6.3f",
 			P, n, d.chanPicked[i], d.chanDead[i], d.chanLive[i], d.chanNodes0[i],
-			d.chanEdgeTot[i], xpc, d.chanFlux[i], d.chanPref[i], d.chanCum[i])
+			d.chanEdgeTot[i], xpc, d.chanWeight[i], d.chanPref[i], d.chanCum[i])
 	}
 
-	// ---- particles
-	meanAbsorb := 0.0
-	if d.absorbProbN > 0 {
-		meanAbsorb = d.absorbProbSum / float64(d.absorbProbN)
+	// ---- walkers
+	meanStop := 0.0
+	if d.stopProbN > 0 {
+		meanStop = d.stopProbSum / float64(d.stopProbN)
 	}
-	cb.debugLog.Log("%s particles=%d walkPushes=%d fissions=%d maxDepth=%d", P, d.particles, d.walkPushes, d.fissions, d.maxDepth)
-	cb.debugLog.Log("%s absorbed=%d (atSeed=%d, %.1f%%) meanAbsorb=%.3f min=%.3f max=%.3f saturated=%d/%d",
-		P, d.absorbed, d.absorbedAtSeed, pct(d.absorbedAtSeed, d.particles), meanAbsorb, d.absorbProbMin, d.absorbProbMax, d.absorbSatCount, d.absorbProbN)
-	cb.debugLog.Log("%s totalFlux=%d fluxOnSeeds=%d (%.1f%%) retainedHits=%d", P, d.fluxTotal, d.fluxOnSeeds, pct(d.fluxOnSeeds, d.fluxTotal), scored)
+	cb.debugLog.Log("%s walkers=%d walkPushes=%d branches=%d maxDepth=%d", P, d.walkers, d.walkPushes, d.branches, d.maxDepth)
+	cb.debugLog.Log("%s stopped=%d (atSeed=%d, %.1f%%) meanStop=%.3f min=%.3f max=%.3f saturated=%d/%d",
+		P, d.stopped, d.stoppedAtSeed, pct(d.stoppedAtSeed, d.walkers), meanStop, d.stopProbMin, d.stopProbMax, d.stopSatCount, d.stopProbN)
+	cb.debugLog.Log("%s totalVisits=%d visitsOnSeeds=%d (%.1f%%) retainedHits=%d", P, d.visitTotal, d.visitsOnSeeds, pct(d.visitsOnSeeds, d.visitTotal), scored)
 
 	// ---- concentration
-	keys := make([]int, 0, len(flux))
+	keys := make([]int, 0, len(visits))
 	top := 0
-	for k, f := range flux {
+	for k, f := range visits {
 		keys = append(keys, k)
 		top += int(f)
 	}
-	sort.Slice(keys, func(i, j int) bool { return flux[keys[i]] > flux[keys[j]] })
+	sort.Slice(keys, func(i, j int) bool { return visits[keys[i]] > visits[keys[j]] })
 	n5 := len(keys)
 	if n5 > 5 {
 		n5 = 5
@@ -236,9 +236,9 @@ func (d *mcDiag) report(cb *ContextBuilder, flux map[int]float64, scored int) {
 	if n5 > 0 {
 		var t5 int
 		for i := 0; i < n5; i++ {
-			t5 += int(flux[keys[i]])
+			t5 += int(visits[keys[i]])
 		}
-		cb.debugLog.Log("%s flux top5=%v share=%.1f%% distinctFilesWithFlux=%d", P, topVisitList(cb, flux, keys, 5), pct(t5, top), len(d.fileFlux))
+		cb.debugLog.Log("%s visits top5=%v share=%.1f%% distinctFilesVisited=%d", P, topVisitList(cb, visits, keys, 5), pct(t5, top), len(d.fileVisits))
 	}
 
 	// ---- depth
@@ -253,28 +253,28 @@ func (d *mcDiag) report(cb *ContextBuilder, flux map[int]float64, scored int) {
 	// ---- cross-file movement
 	cb.debugLog.Log("%s crossFileSteps=%d/%d (%.1f%%)", P, d.fileSteps, d.walkPushes, pct(d.fileSteps, d.walkPushes))
 
-	// ---- flux by file
-	ff := make([]string, 0, len(d.fileFlux))
-	for f, n := range d.fileFlux {
+	// ---- visits by file
+	ff := make([]string, 0, len(d.fileVisits))
+	for f, n := range d.fileVisits {
 		ff = append(ff, fmt.Sprintf("%s:%d", f, n))
 	}
 	sort.Strings(ff)
 	if len(ff) > 12 {
 		ff = ff[:12]
 	}
-	cb.debugLog.Log("%s fluxByFile %v", P, ff)
+	cb.debugLog.Log("%s visitsByFile %v", P, ff)
 
 	// ---- reproducibility
 	cb.debugLog.Log("%s rngSeed=%d firstDraws=%v", P, d.rngSeed, d.rngFirst)
 }
 
-func topVisitList(cb *ContextBuilder, flux map[int]float64, keys []int, n int) []string {
+func topVisitList(cb *ContextBuilder, visits map[int]float64, keys []int, n int) []string {
 	if len(keys) > n {
 		keys = keys[:n]
 	}
 	out := make([]string, 0, len(keys))
 	for _, k := range keys {
-		out = append(out, fmt.Sprintf("%s(%.0f)", cb.chunkFileAt(k), flux[k]))
+		out = append(out, fmt.Sprintf("%s(%.0f)", cb.chunkFileAt(k), visits[k]))
 	}
 	return out
 }
@@ -315,11 +315,11 @@ func topEdges(acc map[int]float32, cap int) []walkEdge {
 }
 
 func buildSymbolLayer(cb *ContextBuilder) *walkLayer {
-	if cb.medSymbol != nil {
-		return cb.medSymbol
+	if cb.symLayer != nil {
+		return cb.symLayer
 	}
 	m := &walkLayer{name: layerSymbol, edges: make([][]walkEdge, len(cb.chunks))}
-	cb.medSymbol = m
+	cb.symLayer = m
 
 	acc := make(map[int]float32, mcMaxNeighbors)
 	for i := range cb.chunks {
@@ -344,11 +344,11 @@ func buildSymbolLayer(cb *ContextBuilder) *walkLayer {
 }
 
 func buildCallLayer(cb *ContextBuilder) *walkLayer {
-	if cb.medCall != nil {
-		return cb.medCall
+	if cb.callLayer != nil {
+		return cb.callLayer
 	}
 	m := &walkLayer{name: layerCall, edges: make([][]walkEdge, len(cb.chunks))}
-	cb.medCall = m
+	cb.callLayer = m
 
 	acc := make([]map[int]float32, len(cb.chunks))
 	get := func(i int) map[int]float32 {
@@ -427,11 +427,11 @@ func buildCallLayer(cb *ContextBuilder) *walkLayer {
 }
 
 func buildLexLayer(cb *ContextBuilder) *walkLayer {
-	if cb.medLex != nil {
-		return cb.medLex
+	if cb.lexLayer != nil {
+		return cb.lexLayer
 	}
 	m := &walkLayer{name: layerLex, edges: make([][]walkEdge, len(cb.chunks))}
-	cb.medLex = m
+	cb.lexLayer = m
 
 	idx := cb.invertedIdx
 	if idx == nil || len(idx.Postings) == 0 {
@@ -492,15 +492,15 @@ func (cb *ContextBuilder) walkLayers() []*walkLayer {
 func layerPreference(name string) float64 {
 	switch name {
 	case layerSymbol:
-		return scatterSymbol
+		return prefSymbol
 	case layerCall:
-		return scatterCall
+		return prefCall
 	default:
-		return scatterLex
+		return prefLex
 	}
 }
 
-func (cb *ContextBuilder) monteCarloWalk(seedIdxs []int, topK int) []ScoredChunk {
+func (cb *ContextBuilder) MonteCarloWalk(seedIdxs []int, topK int) []ScoredChunk {
 	return cb.monteCarloWalkWithQuery(seedIdxs, topK, "")
 }
 
@@ -511,31 +511,31 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 	if len(seedIdxs) == 0 {
 		return nil
 	}
-	media := cb.walkLayers()
-	if len(media) == 0 {
-		cb.debugLog.Log("[transport] no scattering channels available — walk skipped")
+	layers := cb.walkLayers()
+	if len(layers) == 0 {
+		cb.debugLog.Log("[mc-walk] no walk layers available — walk skipped")
 		return nil
 	}
 
-	pref := make([]float64, len(media))
+	pref := make([]float64, len(layers))
 	var wsum float64
-	for i, m := range media {
-		var chanFlux float64
+	for i, m := range layers {
+		var chanWeight float64
 		for _, es := range m.edges {
 			for _, e := range es {
-				chanFlux += float64(e.w)
+				chanWeight += float64(e.w)
 			}
 		}
-		pref[i] = layerPreference(m.name) * math.Log1p(math.Sqrt(chanFlux))
+		pref[i] = layerPreference(m.name) * math.Log1p(math.Sqrt(chanWeight))
 		wsum += pref[i]
 	}
 	if wsum <= 0 {
-		cb.debugLog.Log("[transport] all channels carry zero flux — walk skipped")
+		cb.debugLog.Log("[mc-walk] all layers have zero edge weight — walk skipped")
 		return nil
 	}
-	cum := make([]float64, len(media))
+	cum := make([]float64, len(layers))
 	var run float64
-	for i := range media {
+	for i := range layers {
 		run += pref[i] / wsum
 		cum[i] = run
 	}
@@ -561,25 +561,25 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 	// diag: fingerprint drawn from a CLONE so the live walk stream is untouched.
 	var diag *mcDiag
 	if mcDiagEnabled {
-		diag = newMcDiag(media)
+		diag = newMcDiag(layers)
 		diag.rngSeed = rawSeed
 		probe := newMCRNG(rawSeed)
 		for i := 0; i < 4; i++ {
 			diag.rngFirst = append(diag.rngFirst, probe.Float64())
 		}
-		diag.profileLayers(cb, media)
-		for i := range media {
+		diag.profileLayers(cb, layers)
+		for i := range layers {
 			diag.chanPref[i] = pref[i] / wsum
 			diag.chanCum[i] = cum[i]
 		}
-		for i, m := range media {
+		for i, m := range layers {
 			var f float64
 			for _, es := range m.edges {
 				for _, e := range es {
 					f += float64(e.w)
 				}
 			}
-			diag.chanFlux[i] = f
+			diag.chanWeight[i] = f
 		}
 	}
 
@@ -589,7 +589,7 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 				return i
 			}
 		}
-		return len(media) - 1
+		return len(layers) - 1
 	}
 	pickNeighbour := func(es []walkEdge) int {
 		var tot float32
@@ -609,7 +609,7 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 		return es[len(es)-1].to
 	}
 
-	cross := make([]float64, len(cb.chunks))
+	symDF := make([]float64, len(cb.chunks))
 	deg := make([]int, len(cb.chunks))
 	seenSym := make(map[string]bool, 16)
 	for i := range cb.chunks {
@@ -623,15 +623,15 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 			df += len(cb.symbolIndex[low])
 		}
 		clear(seenSym)
-		cross[i] = float64(df)
-		for _, m := range media {
+		symDF[i] = float64(df)
+		for _, m := range layers {
 			deg[i] += len(m.edges[i])
 		}
 	}
 
 	if mcDiagEnabled {
-		diag.profileSeeds(cb, seedIdxs, cross, deg)
-		diag.particles = mcWalkers
+		diag.profileSeeds(cb, seedIdxs, symDF, deg)
+		diag.walkers = mcWalkers
 	}
 
 	seedSet := map[int]bool{}
@@ -641,8 +641,8 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 		}
 	}
 
-	flux := make(map[int]float64, topK*2)
-	visits := make([]int, len(media))
+	visits := make(map[int]float64, topK*2)
+	layerVisits := make([]int, len(layers))
 
 	type walker struct{ idx, steps int }
 	for p := 0; p < mcWalkers; p++ {
@@ -651,25 +651,25 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 		for len(queue) > 0 {
 			w := queue[len(queue)-1]
 			queue = queue[:len(queue)-1]
-			flux[w.idx]++
+			visits[w.idx]++
 
 			if mcDiagEnabled {
-				diag.fluxTotal++
+				diag.visitTotal++
 				diag.depthHist[w.steps]++
 				if w.steps > diag.maxDepth {
 					diag.maxDepth = w.steps
 				}
 				if seedSet[w.idx] {
-					diag.fluxOnSeeds++
+					diag.visitsOnSeeds++
 				}
-				diag.fileFlux[cb.chunkFileAt(w.idx)]++
+				diag.fileVisits[cb.chunkFileAt(w.idx)]++
 			}
 
 			if w.steps >= mcMaxSteps {
 				continue
 			}
 			ci := pickChannel(rng.Float64())
-			m := media[ci]
+			m := layers[ci]
 			es := m.edges[w.idx]
 			if mcDiagEnabled {
 				diag.chanPicked[ci]++
@@ -682,20 +682,20 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 				}
 				continue
 			}
-			visits[ci]++
+			layerVisits[ci]++
 			if mcDiagEnabled {
 				diag.chanLive[ci]++
 			}
 
-			absorb := mcStopBase + math.Min(0.45, cross[w.idx]/5000.0)
+			stopP := mcStopBase + math.Min(0.45, symDF[w.idx]/5000.0)
 			if mcDiagEnabled {
-				diag.noteStop(absorb)
+				diag.noteStop(stopP)
 			}
-			if rng.Float64() < absorb {
+			if rng.Float64() < stopP {
 				if mcDiagEnabled {
-					diag.absorbed++
+					diag.stopped++
 					if w.steps == 0 {
-						diag.absorbedAtSeed++
+						diag.stoppedAtSeed++
 					}
 				}
 				continue
@@ -710,7 +710,7 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 			}
 			if deg[next] >= mcMaxNeighbors && rng.Float64() < 0.25 {
 				if mcDiagEnabled {
-					diag.fissions++
+					diag.branches++
 				}
 				for b := 0; b < mcHubBranch-1; b++ {
 					queue = append(queue, nw)
@@ -723,15 +723,15 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 		}
 	}
 
-	scored := make([]ScoredChunk, 0, len(flux))
-	for idx, f := range flux {
+	scored := make([]ScoredChunk, 0, len(visits))
+	for idx, f := range visits {
 		if f < 2 {
 			continue
 		}
 		scored = append(scored, ScoredChunk{
 			Chunk:        cb.chunks[idx],
 			Score:        f * mcVisitScoreScale,
-			MatchDetails: fmt.Sprintf("mc-flux: %.0f particles", f),
+			MatchDetails: fmt.Sprintf("mc-visits: %.0f", f),
 		})
 	}
 	slices.SortFunc(scored, byScoreDesc)
@@ -739,11 +739,11 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 		scored = scored[:topK]
 	}
 	if debugLevel3 {
-		shares := make([]string, len(media))
-		for i, m := range media {
-			shares[i] = fmt.Sprintf("%s=%d", m.name, visits[i])
+		shares := make([]string, len(layers))
+		for i, m := range layers {
+			shares[i] = fmt.Sprintf("%s=%d", m.name, layerVisits[i])
 		}
-		cb.debugLog.Log("[transport] %d chunks received flux, channel scatter %v, top flux=%.0f",
+		cb.debugLog.Log("[mc-walk] %d chunks visited, layer visits %v, top visits=%.0f",
 			len(scored), shares, func() float64 {
 				if len(scored) == 0 {
 					return 0
@@ -752,7 +752,7 @@ func (cb *ContextBuilder) monteCarloWalkWithQuery(seedIdxs []int, topK int, quer
 			}())
 	}
 	if mcDiagEnabled && diag != nil {
-		diag.report(cb, flux, len(scored))
+		diag.report(cb, visits, len(scored))
 	}
 	return scored
 }

@@ -12,16 +12,14 @@ import (
 // partial, keyword, semantic, monte_carlo), merging duplicate chunk scores with
 // multi-strategy boosts and sorting by match type and score.
 //
-// Physics-inspired extensions over the classic pipeline:
-//   - Monte Carlo particle transport: seeded random walks over the symbol
-//     co-occurrence graph score chunks by integrated flux (O(N·k) not O(V²)).
-//   - Wigner-Eckart/Clebsch-Gordan coupling: semantic scores factorize into
-//     radial strength (embedding norms) and angular geometry (cosine coupling).
-//   - Isospin alignment: per-language centroid rotation moves the query into a
-//     language-agnostic nucleon-doublet space before vector search.
-//   - Fermi-Dirac packing: the context budget is the chemical potential μ; a
-//     temperature schedule gates redundant blocks while bosonic connector
-//     chunks (high-df symbols) condense without penalty.
+// Extensions over the classic pipeline:
+//   - Monte Carlo walk: seeded random walks over the symbol
+//     co-occurrence graph score chunks by visit count (O(N·k) not O(V²)).
+//   - Twin search: chunks with the same structural signature in another
+//     language are added without any vector search.
+//   - Novelty packing: a logistic gate with an annealed temperature demotes
+//     redundant blocks while common connector chunks (high-df symbols)
+//     pass without penalty.
 //
 // If trace is non-nil, it records performance and score metrics per strategy.
 func (cb *ContextBuilder) EhnasSearch(
@@ -307,10 +305,10 @@ func (cb *ContextBuilder) EhnasSearch(
 	// 	}, 1.5)
 	// }
 	// ---------------------------------------------------------------------
-	// [Step 2.6] Isospin bridge — cross-projection resonance.
+	// [Step 2.6] Twin search — cross-language structural matches.
 	//
 	// This is the channel that used to be vectorSearch. For every chunk the
-	// lexical and graph strategies already love, it emits the chunks that are
+	// lexical and graph strategies already love, it returns the chunks that are
 	// the same structural state in a *different* language: same declared
 	// symbol set, no shared string required. It is the only route by which a
 	// query reaches code it shares no token with, and it costs one hash
@@ -318,37 +316,37 @@ func (cb *ContextBuilder) EhnasSearch(
 	//
 	// Deliberately not gated on intent.Callers/Callees the way the old
 	// semantic block was — a cross-language twin of a caller set is still
-	// useful, and transport handles the precision cases.
+	// useful, and the Monte Carlo walk handles the precision cases.
 	// ---------------------------------------------------------------------
-	if lat := cb.twinIndexOrBuild(); len(lat.twin) > 0 {
-		bridgeTopK := int(float64(topK) * (0.3 + 0.4*weights["isospin"]))
+	if ti := cb.twinIndexOrBuild(); len(ti.twin) > 0 {
+		bridgeTopK := int(float64(topK) * (0.3 + 0.4*weights["twin"]))
 		if bridgeTopK < 8 {
 			bridgeTopK = 8
 		}
-		cb.debugLog.Log("[Step 2.6] Executing isospin bridge strategy (bridgeTopK=%d, %d signatures, %d languages)",
-			bridgeTopK, len(lat.twin), len(lat.density))
-		run("isospin", func() []ScoredChunk {
+		cb.debugLog.Log("[Step 2.6] Executing twin search strategy (bridgeTopK=%d, %d signatures, %d languages)",
+			bridgeTopK, len(ti.twin), len(ti.density))
+		run("twin", func() []ScoredChunk {
 			return cb.crossLangTwinSearch(all, bridgeTopK)
 		}, 1.2)
 	}
 	// ---------------------------------------------------------------------
-	// [Step 3.5] Monte Carlo particle transport.
-	// The symbol co-occurrence graph is the transport medium; anchor/grep hits
-	// are neutron sources. Particles scatter along edges, absorb at boilerplate
-	// boundaries, and fission at hub chunks. Chunks score by integrated flux.
+	// [Step 3.5] Monte Carlo walk.
+	// Walkers start at anchor/grep hits, step along the symbol, call and lexical
+	// layers, stop early at boilerplate, and branch at hub chunks. Chunks
+	// score by visit count.
 	// ---------------------------------------------------------------------
 	tMC := time.Now()
 	{
 		seeds := mcSeedIndices(cb, all)
 		if len(seeds) > 0 {
-			cb.debugLog.Log("[Step 3.5] Monte Carlo transport: %d seeds emitted into medium", len(seeds))
+			cb.debugLog.Log("[Step 3.5] Monte Carlo walk: %d seeds", len(seeds))
 			run("monte_carlo", func() []ScoredChunk {
 				return cb.monteCarloWalkWithQuery(seeds, topK, query)
 			}, 1.0)
 		} else {
-			cb.debugLog.Log("[Step 3.5] Monte Carlo transport skipped: no seeds (no anchors/grep hits)")
+			cb.debugLog.Log("[Step 3.5] Monte Carlo walk skipped: no seeds (no anchors/grep hits)")
 		}
-		cb.debugLog.Log("[Timing] Monte Carlo transport took %v", time.Since(tMC))
+		cb.debugLog.Log("[Timing] Monte Carlo walk took %v", time.Since(tMC))
 	}
 	cb.debugLog.Log("[Step 3] Resolving anchor pins")
 	if pins := cb.resolveAnchorPins(query, all); len(pins) > 0 {
@@ -388,13 +386,13 @@ func (cb *ContextBuilder) EhnasSearch(
 	for _, sc := range all {
 		result = append(result, sc)
 	}
-	// [Step 3.9] Isospin score normalization. Divide out each language's
-	// relative lexical density so a chunk in a dense projection (C: short
-	// symbols, high df) cannot out-rank one in a sparse projection purely for
-	// being dense. This is the "remove the projection offset" step the old
+	// [Step 3.9] Per-language score normalization. Divide out each language's
+	// relative lexical density so a chunk in a dense language (C: short
+	// symbols, high df) cannot out-rank one in a sparse language purely for
+	// being dense. This is the "remove the per-language offset" step the old
 	// code did in 768 dimensions, done in score space.
 	preBoost := len(result)
-	cb.debugLog.Log("[Step 3.9] Isospin score normalization over %d candidates, %d languages",
+	cb.debugLog.Log("[Step 3.9] Per-language score normalization over %d candidates, %d languages",
 		preBoost, len(cb.twinIndexOrBuild().relDens))
 	result = langNormalizeScores(result, cb)
 
@@ -495,16 +493,15 @@ func (cb *ContextBuilder) EhnasSearch(
 	cb.debugLog.Log("[Timing] Sorting took %v", time.Since(tSort))
 
 	// ---------------------------------------------------------------------
-	// [Step 6.2] Fermi-Dirac context packing.
-	// The context budget is the chemical potential μ. Candidate blocks carry an
-	// energy ε = -ln(novelty): redundant fermionic blocks (overlapping symbols
-	// with already-selected blocks) have high ε and are Pauli-excluded as the
-	// window fills; bosonic connector blocks (high-df utility symbols) condense
-	// freely. Temperature anneals from hot exploration to degenerate packing.
+	// [Step 6.2] Novelty packing.
+	// Each block gets a redundancy cost -ln(novelty): blocks whose symbols
+	// overlap already-selected blocks cost more and are cut harder as the
+	// window fills; connector blocks (high-df utility symbols) pass freely.
+	// Temperature anneals from loose exploration to a sharp cutoff.
 	// ---------------------------------------------------------------------
-	tFermi := time.Now()
+	tPack := time.Now()
 	result = noveltyPack(result, topK, cb)
-	cb.debugLog.Log("[Timing] Fermi-Dirac packing took %v", time.Since(tFermi))
+	cb.debugLog.Log("[Timing] Novelty packing took %v", time.Since(tPack))
 
 	if len(result) > topK {
 		cb.debugLog.Log("[Step 6.1] Truncating results: %d → %d (topK=%d)", len(result), topK, topK)
@@ -547,10 +544,10 @@ func (cb *ContextBuilder) EhnasSearch(
 }
 
 // ---------------------------------------------------------------------------
-// Monte Carlo particle transport
+// Monte Carlo walk
 // ---------------------------------------------------------------------------
 
-// mcRNG is a deterministic xorshift64* PRNG so transport is reproducible
+// mcRNG is a deterministic xorshift64* PRNG so the walk is reproducible
 // across runs without pulling in math/rand.
 type mcRNG struct{ s uint64 }
 
@@ -578,16 +575,15 @@ func (r *mcRNG) Intn(n int) int {
 }
 
 const (
-	mcWalkers         = 256 // emitted "neutrons" per search
-	mcMaxSteps        = 20  // max mean-free-path length before forced absorption
+	mcWalkers         = 256 // walkers started per search
+	mcMaxSteps        = 20  // max walk length before a forced stop
 	mcStopBase        = 0.30
-	mcHubBranch       = 3  // branch factor at critical hub chunks
+	mcHubBranch       = 3  // branch factor at hub chunks
 	mcMaxNeighbors    = 96 // 48 // cap adjacency fanout per chunk
 	mcVisitScoreScale = 12.0
 )
 
-// chunkLanguage derives a coarse language group from the file extension,
-// the isospin quantum number of the chunk in embedding space.
+// chunkLanguage derives a coarse language group from the file extension.
 func chunkLanguage(file string) string {
 	dot := strings.LastIndex(file, ".")
 	if dot < 0 || dot == len(file)-1 {
@@ -762,29 +758,29 @@ func (cb *ContextBuilder) chunkIndexByID(id string) int {
 // }
 
 // ---------------------------------------------------------------------------
-// Fermi-Dirac context packing
+// Novelty packing
 // ---------------------------------------------------------------------------
 
-// noveltyPack gates the sorted candidate list through the Fermi-Dirac
-// occupancy function. Each block's energy ε = -ln(novelty), where novelty is
+// noveltyPack gates the sorted candidate list through a logistic weight
+// function. Each block's cost is -ln(novelty), where novelty is
 // the fraction of its symbols not already represented in the selected window.
-// Bosonic symbols (document frequency above commonSymbolDF) behave like
-// condensate connectors — repeated error checks/imports — and never raise ε.
+// Common symbols (document frequency above commonSymbolDF) are
+// connectors — repeated error checks/imports — and never raise the cost.
 // Temperature anneals linearly from temp0 to tempMin over the packing progress,
-// so early picks explore broadly and late picks form a degenerate core.
+// so early picks explore broadly and late picks form a tight core.
 func noveltyPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredChunk {
 	if len(cands) == 0 {
 		return cands
 	}
 	const (
-		commonSymbolDF = 200  // df above which a symbol is a bosonic connector
-		temp0          = 0.50 // hot: exploration
-		tempMin        = 0.05 // degenerate: sharp Pauli cutoff
+		commonSymbolDF = 200  // df above which a symbol is a common connector
+		temp0          = 0.50 // loose: exploration
+		tempMin        = 0.05 // tight: sharp cutoff
 		noveltyGain    = 0.85 // max score amplification for novel blocks
 	)
-	mu := math.Ln2 // chemical potential: half-filled baseline
+	midpoint := math.Ln2 // logistic midpoint: half-novel baseline
 
-	// Pre-compute df for boson classification.
+	// Pre-compute df for common-symbol classification.
 	df := func(sym string) int { return len(cb.symbolIndex[strings.ToLower(sym)]) }
 
 	selectedSymCounts := make(map[string]int, topK*8)
@@ -797,13 +793,13 @@ func noveltyPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredChun
 		sc := cands[i]
 		if sc.Pinned || sc.IsExact {
 			packed++
-			continue // pinned/exact blocks bypass the exclusion principle
+			continue // pinned/exact blocks bypass the novelty gate
 		}
 		progress := float64(packed) / float64(topK)
 		if progress > 1 {
 			progress = 1
 		}
-		kT := temp0 + (tempMin-temp0)*progress // annealing schedule
+		temp := temp0 + (tempMin-temp0)*progress // annealing schedule
 
 		syms := sc.Symbols
 		if len(syms) == 0 {
@@ -814,34 +810,34 @@ func noveltyPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredChun
 		for _, sym := range syms {
 			low := strings.ToLower(sym)
 			if df(low) > commonSymbolDF {
-				continue // bosonic: condenses, no exclusion cost
+				continue // common symbol: no redundancy cost
 			}
 			total++
 			if selectedSymCounts[low] > 0 {
 				redundant++
 			}
 		}
-		var occupancy float64
+		var weight float64
 		if total == 0 {
-			occupancy = 1.0 // pure bosonic chunk
+			weight = 1.0 // only common symbols
 		} else {
 			novelty := 1.0 - float64(redundant)/float64(total)
 			if novelty < 1e-6 {
 				novelty = 1e-6
 			}
-			epsilon := -math.Log(novelty) // redundancy energy
-			occupancy = 1.0 / (math.Exp((epsilon-mu)/kT) + 1.0)
+			epsilon := -math.Log(novelty) // redundancy cost
+			weight = 1.0 / (math.Exp((epsilon-midpoint)/temp) + 1.0)
 		}
-		// Rescale: occupancy 1 → +noveltyGain boost, occupancy 0 → deep cut,
+		// Rescale: weight 1 → +noveltyGain boost, weight 0 → deep cut,
 		// but never zero a demotion-surviving exact-ish candidate entirely.
 		// around line 810 in the original file:
-		if math.IsNaN(occupancy) || math.IsInf(occupancy, 0) {
+		if math.IsNaN(weight) || math.IsInf(weight, 0) {
 			// novelty was 0 or negative; this block has no discriminative signal.
 			// Keep the score rather than propagating NaN.
-			occupancy = 1.0
+			weight = 1.0
 		}
-		cands[i].Score *= (1.0 - noveltyGain) + noveltyGain*occupancy
-		cands[i].MatchDetails = fmt.Sprintf("%s; fermi: n=%.2f", cands[i].MatchDetails, occupancy)
+		cands[i].Score *= (1.0 - noveltyGain) + noveltyGain*weight
+		cands[i].MatchDetails = fmt.Sprintf("%s; novelty: w=%.2f", cands[i].MatchDetails, weight)
 
 		for _, sym := range syms {
 			selectedSymCounts[strings.ToLower(sym)]++
@@ -849,7 +845,7 @@ func noveltyPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredChun
 		packed++
 	}
 
-	// Re-sort after occupancy weighting (stable keeps exact/pinned on top).
+	// Re-sort after novelty weighting (stable keeps exact/pinned on top).
 	sort.SliceStable(cands, func(i, j int) bool {
 		if cands[i].IsExact != cands[j].IsExact {
 			return cands[i].IsExact
@@ -857,8 +853,8 @@ func noveltyPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredChun
 		return cands[i].Score > cands[j].Score
 	})
 	if debugLevel3 {
-		cb.debugLog.Log("[noveltyPack] Annealed kT %.2f→%.2f, μ=%.2f over %d slots",
-			temp0, tempMin, mu, packed)
+		cb.debugLog.Log("[noveltyPack] Annealed temp %.2f→%.2f, midpoint=%.2f over %d slots",
+			temp0, tempMin, midpoint, packed)
 	}
 	return cands
 }

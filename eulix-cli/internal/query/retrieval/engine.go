@@ -15,53 +15,55 @@ import (
 // chunk store and every lexical strategy; they differ in how they reach code
 // that shares no token with the query, and in what they need on disk.
 //
-//	orbit   — query embedding → vectorSearch/vectorSearchIVF → MMR selection.
+//	etiya   — Embedding-aware Topological Indexing for Your Architecture.
+//	          query embedding → vectorSearch/vectorSearchIVF → MMR selection.
 //	          Needs embeddings.bin and vectors.bin. Queries the embedding
 //	          service on every request.
-//	Ehnas — isospin bridge → multi-channel particle transport →
-//	          Fermi-Dirac packing. Reads no vector artifacts and makes no
-//	          outbound call. Greedy selection.
+//	ehnas   — Exact · Hierarchical · Node · Structure.
+//	          twin search → multi-layer Monte Carlo walk →
+//	          novelty packing. Reads no vector artifacts and makes no
+//	          outbound call. structuralMMR selection.
 //
 // The switch has exactly two halves and each lives in one place:
 //
 //	load time   → loadEngineArtifacts
-//	query time  → runSearch, useMMR, Engine().UsesSemantic()
+//	query time  → runSearch, SelectorFor, Engine().UsesSemantic()
 //
 // Anything that branches on "do we have embeddings" should branch on the
-// engine instead. hasEmbeddings is a *load outcome* — orbit can be running
+// engine instead. hasEmbeddings is a *load outcome* — etiya can be running
 // with it false because a file was missing, and Ehnas is always false — so
 // it is a bad proxy for "which pipeline are we running".
 
 type Engine string
 
 const (
-	EngineOrbit Engine = "orbit"
+	EngineEtiya Engine = "etiya"
 	EngineEHNAS Engine = "ehnas"
 )
 
-// engineDefault is what an absent or empty config key resolves to. Orbit,
+// engineDefault is what an absent or empty config key resolves to. Etiya,
 // because that is the behaviour every config file already has — a missing key
 // must not silently change anyone's results.
-const engineDefault = EngineOrbit
+const engineDefault = EngineEtiya
 
 // ResolveEngine reads config.Project.Engine.
 //
-// Empty or absent → orbit (backwards compatible).
+// Empty or absent → etiya (backwards compatible).
 // A non-empty unknown value is an error. Silently running Ehnas when the
-// operator meant orbit — or the reverse — returns plausible-looking results
+// operator meant etiya — or the reverse — returns plausible-looking results
 // from the wrong pipeline, which is far more expensive to debug than a
 // refusal to start.
 func ResolveEngine(raw string) (Engine, error) {
 	switch s := strings.ToLower(strings.TrimSpace(raw)); s {
 	case "":
 		return engineDefault, nil
-	case string(EngineOrbit):
-		return EngineOrbit, nil
+	case string(EngineEtiya):
+		return EngineEtiya, nil
 	case string(EngineEHNAS):
 		return EngineEHNAS, nil
 	default:
 		return "", fmt.Errorf("unknown config.Project.Engine %q (want %q or %q)",
-			raw, EngineOrbit, EngineEHNAS)
+			raw, EngineEtiya, EngineEHNAS)
 	}
 }
 
@@ -73,7 +75,7 @@ func (cb *ContextBuilder) SelectorFor() SelectorMode {
 	case cb.hasEmbeddings:
 		return SelectorQueryMMR
 	default:
-		// Orbit running without embeddings: a load degraded.
+		// Etiya running without embeddings: a load degraded.
 		return SelectorGreedy
 	}
 }
@@ -81,7 +83,7 @@ func (cb *ContextBuilder) SelectorFor() SelectorMode {
 // UsesSemantic reports whether the engine routes queries through embedding
 // space. This is the predicate the loader, the search dispatch and the
 // selector all ask, so "does this engine need a query vector" has one answer.
-func (e Engine) UsesSemantic() bool { return e == EngineOrbit }
+func (e Engine) UsesSemantic() bool { return e == EngineEtiya }
 
 // Engine returns the engine this builder was constructed with. The zero value
 // resolves to the default, so a builder created by a constructor that never
@@ -137,14 +139,8 @@ func (cb *ContextBuilder) runSearch(
 // useMMR reports whether the active engine finishes with maximal marginal
 // relevance.
 //
-// MMR needs a query vector for its relevance-weighted redundancy term, so
-// Ehnas — which by construction has none — always selects greedily. Worth
-// knowing that this is a real quality difference and not a free choice:
-// noveltyPack gates redundancy before selection, but greedy can still
-// re-adjacent blocks that fermi let through. A query-free MMR (redundancy
-// measured only between already-selected chunks, e.g. token Jaccard) would
-// close that gap without reintroducing a single embedding. That is the next
-// thing to build on Ehnas, and this predicate is where it plugs in.
+// Etiya uses query MMR when embeddings loaded; Ehnas always uses the
+// query-free structuralMMR. SelectorFor is what the builder actually calls.
 // nolint: unused
 func (cb *ContextBuilder) useMMR() bool {
 	return cb.hasEmbeddings || cb.Engine() == EngineEHNAS
@@ -161,7 +157,7 @@ func (cb *ContextBuilder) EnsureWeightKeys(weights map[string]float64) map[strin
 	if weights == nil {
 		weights = make(map[string]float64, 2)
 	}
-	for _, k := range []string{"semantic", "isospin"} {
+	for _, k := range []string{"semantic", "twin"} {
 		if _, ok := weights[k]; !ok {
 			weights[k] = 0.5
 		}
@@ -197,8 +193,8 @@ func (cb *ContextBuilder) loadEngineArtifacts() error {
 		if err := cb.loadEhnasArtifacts(); err != nil {
 			return fmt.Errorf("[%s] Ehnas artifacts: %w", eng, err)
 		}
-	} else if err := cb.loadOrbitArtifacts(); err != nil {
-		return fmt.Errorf("[%s] orbit artifacts: %w", eng, err)
+	} else if err := cb.loadEtiyaArtifacts(); err != nil {
+		return fmt.Errorf("[%s] etiya artifacts: %w", eng, err)
 	}
 
 	cb.debugLog.Log("[ENGINE] %s ready in %v: %d chunks, callGraph=%t, semantic=%t, invertedIdx=%t",
@@ -207,27 +203,27 @@ func (cb *ContextBuilder) loadEngineArtifacts() error {
 	return nil
 }
 
-// loadOrbitArtifacts loads the vector artifacts.
+// loadEtiyaArtifacts loads the vector artifacts.
 //
 // A missing or unreadable file degrades to lexical-only rather than failing
 // the builder — that is today's behaviour and worth preserving. It is logged
 // loudly, though, because a silent degrade looks exactly like a retrieval
 // quality regression with no visible cause.
-func (cb *ContextBuilder) loadOrbitArtifacts() error {
+func (cb *ContextBuilder) loadEtiyaArtifacts() error {
 	if err := cb.loadEmbeddings(); err != nil {
 		cb.hasEmbeddings = false
-		cb.debugLog.Log("[ORBIT] embeddings.bin unavailable (%v) — degrading to lexical-only retrieval", err)
+		cb.debugLog.Log("[ETIYA] embeddings.bin unavailable (%v) — degrading to lexical-only retrieval", err)
 	} else {
 		cb.hasEmbeddings = len(cb.embeddings) > 0
 	}
 	if err := cb.loadVectorMap(); err != nil {
-		cb.debugLog.Log("[ORBIT] vectors.bin unavailable (%v) — rebuilding chunk index in memory", err)
+		cb.debugLog.Log("[ETIYA] vectors.bin unavailable (%v) — rebuilding chunk index in memory", err)
 	}
 	if cb.chunkIdx == nil {
 		cb.buildChunkIndex()
 	}
 	if cb.hasEmbeddings {
-		cb.debugLog.Log("[ORBIT] semantic enabled: %d embeddings, %d chunk ids",
+		cb.debugLog.Log("[ETIYA] semantic enabled: %d embeddings, %d chunk ids",
 			len(cb.embeddings), len(cb.chunkIdx))
 	}
 	return nil
@@ -242,10 +238,10 @@ func (cb *ContextBuilder) loadEhnasArtifacts() error {
 
 	// Eager on purpose. O(N) with small constants, it pays for itself on the
 	// first query, and it gives the operator an immediate read on how many
-	// language projections and structural signatures the corpus actually has
-	// — the two numbers that decide whether the isospin bridge does anything.
+	// languages and structural signatures the corpus actually has
+	// — the two numbers that decide whether the twin search does anything.
 	//
-	// The transport media stay lazy. The lexical medium is O(Σ df²) and
+	// The walk layers stay lazy. The lexical layer is O(Σ df²) and
 	// should not be paid for until a query actually needs a walk.
 	cb.twins = buildTwinIndex(cb)
 
@@ -259,7 +255,7 @@ func (cb *ContextBuilder) loadEhnasArtifacts() error {
 // This is the same map vectors.bin carries, and the indices agree:
 // vectorSearchIVF addresses cb.chunks[embIdx] with the embedding index, so
 // "chunk ID → embedding slot" and "chunk ID → chunk slice index" are the same
-// mapping. Orbit gets it from disk, Ehnas builds it in memory, and both end
+// mapping. Etiya gets it from disk, Ehnas builds it in memory, and both end
 // up in cb.chunkIdx. There is deliberately no second field — two maps for one
 // concept is how you get a stale one.
 //
@@ -274,15 +270,15 @@ func (cb *ContextBuilder) buildChunkIndex() {
 }
 
 func (cb *ContextBuilder) reportEhnasIndex() {
-	lat := cb.twins
-	if lat != nil {
-		projs := make([]string, 0, len(lat.density))
-		for lang, d := range lat.density {
-			projs = append(projs, fmt.Sprintf("%s:%.1f", lang, d))
+	ti := cb.twins
+	if ti != nil {
+		langs := make([]string, 0, len(ti.density))
+		for lang, d := range ti.density {
+			langs = append(langs, fmt.Sprintf("%s:%.1f", lang, d))
 		}
-		sort.Strings(projs)
-		cb.debugLog.Log("[EHNAS] isospin lattice: %d language projections [%s], %d structural signatures",
-			len(lat.density), strings.Join(projs, " "), len(lat.twin))
+		sort.Strings(langs)
+		cb.debugLog.Log("[EHNAS] twin index: %d languages [%s], %d structural signatures",
+			len(ti.density), strings.Join(langs, " "), len(ti.twin))
 	}
 
 	// Proof of migration, not decoration. A size here confirms the artifact
@@ -298,18 +294,18 @@ func (cb *ContextBuilder) reportEhnasIndex() {
 	}
 
 	// The one silent-failure mode in Ehnas. Both the pseudo-relevance
-	// feedback pass and the lexical transport medium read invertedIdx, and
+	// feedback pass and the lexical walk layer read invertedIdx, and
 	// buildDerivedIndices only builds it above invIdxThreshold chunks. Below
 	// that, Ehnas still runs and still returns results — it just loses the
-	// paraphrase channel and the fuzzy medium without a word in the logs.
+	// paraphrase channel and the lexical layer without a word in the logs.
 	if cb.invertedIdx == nil {
 		cb.debugLog.Log("[EHNAS] WARNING: no inverted index (%d chunks ≤ %d threshold) — "+
-			"PRF has no corpus to vote with and the lexical transport medium is empty. "+
+			"PRF has no corpus to vote with and the lexical walk layer is empty. "+
 			"Lower invIdxThreshold or accept lexical-only retrieval.",
 			len(cb.chunks), invIdxThreshold)
 	}
 	if !cb.hasCallGraph {
-		cb.debugLog.Log("[EHNAS] WARNING: no call graph — call medium unavailable, " +
+		cb.debugLog.Log("[EHNAS] WARNING: no call graph — call layer unavailable, " +
 			"structural queries will rely on the symbol and lexical channels")
 	}
 }

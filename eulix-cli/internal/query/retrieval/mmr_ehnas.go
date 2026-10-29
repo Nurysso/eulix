@@ -8,9 +8,9 @@ Package retrieval provides context window creation for Eulix's RAG system.
 
 This file defines structuralMMR, a query-free, MMR-family context selector.
 It is not textbook MMR: relevance is a fused multi-strategy score rather
-than a query cosine, and redundancy is a multipole expansion over symbol,
-spatial, and isospin (structural-twin) channels rather than an embedding
-cosine. See the Isospin MMR block comment below for the full mapping.
+than a query cosine, and redundancy is a weighted sum over symbol,
+spatial, and structural-twin channels rather than an embedding
+cosine. See the Structural MMR block comment below for the full mapping.
 */
 package retrieval
 
@@ -20,57 +20,46 @@ import (
 	"sort"
 )
 
-// Isospin MMR query-free maximal marginal relevance.
+// Structural MMR query-free maximal marginal relevance.
 //
 // Embeddings gave MMR two things: a relevance term (cosine to the query) and
 // a redundancy term (cosine between candidates). EHNAS keeps relevance
 // the fused multi-strategy score already is a relevance estimate, and it is
 // better than a cosine because it is ground truth rather than coincidence.
 //
-// Redundancy is where the real work is, and this is the part the physics is
-// actually about.
-//
-// A rank-k tensor operator acting on a nuclear state does not produce one
-// number, it produces a multipole expansion: the monopole (k=0) is the
-// overall strength, the dipole (k=1) is where it is pointing, the quadrupole
-// (k=2) is the anisotropy. Asking "do these two chunks overlap" collapses
-// all of that into one cosine and throws away which kind of overlap it is.
+// Redundancy is where the real work is. Asking "do these two chunks overlap"
+// with one cosine throws away which kind of overlap it is.
 //
 // The kinds matter because they are not interchangeable:
 //
-//	k=0  monopole   shared declared surface symbol overlap, idf-weighted
-//	k=1  dipole     spatial relation same file, how far apart
-//	k=2  quadrupole isospin state same structural signature, any language
+//	symbolOverlap  shared declared surface, idf-weighted
+//	lineProximity  same file, how far apart
+//	sameTwin       same structural signature, any language
 //
-// k=2 is the channel that pays for this whole file. The existing
+// sameTwin is the channel that pays for this whole file. The existing
 // mmrSim fallback is Jaccard over non-boilerplate symbols, which scores a
 // Rust parse_config and a Go ParseConfig at ZERO redundancy, because they
 // share no literal identifier. MMR then reads five ports of the same parser
 // as five independent, maximally diverse facts and spends the entire context
-// budget on them. Symbol sets live in the raw isospin projection. The
-// exclusion principle has to be evaluated in the nucleon frame or it does not
-// apply at all.
+// budget on them. Symbol sets differ per language, so redundancy has to be
+// measured on the structural signature or it does not apply at all.
 //
-// Glossary (physics term → CS meaning):
+// Terms:
 //
-//	isospin      chunk equivalence class under surface-form variation,
+//	twin         chunk equivalence under surface-form variation,
 //	             e.g. EN/FR twins or cross-language ports of the same code
-//	twinClass    integer label of an isospin class
-//	lattice      precomputed chunk-index → twinClass map plus class metadata
-//	multipole    one redundancy channel; k=0 symbol, k=1 spatial, k=2 isospin
-//	monopole     idf-weighted symbol Jaccard
-//	dipole       same-file line-gap response
-//	quadrupole   twin-class match indicator (1 if same class, else 0)
+//	twinClass    integer label of a group of twins
+//	twin index   precomputed chunk-index → twinClass map plus class metadata
 
 const (
-	// Multipole weights. They sum above 1.0 on purpose a chunk that is
+	// Redundancy channel weights. They sum above 1.0 on purpose a chunk that is
 	// simultaneously adjacent, symbol-overlapping and a structural twin
 	// really is fully redundant, and the clamp handles the overshoot.
 	wSymbolOverlap = 0.45 // shared symbol surface
 	wLineProximity = 0.20 // spatial relation within a file
-	wSameTwin      = 0.55 // isospin structural state
+	wSameTwin      = 0.55 // same structural signature
 
-	// Dipole response by line gap, same file. Adjacent blocks merge for
+	// Line proximity response by line gap, same file. Adjacent blocks merge for
 	// almost no marginal token cost, so they are cheap to carry together and
 	// should not be treated as redundant. Distant blocks in the same file
 	// cost real budget and share a file header, so they are.
@@ -123,9 +112,9 @@ type structCand struct {
 // dominate the window. Pinned anchors are seeded before the loop and the top
 // pin is always kept regardless of budget.
 //
-// "Isospin" in the name refers to the twin-class channel (k=2) that treats
-// cross-language structural twins as the same particle in different
-// projections. See the file-level comment above for the full glossary.
+// "Structural" in the name refers to the twin-class channel that treats
+// cross-language structural twins as the same chunk in different
+// languages. See the file-level comment above for the full glossary.
 func (cb *ContextBuilder) structuralMMR(
 	candidates []ScoredChunk,
 	budget int,
@@ -153,9 +142,9 @@ func (cb *ContextBuilder) structuralMMR(
 	if maxChunks <= 0 {
 		maxChunks = 30
 	}
-	lat := cb.twinIndexOrBuild()
+	ti := cb.twinIndexOrBuild()
 	cb.debugLog.Log("[structuralMMR] lambda=%.2f budget=%d maxChunks=%d candidates=%d twins=%d classes=%d",
-		lambda, budget, maxChunks, len(candidates), len(lat.twin), len(lat.twin))
+		lambda, budget, maxChunks, len(candidates), len(ti.twin), len(ti.twin))
 
 	//               pinned first, before anything is normalised
 	// Pinned chunks score 5000+. Left in the pool they squash every other
@@ -191,8 +180,8 @@ func (cb *ContextBuilder) structuralMMR(
 			alive:     true,
 			twinClass: -1,
 		}
-		if ci := cb.chunkIndexByID(c.ID); ci >= 0 && ci < len(lat.twinClass) {
-			cs[i].twinClass = lat.twinClass[ci]
+		if ci := cb.chunkIndexByID(c.ID); ci >= 0 && ci < len(ti.twinClass) {
+			cs[i].twinClass = ti.twinClass[ci]
 		}
 	}
 
@@ -248,8 +237,8 @@ func (cb *ContextBuilder) structuralMMR(
 		}
 		// A pinned chunk must carry its twin class too, or it fails to
 		// exclude its cross-language twin and the exclusion is one-sided.
-		if pi := cb.chunkIndexByID(p.ID); pi >= 0 && pi < len(lat.twinClass) {
-			pc.twinClass = lat.twinClass[pi]
+		if pi := cb.chunkIndexByID(p.ID); pi >= 0 && pi < len(ti.twinClass) {
+			pc.twinClass = ti.twinClass[pi]
 		}
 		noteSelected(&pc, pinnedRedundancyDamp)
 	}
@@ -353,7 +342,7 @@ func (cb *ContextBuilder) structuralMMR(
 // multi-strategy score stands in for one.
 //
 // Min-max alone is wrong here and the failure is quiet. EHNAS's score
-// distribution is heavy-tailed: anchor hits land around 250, isospin-bridge
+// distribution is heavy-tailed: anchor hits land around 250, twin-bridge
 // hits inherit from them, keyword hits sit near 20. Min-max maps the top
 // candidate to 1.0 and squashes everything else into 0.05–0.2, after which
 // the (1-lambda)*maxRed term dominates for effectively every non-anchor and
@@ -361,7 +350,7 @@ func (cb *ContextBuilder) structuralMMR(
 // diversity picker wearing an MMR costume.
 //
 // So: log compression for magnitude, blended with rank for spread. The
-// function deliberately does not consult the isospin lattice, the twin-class
+// function deliberately does not consult the twin index, the twin-class
 // channel belongs to redundancy, not relevance. cs is expected to already be
 // sorted by score descending.
 func fillQueryFreeRelevance(cs []structCand, anchorFiles map[string]bool) {
@@ -401,15 +390,15 @@ func fillQueryFreeRelevance(cs []structCand, anchorFiles map[string]bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Redundancy: The multipole expansion
+// Redundancy channels
 // ---------------------------------------------------------------------------
 
 // chunkRedundancy returns the combined redundancy of a and b in [0,1].
 //
 // Channels are independent rather than averaged. Two chunks that are the same
-// structural state in different languages score high on quadrupole and zero
-// on monopole, which is the entire point; averaging would dilute exactly the
-// signal the k=2 term exists to provide.
+// structural state in different languages score high on sameTwin and zero
+// on symbolOverlap, which is the entire point; averaging would dilute exactly the
+// signal the sameTwin term exists to provide.
 func chunkRedundancy(a, b *structCand) float64 {
 	r := wSymbolOverlap*symbolOverlap(a, b) +
 		wLineProximity*lineProximity(a, b) +
@@ -420,7 +409,7 @@ func chunkRedundancy(a, b *structCand) float64 {
 	return r
 }
 
-// symbolOverlap (k=0): weighted Jaccard over non-boilerplate symbols.
+// symbolOverlap: weighted Jaccard over non-boilerplate symbols.
 //
 // Weighted rather than raw: a shared rare identifier means the two chunks
 // are doing the same specific thing, a shared common one means little.
@@ -460,7 +449,7 @@ func symbolOverlap(a, b *structCand) float64 {
 	return inter / union
 }
 
-// lineProximity (k=1): spatial relation within a file.
+// lineProximity: spatial relation within a file.
 //
 // The response is inverted relative to intuition: adjacent blocks are cheap
 // to carry together (addChunk merges them, so the marginal token cost is a
@@ -483,7 +472,7 @@ func lineProximity(a, b *structCand) float64 {
 	case canMerge(a.sc.Chunk, b.sc.Chunk):
 		// Ask addChunk's own predicate rather than hardcoding its line
 		// threshold here. If that constant moves and this does not, the
-		// dipole term silently starts scoring free merges as redundant.
+		// lineProximity term silently starts scoring free merges as redundant.
 		return proximityAdjacent
 	case gap <= distantLineThreshold:
 		return proximityNear
@@ -492,10 +481,10 @@ func lineProximity(a, b *structCand) float64 {
 	}
 }
 
-// sameTwin (k=2): isospin structural state.
+// sameTwin: same structural signature.
 //
 // Two chunks whose declared surface hashes to the same signature are the same
-// nuclear state in different projections. This channel is the whole reason
+// code in different languages. This channel is the whole reason
 // the selector exists: a language-agnostic measure of "these are the same
 // thing", which a symbol-set measure structurally cannot express.
 func sameTwin(a, b *structCand) float64 {
@@ -542,7 +531,7 @@ func (cb *ContextBuilder) symWeights(syms []string) map[string]float64 {
 }
 
 // redundancyStats logs how much of the selection was driven by which channel.
-// If no candidate carries a twin class the k=2 channel is inert and the
+// If no candidate carries a twin class the sameTwin channel is inert and the
 // selector has quietly degraded to a symbol Jaccard with a spatial term.
 func (cb *ContextBuilder) redundancyStats(cs []structCand) {
 	if !debugLevel3 || len(cs) == 0 {
@@ -555,5 +544,5 @@ func (cb *ContextBuilder) redundancyStats(cs []structCand) {
 		}
 	}
 	cb.debugLog.Log("[structuralMMR] twin coverage: %d/%d candidates in a structural class "+
-		"(if 0, the k=2 channel is inert)", twined, len(cs))
+		"(if 0, the sameTwin channel is inert)", twined, len(cs))
 }

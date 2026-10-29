@@ -125,7 +125,7 @@ func prfExpand(cb *ContextBuilder, hits []ScoredChunk, topN int) []string {
 		}
 		df := float64(len(postings))
 		if df > prfMaxDF {
-			continue // bosonic connector of the corpus
+			continue // common connector term of the corpus
 		}
 		// Rare in the corpus, concentrated in the seeds.
 		cands = append(cands, cand{term, float64(m) / 100.0 * math.Log(docs/df)})

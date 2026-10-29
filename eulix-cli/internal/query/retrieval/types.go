@@ -66,9 +66,9 @@ type ContextBuilder struct {
 	lastTrace        *DebugTrace
 	llmClient        *llm.Client
 	twins            *twinIndex
-	medCall          *walkLayer
-	medLex           *walkLayer
-	medSymbol        *walkLayer
+	callLayer        *walkLayer
+	lexLayer         *walkLayer
+	symLayer         *walkLayer
 	mu               sync.Mutex
 	symbolIndex      map[string][]int
 	vectorMap        map[string]int
@@ -285,7 +285,7 @@ func (m SelectorMode) MmmrSelector() string {
 	case SelectorQueryMMR:
 		return "mmr"
 	case SelectorStructuralMMR:
-		return "isospin_mmr"
+		return "structural_mmr"
 	default:
 		return "greedy"
 	}
