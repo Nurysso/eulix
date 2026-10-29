@@ -60,7 +60,7 @@ fn check(ext: &str, case: &str) {
         "factory" | "shadow" => vec![id(&p, &app, "Client", "send")],
         "bare" | "static_call" => vec![id(&p, &app, "", "send")],
         "missing" => vec![],
-        "unknown" => vec![id(&p, &app, "Other", "unique")],
+        "unknown" => vec![],
         "imported" => vec![id(&p, &format!("helpers.{ext}"), "", "helper")],
         _ => unreachable!(),
     };
@@ -107,7 +107,7 @@ macro_rules! cases {
                 check($ext, "missing");
             }
             #[test]
-            fn unknown_receiver_requires_unique_method() {
+            fn unknown_receiver_does_not_guess_a_unique_method() {
                 check($ext, "unknown");
             }
             #[test]

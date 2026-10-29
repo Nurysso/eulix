@@ -94,7 +94,12 @@ pub fn parse_file(
         .filter(|i| {
             !matches!(
                 i.import_type.as_str(),
-                "internal" | "cgo" | "include" | "include_dynamic"
+                "internal"
+                    | "cgo"
+                    | "include"
+                    | "include_dynamic"
+                    | "reexport_all"
+                    | "reexport_named"
             )
         })
         .map(|i| {

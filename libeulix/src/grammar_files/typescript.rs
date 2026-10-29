@@ -162,10 +162,52 @@ impl TypeScriptParser {
 
             if target.kind() == "import_statement" {
                 self.parse_import_statement(&target, &mut imports);
+            } else if target.kind() == "export_statement" {
+                self.parse_reexport(&target, &mut imports);
             }
         }
 
         imports
+    }
+
+    fn parse_reexport(&self, node: &Node, imports: &mut Vec<Import>) {
+        let Some(source) = node.child_by_field_name("source") else {
+            return;
+        };
+        let mut cursor = node.walk();
+        // Namespace exports (`export * as ns`) are not wildcard reexports.
+        if node
+            .children(&mut cursor)
+            .any(|n| n.kind() == "namespace_export" || n.kind() == "type")
+        {
+            return;
+        }
+        let clause = node
+            .children(&mut node.walk())
+            .find(|n| n.kind() == "export_clause");
+        let items = clause
+            .map(|clause| {
+                clause
+                    .named_children(&mut clause.walk())
+                    .filter(|n| n.kind() == "export_specifier")
+                    .filter(|n| !self.get_node_text(n).starts_with("type "))
+                    .map(|n| self.get_node_text(&n))
+                    .collect()
+            })
+            .unwrap_or_default();
+        imports.push(Import {
+            module: self
+                .get_node_text(&source)
+                .trim_matches(['\'', '"'])
+                .to_string(),
+            items,
+            import_type: if clause.is_some() {
+                "reexport_named"
+            } else {
+                "reexport_all"
+            }
+            .to_string(),
+        });
     }
 
     fn parse_import_statement(&self, node: &Node, imports: &mut Vec<Import>) {

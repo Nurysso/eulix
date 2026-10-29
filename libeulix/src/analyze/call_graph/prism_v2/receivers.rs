@@ -110,6 +110,10 @@ pub(super) fn build_imports<'a>(
         }
         let (source, local) = alias(&imp.module);
         let target = module(source, path, index, &fd.language);
+        if matches!(imp.import_type.as_str(), "reexport_all" | "reexport_named") {
+            out.reexports.push((imp, target));
+            continue;
+        }
         if imp.items.is_empty() {
             let binding = if local != source {
                 local
@@ -117,9 +121,11 @@ pub(super) fn build_imports<'a>(
                 source.rsplit(sep).find(|s| !s.is_empty()).unwrap_or(source)
             };
             out.namespaces.insert(binding, target);
+            out.namespace_modules.insert(binding, Cow::Borrowed(source));
             // Python allows a fully qualified module receiver.
             if local == source {
                 out.namespaces.insert(source, target);
+                out.namespace_modules.insert(source, Cow::Borrowed(source));
             }
         }
         for item in &imp.items {
@@ -131,11 +137,13 @@ pub(super) fn build_imports<'a>(
                     let submodule = format!("{source}.{original}");
                     if let Some(files) = module(&submodule, path, index, "python") {
                         out.namespaces.insert(binding, Some(files));
+                        out.namespace_modules.insert(binding, Cow::Owned(submodule));
                         continue;
                     }
                 }
                 if original == "*" {
                     out.namespaces.insert(binding, target);
+                    out.namespace_modules.insert(binding, Cow::Borrowed(source));
                 } else if !original.is_empty() {
                     out.names.insert(binding, target);
                     out.symbols.insert(binding, original);
@@ -143,25 +151,102 @@ pub(super) fn build_imports<'a>(
             }
         }
     }
+    // Explicit bindings override wildcard exports regardless of source order.
+    out.reexports
+        .sort_by_key(|(export, _)| export.import_type == "reexport_all");
     out
 }
 
 impl Resolver<'_> {
-    /// Receiver calls never use the scope ladder's arbitrary tie-breaker.
-    fn unique_method(&self, name: &str, file: u32) -> Option<u32> {
-        let mut candidates = self.by_name.get(name)?.iter().copied().filter(|&i| {
-            let n = &self.nodes[i as usize];
-            n.kind == Kind::Method && self.php[n.file as usize] == self.php[file as usize]
-        });
-        let only = candidates.next()?;
-        candidates.next().is_none().then_some(only)
-    }
-
     /// A known receiver searches its own class and ancestors only. Descendant
     /// overrides do not establish the type of an otherwise missing method.
     fn receiver_method(&self, class: u32, name: &str) -> Option<u32> {
         self.own_method(class, name)
             .or_else(|| self.walk(class, name, &self.parents))
+    }
+
+    fn exported(&self, name: &str, files: &[u32], caller_file: u32, depth: usize) -> Option<u32> {
+        // A named reexport defines the public binding, even if this module
+        // also declares a private function with that name.
+        if depth < 2 {
+            for &file in files {
+                for (export, target) in &self.imports[file as usize].reexports {
+                    if export.import_type != "reexport_named" {
+                        continue;
+                    }
+                    for item in &export.items {
+                        let (original, public) = alias(item);
+                        if public == name {
+                            return self.exported(original, (*target)?, caller_file, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(found) = self.lookup_in_files(name, files, caller_file, Seek::LexicalCall) {
+            return Some(found);
+        }
+        if depth == 2 {
+            return None;
+        }
+        for &file in files {
+            for (export, target) in &self.imports[file as usize].reexports {
+                if export.import_type != "reexport_all" {
+                    continue;
+                }
+                if let Some(target) = target {
+                    if let Some(found) = self.exported(name, target, caller_file, depth + 1) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// None: not an imported namespace. Some(None): external or unresolved.
+    /// A project-owned root may fall back to the base resolver's name search.
+    fn namespace_call(&self, receiver: &str, name: &str, file: u32) -> Option<Option<u32>> {
+        let imports = &self.imports[file as usize];
+        // An import may itself contain dots. Prefer its longest matching
+        // prefix so `import pkg.sub; pkg.sub.deep.f()` keeps the module path.
+        let mut prefix = receiver;
+        let (binding, target) = loop {
+            if let Some(binding) = imports.namespaces.get_key_value(prefix) {
+                break binding;
+            }
+            prefix = split_callee(prefix).0?;
+        };
+        let Some(files) = target else {
+            return Some(None);
+        };
+        if *binding == receiver {
+            if let Some(found) = self.exported(name, files, file, 0) {
+                return Some(Some(found));
+            }
+        } else {
+            if self.languages[file as usize] == "python" {
+                if let Some(original) = imports.namespace_modules.get(binding) {
+                    let qualified = format!("{original}{}", &receiver[binding.len()..]);
+                    if let Some(files) = module(
+                        &qualified,
+                        self.files[file as usize],
+                        self.module_index,
+                        "python",
+                    ) {
+                        if let Some(found) = self.exported(name, files, file, 0) {
+                            return Some(Some(found));
+                        }
+                    }
+                }
+            }
+            // Imported namespace followed by a class, e.g. api.Client.send().
+            let short = split_callee(receiver).1;
+            if let Some(class) = self.lookup_in_files(short, files, file, Want::Class) {
+                return Some(self.receiver_method(class, name));
+            }
+        }
+        Some(self.lookup(name, file, Seek::LexicalCall))
     }
 
     pub(super) fn receiver_call(
@@ -187,7 +272,9 @@ impl Resolver<'_> {
                     .get(call.callee.as_str())
                     .copied()
                     .flatten()?;
-                return self.lookup_in_files(original, fs, file, Seek::LexicalCall);
+                return self
+                    .exported(original, fs, file, 0)
+                    .or_else(|| self.lookup(original, file, Seek::LexicalCall));
             }
             return self.lookup(&call.callee, file, Seek::LexicalCall);
         };
@@ -208,29 +295,21 @@ impl Resolver<'_> {
         let receiver = receiver.strip_prefix("new ").unwrap_or(receiver);
         let receiver = receiver.strip_suffix("()").unwrap_or(receiver);
         let imports = &self.imports[file as usize];
-        // The alias is authoritative, including when its module is external
-        // or the requested symbol does not exist in the imported module.
+        // External aliases are authoritative. Internal namespaces without
+        // class metadata retain the base resolver's name fallback.
         if let Some(original) = imports.symbols.get(receiver) {
             let fs = imports.names.get(receiver).copied().flatten()?;
-            let cls = self.lookup_in_files(original, fs, file, Want::Class)?;
-            return self.receiver_method(cls, name);
-        }
-        if let Some(target) = imports.namespaces.get(receiver) {
-            return self
-                .lookup_in_files(name, (*target)?, file, Seek::Only(Kind::Function))
-                .or_else(|| self.lookup_in_files(name, (*target)?, file, Want::Class));
-        }
-        let (qual, short) = split_callee(receiver);
-        if let Some(q) = qual {
-            if let Some(target) = imports.namespaces.get(q) {
-                let cls = self.lookup_in_files(short, (*target)?, file, Want::Class)?;
+            if let Some(cls) = self.lookup_in_files(original, fs, file, Want::Class) {
                 return self.receiver_method(cls, name);
             }
-            // Never let `external.member` escape an explicit external import.
-            let root = receiver.split(sep).next().unwrap_or(receiver);
-            if imports.namespaces.contains_key(root) || imports.names.contains_key(root) {
-                return None;
-            }
+            return self.lookup(name, file, Seek::LexicalCall);
+        }
+        if let Some(result) = self.namespace_call(receiver, name, file) {
+            return result;
+        }
+        let root = receiver.split(sep).next().unwrap_or(receiver);
+        if let Some(target) = imports.names.get(root) {
+            return target.and_then(|_| self.lookup(name, file, Seek::LexicalCall));
         }
         // Explicit class receivers, including simple constructor expressions.
         if !receiver.contains(['(', ')', '[', ']']) {
@@ -238,6 +317,8 @@ impl Resolver<'_> {
                 return self.receiver_method(cls, name);
             }
         }
-        self.unique_method(name, file)
+        // An unknown receiver is insufficient evidence for a call edge, even
+        // when only one indexed method happens to have this name.
+        None
     }
 }

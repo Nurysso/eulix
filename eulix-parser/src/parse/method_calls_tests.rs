@@ -45,3 +45,29 @@ fn slimming_keeps_receiver_resolution_and_imports() {
                 && e.to == format!("func_send::app.{ext}")));
     }
 }
+
+#[test]
+fn slimming_keeps_project_reexports() {
+    let mut structure = BTreeMap::new();
+    for (file, source) in [
+        (
+            "app.ts",
+            "import * as core from './index'; function run() { core.publicName(); }",
+        ),
+        ("index.ts", "export * from './middle';"),
+        (
+            "middle.ts",
+            "export { actual as publicName } from './impl';",
+        ),
+        ("impl.ts", "export function actual() {}"),
+    ] {
+        let (_, mut fd) = parse_source(Path::new(file), source).unwrap();
+        slim(&mut fd);
+        strip_emitted(&mut fd);
+        structure.insert(file.to_owned(), fd);
+    }
+    assert!(build_call_graph_v2(&structure)
+        .edges
+        .iter()
+        .any(|e| { e.from == "func_run::app.ts" && e.to == "func_actual::impl.ts" }));
+}

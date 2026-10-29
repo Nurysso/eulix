@@ -29,7 +29,7 @@
 //! producing ~773k nodes and ~1.5M edges. That is the target profile.
 
 use crate::struc::kb_struct::{
-    CallGraph, CallGraphEdge, CallGraphNode, CallerInfo, FileData, KnowledgeBase, Parameter,
+    CallGraph, CallGraphEdge, CallGraphNode, CallerInfo, FileData, Import, KnowledgeBase, Parameter,
 };
 use rayon::prelude::*;
 use std::borrow::Cow;
@@ -168,6 +168,10 @@ struct FileImports<'a> {
     namespaces: Map<&'a str, Target<'a>>,
     /// Local imported name -> original symbol name (receiver-aware languages).
     symbols: Map<&'a str, &'a str>,
+    /// Namespace binding -> original module path (for dotted Python receivers).
+    namespace_modules: Map<&'a str, Cow<'a, str>>,
+    /// TypeScript reexports, distinct from imports visible in this file.
+    reexports: Vec<(&'a Import, Target<'a>)>,
     /// PHP `include`/`require` targets, sorted. Direct includes while the
     /// files are read, then replaced by the transitive closure.
     includes: Vec<u32>,
@@ -470,6 +474,8 @@ struct Resolver<'a> {
     imports: &'a [FileImports<'a>],
     /// file idx -> written in PHP
     php: &'a [bool],
+    languages: &'a [&'a str],
+    module_index: &'a ModuleIndex<'a>,
     /// `extends` and traits of PHP classes, for PHP's lookup order.
     php_hierarchy: PhpHierarchy,
     /// (class idx, method name, method idx), sorted — enables binary search
@@ -963,6 +969,7 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
     }
 
     let php: Vec<bool> = files.iter().map(|f| f.1.language == "php").collect();
+    let languages: Vec<&str> = files.iter().map(|f| f.1.language.as_str()).collect();
     let mut by_name: Map<&str, Vec<u32>> = Map::with_capacity(nodes.len());
     for (i, n) in nodes.iter().enumerate().filter(|(_, n)| !n.nested) {
         by_name.entry(n.name.as_ref()).or_default().push(i as u32);
@@ -986,6 +993,8 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
         file_dir: &file_dir,
         imports: &imports,
         php: &php,
+        languages: &languages,
+        module_index: &module_index,
         php_hierarchy: PhpHierarchy::default(),
         methods: &methods,
         parents: Map::new(),

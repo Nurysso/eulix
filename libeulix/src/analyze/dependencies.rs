@@ -18,7 +18,12 @@ pub fn analyze_external_deps(kb: &KnowledgeBase) -> Vec<ExternalDependency> {
                 .filter(|i| {
                     !matches!(
                         i.import_type.as_str(),
-                        "internal" | "cgo" | "include" | "include_dynamic"
+                        "internal"
+                            | "cgo"
+                            | "include"
+                            | "include_dynamic"
+                            | "reexport_all"
+                            | "reexport_named"
                     )
                 })
                 .map(|i| (i.module.clone(), filepath.clone(), i.import_type.clone()))
