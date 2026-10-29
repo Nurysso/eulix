@@ -1418,6 +1418,7 @@ impl CppParser {
                             seen.insert(key);
                             let args = self.extract_call_arguments(node);
                             calls.push(FunctionCall {
+                                receiver: None,
                                 callee: name,
                                 defined_in: None,
                                 line: node.start_position().row + 1,
@@ -1433,6 +1434,7 @@ impl CppParser {
                             seen.insert(key);
                             let args = self.extract_call_arguments(node);
                             calls.push(FunctionCall {
+                                receiver: None,
                                 callee: resolved,
                                 defined_in: None,
                                 line: node.start_position().row + 1,

@@ -39,11 +39,13 @@ use std::collections::VecDeque;
 use std::collections::{BTreeMap, HashMap};
 
 mod php;
+mod receivers;
 use crate::grammar_files::php::FALLBACK_TAG;
 use crate::grammar_files::utils::NESTED_TAG;
 use php::{include_closures, php_name, php_namespace, IncludeIndex, PhpHierarchy};
 
 type Map<K, V> = HashMap<K, V>;
+type ModuleIndex<'a> = Map<Cow<'a, str>, Vec<u32>>;
 
 const ENTRY_TAG: &str = "entry-point";
 /// Prefixes the parser adds to synthesized IDs (`func_foo`, `method_Bar.baz`).
@@ -107,6 +109,8 @@ pub enum Want {
 #[derive(Clone, Copy)]
 enum Seek {
     Shape(Want),
+    /// A lexical call may name a function or constructor, never a method.
+    LexicalCall,
     Only(Kind),
 }
 
@@ -162,6 +166,8 @@ struct FileImports<'a> {
     names: Map<&'a str, Target<'a>>,
     /// `import * as ns from "x"` or `import x.y` — `ns.foo()` / `x.y.foo()`.
     namespaces: Map<&'a str, Target<'a>>,
+    /// Local imported name -> original symbol name (receiver-aware languages).
+    symbols: Map<&'a str, &'a str>,
     /// PHP `include`/`require` targets, sorted. Direct includes while the
     /// files are read, then replaced by the transitive closure.
     includes: Vec<u32>,
@@ -238,7 +244,10 @@ fn split_callee(c: &str) -> (Option<&str>, &str) {
 fn first_self_param(params: &[Parameter]) -> bool {
     params
         .first()
-        .map(|p| SELF_NAMES.contains(&p.name.as_str()))
+        .map(|p| {
+            SELF_NAMES.contains(&p.name.as_str())
+                || matches!(p.name.as_str(), "&self" | "&mut self")
+        })
         .unwrap_or(false)
 }
 
@@ -289,10 +298,10 @@ fn common_dir_prefix(a: &str, b: &str) -> usize {
 // The suffix trick is what makes the index polyglot: every language's module
 // syntax is expressible as some suffix of a path, so we can look up "retr"
 // and match `pkg/retr/x.go` without knowing we're in Go.
-fn add_suffixes<'a>(map: &mut Map<&'a str, Vec<u32>>, s: &'a str, file: u32) {
+fn add_suffixes<'a>(map: &mut ModuleIndex<'a>, s: &'a str, file: u32) {
     let mut cur = s;
     while !cur.is_empty() {
-        let v = map.entry(cur).or_default();
+        let v = map.entry(Cow::Borrowed(cur)).or_default();
         if v.last() != Some(&file) {
             v.push(file);
         }
@@ -303,8 +312,8 @@ fn add_suffixes<'a>(map: &mut Map<&'a str, Vec<u32>>, s: &'a str, file: u32) {
     }
 }
 
-fn build_module_index<'a>(files: &[&'a str]) -> Map<&'a str, Vec<u32>> {
-    let mut map: Map<&'a str, Vec<u32>> = Map::with_capacity(files.len() * 3);
+fn build_module_index<'a>(files: &[&'a str]) -> ModuleIndex<'a> {
+    let mut map: ModuleIndex<'a> = Map::with_capacity(files.len() * 3);
     for (i, &path) in files.iter().enumerate() {
         let cleaned = clean_path(path);
         // File "stem": drop the extension, but only if the last `.` is not
@@ -313,6 +322,11 @@ fn build_module_index<'a>(files: &[&'a str]) -> Map<&'a str, Vec<u32>> {
             Some(d) if !cleaned[d..].contains('/') => &cleaned[..d],
             _ => cleaned,
         };
+        // Explicit relative imports use an exact key, never a suffix that
+        // could name an unrelated directory elsewhere in the project.
+        map.entry(Cow::Owned(format!("./{stem}")))
+            .or_default()
+            .push(i as u32);
         add_suffixes(&mut map, stem, i as u32);
         if let Some(slash) = stem.rfind('/') {
             add_suffixes(&mut map, &stem[..slash], i as u32);
@@ -321,7 +335,7 @@ fn build_module_index<'a>(files: &[&'a str]) -> Map<&'a str, Vec<u32>> {
     map
 }
 
-fn resolve_module<'a>(module: &str, index: &'a Map<&'a str, Vec<u32>>) -> Target<'a> {
+fn resolve_module<'a>(module: &str, index: &'a ModuleIndex<'a>) -> Target<'a> {
     let mut m = module.trim().trim_start_matches(['.', '/']);
     // Peel common alias prefixes until none match.
     for p in ["@/", "~/", "crate::", "self::", "super::"] {
@@ -357,7 +371,7 @@ fn resolve_module<'a>(module: &str, index: &'a Map<&'a str, Vec<u32>>) -> Target
 
 fn build_file_imports<'a>(
     fd: &'a FileData,
-    index: &'a Map<&'a str, Vec<u32>>,
+    index: &'a ModuleIndex<'a>,
     includes: &IncludeIndex,
     path: &str,
 ) -> FileImports<'a> {
@@ -365,6 +379,9 @@ fn build_file_imports<'a>(
     if fd.language == "php" {
         out.includes = php::includes_of(fd, includes, path);
         return out;
+    }
+    if receivers::enabled(&fd.language) {
+        return receivers::build_imports(fd, index, path);
     }
     for imp in &fd.imports {
         let target = resolve_module(&imp.module, index);
@@ -438,6 +455,7 @@ fn rank_seek(seek: Seek, k: Kind, strict: bool) -> Option<u8> {
     match seek {
         Seek::Shape(want) => rank(want, k, strict),
         Seek::Only(only) => (k == only).then_some(0),
+        Seek::LexicalCall => rank(Want::Call, k, true),
     }
 }
 
@@ -723,6 +741,14 @@ impl<'a> Resolver<'a> {
         if let Some(&i) = self.node_map.get(base) {
             return Some(i);
         }
+        if let Some(original) = self.imports[file as usize].symbols.get(base) {
+            let fs = self.imports[file as usize]
+                .names
+                .get(base)
+                .copied()
+                .flatten()?;
+            return self.lookup_in_files(original, fs, file, Want::Class);
+        }
         // `Base<T>` / `Base[]` / `Base(args)` -> `Base`. Generic args and
         // array suffixes are irrelevant to *which class* the base refers to.
         let base = base.split(['<', '[', '(']).next().unwrap_or(base).trim();
@@ -835,6 +861,8 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                         id: &class.id,
                         name: if php {
                             php_name(&class.name, &class.lang_info)
+                        } else if receivers::enabled(&fd.language) {
+                            Cow::Borrowed(&class.name)
                         } else {
                             Cow::Borrowed(bare_name(&class.id))
                         },
@@ -880,6 +908,8 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                             // `{Class}_{name}`, which no call site spells.
                             name: if php {
                                 Cow::Owned(m.name.to_ascii_lowercase())
+                            } else if receivers::enabled(&fd.language) {
+                                Cow::Borrowed(&m.name)
                             } else {
                                 Cow::Borrowed(bare_name(&m.id))
                             },
@@ -1021,7 +1051,7 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                         continue;
                     };
                     for call in &func.calls {
-                        if !php && is_param(&func.params, &call.callee) {
+                        if !php && call.receiver.is_none() && is_param(&func.params, &call.callee) {
                             continue;
                         }
                         let to = if php {
@@ -1031,6 +1061,8 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                                 None,
                                 php_namespace(&func.lang_info),
                             )
+                        } else if receivers::enabled(&fd.language) {
+                            r.receiver_call(call, f, None, false, &func.id)
                         } else {
                             r.nested_in(&func.id, &call.callee)
                                 .or_else(|| r.resolve_call(&call.callee, f, None, false))
@@ -1054,16 +1086,26 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                         let Some(&from) = r.node_map.get(m.id.as_str()) else {
                             continue;
                         };
-                        // `has_self` enables the "is this a sibling method?"
-                        // shortcut in `resolve_call`.
-                        let has_self = first_self_param(&m.params);
+                        // Python omits self/cls from params. Keep static methods
+                        // separate; Rust stores the receiver's borrow spelling.
+                        let has_self = first_self_param(&m.params)
+                            || (fd.language == "python"
+                                && !m
+                                    .lang_info
+                                    .python
+                                    .as_ref()
+                                    .is_some_and(|p| p.is_staticmethod))
+                            || fd.language == "typescript";
                         for call in &m.calls {
-                            if !php && is_param(&m.params, &call.callee) {
+                            if !php && call.receiver.is_none() && is_param(&m.params, &call.callee)
+                            {
                                 continue;
                             }
                             let to = if php {
                                 let ns = php_namespace(&m.lang_info);
                                 r.resolve_php_call(&call.callee, f, Some(cidx), ns)
+                            } else if receivers::enabled(&fd.language) {
+                                r.receiver_call(call, f, Some(cidx), has_self, &m.id)
                             } else {
                                 r.nested_in(&m.id, &call.callee).or_else(|| {
                                     r.resolve_call(&call.callee, f, Some(cidx), has_self)

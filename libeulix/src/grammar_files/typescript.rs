@@ -742,11 +742,18 @@ impl TypeScriptParser {
                         .to_string();
 
                     if !name.is_empty() {
-                        let key = format!("{}:{}", name, node.start_position().row);
+                        let receiver = if func_node.kind() == "member_expression" {
+                            func_node.child_by_field_name("object")
+                        } else {
+                            None
+                        }
+                        .map(|n| self.get_node_text(&n));
+                        let key = format!("{:?}:{}:{}", receiver, name, node.start_position().row);
                         if !seen.contains(&key) {
                             seen.insert(key);
                             let args = self.extract_call_arguments(node);
                             calls.push(FunctionCall {
+                                receiver,
                                 callee: name,
                                 defined_in: None,
                                 line: node.start_position().row + 1,

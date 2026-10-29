@@ -1019,11 +1019,28 @@ impl RustParser {
                         .to_string();
 
                     if !name.is_empty() {
-                        let key = format!("{}:{}", name, node.start_position().row);
+                        let receiver = if func_node.kind() == "field_expression" {
+                            func_node.child_by_field_name("value")
+                        } else if func_node.kind() == "scoped_identifier" {
+                            func_node.child_by_field_name("path")
+                        } else {
+                            None
+                        }
+                        .map(|n| {
+                            let receiver = self.get_node_text(&n);
+                            if func_node.kind() == "scoped_identifier" && receiver == "self" {
+                                // `self::f()` names this module, not the instance.
+                                "self::".to_string()
+                            } else {
+                                receiver
+                            }
+                        });
+                        let key = format!("{:?}:{}:{}", receiver, name, node.start_position().row);
                         if !seen.contains(&key) {
                             seen.insert(key);
                             let args = self.extract_call_arguments(node);
                             calls.push(FunctionCall {
+                                receiver,
                                 callee: name,
                                 defined_in: None,
                                 line: node.start_position().row + 1,
