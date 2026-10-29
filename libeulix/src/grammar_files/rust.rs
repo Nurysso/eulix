@@ -179,7 +179,16 @@ impl RustParser {
             if child == *node {
                 return Some(());
             }
-            if child.kind() == "use_declaration" {
+            if child.kind() == "mod_item" {
+                if let Some(name) = child.child_by_field_name("name") {
+                    imports.push(Import {
+                        module: self.get_node_text(&name),
+                        items: vec![],
+                        import_type: "rust_module".to_string(),
+                    });
+                }
+                Some(())
+            } else if child.kind() == "use_declaration" {
                 let text = self.get_node_text(&child);
                 let module = text
                     .trim_start_matches("use ")
@@ -1028,9 +1037,9 @@ impl RustParser {
                         }
                         .map(|n| {
                             let receiver = self.get_node_text(&n);
-                            if func_node.kind() == "scoped_identifier" && receiver == "self" {
-                                // `self::f()` names this module, not the instance.
-                                "self::".to_string()
+                            if func_node.kind() == "scoped_identifier" {
+                                // Preserve path syntax separately from instance dispatch.
+                                format!("{receiver}::")
                             } else {
                                 receiver
                             }

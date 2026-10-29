@@ -152,7 +152,7 @@ fn receivers_survive_same_line_calls_and_keep_legacy_ids_and_callees() {
         (
             "app.rs",
             "fn run() { first.send(); second.send(); Session::send(); }",
-            vec!["first", "second", "Session"],
+            vec!["first", "second", "Session::"],
         ),
     ] {
         let (_, fd) = parse_source(Path::new(file), source).unwrap();

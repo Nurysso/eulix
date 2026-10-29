@@ -168,6 +168,8 @@ struct FileImports<'a> {
     namespaces: Map<&'a str, Target<'a>>,
     /// Local imported name -> original symbol name (receiver-aware languages).
     symbols: Map<&'a str, &'a str>,
+    /// Rust binding -> crate-local module path; None is explicitly external.
+    rust_paths: Map<&'a str, Option<String>>,
     /// Namespace binding -> original module path (for dotted Python receivers).
     namespace_modules: Map<&'a str, Cow<'a, str>>,
     /// TypeScript reexports, distinct from imports visible in this file.
@@ -331,6 +333,11 @@ fn build_module_index<'a>(files: &[&'a str]) -> ModuleIndex<'a> {
         map.entry(Cow::Owned(format!("./{stem}")))
             .or_default()
             .push(i as u32);
+        if cleaned.ends_with(".rs") {
+            map.entry(Cow::Owned(format!("./{cleaned}")))
+                .or_default()
+                .push(i as u32);
+        }
         add_suffixes(&mut map, stem, i as u32);
         if let Some(slash) = stem.rfind('/') {
             add_suffixes(&mut map, &stem[..slash], i as u32);
@@ -468,6 +475,7 @@ struct Resolver<'a> {
     node_map: &'a Map<&'a str, u32>,
     /// bare name -> node indices, ascending (=> also ascending by file).
     by_name: &'a Map<&'a str, Vec<u32>>,
+    legacy_js_names: &'a Map<&'a str, Vec<u32>>,
     files: &'a [&'a str],
     /// file idx -> dir id; non-decreasing because files are sorted by (dir, path)
     file_dir: &'a [u32],
@@ -481,6 +489,7 @@ struct Resolver<'a> {
     /// (class idx, method name, method idx), sorted — enables binary search
     /// for "does this class define this method".
     methods: &'a [(u32, &'a str, u32)],
+    legacy_js_methods: &'a [(u32, &'a str, u32)],
     parents: Map<u32, Vec<u32>>,
     children: Map<u32, Vec<u32>>,
     max_ambiguous: usize,
@@ -488,6 +497,14 @@ struct Resolver<'a> {
 }
 
 impl<'a> Resolver<'a> {
+    fn names_for(&self, file: u32) -> &Map<&'a str, Vec<u32>> {
+        if self.languages[file as usize] == "javascript" {
+            self.legacy_js_names
+        } else {
+            self.by_name
+        }
+    }
+
     /// Best candidate + how many were eligible to be picked.
     ///
     /// `closeness` is off in tiers where the candidate set is already
@@ -547,7 +564,7 @@ impl<'a> Resolver<'a> {
         file: u32,
         want: impl Into<Seek>,
     ) -> Option<u32> {
-        let cands = self.by_name.get(name)?;
+        let cands = self.names_for(file).get(name)?;
         let it = cands
             .iter()
             .copied()
@@ -565,7 +582,7 @@ impl<'a> Resolver<'a> {
     /// list with `partition_point` instead of filtering the whole thing.
     fn lookup(&self, name: &str, file: u32, want: impl Into<Seek>) -> Option<u32> {
         let want = want.into();
-        let cands = self.by_name.get(name)?.as_slice();
+        let cands = self.names_for(file).get(name)?.as_slice();
 
         // Tier 1: same file.
         let lo = cands.partition_point(|&c| self.nodes[c as usize].file < file);
@@ -635,10 +652,12 @@ impl<'a> Resolver<'a> {
     /// Binary search for `class.name` in the sorted methods vector.
     #[inline]
     fn own_method(&self, class: u32, name: &str) -> Option<u32> {
-        let i = self
-            .methods
-            .partition_point(|&(c, n, _)| (c, n) < (class, name));
-        match self.methods.get(i) {
+        Self::own_method_in(self.methods, class, name)
+    }
+
+    fn own_method_in(methods: &[(u32, &str, u32)], class: u32, name: &str) -> Option<u32> {
+        let i = methods.partition_point(|&(c, n, _)| (c, n) < (class, name));
+        match methods.get(i) {
             Some(&(c, n, m)) if c == class && n == name => Some(m),
             _ => None,
         }
@@ -648,6 +667,16 @@ impl<'a> Resolver<'a> {
     /// class that defines `name`. `visited` also acts as a cycle guard;
     /// `MAX_CHAIN` bounds adversarial/deep hierarchies.
     fn walk(&self, start: u32, name: &str, adj: &Map<u32, Vec<u32>>) -> Option<u32> {
+        self.walk_methods(start, name, adj, self.methods)
+    }
+
+    fn walk_methods(
+        &self,
+        start: u32,
+        name: &str,
+        adj: &Map<u32, Vec<u32>>,
+        methods: &[(u32, &str, u32)],
+    ) -> Option<u32> {
         let mut queue: VecDeque<u32> = adj.get(&start)?.iter().copied().collect();
         let mut visited: Vec<u32> = vec![start];
         while let Some(c) = queue.pop_front() {
@@ -658,7 +687,7 @@ impl<'a> Resolver<'a> {
             if visited.len() > MAX_CHAIN {
                 break;
             }
-            if let Some(m) = self.own_method(c, name) {
+            if let Some(m) = Self::own_method_in(methods, c, name) {
                 return Some(m);
             }
             if let Some(next) = adj.get(&c) {
@@ -673,10 +702,15 @@ impl<'a> Resolver<'a> {
     /// Ancestors first because inherited methods are the common case;
     /// descendants second so an override in a subclass can also be found
     /// when the call site is on the base (e.g. Python's `super().foo()`).
-    fn method_in_hierarchy(&self, class: u32, name: &str) -> Option<u32> {
-        self.own_method(class, name)
-            .or_else(|| self.walk(class, name, &self.parents))
-            .or_else(|| self.walk(class, name, &self.children))
+    fn method_in_hierarchy(&self, class: u32, name: &str, file: u32) -> Option<u32> {
+        let methods = if self.languages[file as usize] == "javascript" {
+            self.legacy_js_methods
+        } else {
+            self.methods
+        };
+        Self::own_method_in(methods, class, name)
+            .or_else(|| self.walk_methods(class, name, &self.parents, methods))
+            .or_else(|| self.walk_methods(class, name, &self.children, methods))
     }
 
     fn resolve_call(
@@ -703,7 +737,7 @@ impl<'a> Resolver<'a> {
             // If the enclosing method has a self param, try the class chain
             // first — `foo()` inside a method could be a sibling method.
             if has_self {
-                if let Some(m) = class.and_then(|c| self.method_in_hierarchy(c, name)) {
+                if let Some(m) = class.and_then(|c| self.method_in_hierarchy(c, name, file)) {
                     return Some(m);
                 }
             }
@@ -712,7 +746,7 @@ impl<'a> Resolver<'a> {
 
         // `self.foo()` / `this.bar()` / `cls.baz()`
         if is_self_qualifier(q) {
-            if let Some(m) = class.and_then(|c| self.method_in_hierarchy(c, name)) {
+            if let Some(m) = class.and_then(|c| self.method_in_hierarchy(c, name, file)) {
                 return Some(m);
             }
             return self.lookup(name, file, Want::MethodCall);
@@ -736,7 +770,7 @@ impl<'a> Resolver<'a> {
         // a class first, then search that class's method hierarchy.
         let q_last = q.rsplit(sep).next().unwrap_or(q);
         if let Some(cls) = self.lookup(q_last, file, Want::Class) {
-            if let Some(m) = self.method_in_hierarchy(cls, name) {
+            if let Some(m) = self.method_in_hierarchy(cls, name, file) {
                 return Some(m);
             }
         }
@@ -974,6 +1008,19 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
     for (i, n) in nodes.iter().enumerate().filter(|(_, n)| !n.nested) {
         by_name.entry(n.name.as_ref()).or_default().push(i as u32);
     }
+    // JS still uses the legacy resolver. Preserve the base's keys even for
+    // declarations whose receiver-aware language now indexes short names.
+    let mut legacy_js_names: Map<&str, Vec<u32>> = Map::new();
+    if languages.contains(&"javascript") {
+        for (i, n) in nodes.iter().enumerate().filter(|(_, n)| !n.nested) {
+            let name = if php[n.file as usize] {
+                n.name.as_ref()
+            } else {
+                bare_name(n.id)
+            };
+            legacy_js_names.entry(name).or_default().push(i as u32);
+        }
+    }
     // Class-method index, sorted for binary search by (class, name).
     let mut methods: Vec<(u32, &str, u32)> = nodes
         .iter()
@@ -984,11 +1031,32 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
         })
         .collect();
     methods.sort_unstable();
+    let mut legacy_js_methods: Vec<_> = if languages.contains(&"javascript") {
+        methods
+            .iter()
+            .map(|&(class, _, method)| {
+                let n = &nodes[method as usize];
+                (
+                    class,
+                    if php[n.file as usize] {
+                        n.name.as_ref()
+                    } else {
+                        bare_name(n.id)
+                    },
+                    method,
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    legacy_js_methods.sort_unstable();
 
     let mut r = Resolver {
         nodes: &nodes,
         node_map: &node_map,
         by_name: &by_name,
+        legacy_js_names: &legacy_js_names,
         files: &paths,
         file_dir: &file_dir,
         imports: &imports,
@@ -997,6 +1065,7 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
         module_index: &module_index,
         php_hierarchy: PhpHierarchy::default(),
         methods: &methods,
+        legacy_js_methods: &legacy_js_methods,
         parents: Map::new(),
         children: Map::new(),
         max_ambiguous: opts.max_ambiguous,

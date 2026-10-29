@@ -24,6 +24,7 @@ pub fn analyze_external_deps(kb: &KnowledgeBase) -> Vec<ExternalDependency> {
                             | "include_dynamic"
                             | "reexport_all"
                             | "reexport_named"
+                            | "rust_module"
                     )
                 })
                 .map(|i| (i.module.clone(), filepath.clone(), i.import_type.clone()))

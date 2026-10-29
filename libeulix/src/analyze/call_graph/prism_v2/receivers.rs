@@ -4,6 +4,7 @@
 //! Receiver-aware resolution for parsers that retain a separate receiver.
 //! Keep the legacy resolver for the other languages.
 use super::*;
+mod rust_paths;
 use crate::struc::kb_struct::FunctionCall;
 
 pub(super) fn enabled(language: &str) -> bool {
@@ -44,6 +45,10 @@ fn module<'a>(name: &str, path: &str, index: &'a ModuleIndex<'a>, language: &str
             .or_else(|| index.get(format!("{key}/index").as_str()))
             .map(Vec::as_slice);
     }
+    if language == "rust" {
+        return rust_paths::project_path(name, path, index)
+            .and_then(|module_path| rust_paths::module_file(&module_path, path, index));
+    }
     resolve_module(name, index)
 }
 
@@ -55,13 +60,18 @@ fn rust_import<'a>(
     index: &'a ModuleIndex<'a>,
     out: &mut FileImports<'a>,
 ) {
-    let mut pending = vec![(String::new(), source)];
-    while let Some((prefix, source)) = pending.pop() {
+    let mut pending = vec![(String::new(), source, None)];
+    while let Some((prefix, source, parent_binding)) = pending.pop() {
         let source = source.trim();
         if let Some((head, group)) = source.split_once('{') {
             let Some(group) = group.trim().strip_suffix('}') else {
                 continue;
             };
+            let parent_binding = head
+                .trim_end_matches("::")
+                .rsplit("::")
+                .find(|s| !s.is_empty())
+                .or(parent_binding);
             let prefix = format!("{prefix}{head}");
             let (mut depth, mut start) = (0usize, 0usize);
             for (i, ch) in group.char_indices() {
@@ -69,13 +79,13 @@ fn rust_import<'a>(
                     '{' => depth += 1,
                     '}' => depth = depth.saturating_sub(1),
                     ',' if depth == 0 => {
-                        pending.push((prefix.clone(), &group[start..i]));
+                        pending.push((prefix.clone(), &group[start..i], parent_binding));
                         start = i + 1;
                     }
                     _ => {}
                 }
             }
-            pending.push((prefix, &group[start..]));
+            pending.push((prefix, &group[start..], parent_binding));
             continue;
         }
         let (original, local) = alias(source);
@@ -83,9 +93,17 @@ fn rust_import<'a>(
             continue;
         }
         let full = format!("{prefix}{original}");
-        let symbol = original.rsplit("::").next().unwrap_or(original);
+        // `use path::{self as alias}` imports path itself, not path/self.
+        let full = full.strip_suffix("::self").unwrap_or(&full);
+        let symbol = if original == "self" {
+            parent_binding.unwrap_or(original)
+        } else {
+            original.rsplit("::").next().unwrap_or(original)
+        };
         let binding = if local != original { local } else { symbol };
-        if let Some(target) = module(&full, path, index, "rust") {
+        out.rust_paths
+            .insert(binding, rust_paths::project_path(full, path, index));
+        if let Some(target) = module(full, path, index, "rust") {
             out.namespaces.entry(binding).or_insert(Some(target));
         } else {
             let target = full
@@ -105,6 +123,13 @@ pub(super) fn build_imports<'a>(
     let mut out = FileImports::default();
     for imp in &fd.imports {
         if fd.language == "rust" {
+            if imp.import_type == "rust_module" {
+                out.rust_paths.insert(
+                    &imp.module,
+                    rust_paths::project_path(&format!("self::{}", imp.module), path, index),
+                );
+                continue;
+            }
             rust_import(&imp.module, path, index, &mut out);
             continue;
         }
@@ -279,10 +304,17 @@ impl Resolver<'_> {
             return self.lookup(&call.callee, file, Seek::LexicalCall);
         };
         let name = &call.callee;
-        // Rust's module `self::f()` is distinct from the instance `self.f()`.
-        if receiver == "self::" {
-            return self.lookup_in_files(name, &[file], file, Seek::LexicalCall);
+        let rust_instance = self.languages[file as usize] == "rust" && !receiver.ends_with("::");
+        if self.languages[file as usize] == "rust" {
+            if let Some(result) = self.rust_module_call(receiver, name, file) {
+                return result;
+            }
         }
+        let receiver = if self.languages[file as usize] == "rust" {
+            receiver.strip_suffix("::").unwrap_or(receiver)
+        } else {
+            receiver
+        };
         if is_self_qualifier(receiver) {
             return if has_self || receiver == "Self" {
                 class.and_then(|c| self.receiver_method(c, name))
@@ -302,14 +334,29 @@ impl Resolver<'_> {
             if let Some(cls) = self.lookup_in_files(original, fs, file, Want::Class) {
                 return self.receiver_method(cls, name);
             }
-            return self.lookup(name, file, Seek::LexicalCall);
+            return if rust_instance {
+                None
+            } else {
+                self.lookup(name, file, Seek::LexicalCall)
+            };
+        }
+        if rust_instance
+            && imports
+                .namespaces
+                .contains_key(receiver.split(sep).next().unwrap_or(receiver))
+        {
+            return None;
         }
         if let Some(result) = self.namespace_call(receiver, name, file) {
             return result;
         }
         let root = receiver.split(sep).next().unwrap_or(receiver);
         if let Some(target) = imports.names.get(root) {
-            return target.and_then(|_| self.lookup(name, file, Seek::LexicalCall));
+            return if rust_instance {
+                None
+            } else {
+                target.and_then(|_| self.lookup(name, file, Seek::LexicalCall))
+            };
         }
         // Explicit class receivers, including simple constructor expressions.
         if !receiver.contains(['(', ')', '[', ']']) {

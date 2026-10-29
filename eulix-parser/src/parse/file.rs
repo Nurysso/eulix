@@ -100,6 +100,7 @@ pub fn parse_file(
                     | "include_dynamic"
                     | "reexport_all"
                     | "reexport_named"
+                    | "rust_module"
             )
         })
         .map(|i| {
