@@ -6,7 +6,7 @@ pub mod prism_v2;
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     use crate::analyze::call_graph::prism_v1::build_call_graph;
     use crate::analyze::call_graph::prism_v2::build_call_graph_v2;
@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn empty_project_produces_empty_graph_both_versions() {
-        let structure: HashMap<String, FileData> = HashMap::new();
+        let structure: BTreeMap<String, FileData> = BTreeMap::new();
         let g1 = build_call_graph(&structure);
         let g2 = build_call_graph_v2(&structure);
         assert!(g1.nodes.is_empty() && g1.edges.is_empty());
@@ -51,7 +51,7 @@ mod tests {
 
     #[test]
     fn self_recursive_function_produces_a_self_edge() {
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert(
             "a.c".to_string(),
             filedata(vec![func("func_fact::a.c", "fact", vec!["fact"])], vec![]),
@@ -70,7 +70,7 @@ mod tests {
         // (e.g. two files sharing a generated/templated id), node_map's
         // `insert` keeps whichever came first and the second is dropped
         // without any warning or error.
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert(
             "a.c".to_string(),
             filedata(vec![func("func_dup::x", "dup", vec![])], vec![]),
@@ -94,7 +94,7 @@ mod tests {
         // call to "run" resolves via symbol_index, which is populated
         // by iterating an unordered HashMap -- which candidate wins is
         // unspecified and can differ between runs/builds.
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert(
             "a.c".to_string(),
             filedata(vec![func("func_run::a.c", "run", vec![])], vec![]),
@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn call_to_nonexistent_function_produces_no_edge_and_no_panic() {
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert(
             "a.c".to_string(),
             filedata(
@@ -143,7 +143,7 @@ mod tests {
         // preserve exactly the right node count (off-by-one bugs in
         // manual chunking are a classic source of silently dropped data).
         for n in [1999usize, 2000, 2001] {
-            let mut structure = HashMap::new();
+            let mut structure = BTreeMap::new();
             for i in 0..n {
                 structure.insert(
                     format!("f{i}.c"),
@@ -171,7 +171,7 @@ mod tests {
         // Base class reference to something that was never parsed as a
         // node (external/third-party base) must not create a dangling
         // edge or panic.
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         let cls = Class {
             id: "class_Child::a.c".to_string(),
             name: "Child".to_string(),
@@ -188,7 +188,7 @@ mod tests {
         // v2 uses a `seen: HashSet<(from, to)>` per chunk, so calling the
         // same function twice from the same caller produces one edge,
         // not two -- verify that intentional behavior explicitly.
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert(
             "a.c".to_string(),
             filedata(
@@ -216,7 +216,7 @@ mod tests {
     fn duplicate_declarations_of_one_id_in_a_file_share_one_edge_per_target() {
         // `#ifdef` branches can declare the same function twice in one file;
         // both declarations are one node, so they get one edge per target.
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert(
             "a.c".to_string(),
             filedata(
@@ -241,7 +241,7 @@ mod tests {
     fn nested_function_is_only_visible_to_its_parent() {
         let mut nested = func("func_outer.helper::a.rs", "helper", vec![]);
         nested.tags.push(NESTED_TAG.to_string());
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert(
             "a.rs".to_string(),
             filedata(
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn nested_function_is_not_visible_from_other_files() {
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert(
             "a.rs".to_string(),
             filedata(vec![nested("func_outer.helper::a.rs", "helper")], vec![]),
@@ -298,7 +298,7 @@ mod tests {
             methods: vec![func("method_S_m::a.rs", "m", vec!["h"])],
             ..Default::default()
         };
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert(
             "a.rs".to_string(),
             filedata(vec![nested("method_S_m.h::a.rs", "h")], vec![class]),

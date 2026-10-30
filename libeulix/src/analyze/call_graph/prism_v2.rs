@@ -35,8 +35,8 @@ use rayon::prelude::*;
 use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::collections::{BTreeMap, HashMap};
 
 mod php;
 use crate::grammar_files::php::FALLBACK_TAG;
@@ -744,11 +744,11 @@ impl<'a> Resolver<'a> {
 // short name common enough in real codebases (`__init__`, `run`,
 // `handle`) that a class-aware, scope-aware resolver earns its extra
 // cost for callers who need accuracy over raw speed.
-pub fn build_call_graph_v2(structure: &HashMap<String, FileData>) -> CallGraph {
+pub fn build_call_graph_v2(structure: &BTreeMap<String, FileData>) -> CallGraph {
     build_with(structure, &CallGraphOptions::default())
 }
 
-pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions) -> CallGraph {
+pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOptions) -> CallGraph {
     if structure.is_empty() {
         return CallGraph {
             nodes: Vec::new(),
@@ -1240,7 +1240,7 @@ mod tests {
 
         for (file, src) in cases {
             let (_, fd) = parse_source(Path::new(file), src).unwrap();
-            let mut structure = HashMap::new();
+            let mut structure = BTreeMap::new();
             structure.insert(file.to_string(), fd);
             let cg = build_call_graph_v2(&structure);
 

@@ -66,7 +66,32 @@ pub fn generate_indices_view(kb: &KnowledgeBase) -> IndicesView<'_> {
 mod tests {
     use super::*;
     use crate::struc::kb_struct::{Class, FileData, Function, FunctionCall};
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
+
+    fn kb(structure: BTreeMap<String, FileData>) -> KnowledgeBase {
+        KnowledgeBase {
+            metadata: crate::struc::kb_struct::Metadata {
+                version: "1.0".to_string(),
+                git_hash: "".to_string(),
+                project_name: "test".to_string(),
+                project_hash: "".to_string(),
+                parsed_at: "".to_string(),
+                languages: vec![],
+                total_files: 1,
+                total_loc: 20,
+                total_functions: 0,
+                total_classes: 1,
+                total_methods: 1,
+            },
+            structure,
+            call_graph: Default::default(),
+            dependency_graph: Default::default(),
+            indices: Default::default(),
+            entry_points: vec![],
+            external_dependencies: vec![],
+            patterns: Default::default(),
+        }
+    }
 
     fn kb(structure: HashMap<String, FileData>) -> KnowledgeBase {
         KnowledgeBase {
@@ -95,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_generate_indices_view_files_by_category_and_method_calls() {
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
 
         let mut class = Class {
             id: "src/api_handler.py::Handler".to_string(),
@@ -154,7 +179,7 @@ mod tests {
             line_start: 9,
             ..Default::default()
         };
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert(
             "a.rs".to_string(),
             FileData {

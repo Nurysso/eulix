@@ -14,7 +14,7 @@
 
 use tree_sitter::Tree;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct SyntaxHealth {
     /// Number of ERROR nodes (tokens/regions the grammar couldn't fit).
     pub error_nodes: usize,

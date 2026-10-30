@@ -6,7 +6,7 @@ use super::utils::{extract_todos, static_regex, walk, Nested, JS_NESTED_KINDS as
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
@@ -778,7 +778,7 @@ impl TypeScriptParser {
     }
 
     fn extract_variables(&self, node: &Node, params: &[Parameter]) -> Vec<Variable> {
-        let mut variables: HashMap<String, Variable> = HashMap::new();
+        let mut variables: BTreeMap<String, Variable> = BTreeMap::new();
 
         for param in params {
             variables.insert(
@@ -803,7 +803,7 @@ impl TypeScriptParser {
         variables.into_values().collect()
     }
 
-    fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
+    fn track_variable_usage(&self, node: &Node, variables: &mut BTreeMap<String, Variable>) {
         walk(*node, (), |node, _| {
             if NESTED_KINDS.contains(&node.kind()) {
                 return None;
@@ -1194,7 +1194,7 @@ mod tests {
 
     use super::*;
     use crate::analyze::call_graph::prism_v2::build_call_graph_v2;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::path::Path;
 
     // ---------- helpers ----------
@@ -1230,7 +1230,7 @@ mod tests {
         assert_eq!(fd_b.classes[0].id, "interface_Options::src/b.ts");
         assert_eq!(fd_b.classes[1].id, "interface_ExtendedOptions::src/b.ts");
 
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert("src/a.ts".to_string(), fd_a);
         structure.insert("src/b.ts".to_string(), fd_b);
 
