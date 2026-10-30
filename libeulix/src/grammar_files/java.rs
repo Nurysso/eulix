@@ -1020,6 +1020,7 @@ impl JavaParser {
                         );
                         if seen.insert(key) {
                             calls.push(FunctionCall {
+                                receiver: None,
                                 callee,
                                 defined_in: object,
                                 line: node.start_position().row + 1,
@@ -1036,6 +1037,7 @@ impl JavaParser {
                         let key = format!("{}:{}", callee, node.start_position().row);
                         if seen.insert(key) {
                             calls.push(FunctionCall {
+                                receiver: None,
                                 callee,
                                 defined_in: None,
                                 line: node.start_position().row + 1,
@@ -1052,6 +1054,7 @@ impl JavaParser {
                         let key = format!("{}:{}", callee, node.start_position().row);
                         if seen.insert(key) {
                             calls.push(FunctionCall {
+                                receiver: None,
                                 callee,
                                 defined_in: None,
                                 line: node.start_position().row + 1,

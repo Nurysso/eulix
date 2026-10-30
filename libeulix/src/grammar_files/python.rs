@@ -215,7 +215,7 @@ impl PythonParser {
             let items_str = caps.get(2)?.as_str();
             let items: Vec<String> = items_str
                 .split(',')
-                .map(|s| s.split_whitespace().next().unwrap_or(s.trim()))
+                .map(|s| s.trim().trim_matches(['(', ')']))
                 .map(|s| s.to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
@@ -496,13 +496,21 @@ impl PythonParser {
                             .to_string();
 
                         if !name.is_empty() {
-                            let key = format!("{}:{}", name, node.start_position().row);
+                            let receiver = if func_node.kind() == "attribute" {
+                                func_node.child_by_field_name("object")
+                            } else {
+                                None
+                            }
+                            .map(|n| self.get_node_text(&n));
+                            let key =
+                                format!("{:?}:{}:{}", receiver, name, node.start_position().row);
                             if !seen.contains(&key) {
                                 seen.insert(key);
 
                                 let args = self.extract_call_arguments(node);
 
                                 calls.push(FunctionCall {
+                                    receiver,
                                     callee: name,
                                     defined_in: None, // Will be resolved in post-processing
                                     line: node.start_position().row + 1,

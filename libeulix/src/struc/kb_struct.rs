@@ -127,6 +127,11 @@ pub struct Parameter {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionCall {
     pub callee: String,
+    /// Source text of the receiver, separate from the legacy callee and IDs.
+    /// Rust's module qualifier `self::` retains its separator to distinguish
+    /// it from the instance receiver in `self.method()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
     pub defined_in: Option<String>, // File path where callee is defined
     pub line: usize,
     pub args: Vec<String>,

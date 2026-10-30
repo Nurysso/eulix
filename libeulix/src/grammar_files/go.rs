@@ -738,6 +738,7 @@ impl GoParser {
                 };
 
                 calls.push(FunctionCall {
+                    receiver: None,
                     callee,
                     defined_in: qualifier,
                     line: call_node.start_position().row + 1,

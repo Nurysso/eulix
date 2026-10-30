@@ -1351,6 +1351,7 @@ impl PhpParser {
                     let line = n.start_position().row + 1;
                     if seen.insert((callee.clone(), line)) {
                         calls.push(FunctionCall {
+                            receiver: None,
                             callee,
                             defined_in: None, // resolved in post-processing
                             line,

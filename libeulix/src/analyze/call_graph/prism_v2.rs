@@ -29,7 +29,7 @@
 //! producing ~773k nodes and ~1.5M edges. That is the target profile.
 
 use crate::struc::kb_struct::{
-    CallGraph, CallGraphEdge, CallGraphNode, CallerInfo, FileData, KnowledgeBase, Parameter,
+    CallGraph, CallGraphEdge, CallGraphNode, CallerInfo, FileData, Import, KnowledgeBase, Parameter,
 };
 use rayon::prelude::*;
 use std::borrow::Cow;
@@ -39,11 +39,13 @@ use std::collections::VecDeque;
 use std::collections::{BTreeMap, HashMap};
 
 mod php;
+mod receivers;
 use crate::grammar_files::php::FALLBACK_TAG;
 use crate::grammar_files::utils::NESTED_TAG;
 use php::{include_closures, php_name, php_namespace, IncludeIndex, PhpHierarchy};
 
 type Map<K, V> = HashMap<K, V>;
+type ModuleIndex<'a> = Map<Cow<'a, str>, Vec<u32>>;
 
 const ENTRY_TAG: &str = "entry-point";
 /// Prefixes the parser adds to synthesized IDs (`func_foo`, `method_Bar.baz`).
@@ -107,6 +109,8 @@ pub enum Want {
 #[derive(Clone, Copy)]
 enum Seek {
     Shape(Want),
+    /// A lexical call may name a function or constructor, never a method.
+    LexicalCall,
     Only(Kind),
 }
 
@@ -162,6 +166,14 @@ struct FileImports<'a> {
     names: Map<&'a str, Target<'a>>,
     /// `import * as ns from "x"` or `import x.y` — `ns.foo()` / `x.y.foo()`.
     namespaces: Map<&'a str, Target<'a>>,
+    /// Local imported name -> original symbol name (receiver-aware languages).
+    symbols: Map<&'a str, &'a str>,
+    /// Rust binding -> crate-local module path; None is explicitly external.
+    rust_paths: Map<&'a str, Option<String>>,
+    /// Namespace binding -> original module path (for dotted Python receivers).
+    namespace_modules: Map<&'a str, Cow<'a, str>>,
+    /// TypeScript reexports, distinct from imports visible in this file.
+    reexports: Vec<(&'a Import, Target<'a>)>,
     /// PHP `include`/`require` targets, sorted. Direct includes while the
     /// files are read, then replaced by the transitive closure.
     includes: Vec<u32>,
@@ -238,7 +250,10 @@ fn split_callee(c: &str) -> (Option<&str>, &str) {
 fn first_self_param(params: &[Parameter]) -> bool {
     params
         .first()
-        .map(|p| SELF_NAMES.contains(&p.name.as_str()))
+        .map(|p| {
+            SELF_NAMES.contains(&p.name.as_str())
+                || matches!(p.name.as_str(), "&self" | "&mut self")
+        })
         .unwrap_or(false)
 }
 
@@ -289,10 +304,10 @@ fn common_dir_prefix(a: &str, b: &str) -> usize {
 // The suffix trick is what makes the index polyglot: every language's module
 // syntax is expressible as some suffix of a path, so we can look up "retr"
 // and match `pkg/retr/x.go` without knowing we're in Go.
-fn add_suffixes<'a>(map: &mut Map<&'a str, Vec<u32>>, s: &'a str, file: u32) {
+fn add_suffixes<'a>(map: &mut ModuleIndex<'a>, s: &'a str, file: u32) {
     let mut cur = s;
     while !cur.is_empty() {
-        let v = map.entry(cur).or_default();
+        let v = map.entry(Cow::Borrowed(cur)).or_default();
         if v.last() != Some(&file) {
             v.push(file);
         }
@@ -303,8 +318,8 @@ fn add_suffixes<'a>(map: &mut Map<&'a str, Vec<u32>>, s: &'a str, file: u32) {
     }
 }
 
-fn build_module_index<'a>(files: &[&'a str]) -> Map<&'a str, Vec<u32>> {
-    let mut map: Map<&'a str, Vec<u32>> = Map::with_capacity(files.len() * 3);
+fn build_module_index<'a>(files: &[&'a str]) -> ModuleIndex<'a> {
+    let mut map: ModuleIndex<'a> = Map::with_capacity(files.len() * 3);
     for (i, &path) in files.iter().enumerate() {
         let cleaned = clean_path(path);
         // File "stem": drop the extension, but only if the last `.` is not
@@ -313,6 +328,16 @@ fn build_module_index<'a>(files: &[&'a str]) -> Map<&'a str, Vec<u32>> {
             Some(d) if !cleaned[d..].contains('/') => &cleaned[..d],
             _ => cleaned,
         };
+        // Explicit relative imports use an exact key, never a suffix that
+        // could name an unrelated directory elsewhere in the project.
+        map.entry(Cow::Owned(format!("./{stem}")))
+            .or_default()
+            .push(i as u32);
+        if cleaned.ends_with(".rs") {
+            map.entry(Cow::Owned(format!("./{cleaned}")))
+                .or_default()
+                .push(i as u32);
+        }
         add_suffixes(&mut map, stem, i as u32);
         if let Some(slash) = stem.rfind('/') {
             add_suffixes(&mut map, &stem[..slash], i as u32);
@@ -321,7 +346,7 @@ fn build_module_index<'a>(files: &[&'a str]) -> Map<&'a str, Vec<u32>> {
     map
 }
 
-fn resolve_module<'a>(module: &str, index: &'a Map<&'a str, Vec<u32>>) -> Target<'a> {
+fn resolve_module<'a>(module: &str, index: &'a ModuleIndex<'a>) -> Target<'a> {
     let mut m = module.trim().trim_start_matches(['.', '/']);
     // Peel common alias prefixes until none match.
     for p in ["@/", "~/", "crate::", "self::", "super::"] {
@@ -357,7 +382,7 @@ fn resolve_module<'a>(module: &str, index: &'a Map<&'a str, Vec<u32>>) -> Target
 
 fn build_file_imports<'a>(
     fd: &'a FileData,
-    index: &'a Map<&'a str, Vec<u32>>,
+    index: &'a ModuleIndex<'a>,
     includes: &IncludeIndex,
     path: &str,
 ) -> FileImports<'a> {
@@ -365,6 +390,9 @@ fn build_file_imports<'a>(
     if fd.language == "php" {
         out.includes = php::includes_of(fd, includes, path);
         return out;
+    }
+    if receivers::enabled(&fd.language) {
+        return receivers::build_imports(fd, index, path);
     }
     for imp in &fd.imports {
         let target = resolve_module(&imp.module, index);
@@ -438,6 +466,7 @@ fn rank_seek(seek: Seek, k: Kind, strict: bool) -> Option<u8> {
     match seek {
         Seek::Shape(want) => rank(want, k, strict),
         Seek::Only(only) => (k == only).then_some(0),
+        Seek::LexicalCall => rank(Want::Call, k, true),
     }
 }
 
@@ -446,17 +475,21 @@ struct Resolver<'a> {
     node_map: &'a Map<&'a str, u32>,
     /// bare name -> node indices, ascending (=> also ascending by file).
     by_name: &'a Map<&'a str, Vec<u32>>,
+    legacy_js_names: &'a Map<&'a str, Vec<u32>>,
     files: &'a [&'a str],
     /// file idx -> dir id; non-decreasing because files are sorted by (dir, path)
     file_dir: &'a [u32],
     imports: &'a [FileImports<'a>],
     /// file idx -> written in PHP
     php: &'a [bool],
+    languages: &'a [&'a str],
+    module_index: &'a ModuleIndex<'a>,
     /// `extends` and traits of PHP classes, for PHP's lookup order.
     php_hierarchy: PhpHierarchy,
     /// (class idx, method name, method idx), sorted — enables binary search
     /// for "does this class define this method".
     methods: &'a [(u32, &'a str, u32)],
+    legacy_js_methods: &'a [(u32, &'a str, u32)],
     parents: Map<u32, Vec<u32>>,
     children: Map<u32, Vec<u32>>,
     max_ambiguous: usize,
@@ -464,6 +497,14 @@ struct Resolver<'a> {
 }
 
 impl<'a> Resolver<'a> {
+    fn names_for(&self, file: u32) -> &Map<&'a str, Vec<u32>> {
+        if self.languages[file as usize] == "javascript" {
+            self.legacy_js_names
+        } else {
+            self.by_name
+        }
+    }
+
     /// Best candidate + how many were eligible to be picked.
     ///
     /// `closeness` is off in tiers where the candidate set is already
@@ -523,7 +564,7 @@ impl<'a> Resolver<'a> {
         file: u32,
         want: impl Into<Seek>,
     ) -> Option<u32> {
-        let cands = self.by_name.get(name)?;
+        let cands = self.names_for(file).get(name)?;
         let it = cands
             .iter()
             .copied()
@@ -541,7 +582,7 @@ impl<'a> Resolver<'a> {
     /// list with `partition_point` instead of filtering the whole thing.
     fn lookup(&self, name: &str, file: u32, want: impl Into<Seek>) -> Option<u32> {
         let want = want.into();
-        let cands = self.by_name.get(name)?.as_slice();
+        let cands = self.names_for(file).get(name)?.as_slice();
 
         // Tier 1: same file.
         let lo = cands.partition_point(|&c| self.nodes[c as usize].file < file);
@@ -611,10 +652,12 @@ impl<'a> Resolver<'a> {
     /// Binary search for `class.name` in the sorted methods vector.
     #[inline]
     fn own_method(&self, class: u32, name: &str) -> Option<u32> {
-        let i = self
-            .methods
-            .partition_point(|&(c, n, _)| (c, n) < (class, name));
-        match self.methods.get(i) {
+        Self::own_method_in(self.methods, class, name)
+    }
+
+    fn own_method_in(methods: &[(u32, &str, u32)], class: u32, name: &str) -> Option<u32> {
+        let i = methods.partition_point(|&(c, n, _)| (c, n) < (class, name));
+        match methods.get(i) {
             Some(&(c, n, m)) if c == class && n == name => Some(m),
             _ => None,
         }
@@ -624,6 +667,16 @@ impl<'a> Resolver<'a> {
     /// class that defines `name`. `visited` also acts as a cycle guard;
     /// `MAX_CHAIN` bounds adversarial/deep hierarchies.
     fn walk(&self, start: u32, name: &str, adj: &Map<u32, Vec<u32>>) -> Option<u32> {
+        self.walk_methods(start, name, adj, self.methods)
+    }
+
+    fn walk_methods(
+        &self,
+        start: u32,
+        name: &str,
+        adj: &Map<u32, Vec<u32>>,
+        methods: &[(u32, &str, u32)],
+    ) -> Option<u32> {
         let mut queue: VecDeque<u32> = adj.get(&start)?.iter().copied().collect();
         let mut visited: Vec<u32> = vec![start];
         while let Some(c) = queue.pop_front() {
@@ -634,7 +687,7 @@ impl<'a> Resolver<'a> {
             if visited.len() > MAX_CHAIN {
                 break;
             }
-            if let Some(m) = self.own_method(c, name) {
+            if let Some(m) = Self::own_method_in(methods, c, name) {
                 return Some(m);
             }
             if let Some(next) = adj.get(&c) {
@@ -649,10 +702,15 @@ impl<'a> Resolver<'a> {
     /// Ancestors first because inherited methods are the common case;
     /// descendants second so an override in a subclass can also be found
     /// when the call site is on the base (e.g. Python's `super().foo()`).
-    fn method_in_hierarchy(&self, class: u32, name: &str) -> Option<u32> {
-        self.own_method(class, name)
-            .or_else(|| self.walk(class, name, &self.parents))
-            .or_else(|| self.walk(class, name, &self.children))
+    fn method_in_hierarchy(&self, class: u32, name: &str, file: u32) -> Option<u32> {
+        let methods = if self.languages[file as usize] == "javascript" {
+            self.legacy_js_methods
+        } else {
+            self.methods
+        };
+        Self::own_method_in(methods, class, name)
+            .or_else(|| self.walk_methods(class, name, &self.parents, methods))
+            .or_else(|| self.walk_methods(class, name, &self.children, methods))
     }
 
     fn resolve_call(
@@ -679,7 +737,7 @@ impl<'a> Resolver<'a> {
             // If the enclosing method has a self param, try the class chain
             // first — `foo()` inside a method could be a sibling method.
             if has_self {
-                if let Some(m) = class.and_then(|c| self.method_in_hierarchy(c, name)) {
+                if let Some(m) = class.and_then(|c| self.method_in_hierarchy(c, name, file)) {
                     return Some(m);
                 }
             }
@@ -688,7 +746,7 @@ impl<'a> Resolver<'a> {
 
         // `self.foo()` / `this.bar()` / `cls.baz()`
         if is_self_qualifier(q) {
-            if let Some(m) = class.and_then(|c| self.method_in_hierarchy(c, name)) {
+            if let Some(m) = class.and_then(|c| self.method_in_hierarchy(c, name, file)) {
                 return Some(m);
             }
             return self.lookup(name, file, Want::MethodCall);
@@ -712,7 +770,7 @@ impl<'a> Resolver<'a> {
         // a class first, then search that class's method hierarchy.
         let q_last = q.rsplit(sep).next().unwrap_or(q);
         if let Some(cls) = self.lookup(q_last, file, Want::Class) {
-            if let Some(m) = self.method_in_hierarchy(cls, name) {
+            if let Some(m) = self.method_in_hierarchy(cls, name, file) {
                 return Some(m);
             }
         }
@@ -722,6 +780,14 @@ impl<'a> Resolver<'a> {
     fn resolve_base(&self, base: &str, file: u32) -> Option<u32> {
         if let Some(&i) = self.node_map.get(base) {
             return Some(i);
+        }
+        if let Some(original) = self.imports[file as usize].symbols.get(base) {
+            let fs = self.imports[file as usize]
+                .names
+                .get(base)
+                .copied()
+                .flatten()?;
+            return self.lookup_in_files(original, fs, file, Want::Class);
         }
         // `Base<T>` / `Base[]` / `Base(args)` -> `Base`. Generic args and
         // array suffixes are irrelevant to *which class* the base refers to.
@@ -835,6 +901,8 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                         id: &class.id,
                         name: if php {
                             php_name(&class.name, &class.lang_info)
+                        } else if receivers::enabled(&fd.language) {
+                            Cow::Borrowed(&class.name)
                         } else {
                             Cow::Borrowed(bare_name(&class.id))
                         },
@@ -880,6 +948,8 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                             // `{Class}_{name}`, which no call site spells.
                             name: if php {
                                 Cow::Owned(m.name.to_ascii_lowercase())
+                            } else if receivers::enabled(&fd.language) {
+                                Cow::Borrowed(&m.name)
                             } else {
                                 Cow::Borrowed(bare_name(&m.id))
                             },
@@ -933,9 +1003,23 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
     }
 
     let php: Vec<bool> = files.iter().map(|f| f.1.language == "php").collect();
+    let languages: Vec<&str> = files.iter().map(|f| f.1.language.as_str()).collect();
     let mut by_name: Map<&str, Vec<u32>> = Map::with_capacity(nodes.len());
     for (i, n) in nodes.iter().enumerate().filter(|(_, n)| !n.nested) {
         by_name.entry(n.name.as_ref()).or_default().push(i as u32);
+    }
+    // JS still uses the legacy resolver. Preserve the base's keys even for
+    // declarations whose receiver-aware language now indexes short names.
+    let mut legacy_js_names: Map<&str, Vec<u32>> = Map::new();
+    if languages.contains(&"javascript") {
+        for (i, n) in nodes.iter().enumerate().filter(|(_, n)| !n.nested) {
+            let name = if php[n.file as usize] {
+                n.name.as_ref()
+            } else {
+                bare_name(n.id)
+            };
+            legacy_js_names.entry(name).or_default().push(i as u32);
+        }
     }
     // Class-method index, sorted for binary search by (class, name).
     let mut methods: Vec<(u32, &str, u32)> = nodes
@@ -947,17 +1031,41 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
         })
         .collect();
     methods.sort_unstable();
+    let mut legacy_js_methods: Vec<_> = if languages.contains(&"javascript") {
+        methods
+            .iter()
+            .map(|&(class, _, method)| {
+                let n = &nodes[method as usize];
+                (
+                    class,
+                    if php[n.file as usize] {
+                        n.name.as_ref()
+                    } else {
+                        bare_name(n.id)
+                    },
+                    method,
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    legacy_js_methods.sort_unstable();
 
     let mut r = Resolver {
         nodes: &nodes,
         node_map: &node_map,
         by_name: &by_name,
+        legacy_js_names: &legacy_js_names,
         files: &paths,
         file_dir: &file_dir,
         imports: &imports,
         php: &php,
+        languages: &languages,
+        module_index: &module_index,
         php_hierarchy: PhpHierarchy::default(),
         methods: &methods,
+        legacy_js_methods: &legacy_js_methods,
         parents: Map::new(),
         children: Map::new(),
         max_ambiguous: opts.max_ambiguous,
@@ -1021,7 +1129,7 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                         continue;
                     };
                     for call in &func.calls {
-                        if !php && is_param(&func.params, &call.callee) {
+                        if !php && call.receiver.is_none() && is_param(&func.params, &call.callee) {
                             continue;
                         }
                         let to = if php {
@@ -1031,6 +1139,8 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                                 None,
                                 php_namespace(&func.lang_info),
                             )
+                        } else if receivers::enabled(&fd.language) {
+                            r.receiver_call(call, f, None, false, &func.id)
                         } else {
                             r.nested_in(&func.id, &call.callee)
                                 .or_else(|| r.resolve_call(&call.callee, f, None, false))
@@ -1054,16 +1164,26 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                         let Some(&from) = r.node_map.get(m.id.as_str()) else {
                             continue;
                         };
-                        // `has_self` enables the "is this a sibling method?"
-                        // shortcut in `resolve_call`.
-                        let has_self = first_self_param(&m.params);
+                        // Python omits self/cls from params. Keep static methods
+                        // separate; Rust stores the receiver's borrow spelling.
+                        let has_self = first_self_param(&m.params)
+                            || (fd.language == "python"
+                                && !m
+                                    .lang_info
+                                    .python
+                                    .as_ref()
+                                    .is_some_and(|p| p.is_staticmethod))
+                            || fd.language == "typescript";
                         for call in &m.calls {
-                            if !php && is_param(&m.params, &call.callee) {
+                            if !php && call.receiver.is_none() && is_param(&m.params, &call.callee)
+                            {
                                 continue;
                             }
                             let to = if php {
                                 let ns = php_namespace(&m.lang_info);
                                 r.resolve_php_call(&call.callee, f, Some(cidx), ns)
+                            } else if receivers::enabled(&fd.language) {
+                                r.receiver_call(call, f, Some(cidx), has_self, &m.id)
                             } else {
                                 r.nested_in(&m.id, &call.callee).or_else(|| {
                                     r.resolve_call(&call.callee, f, Some(cidx), has_self)
