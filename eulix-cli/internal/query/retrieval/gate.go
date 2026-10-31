@@ -19,7 +19,7 @@ type PathGate struct {
 	active    bool
 }
 
-func buildPathGate(anchors []ExplicitAnchor) PathGate {
+func buildPathGate(anchors []ExplicitAnchor, chunkFiles map[string]struct{}) PathGate {
 	g := PathGate{}
 	for _, a := range anchors {
 		if a.File == "" {
@@ -27,7 +27,8 @@ func buildPathGate(anchors []ExplicitAnchor) PathGate {
 		}
 		fileLow := strings.ToLower(a.File)
 
-		if strings.Contains(fileLow, ".") {
+		// A file no chunk path contains (e.g. eulix.toml) would gate out every result.
+		if strings.Contains(fileLow, ".") && inChunkFiles(chunkFiles, fileLow) {
 			dir := fileLow[:strings.LastIndex(fileLow, "/")+1]
 			if dir != "" {
 				g.required = append(g.required, dir)
@@ -40,6 +41,15 @@ func buildPathGate(anchors []ExplicitAnchor) PathGate {
 		}
 	}
 	return g
+}
+
+func inChunkFiles(chunkFiles map[string]struct{}, file string) bool {
+	for f := range chunkFiles {
+		if strings.Contains(f, file) {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *PathGate) Pass(filePath string) bool {
