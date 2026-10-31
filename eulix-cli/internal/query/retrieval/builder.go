@@ -46,7 +46,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 
 	// Only the embedding engine needs a query embedder; Ehnas never calls it.
 	if cb.Engine().UsesSemantic() {
-		queryEmbedder, err := embeddings.VectorWeaver(cfg.Embeddings.Model, cfg.Embeddings.Debug)
+		queryEmbedder, err := embeddings.VectorWeaver(cfg.Embeddings.Model, cfg.Embeddings.Engine, cfg.Embeddings.Debug)
 		if err != nil {
 			cb.debugLog.Log("Failed to initialize embedder: %v", err)
 			_ = cb.Close()
