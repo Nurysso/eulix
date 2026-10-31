@@ -88,7 +88,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	start := time.Now()
 	trace := &DebugTrace{Query: query}
 	explicitAnchor := extractExplicitAnchors(query)
-	gate := buildPathGate(explicitAnchor)
+	gate := buildPathGate(explicitAnchor, cb.chunkFiles)
 
 	cb.debugLog.Log("\n=== NEW QUERY ===")
 	cb.debugLog.Log("Query: %s", query)

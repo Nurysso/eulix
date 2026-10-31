@@ -3,7 +3,6 @@ package retrieval
 import (
 	"math"
 	"sort"
-	"strings"
 )
 
 // ---------------------------------------------------------------------------
@@ -38,17 +37,7 @@ func defaultPRFTokenize(s string) []string {
 	if s == "" {
 		return nil
 	}
-	fields := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
-		return r != '_' && (r < 'a' || r > 'z') && (r < '0' || r > '9')
-	})
-	out := fields[:0]
-	for _, f := range fields {
-		if len(f) < prfMinTokenLen {
-			continue
-		}
-		out = append(out, f)
-	}
-	return out
+	return indexKeys([]string{s})
 }
 
 var prfStopwords = map[string]bool{

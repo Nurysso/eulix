@@ -3,6 +3,8 @@ package retrieval
 import (
 	"fmt"
 	"math"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -38,7 +40,7 @@ func (cb *ContextBuilder) EhnasSearch(
 	querySymbolsExpanded := splitDottedSymbols(querySymbols) // dotted names+part
 	cb.debugLog.Log("[Step 1] Extracting explicit anchors...")
 	anchors := extractExplicitAnchors(query)
-	gate := buildPathGate(anchors)
+	gate := buildPathGate(anchors, cb.chunkFiles)
 	hc := newHydrationCache(cb)
 
 	// Track detailed results per strategy
@@ -448,6 +450,7 @@ func (cb *ContextBuilder) EhnasSearch(
 	if cb.config.RetrievalConfig.TestFilePenalty > 0 {
 		testPenalty = float64(cb.config.RetrievalConfig.TestFilePenalty)
 	}
+	qKeys := slices.DeleteFunc(indexKeys([]string{query}), func(k string) bool { return prfStopwords[k] })
 	demotionCount := 0
 	for i := range result {
 		if result[i].IsExact {
@@ -462,6 +465,10 @@ func (cb *ContextBuilder) EhnasSearch(
 		case isTestFile(f) && (intent.Type == IntentConcept || intent.Type == IntentFlow):
 			conceptPenalty := math.Min(1.0, testPenalty*2.33)
 			result[i].Score *= conceptPenalty
+			demoted = true
+		}
+		if lf := longChunkFactor(result[i].Chunk, qKeys); lf < 1 {
+			result[i].Score *= lf
 			demoted = true
 		}
 		if primaryRepo != "" && cb.config.RetrievalConfig.ApplyCrossRootIsolation {
@@ -758,6 +765,29 @@ func (cb *ContextBuilder) chunkIndexByID(id string) int {
 // 	}
 // 	return scored
 // }
+
+// longChunkLines is the span above which a chunk starts losing score: an
+// orchestrator's summary names every callee, so it matches almost any
+// question about its pipeline and then hydrates to thousands of tokens.
+const longChunkLines = 120 // shortcut: fixed constant, move to [retrievalConfig.ehnas] if tuning is needed
+
+// longChunkFactor scales a chunk's score by sqrt(longChunkLines/lines), so a
+// 523-line function keeps ~48% and anything ≤ longChunkLines keeps all of it.
+// A long chunk whose own name, class, file or directory shares a key with the
+// query is exempt: the question names it (EmbeddingGeneratorOnnx for "ONNX
+// embedder"), so it is the answer, not an orchestrator matching via callees.
+func longChunkFactor(c Chunk, queryKeys []string) float64 {
+	lines := c.EndLine - c.StartLine + 1
+	if lines <= longChunkLines {
+		return 1
+	}
+	dir, file := filepath.Split(c.File)
+	own := indexKeys([]string{c.Name, c.ClassName, strings.TrimSuffix(file, filepath.Ext(file)), filepath.Base(dir)})
+	if slices.ContainsFunc(own, func(k string) bool { return slices.Contains(queryKeys, k) }) {
+		return 1
+	}
+	return math.Sqrt(float64(longChunkLines) / float64(lines))
+}
 
 // ---------------------------------------------------------------------------
 // Novelty packing

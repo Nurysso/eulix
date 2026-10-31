@@ -1,9 +1,12 @@
 package retrieval
 
 import (
+	"fmt"
+	"slices"
 	"testing"
 
 	"eulix/internal/config"
+	"eulix/internal/utils"
 )
 
 func TestApplyPreMMRFloorIgnoresPinnedMax(t *testing.T) {
@@ -48,6 +51,74 @@ func TestMCSeedIndicesTieBreakIsDeterministic(t *testing.T) {
 	if len(want) != 16 || want[0] != 0 || want[15] != 15 {
 		t.Fatalf("want lowest 16 indices, got %v", want)
 	}
+}
+
+// TestBM25TieBreakIsDeterministic BM25 sorted only by score and truncated twice, so tied chunks at
+// either cut were kept or dropped in map order. IDs run opposite to chunk
+// index here, so the two tie-breaks (index for candidates, ID for the
+// result) pick different chunks and both are checked.
+func TestBM25TieBreakIsDeterministic(t *testing.T) {
+	chunks := make([]Chunk, 30)
+	for i := range chunks {
+		chunks[i] = Chunk{ID: fmt.Sprintf("c%02d", 29-i), File: "a.go", Content: "seed walk"}
+	}
+	cb := testEhnasBuilder(t, chunks)
+	want := ids(cb.invertedKeywordSearchBM25("seed walk", 3, nil))
+	for range 20 { // map iteration order varies per call
+		if got := ids(cb.invertedKeywordSearchBM25("seed walk", 3, nil)); !slices.Equal(got, want) {
+			t.Fatalf("BM25 order changed: %v vs %v", want, got)
+		}
+	}
+	// Proximity (topK*4 = 12 candidates) goes to the lowest indices, c29..c18;
+	// the result keeps the lowest IDs among them.
+	if !slices.Equal(want, []string{"c18", "c19", "c20"}) {
+		t.Fatalf("want [c18 c19 c20], got %v", want)
+	}
+}
+
+func TestByScoreDescBreaksTiesOnID(t *testing.T) {
+	cs := []ScoredChunk{
+		{Chunk: Chunk{ID: "c"}, Score: 1},
+		{Chunk: Chunk{ID: "a"}, Score: 1},
+		{Chunk: Chunk{ID: "z"}, Score: 2},
+		{Chunk: Chunk{ID: "b"}, Score: 1},
+	}
+	slices.SortFunc(cs, byScoreDesc)
+	if got := ids(cs); !slices.Equal(got, []string{"z", "a", "b", "c"}) {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestNoveltyPackTieBreakIsOrderIndependent(t *testing.T) {
+	cb := &ContextBuilder{config: config.DefaultConfig()}
+	mk := func(order ...string) []ScoredChunk {
+		out := make([]ScoredChunk, len(order))
+		for i, id := range order {
+			out[i] = ScoredChunk{Chunk: Chunk{ID: id}, Score: 5}
+		}
+		return out
+	}
+	a := ids(noveltyPack(mk("c", "a", "b"), 3, cb))
+	b := ids(noveltyPack(mk("b", "c", "a"), 3, cb))
+	if !slices.Equal(a, []string{"a", "b", "c"}) || !slices.Equal(a, b) {
+		t.Fatalf("tied chunks depend on input order: %v vs %v", a, b)
+	}
+}
+
+// testEhnasBuilder loads chunks into an EHNAS builder with derived indices
+// (chunkFiles, symbol and inverted index) built the way loader.go does.
+func testEhnasBuilder(t *testing.T, chunks []Chunk) *ContextBuilder {
+	t.Helper()
+	cfg := config.DefaultConfig()
+	cfg.Project.Engine = "ehnas"
+	cfg.RetrievalConfig.Ehnas.InvertedIndexMinChunks = 0
+	cb := NewTestContextBuilder(cfg, t.TempDir(), utils.NewDebugLogger(t.TempDir()))
+	if err := cb.InitEngine(); err != nil {
+		t.Fatal(err)
+	}
+	cb.chunks = chunks
+	cb.buildDerivedIndices()
+	return cb
 }
 
 func ids(cs []ScoredChunk) []string {

@@ -73,6 +73,7 @@ type ContextBuilder struct {
 	symbolIndex      map[string][]int
 	vectorMap        map[string]int
 	chunkIdx         map[string]int
+	chunkFiles       map[string]struct{} // lowercased File of every chunk
 	engine           Engine
 	sourceRoot       string
 	hasCallGraph     bool

@@ -205,7 +205,7 @@ func (cb *ContextBuilder) streamKBChunks() error {
 }
 
 // buildDerivedIndices populates the boilerplate detector, symbol
-// index, and inverted index from cb.chunks in a single pass.
+// index, chunk file set, and inverted index from cb.chunks in a single pass.
 func (cb *ContextBuilder) buildDerivedIndices() {
 	// Boilerplate detector (over the full corpus)
 	cb.buildBoilerplate()
@@ -223,7 +223,9 @@ func (cb *ContextBuilder) buildDerivedIndices() {
 	cb.detectNoisePatterns()
 
 	cb.symbolIndex = make(map[string][]int, len(cb.chunks)*2)
+	cb.chunkFiles = make(map[string]struct{})
 	for i, c := range cb.chunks {
+		cb.chunkFiles[strings.ToLower(c.File)] = struct{}{}
 		for _, sym := range c.Symbols {
 			if cb.isBoilerplateSymbol(sym) {
 				continue
@@ -249,6 +251,7 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 	postings := make(map[string][]Posting, len(cb.chunks)*8)
 	totalTokens, nonEmpty := 0, 0
 
+	var terms []string
 	for i, c := range cb.chunks {
 		if c.Content == "" {
 			continue
@@ -260,7 +263,10 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 			norm := normalizeSymbol(tok)
 			if norm != "" && !cb.isBoilerplateSymbol(norm) {
 				// Give path tokens a slight artificial frequency boost
-				counts[norm] += 2
+				terms = indexTerms(terms[:0], tok, norm)
+				for _, t := range terms {
+					counts[t] += 2
+				}
 			}
 		}
 
@@ -269,7 +275,10 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 			if norm == "" || cb.isBoilerplateSymbol(norm) {
 				continue
 			}
-			counts[norm]++
+			terms = indexTerms(terms[:0], tok, norm)
+			for _, t := range terms {
+				counts[t]++
+			}
 		}
 
 		if len(counts) == 0 {

@@ -60,6 +60,7 @@ func (cb *ContextBuilder) Close() error {
 	cb.vectorMap = nil
 	cb.hydrateIdx = nil
 	cb.symbolIndex = nil
+	cb.chunkFiles = nil
 	cb.subsystemTree = nil
 	cb.noisePaths = nil
 	cb.invertedIdx = nil
@@ -370,6 +371,67 @@ func splitIdentifierToTokens(s string) []string {
 	return toks
 }
 
+// indexKeys turns free text into inverted-index keys with the same rules
+// buildInvertedIndex applies, so query words and indexed code words meet.
+func indexKeys(words []string) []string {
+	var out []string
+	for _, w := range words {
+		for _, tok := range strings.FieldsFunc(w, isIdentBoundary) {
+			if norm := normalizeSymbol(tok); norm != "" {
+				out = indexTerms(out, tok, norm)
+			}
+		}
+	}
+	return uniqueStrings(out)
+}
+
+// indexTerms appends the keys for one raw token: its stemmed normalized form
+// and, for camelCase, each stemmed part (mcSeedIndices -> ..., mc, seed, indic).
+func indexTerms(dst []string, raw, norm string) []string {
+	dst = append(dst, stemTerm(norm))
+	if !isCodeIdentifier(raw) {
+		return dst
+	}
+	for _, p := range splitIdentifierToTokens(raw) {
+		if len(p) > 1 {
+			dst = append(dst, stemTerm(p))
+		}
+	}
+	return dst
+}
+
+// stemTerm conflates simple inflections (loaded, loads, loading -> load).
+// Applied to a fixpoint so it is idempotent: re-stemming a key is a no-op.
+// shortcut: suffix rules only, irregular forms (index/indices) do not meet; swap in a Porter stemmer if that matters.
+func stemTerm(t string) string {
+	for {
+		s := stemStep(t)
+		if s == t {
+			return t
+		}
+		t = s
+	}
+}
+
+func stemStep(t string) string {
+	if strings.HasSuffix(t, "ss") {
+		return t
+	}
+	for _, suf := range []string{"ings", "ing", "ed", "s"} {
+		if strings.HasSuffix(t, suf) && len(t)-len(suf) >= 4 {
+			t = t[:len(t)-len(suf)]
+			break
+		}
+	}
+	if len(t) > 4 && t[len(t)-1] == 'e' {
+		t = t[:len(t)-1]
+	}
+	if n := len(t); n > 4 && t[n-1] == t[n-2] && !strings.ContainsRune("lsz", rune(t[n-1])) {
+		t = t[:n-1]
+	}
+	return t
+}
+
 // Helper to prevent unnecessary memory allocations in strings.ToLower
 func hasUpper(s string) bool {
 	for _, r := range s {
@@ -451,7 +513,7 @@ func byScoreDesc(a, b ScoredChunk) int {
 	case a.Score < b.Score:
 		return 1
 	default:
-		return 0
+		return strings.Compare(a.ID, b.ID)
 	}
 }
 
