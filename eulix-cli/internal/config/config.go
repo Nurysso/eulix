@@ -88,6 +88,10 @@ type EtiyaConfig struct {
 	MMRDiversityFactor    *float32 `toml:"mmr_diversity_factor,omitempty"`
 	SemanticMinSimilarity *float64 `toml:"semantic_min_similarity,omitempty"`
 	MaxContextChunks      *int     `toml:"max_context_chunks,omitempty"`
+
+	// LexicalExclude: paths the MCP grep fallback skips while etiya is active.
+	// Globs match the repo-relative path or the file name; "dir/" skips a directory.
+	LexicalExclude []string `toml:"lexical_exclude,omitempty"`
 }
 
 // EhnasConfig overrides shared retrieval keys for the ehnas engine (nil =
