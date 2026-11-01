@@ -1272,7 +1272,13 @@ impl LanguageServer for Backend {
         let index = self.state.index.read();
 
         let mut out = Vec::new();
+        // Same-line calls on different receivers resolve by name and line
+        // here, so list each pair once.
+        let mut seen = HashSet::new();
         for call in calls {
+            if !seen.insert((call.callee.clone(), call.line)) {
+                continue;
+            }
             if let Some(path) = &from_path {
                 let Some(def) = index.resolve_call(&call.callee, path, call.line, root.as_deref())
                 else {
@@ -1311,6 +1317,8 @@ fn is_valid_identifier(s: &str) -> bool {
         && s.chars().all(|c| c == '_' || c.is_alphanumeric())
 }
 
+#[cfg(test)]
+mod call_tests;
 #[cfg(test)]
 mod php_tests;
 

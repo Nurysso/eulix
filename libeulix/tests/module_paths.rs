@@ -80,7 +80,7 @@ fn rust_internal_alias_without_module_file_uses_fallback() {
 #[test]
 fn rust_external_alias_is_not_a_project_module_even_with_matching_file() {
     let g = graph(&[
-        ("src/lib.rs", "use std::env; fn run() { env::args(); std::env::args(); core::args(); alloc::args(); missing_crate::args(); }"),
+        ("src/lib.rs", "use std::env; fn run() { env::args(); std::env::args(); core::args(); alloc::args(); u32::args(); }"),
         ("src/env.rs", "pub fn args() {}"),
         ("src/core.rs", "pub fn args() {}"),
         ("src/alloc.rs", "pub fn args() {}"),
@@ -89,6 +89,35 @@ fn rust_external_alias_is_not_a_project_module_even_with_matching_file() {
         .edges
         .iter()
         .any(|e| e.edge_type == "call" && e.from == "func_run::src/lib.rs"));
+}
+#[test]
+fn rust_sibling_workspace_crate_keeps_the_name_lookup() {
+    let g = graph(&[
+        (
+            "crates/app/src/lib.rs",
+            "use util::run; use util as u; pub fn start() { run(); } pub fn qualified() { util::run(); } pub fn aliased() { u::run(); }",
+        ),
+        ("crates/util/src/lib.rs", "pub fn run() {}"),
+        (
+            "crates/app/src/out.rs",
+            "fn print() { termcolor::BufferWriter::stdout(); } pub fn stdout() {}",
+        ),
+    ]);
+    assert!(!edge(
+        &g,
+        "func_print::crates/app/src/out.rs",
+        "func_stdout::crates/app/src/out.rs"
+    ));
+    for caller in ["start", "qualified", "aliased"] {
+        assert!(
+            edge(
+                &g,
+                &format!("func_{caller}::crates/app/src/lib.rs"),
+                "func_run::crates/util/src/lib.rs"
+            ),
+            "{caller}"
+        );
+    }
 }
 #[test]
 fn rust_imported_module_alias_stays_in_the_callers_crate() {

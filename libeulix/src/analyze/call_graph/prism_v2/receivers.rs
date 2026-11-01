@@ -101,8 +101,14 @@ fn rust_import<'a>(
             original.rsplit("::").next().unwrap_or(original)
         };
         let binding = if local != original { local } else { symbol };
-        out.rust_paths
-            .insert(binding, rust_paths::project_path(full, path, index));
+        let project = rust_paths::project_path(full, path, index);
+        let root = full.split("::").find(|s| !s.is_empty()).unwrap_or(full);
+        // Leave unknown roots unbound so the base lookup still runs: they
+        // may name a sibling crate of the same workspace.
+        if project.is_none() && !rust_paths::external_root(root) {
+            continue;
+        }
+        out.rust_paths.insert(binding, project);
         if let Some(target) = module(full, path, index, "rust") {
             out.namespaces.entry(binding).or_insert(Some(target));
         } else {

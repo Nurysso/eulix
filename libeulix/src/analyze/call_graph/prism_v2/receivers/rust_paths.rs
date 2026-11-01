@@ -3,6 +3,36 @@
 
 use super::*;
 
+/// Roots that are known to live outside the project. Any other unresolved
+/// root may be a sibling crate of the same workspace, so it keeps the name
+/// lookup instead of being treated as external.
+pub(super) fn external_root(root: &str) -> bool {
+    matches!(
+        root,
+        "std"
+            | "core"
+            | "alloc"
+            | "proc_macro"
+            | "bool"
+            | "char"
+            | "str"
+            | "f32"
+            | "f64"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+    )
+}
+
 pub(super) fn module_file<'a>(path: &str, caller: &str, index: &'a ModuleIndex<'a>) -> Target<'a> {
     // A package can contain distinct lib and main crates in the same directory.
     if path == crate_root(caller, index)
@@ -85,7 +115,7 @@ fn join(parent: &str, child: &str) -> String {
 pub(super) fn project_path(name: &str, path: &str, index: &ModuleIndex<'_>) -> Option<String> {
     let mut parts = name.split("::").filter(|s| !s.is_empty()).peekable();
     let first = parts.next()?;
-    if matches!(first, "std" | "core" | "alloc" | "proc_macro") {
+    if external_root(first) {
         return None;
     }
     let root = crate_root(path, index);
@@ -144,7 +174,7 @@ impl Resolver<'_> {
             }
         }
         let (root, tail) = receiver.split_once("::").unwrap_or((receiver, ""));
-        if matches!(root, "std" | "core" | "alloc" | "proc_macro") {
+        if external_root(root) {
             return Some(None);
         }
         let path = if let Some(binding) = imports.rust_paths.get(root) {
@@ -156,8 +186,22 @@ impl Resolver<'_> {
             } else {
                 join(binding, &tail.replace("::", "/"))
             }
+        } else if let Some(path) =
+            project_path(receiver, self.files[file as usize], self.module_index)
+        {
+            path
+        } else if root.starts_with(|c: char| c.is_ascii_lowercase())
+            && !receiver
+                .rsplit("::")
+                .next()
+                .is_some_and(|last| last.starts_with(|c: char| c.is_ascii_uppercase()))
+        {
+            // A module path outside this crate, such as a sibling workspace
+            // crate, keeps the base's function lookup. `krate::Type::f()` is
+            // a method and stays with the type resolver.
+            return Some(self.lookup(name, file, Seek::Only(Kind::Function)));
         } else {
-            project_path(receiver, self.files[file as usize], self.module_index)?
+            return None;
         };
         Some(
             module_file(&path, self.files[file as usize], self.module_index)
