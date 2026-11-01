@@ -39,6 +39,7 @@ pub struct Document {
     // alone leaves open: abort can't stop a task that's already inside
     // `spawn_blocking`, and the parse is CPU bound.
     pub generation: u64,
+    session: Arc<()>,
 }
 
 impl Document {
@@ -49,8 +50,36 @@ impl Document {
             parsed,
             parse_error: None,
             generation: 0,
+            session: Arc::new(()),
         }
     }
+
+    pub fn revision(&self) -> DocumentRevision {
+        DocumentRevision {
+            session: self.session.clone(),
+            version: self.version,
+            generation: self.generation,
+        }
+    }
+
+    pub fn matches(&self, revision: &DocumentRevision) -> bool {
+        Arc::ptr_eq(&self.session, &revision.session)
+            && self.version == revision.version
+            && self.generation == revision.generation
+    }
+}
+
+#[derive(Clone)]
+pub struct DocumentRevision {
+    session: Arc<()>,
+    pub version: i32,
+    generation: u64,
+}
+
+#[derive(Default)]
+struct DiskUpdates {
+    clock: u64,
+    versions: HashMap<PathBuf, u64>,
 }
 
 #[derive(Default)]
@@ -97,6 +126,7 @@ pub struct ServerState {
     pub scan: RwLock<ScanState>,
     // Set by `shutdown`. The scan loop polls it between files.
     pub shutdown: AtomicBool,
+    disk_updates: RwLock<DiskUpdates>,
 }
 
 impl Default for ServerState {
@@ -114,6 +144,7 @@ impl ServerState {
             index: RwLock::new(Index::new()),
             scan: RwLock::new(ScanState::default()),
             shutdown: AtomicBool::new(false),
+            disk_updates: RwLock::new(DiskUpdates::default()),
         }
     }
 
@@ -129,7 +160,8 @@ impl ServerState {
         }
     }
 
-    // Index one parsed file into both the workspace cache and the name index.
+    // Seed test fixtures in both the workspace cache and the name index.
+    #[cfg(test)]
     pub fn commit(&self, path: PathBuf, parsed: Arc<ParsedFile>) {
         {
             let mut ix = self.index.write();
@@ -139,7 +171,99 @@ impl ServerState {
         ws.files.insert(path, parsed);
     }
 
+    // Buffer results are valid only for the same open session and edit.
+    // Lock order for compound updates: index -> documents -> disk -> workspace.
+    pub fn commit_buffer(
+        &self,
+        uri: &Url,
+        path: &Path,
+        parsed: Option<Arc<ParsedFile>>,
+        error: Option<String>,
+        revision: &DocumentRevision,
+    ) -> bool {
+        let mut index = self.index.write();
+        let mut docs = self.documents.write();
+        let Some(doc) = docs.open.get_mut(uri).filter(|d| d.matches(revision)) else {
+            return false;
+        };
+        doc.parsed = parsed.clone();
+        doc.parse_error = error;
+        if let Some(parsed) = parsed {
+            index.index_file(path, &parsed);
+            self.workspace
+                .write()
+                .files
+                .insert(path.to_path_buf(), parsed);
+        }
+        true
+    }
+
+    // Reserve before asynchronous work. A newer operation on the same path
+    // invalidates older reads, including scans and close-time disk restores.
+    pub fn reserve_disk_update(&self) -> u64 {
+        let mut updates = self.disk_updates.write();
+        updates.clock += 1;
+        updates.clock
+    }
+
+    pub fn activate_disk_update(&self, path: &Path, ticket: u64) -> bool {
+        let mut updates = self.disk_updates.write();
+        let current = updates.versions.entry(path.to_path_buf()).or_default();
+        if *current > ticket {
+            return false;
+        }
+        *current = ticket;
+        true
+    }
+
+    // An open buffer owns both the cache and index until it closes.
+    pub fn commit_disk(&self, path: PathBuf, parsed: Arc<ParsedFile>, ticket: u64) {
+        self.commit_disk_batch(&[(path, parsed)], ticket);
+    }
+
+    pub fn commit_disk_batch(&self, files: &[(PathBuf, Arc<ParsedFile>)], ticket: u64) {
+        let mut index = self.index.write();
+        let docs = self.documents.read();
+        let mut updates = self.disk_updates.write();
+        let mut workspace = self.workspace.write();
+        for (path, parsed) in files {
+            let current = updates.versions.entry(path.clone()).or_default();
+            if *current > ticket {
+                continue;
+            }
+            *current = ticket;
+            let open = Url::from_file_path(path)
+                .ok()
+                .is_some_and(|uri| docs.open.contains_key(&uri));
+            if open {
+                continue;
+            }
+            index.index_file(path, parsed);
+            workspace.files.insert(path.clone(), parsed.clone());
+        }
+    }
+
+    pub fn forget_disk(&self, path: &Path, ticket: u64) {
+        let mut index = self.index.write();
+        let docs = self.documents.read();
+        let mut updates = self.disk_updates.write();
+        let current = updates.versions.entry(path.to_path_buf()).or_default();
+        if *current > ticket {
+            return;
+        }
+        *current = ticket;
+        let open = Url::from_file_path(path)
+            .ok()
+            .is_some_and(|uri| docs.open.contains_key(&uri));
+        if open {
+            return;
+        }
+        index.remove_file(path);
+        self.workspace.write().files.remove(path);
+    }
+
     // Drop a file from both the cache and the index.
+    #[cfg(test)]
     pub fn forget(&self, path: &Path) {
         {
             let mut ix = self.index.write();
@@ -155,9 +279,9 @@ impl ServerState {
         {
             let docs = self.documents.read();
             if let Some(doc) = docs.open.get(uri) {
-                if let Some(p) = doc.parsed.clone() {
-                    return Some(p);
-                }
+                // Even before the first buffer parse, disk content must not
+                // answer requests for an open document.
+                return doc.parsed.clone();
             }
         }
         let ws = self.workspace.read();

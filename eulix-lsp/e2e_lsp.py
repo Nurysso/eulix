@@ -236,6 +236,9 @@ def main():
     print("\n[2] didOpen + documentSymbol")
     c.notify("textDocument/didOpen", {"textDocument": {
         "uri": lib_uri, "languageId": "rust", "version": 1, "text": WORKSPACE["lib.rs"]}})
+    # didOpen parses off-thread. Wait for this buffer's first result rather
+    # than accidentally testing a pre-existing disk-cache fallback.
+    c.diagnostics_for(lib_uri, timeout=5)
     c.request(2, "textDocument/documentSymbol", {"textDocument": {"uri": lib_uri}})
     r = c.wait_for_id(2)
     syms = (r or {}).get("result") or []
@@ -382,6 +385,7 @@ def main():
     c.notify("textDocument/didOpen", {"textDocument": {
         "uri": newfile.as_uri(), "languageId": "rust", "version": 1,
         "text": newfile.read_text()}})
+    c.diagnostics_for(newfile.as_uri(), timeout=5)
     c.request(11, "textDocument/prepareCallHierarchy", {
         "textDocument": {"uri": newfile.as_uri()}, "position": {"line": 0, "character": 4}})
     r = c.wait_for_id(11)
@@ -474,7 +478,97 @@ def main():
     check("Rust test functions are not marked deprecated over JSON-RPC",
           bool(functions) and all(not (t[4] & (1 << deprecated)) for t in functions), str(functions))
 
-    print("\n[14] shutdown")
+    print("\n[14] buffer and watcher regressions")
+    ticket = 2000
+
+    def request(method, params):
+        nonlocal ticket
+        ticket += 1
+        c.request(ticket, method, params)
+        return c.wait_for_id(ticket)
+
+    def workspace_names(query):
+        response = request("workspace/symbol", {"query": query})
+        return [s["name"] for s in (response or {}).get("result") or []]
+
+    def wait_names(query, predicate):
+        deadline = time.monotonic() + 5
+        names = []
+        while time.monotonic() < deadline:
+            names = workspace_names(query)
+            if predicate(names):
+                break
+            time.sleep(0.02)
+        return names
+
+    def open_text(path, text, language="python"):
+        c.notify("textDocument/didOpen", {"textDocument": {
+            "uri": path.as_uri(), "languageId": language, "version": 1, "text": text}})
+
+    def change_events(changes):
+        c.notify("workspace/didChangeWatchedFiles", {"changes": [
+            {"uri": path.as_uri(), "type": kind} for path, kind in changes]})
+
+    unsaved = pathlib.Path(tmp, "unsaved148.py")
+    open_text(unsaved, "def never_saved_148(): pass\n")
+    names = wait_names("never_saved_148", lambda names: names == ["never_saved_148"])
+    check("never-saved buffer is indexed while open", names == ["never_saved_148"], str(names))
+    c.notify("textDocument/didClose", {"textDocument": {"uri": unsaved.as_uri()}})
+    names = wait_names("never_saved_148", lambda names: not names)
+    check("closing a never-saved buffer removes its workspace symbols", not names, str(names))
+
+    watched_path = pathlib.Path(tmp, "watched148.py")
+    watched_path.write_text("def inside_watch_148(): pass\n", encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix=pathlib.Path(tmp).name + "-outside-",
+                                     dir=pathlib.Path(tmp).parent) as outside_dir:
+        outside_path = pathlib.Path(outside_dir, "foreign.py")
+        outside_path.write_text("def outside_watch_148(): pass\n", encoding="utf-8")
+        # The accepted second event is a barrier for handling the first one.
+        change_events([(outside_path, 1), (watched_path, 1)])
+        names = wait_names("inside_watch_148", lambda names: names == ["inside_watch_148"])
+        check("an in-workspace watched creation is indexed", names == ["inside_watch_148"], str(names))
+        names = workspace_names("outside_watch_148")
+        check("a sibling-prefix file outside the workspace is not indexed", not names, str(names))
+
+    open_text(watched_path, "def buffer_watch_148(): pass\n")
+    wait_names("buffer_watch_148", lambda names: names == ["buffer_watch_148"])
+    watched_path.write_text("def disk_watch_148(): pass\n", encoding="utf-8")
+    barrier = pathlib.Path(tmp, "barrier148.rs")
+    barrier.write_text("fn watch_barrier_148() {}", encoding="utf-8")
+    change_events([(watched_path, 2), (barrier, 1)])
+    wait_names("watch_barrier_148", lambda names: names == ["watch_barrier_148"])
+    names = workspace_names("buffer_watch_148")
+    check("watched disk edits preserve an open buffer's index", names == ["buffer_watch_148"], str(names))
+    c.notify("textDocument/didClose", {"textDocument": {"uri": watched_path.as_uri()}})
+    names = wait_names("disk_watch_148", lambda names: names == ["disk_watch_148"])
+    check("closing an edited saved buffer restores disk symbols", names == ["disk_watch_148"], str(names))
+    watched_path.unlink()
+    barrier.write_text("fn watch_barrier_done_148() {}", encoding="utf-8")
+    change_events([(watched_path, 3), (barrier, 2)])
+    wait_names("watch_barrier_done_148", lambda names: names == ["watch_barrier_done_148"])
+    names = workspace_names("disk_watch_148")
+    check("an in-workspace watched deletion removes disk symbols", not names, str(names))
+
+    diagnostics_path = pathlib.Path(tmp, "buffer_diagnostics.py")
+    diagnostics_path.write_text("def disk_diagnostics(): pass\n", encoding="utf-8")
+    open_text(diagnostics_path, "def buffer_diagnostics():\n    pass # TODO fix\n")
+    initial_diags = c.diagnostics_for(diagnostics_path.as_uri(), timeout=5)
+    check("open buffer publishes its TODO diagnostic",
+          any(d.get("code") == "todo" for d in initial_diags or []), str(initial_diags))
+    with c.lock:
+        before_deletion = len(c.msgs)
+    diagnostics_path.unlink()
+    barrier.write_text("fn deletion_diagnostics_barrier() {}", encoding="utf-8")
+    change_events([(diagnostics_path, 3), (barrier, 2)])
+    wait_names("deletion_diagnostics_barrier", lambda names: names == ["deletion_diagnostics_barrier"])
+    with c.lock:
+        after_deletion = [m["params"] for m in c.msgs[before_deletion:]
+                          if m.get("method") == "textDocument/publishDiagnostics"
+                          and m.get("params", {}).get("uri") == diagnostics_path.as_uri()]
+    check("watched deletion keeps diagnostics owned by the open buffer",
+          not any(not params.get("diagnostics") for params in after_deletion), str(after_deletion))
+
+    print("\n[15] shutdown")
     c.request(99, "shutdown")
     r = c.wait_for_id(99, timeout=10)
     if r is None or "result" not in r:
