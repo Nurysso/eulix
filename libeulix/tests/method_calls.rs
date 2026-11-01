@@ -210,7 +210,7 @@ fn rust_grouped_imports_keep_modules_and_renamed_types() {
 }
 
 #[test]
-fn missing_relative_import_does_not_bind_an_unrelated_file_with_the_same_stem() {
+fn missing_relative_import_keeps_the_project_name_fallback() {
     let p: BTreeMap<_, _> = [
         (
             "app.ts",
@@ -226,7 +226,10 @@ fn missing_relative_import_does_not_bind_an_unrelated_file_with_the_same_stem() 
         )
     })
     .collect();
-    assert!(edges_from(&build_call_graph_v2(&p), "func_run::app.ts").is_empty());
+    assert_eq!(
+        edges_from(&build_call_graph_v2(&p), "func_run::app.ts"),
+        vec!["func_helper::other/missing.ts"]
+    );
 }
 
 #[test]

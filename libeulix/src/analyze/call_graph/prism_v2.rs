@@ -36,7 +36,7 @@ use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::hash_map::Entry;
 use std::collections::VecDeque;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 mod php;
 mod receivers;
@@ -168,8 +168,12 @@ struct FileImports<'a> {
     namespaces: Map<&'a str, Target<'a>>,
     /// Local imported name -> original symbol name (receiver-aware languages).
     symbols: Map<&'a str, &'a str>,
+    /// Relative imports stay internal even when their source is unavailable.
+    internal_names: HashSet<&'a str>,
     /// Rust binding -> crate-local module path; None is explicitly external.
     rust_paths: Map<&'a str, Option<String>>,
+    /// Unknown-root Rust type imports bind in another crate, not this one.
+    rust_foreign_types: Map<&'a str, &'a str>,
     /// Namespace binding -> original module path (for dotted Python receivers).
     namespace_modules: Map<&'a str, Cow<'a, str>>,
     /// TypeScript reexports, distinct from imports visible in this file.
@@ -475,7 +479,7 @@ struct Resolver<'a> {
     node_map: &'a Map<&'a str, u32>,
     /// bare name -> node indices, ascending (=> also ascending by file).
     by_name: &'a Map<&'a str, Vec<u32>>,
-    legacy_js_names: &'a Map<&'a str, Vec<u32>>,
+    legacy_names: &'a Map<&'a str, Vec<u32>>,
     files: &'a [&'a str],
     /// file idx -> dir id; non-decreasing because files are sorted by (dir, path)
     file_dir: &'a [u32],
@@ -489,7 +493,7 @@ struct Resolver<'a> {
     /// (class idx, method name, method idx), sorted — enables binary search
     /// for "does this class define this method".
     methods: &'a [(u32, &'a str, u32)],
-    legacy_js_methods: &'a [(u32, &'a str, u32)],
+    legacy_methods: &'a [(u32, &'a str, u32)],
     parents: Map<u32, Vec<u32>>,
     children: Map<u32, Vec<u32>>,
     max_ambiguous: usize,
@@ -498,8 +502,8 @@ struct Resolver<'a> {
 
 impl<'a> Resolver<'a> {
     fn names_for(&self, file: u32) -> &Map<&'a str, Vec<u32>> {
-        if self.languages[file as usize] == "javascript" {
-            self.legacy_js_names
+        if !receivers::enabled(self.languages[file as usize]) && !self.php[file as usize] {
+            self.legacy_names
         } else {
             self.by_name
         }
@@ -598,7 +602,12 @@ impl<'a> Resolver<'a> {
             Some(Some(fs)) if let Some(x) = self.lookup_in_files(name, fs, file, want) => {
                 return Some(x);
             }
-            Some(None) if self.strict_imports => return None,
+            Some(None)
+                if self.strict_imports
+                    && !self.imports[file as usize].internal_names.contains(name) =>
+            {
+                return None
+            }
             _ => {}
         }
 
@@ -703,11 +712,12 @@ impl<'a> Resolver<'a> {
     /// descendants second so an override in a subclass can also be found
     /// when the call site is on the base (e.g. Python's `super().foo()`).
     fn method_in_hierarchy(&self, class: u32, name: &str, file: u32) -> Option<u32> {
-        let methods = if self.languages[file as usize] == "javascript" {
-            self.legacy_js_methods
-        } else {
-            self.methods
-        };
+        let methods =
+            if !receivers::enabled(self.languages[file as usize]) && !self.php[file as usize] {
+                self.legacy_methods
+            } else {
+                self.methods
+            };
         Self::own_method_in(methods, class, name)
             .or_else(|| self.walk_methods(class, name, &self.parents, methods))
             .or_else(|| self.walk_methods(class, name, &self.children, methods))
@@ -781,17 +791,17 @@ impl<'a> Resolver<'a> {
         if let Some(&i) = self.node_map.get(base) {
             return Some(i);
         }
-        if let Some(original) = self.imports[file as usize].symbols.get(base) {
-            let fs = self.imports[file as usize]
-                .names
-                .get(base)
-                .copied()
-                .flatten()?;
-            return self.lookup_in_files(original, fs, file, Want::Class);
-        }
         // `Base<T>` / `Base[]` / `Base(args)` -> `Base`. Generic args and
         // array suffixes are irrelevant to *which class* the base refers to.
         let base = base.split(['<', '[', '(']).next().unwrap_or(base).trim();
+        if receivers::enabled(self.languages[file as usize]) {
+            if let Some(local) = self.lookup_in_files(base, &[file], file, Want::Class) {
+                return Some(local);
+            }
+        }
+        if let Some(result) = self.imported_symbol(base, file, Want::Class.into()) {
+            return result;
+        }
         let (qual, name) = split_callee(base);
         if let Some(q) = qual {
             let root = q.split(sep).next().unwrap_or(q);
@@ -1008,17 +1018,20 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
     for (i, n) in nodes.iter().enumerate().filter(|(_, n)| !n.nested) {
         by_name.entry(n.name.as_ref()).or_default().push(i as u32);
     }
-    // JS still uses the legacy resolver. Preserve the base's keys even for
+    // Legacy callers keep the base's keys even for
     // declarations whose receiver-aware language now indexes short names.
-    let mut legacy_js_names: Map<&str, Vec<u32>> = Map::new();
-    if languages.contains(&"javascript") {
+    let mut legacy_names: Map<&str, Vec<u32>> = Map::new();
+    if languages
+        .iter()
+        .any(|l| !receivers::enabled(l) && *l != "php")
+    {
         for (i, n) in nodes.iter().enumerate().filter(|(_, n)| !n.nested) {
             let name = if php[n.file as usize] {
                 n.name.as_ref()
             } else {
                 bare_name(n.id)
             };
-            legacy_js_names.entry(name).or_default().push(i as u32);
+            legacy_names.entry(name).or_default().push(i as u32);
         }
     }
     // Class-method index, sorted for binary search by (class, name).
@@ -1031,7 +1044,10 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
         })
         .collect();
     methods.sort_unstable();
-    let mut legacy_js_methods: Vec<_> = if languages.contains(&"javascript") {
+    let mut legacy_methods: Vec<_> = if languages
+        .iter()
+        .any(|l| !receivers::enabled(l) && *l != "php")
+    {
         methods
             .iter()
             .map(|&(class, _, method)| {
@@ -1050,13 +1066,13 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
     } else {
         Vec::new()
     };
-    legacy_js_methods.sort_unstable();
+    legacy_methods.sort_unstable();
 
     let mut r = Resolver {
         nodes: &nodes,
         node_map: &node_map,
         by_name: &by_name,
-        legacy_js_names: &legacy_js_names,
+        legacy_names: &legacy_names,
         files: &paths,
         file_dir: &file_dir,
         imports: &imports,
@@ -1065,7 +1081,7 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
         module_index: &module_index,
         php_hierarchy: PhpHierarchy::default(),
         methods: &methods,
-        legacy_js_methods: &legacy_js_methods,
+        legacy_methods: &legacy_methods,
         parents: Map::new(),
         children: Map::new(),
         max_ambiguous: opts.max_ambiguous,

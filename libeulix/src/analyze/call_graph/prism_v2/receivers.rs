@@ -20,6 +20,20 @@ fn alias(s: &str) -> (&str, &str) {
 }
 
 fn module<'a>(name: &str, path: &str, index: &'a ModuleIndex<'a>, language: &str) -> Target<'a> {
+    if language == "python" && name.starts_with('.') {
+        let mut parts: Vec<&str> = dir_of(path).split('/').filter(|s| !s.is_empty()).collect();
+        let levels = name.bytes().take_while(|b| *b == b'.').count();
+        for _ in 1..levels {
+            parts.pop()?;
+        }
+        parts.extend(name[levels..].split('.').filter(|s| !s.is_empty()));
+        let key = format!("./{}", parts.join("/"));
+        let package = format!("{}/__init__", key.trim_end_matches('/'));
+        return index
+            .get(package.as_str())
+            .or_else(|| index.get(key.as_str()))
+            .map(Vec::as_slice);
+    }
     // Relative JS modules are relative to the caller, not a global suffix.
     // An explicit .js specifier may refer to a .ts source file.
     if language == "typescript" && name.starts_with('.') {
@@ -42,7 +56,7 @@ fn module<'a>(name: &str, path: &str, index: &'a ModuleIndex<'a>, language: &str
         }
         return index
             .get(key.as_str())
-            .or_else(|| index.get(format!("{key}/index").as_str()))
+            .or_else(|| index.get(format!("{}/index", key.trim_end_matches('/')).as_str()))
             .map(Vec::as_slice);
     }
     if language == "rust" {
@@ -60,6 +74,9 @@ fn rust_import<'a>(
     index: &'a ModuleIndex<'a>,
     out: &mut FileImports<'a>,
 ) {
+    // The parser retains visibility and `use` on public reexports. These
+    // prefixes do not belong to the module root (`pub use self::...`).
+    let source = source.split_once(" use ").map_or(source, |(_, path)| path);
     let mut pending = vec![(String::new(), source, None)];
     while let Some((prefix, source, parent_binding)) = pending.pop() {
         let source = source.trim();
@@ -101,23 +118,52 @@ fn rust_import<'a>(
             original.rsplit("::").next().unwrap_or(original)
         };
         let binding = if local != original { local } else { symbol };
-        let project = rust_paths::project_path(full, path, index);
         let root = full.split("::").find(|s| !s.is_empty()).unwrap_or(full);
+        if matches!(out.rust_paths.get(root), Some(None)) {
+            // A known external alias stays external through further uses.
+            out.rust_paths.entry(binding).or_insert(None);
+            out.names.entry(binding).or_insert(None);
+            out.symbols.entry(binding).or_insert(symbol);
+            continue;
+        }
+        let project = out
+            .rust_paths
+            .get(root)
+            .and_then(Option::as_ref)
+            .map(|base| match full.split_once("::") {
+                Some((_, tail)) => format!("{base}/{}", tail.replace("::", "/")),
+                None => base.clone(),
+            })
+            .or_else(|| rust_paths::project_path(full, path, index));
         // Leave unknown roots unbound so the base lookup still runs: they
         // may name a sibling crate of the same workspace.
         if project.is_none() && !rust_paths::external_root(root) {
+            // Unknown type roots name another crate. Retain the binding so
+            // type lookup can exclude the caller's crate without losing
+            // sibling-crate types. Modules/functions keep the name fallback.
+            if !matches!(root, "crate" | "self" | "super")
+                && symbol.starts_with(|c: char| c.is_ascii_uppercase())
+                && !out.names.contains_key(binding)
+                && !out.namespaces.contains_key(binding)
+            {
+                out.rust_foreign_types.entry(binding).or_insert(symbol);
+            }
             continue;
         }
-        out.rust_paths.insert(binding, project);
-        if let Some(target) = module(full, path, index, "rust") {
+        if let Some(target) = project
+            .as_deref()
+            .and_then(|p| rust_paths::module_file(p, path, index))
+        {
             out.namespaces.entry(binding).or_insert(Some(target));
         } else {
-            let target = full
-                .rsplit_once("::")
-                .and_then(|(parent, _)| module(parent, path, index, "rust"));
+            let target = project
+                .as_deref()
+                .and_then(|p| p.rsplit_once('/'))
+                .and_then(|(parent, _)| rust_paths::module_file(parent, path, index));
             out.names.entry(binding).or_insert(target);
             out.symbols.entry(binding).or_insert(symbol);
         }
+        out.rust_paths.entry(binding).or_insert(project);
     }
 }
 
@@ -127,13 +173,18 @@ pub(super) fn build_imports<'a>(
     path: &str,
 ) -> FileImports<'a> {
     let mut out = FileImports::default();
+    // Declarations shadow prelude crate names regardless of source order.
+    if fd.language == "rust" {
+        for imp in fd.imports.iter().filter(|i| i.import_type == "rust_module") {
+            out.rust_paths.insert(
+                imp.module.as_str(),
+                rust_paths::project_path(&format!("self::{}", imp.module), path, index),
+            );
+        }
+    }
     for imp in &fd.imports {
         if fd.language == "rust" {
             if imp.import_type == "rust_module" {
-                out.rust_paths.insert(
-                    &imp.module,
-                    rust_paths::project_path(&format!("self::{}", imp.module), path, index),
-                );
                 continue;
             }
             rust_import(&imp.module, path, index, &mut out);
@@ -152,6 +203,9 @@ pub(super) fn build_imports<'a>(
                 source.rsplit(sep).find(|s| !s.is_empty()).unwrap_or(source)
             };
             out.namespaces.insert(binding, target);
+            if source.starts_with('.') {
+                out.internal_names.insert(binding);
+            }
             out.namespace_modules.insert(binding, Cow::Borrowed(source));
             // Python allows a fully qualified module receiver.
             if local == source {
@@ -164,8 +218,14 @@ pub(super) fn build_imports<'a>(
             for piece in item.split(',') {
                 let piece = piece.trim().trim_matches(['{', '}']).trim();
                 let (original, binding) = alias(piece);
+                if source.starts_with('.') {
+                    out.internal_names.insert(binding);
+                }
                 if fd.language == "python" {
-                    let submodule = format!("{source}.{original}");
+                    let submodule = format!(
+                        "{source}{}{original}",
+                        if source.ends_with('.') { "" } else { "." }
+                    );
                     if let Some(files) = module(&submodule, path, index, "python") {
                         out.namespaces.insert(binding, Some(files));
                         out.namespace_modules.insert(binding, Cow::Owned(submodule));
@@ -196,7 +256,14 @@ impl Resolver<'_> {
             .or_else(|| self.walk(class, name, &self.parents))
     }
 
-    fn exported(&self, name: &str, files: &[u32], caller_file: u32, depth: usize) -> Option<u32> {
+    fn exported(
+        &self,
+        name: &str,
+        files: &[u32],
+        caller_file: u32,
+        depth: usize,
+        seek: Seek,
+    ) -> Option<u32> {
         // A named reexport defines the public binding, even if this module
         // also declares a private function with that name.
         if depth < 2 {
@@ -208,13 +275,19 @@ impl Resolver<'_> {
                     for item in &export.items {
                         let (original, public) = alias(item);
                         if public == name {
-                            return self.exported(original, (*target)?, caller_file, depth + 1);
+                            return self.exported(
+                                original,
+                                (*target)?,
+                                caller_file,
+                                depth + 1,
+                                seek,
+                            );
                         }
                     }
                 }
             }
         }
-        if let Some(found) = self.lookup_in_files(name, files, caller_file, Seek::LexicalCall) {
+        if let Some(found) = self.lookup_in_files(name, files, caller_file, seek) {
             return Some(found);
         }
         if depth == 2 {
@@ -226,13 +299,34 @@ impl Resolver<'_> {
                     continue;
                 }
                 if let Some(target) = target {
-                    if let Some(found) = self.exported(name, target, caller_file, depth + 1) {
+                    if let Some(found) = self.exported(name, target, caller_file, depth + 1, seek) {
                         return Some(found);
                     }
                 }
             }
         }
         None
+    }
+
+    pub(super) fn imported_symbol(
+        &self,
+        binding: &str,
+        file: u32,
+        seek: Seek,
+    ) -> Option<Option<u32>> {
+        let imports = &self.imports[file as usize];
+        if let Some(original) = imports.rust_foreign_types.get(binding) {
+            return Some(self.rust_type_outside_crate(original, file));
+        }
+        let original = imports.symbols.get(binding)?;
+        let target = imports.names.get(binding).copied().flatten();
+        Some(match target {
+            Some(files) => self
+                .exported(original, files, file, 0, seek)
+                .or_else(|| self.lookup(original, file, seek)),
+            None if imports.internal_names.contains(binding) => self.lookup(original, file, seek),
+            None => None,
+        })
     }
 
     /// None: not an imported namespace. Some(None): external or unresolved.
@@ -249,10 +343,14 @@ impl Resolver<'_> {
             prefix = split_callee(prefix).0?;
         };
         let Some(files) = target else {
-            return Some(None);
+            return Some(if imports.internal_names.contains(binding) {
+                self.lookup(name, file, Seek::LexicalCall)
+            } else {
+                None
+            });
         };
         if *binding == receiver {
-            if let Some(found) = self.exported(name, files, file, 0) {
+            if let Some(found) = self.exported(name, files, file, 0, Seek::LexicalCall) {
                 return Some(Some(found));
             }
         } else {
@@ -265,7 +363,8 @@ impl Resolver<'_> {
                         self.module_index,
                         "python",
                     ) {
-                        if let Some(found) = self.exported(name, files, file, 0) {
+                        if let Some(found) = self.exported(name, files, file, 0, Seek::LexicalCall)
+                        {
                             return Some(Some(found));
                         }
                     }
@@ -294,18 +393,15 @@ impl Resolver<'_> {
             }
             // A bare Python/Rust/TS call is lexical, never an implicit sibling
             // method. For example, `send()` and `self.send()` are different.
-            if let Some(original) = self.imports[file as usize]
-                .symbols
-                .get(call.callee.as_str())
+            // A declaration in this file precedes an imported homonym in
+            // every receiver-aware language, not only Python.
+            if let Some(local) =
+                self.lookup_in_files(&call.callee, &[file], file, Seek::LexicalCall)
             {
-                let fs = self.imports[file as usize]
-                    .names
-                    .get(call.callee.as_str())
-                    .copied()
-                    .flatten()?;
-                return self
-                    .exported(original, fs, file, 0)
-                    .or_else(|| self.lookup(original, file, Seek::LexicalCall));
+                return Some(local);
+            }
+            if let Some(result) = self.imported_symbol(&call.callee, file, Seek::LexicalCall) {
+                return result;
             }
             return self.lookup(&call.callee, file, Seek::LexicalCall);
         };
@@ -333,11 +429,26 @@ impl Resolver<'_> {
         let receiver = receiver.strip_prefix("new ").unwrap_or(receiver);
         let receiver = receiver.strip_suffix("()").unwrap_or(receiver);
         let imports = &self.imports[file as usize];
+        if let Some(original) = imports.rust_foreign_types.get(receiver) {
+            return self
+                .rust_type_outside_crate(original, file)
+                .and_then(|class| self.receiver_method(class, name));
+        }
         // External aliases are authoritative. Internal namespaces without
         // class metadata retain the base resolver's name fallback.
         if let Some(original) = imports.symbols.get(receiver) {
-            let fs = imports.names.get(receiver).copied().flatten()?;
-            if let Some(cls) = self.lookup_in_files(original, fs, file, Want::Class) {
+            let fs = imports.names.get(receiver).copied().flatten();
+            if fs.is_none() && !imports.internal_names.contains(receiver) {
+                return None;
+            }
+            let class = fs
+                .and_then(|fs| self.lookup_in_files(original, fs, file, Want::Class))
+                .or_else(|| {
+                    (fs.is_none() && imports.internal_names.contains(receiver))
+                        .then(|| self.lookup(original, file, Want::Class))
+                        .flatten()
+                });
+            if let Some(cls) = class {
                 return self.receiver_method(cls, name);
             }
             return if rust_instance {
