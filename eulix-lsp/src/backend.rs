@@ -1313,6 +1313,8 @@ fn is_valid_identifier(s: &str) -> bool {
 
 #[cfg(test)]
 mod php_tests;
+#[cfg(test)]
+mod symbol_tests;
 
 // Distinguish `function foo()` from a same-line `Other::foo()` before
 // choosing a declaration by its enclosing span (which can include attributes).
