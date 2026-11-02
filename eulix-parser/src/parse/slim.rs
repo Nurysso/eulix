@@ -5,7 +5,8 @@ use libeulix::struc::kb_struct::*;
 
 /// PRISM v2 resolves PHP by qualified name and walks classes the way PHP
 /// does, so a PHP declaration keeps its namespace, a class its `extends` and
-/// traits, and a method whether it is `static`; the rest of `lang_info` goes.
+/// traits, and a method whether it is `static`. Python keeps its method
+/// binding flags for receiver resolution; the rest of `lang_info` goes.
 fn strip_lang_info(info: &mut LanguageSpecificInfo) {
     let php = info.php.take().map(|p| PhpInfo {
         namespace: p.namespace,
@@ -14,7 +15,13 @@ fn strip_lang_info(info: &mut LanguageSpecificInfo) {
         is_static: p.is_static,
         ..Default::default()
     });
+    let python = info.python.take().map(|p| PythonInfo {
+        is_staticmethod: p.is_staticmethod,
+        is_classmethod: p.is_classmethod,
+        ..Default::default()
+    });
     *info = LanguageSpecificInfo::default();
+    info.python = python.map(Box::new);
     info.php = php.map(Box::new);
 }
 
@@ -54,9 +61,12 @@ pub fn strip_emitted(fd: &mut FileData) {
 pub fn slim(fd: &mut FileData) {
     fd.global_vars = Vec::new();
     fd.security_notes = Vec::new();
-    // PRISM v2 resolves PHP calls through `include`/`require`, so PHP keeps
-    // its imports until the call graph is built.
-    if fd.language != "php" {
+    // Keep imports needed by PHP and receiver-aware PRISM v2 resolution
+    // until the call graph is built. The emitted KB view is unchanged.
+    if !matches!(
+        fd.language.as_str(),
+        "php" | "python" | "typescript" | "rust"
+    ) {
         fd.imports = Vec::new();
         fd.imports.shrink_to_fit();
     }

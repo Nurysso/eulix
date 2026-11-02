@@ -152,6 +152,7 @@ pub fn diagnostics_for(
             .flat_map(|i| i.items.iter().map(String::as_str))
             .collect();
 
+        let mut seen = std::collections::HashSet::new();
         for call in parsed
             .functions
             .iter()
@@ -169,7 +170,10 @@ pub fn diagnostics_for(
             // If we have a qualifier (Go package, Java receiver, etc) we
             // can't tell whether it resolves, so leave it alone. Only bare
             // calls with no definition in the index get flagged.
-            if index.definition_count(&csite.callee) == 0 && !csite.qualifier.is_some() {
+            if index.definition_count(&csite.callee) == 0
+                && !csite.qualifier.is_some()
+                && seen.insert((csite.callee.as_str(), csite.line))
+            {
                 out.push(diag(
                     line_range_or_zero(rope, csite.line),
                     DiagnosticSeverity::HINT,
@@ -346,6 +350,34 @@ mod tests {
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].severity, Some(DiagnosticSeverity::HINT));
+    }
+
+    #[test]
+    fn unresolved_calls_on_different_receivers_share_one_diagnostic_per_line() {
+        let path = std::path::Path::new("/w/a.py");
+        let source = "def total(a, b):\n    a.get() + b.get()\n    a.get() + b.other()\n";
+        let parsed = crate::syntax::parse(path, source).unwrap();
+        let mut config = cfg();
+        config.report_unresolved_calls = true;
+        let out = diagnostics_for(&uri(), path, &parsed, None, &config, &Index::new());
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert_eq!(out.iter().filter(|d| d.range.start.line == 1).count(), 1);
+        assert_eq!(out.iter().filter(|d| d.range.start.line == 2).count(), 2);
+    }
+
+    #[test]
+    fn unresolved_bare_call_is_not_hidden_by_a_same_line_qualified_call() {
+        let path = std::path::Path::new("/w/a.go");
+        for source in [
+            "package p\nfunc run() { fmt.Println(); Println() }",
+            "package p\nfunc run() { Println(); fmt.Println() }",
+        ] {
+            let parsed = crate::syntax::parse(path, source).unwrap();
+            let mut config = cfg();
+            config.report_unresolved_calls = true;
+            let out = diagnostics_for(&uri(), path, &parsed, None, &config, &Index::new());
+            assert_eq!(out.len(), 1, "{source}: {out:?}");
+        }
     }
 
     #[test]

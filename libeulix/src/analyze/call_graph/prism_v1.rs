@@ -13,10 +13,23 @@
 //! more than speed.
 
 use crate::struc::kb_struct::{
-    CallGraph, CallGraphEdge, CallGraphNode, CallerInfo, FileData, KnowledgeBase,
+    CallGraph, CallGraphEdge, CallGraphNode, CallerInfo, FileData, FunctionCall, KnowledgeBase,
 };
 use rayon::prelude::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+// These parsers retain separate receivers for v2. The name-only v1
+// consumers keep the previous one-call-per-name-and-line representation.
+fn legacy_calls<'a>(
+    calls: &'a [FunctionCall],
+    language: &str,
+) -> impl Iterator<Item = &'a FunctionCall> {
+    let per_line = matches!(language, "python" | "typescript" | "rust");
+    let mut seen = HashSet::new();
+    calls
+        .iter()
+        .filter(move |call| !per_line || seen.insert((call.callee.as_str(), call.line)))
+}
 
 /// Internal, compact representation of a node.
 ///
@@ -199,7 +212,7 @@ pub fn build_call_graph(structure: &BTreeMap<String, FileData>) -> CallGraph {
 
                 for func in &filedata.functions {
                     if let Some(&from_idx) = node_map.get(&func.id) {
-                        for call in &func.calls {
+                        for call in legacy_calls(&func.calls, &filedata.language) {
                             if let Some(to_idx) = resolve(&call.callee) {
                                 local_edges.push((
                                     from_idx,
@@ -222,7 +235,7 @@ pub fn build_call_graph(structure: &BTreeMap<String, FileData>) -> CallGraph {
                         }
                         for method in &class.methods {
                             if let Some(&m_from_idx) = node_map.get(&method.id) {
-                                for call in &method.calls {
+                                for call in legacy_calls(&method.calls, &filedata.language) {
                                     if let Some(to_idx) = resolve(&call.callee) {
                                         local_edges.push((
                                             m_from_idx,
@@ -418,7 +431,7 @@ pub fn populate_called_by(kb: &mut KnowledgeBase) {
 
             for (filepath, filedata) in chunk.iter() {
                 for func in &filedata.functions {
-                    for call in &func.calls {
+                    for call in legacy_calls(&func.calls, &filedata.language) {
                         let key = call.callee.clone();
                         local.push((
                             key,
@@ -435,7 +448,7 @@ pub fn populate_called_by(kb: &mut KnowledgeBase) {
 
                 for class in &filedata.classes {
                     for method in &class.methods {
-                        for call in &method.calls {
+                        for call in legacy_calls(&method.calls, &filedata.language) {
                             let key = call.callee.clone();
                             local.push((
                                 key,

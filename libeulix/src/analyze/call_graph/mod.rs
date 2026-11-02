@@ -20,6 +20,7 @@ mod tests {
             calls: calls
                 .into_iter()
                 .map(|c| FunctionCall {
+                    receiver: None,
                     callee: c.to_string(),
                     defined_in: None,
                     line: 1,

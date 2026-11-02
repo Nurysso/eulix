@@ -179,7 +179,16 @@ impl RustParser {
             if child == *node {
                 return Some(());
             }
-            if child.kind() == "use_declaration" {
+            if child.kind() == "mod_item" {
+                if let Some(name) = child.child_by_field_name("name") {
+                    imports.push(Import {
+                        module: self.get_node_text(&name),
+                        items: vec![],
+                        import_type: "rust_module".to_string(),
+                    });
+                }
+                Some(())
+            } else if child.kind() == "use_declaration" {
                 let text = self.get_node_text(&child);
                 let module = text
                     .trim_start_matches("use ")
@@ -1019,11 +1028,28 @@ impl RustParser {
                         .to_string();
 
                     if !name.is_empty() {
-                        let key = format!("{}:{}", name, node.start_position().row);
+                        let receiver = if func_node.kind() == "field_expression" {
+                            func_node.child_by_field_name("value")
+                        } else if func_node.kind() == "scoped_identifier" {
+                            func_node.child_by_field_name("path")
+                        } else {
+                            None
+                        }
+                        .map(|n| {
+                            let receiver = self.get_node_text(&n);
+                            if func_node.kind() == "scoped_identifier" {
+                                // Preserve path syntax separately from instance dispatch.
+                                format!("{receiver}::")
+                            } else {
+                                receiver
+                            }
+                        });
+                        let key = format!("{:?}:{}:{}", receiver, name, node.start_position().row);
                         if !seen.contains(&key) {
                             seen.insert(key);
                             let args = self.extract_call_arguments(node);
                             calls.push(FunctionCall {
+                                receiver,
                                 callee: name,
                                 defined_in: None,
                                 line: node.start_position().row + 1,
