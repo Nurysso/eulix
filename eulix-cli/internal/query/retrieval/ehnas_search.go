@@ -831,12 +831,8 @@ func noveltyPack(cands []ScoredChunk, topK int, cb *ContextBuilder) []ScoredChun
 	df := func(sym string) int { return len(cb.symbolIndex[strings.ToLower(sym)]) }
 
 	selectedSymCounts := make(map[string]int, topK*8)
-	limit := len(cands)
-	if limit > topK*3 {
-		limit = topK * 3
-	}
 	packed := 0
-	for i := 0; i < len(cands) && packed < limit; i++ {
+	for i := range cands {
 		sc := cands[i]
 		if sc.Pinned || sc.IsExact {
 			packed++

@@ -140,6 +140,19 @@ func (cb *ContextBuilder) structuralMMR(
 	cb.debugLog.Log("[structuralMMR] lambda=%.2f budget=%d maxChunks=%d candidates=%d twins=%d classes=%d",
 		lambda, budget, maxChunks, len(candidates), len(ti.twin), len(ti.twin))
 
+	// Parser overloads can share an ID while declaring different symbols.
+	// Resolve the class from the actual candidate's structural signature.
+	twinClass := func(c Chunk) int {
+		if _, ok := cb.chunkIdx[c.ID]; !ok {
+			return -1
+		}
+		sig, ok := structuralSignature(c)
+		if peers := ti.twin[sig]; ok && len(peers) > 0 {
+			return ti.twinClass[peers[0]]
+		}
+		return -1
+	}
+
 	//               pinned first, before anything is normalised
 	// Pinned chunks score 5000+. Left in the pool they squash every other
 	// candidate's relevance toward zero and MMR degenerates into "pick
@@ -174,9 +187,7 @@ func (cb *ContextBuilder) structuralMMR(
 			alive:     true,
 			twinClass: -1,
 		}
-		if ci := cb.chunkIndexByID(c.ID); ci >= 0 && ci < len(ti.twinClass) {
-			cs[i].twinClass = ti.twinClass[ci]
-		}
+		cs[i].twinClass = twinClass(c.Chunk)
 	}
 
 	// Deterministic order. Equal scores are common; map-order shuffles are
@@ -226,14 +237,13 @@ func (cb *ContextBuilder) structuralMMR(
 		tokenSum += cost
 		chunkTraces = append(chunkTraces, ct)
 		pc := structCand{
-			sc:   p,
-			symW: cb.symWeights(cb.nonBoilerplate(p.Symbols)),
+			sc:        p,
+			symW:      cb.symWeights(cb.nonBoilerplate(p.Symbols)),
+			twinClass: -1,
 		}
 		// A pinned chunk must carry its twin class too, or it fails to
 		// exclude its cross-language twin and the exclusion is one-sided.
-		if pi := cb.chunkIndexByID(p.ID); pi >= 0 && pi < len(ti.twinClass) {
-			pc.twinClass = ti.twinClass[pi]
-		}
+		pc.twinClass = twinClass(p.Chunk)
 		noteSelected(&pc, pinnedRedundancyDamp)
 	}
 
