@@ -14,7 +14,7 @@ name = "eulixlsp"
 path = "src/main.rs"
 
 [dependencies]
-libeulix = { path = "../libeulix", version = "0.8.1" }
+libeulix = { path = "../libeulix", version = "0.9.0" }
 
 tower-lsp = "0.20.0"
 tokio = { version = "1", features = [
