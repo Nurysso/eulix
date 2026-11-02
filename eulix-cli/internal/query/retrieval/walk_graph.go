@@ -365,6 +365,12 @@ func buildCallLayer(cb *ContextBuilder) *walkLayer {
 		get(b)[a] += w
 	}
 	inRange := func(i int) bool { return i >= 0 && i < len(cb.chunks) }
+	resolve := func(id string) []int {
+		if i, ok := cb.chunkIdx[id]; ok && inRange(i) {
+			return []int{i}
+		}
+		return cb.symbolIndex[strings.ToLower(id)]
+	}
 
 	for _, callers := range cb.callSites {
 		if len(callers) < 2 || len(callers) > callLayerMaxFanout {
@@ -387,9 +393,9 @@ func buildCallLayer(cb *ContextBuilder) *walkLayer {
 		if len(rels) == 0 {
 			continue
 		}
-		callers := cb.callSites[sym]
+		callers := resolve(sym)
 		if len(callers) == 0 {
-			callers = cb.symbolIndex[strings.ToLower(sym)]
+			callers = cb.callSites[sym]
 		}
 		if len(callers) == 0 || len(callers) > callLayerMaxFanout {
 			continue
@@ -398,7 +404,7 @@ func buildCallLayer(cb *ContextBuilder) *walkLayer {
 			if r.Target == "" {
 				continue
 			}
-			callees := cb.symbolIndex[strings.ToLower(r.Target)]
+			callees := resolve(r.Target)
 			if len(callees) == 0 || len(callees) > callLayerMaxFanout {
 				continue
 			}
