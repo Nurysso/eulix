@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	pathpkg "path" // the walk callback's parameter is named path
 	"path/filepath"
 	"sort"
 	"strings"
@@ -42,6 +43,23 @@ const (
 var skipDirs = map[string]bool{
 	"node_modules": true, "vendor": true, "dist": true, "build": true, "target": true,
 	"__pycache__": true, "venv": true, "coverage": true,
+}
+
+// lexExcluded reports whether rel (repo-relative, slash-separated) matches a
+// pattern: a glob against the path or the file name, or "dir/" as a prefix.
+func lexExcluded(rel string, patterns []string) bool {
+	for _, p := range patterns {
+		if strings.HasSuffix(p, "/") && strings.HasPrefix(rel+"/", p) {
+			return true
+		}
+		if ok, _ := pathpkg.Match(p, rel); ok {
+			return true
+		}
+		if ok, _ := pathpkg.Match(p, pathpkg.Base(rel)); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // fileHit is one file that matched during the walk, with its raw score.
@@ -97,8 +115,10 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 			return cerr
 		}
 		name := d.Name()
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			if path != root && (skipDirs[name] || isHidden(name, d) || ignored(path)) {
+			if path != root && (skipDirs[name] || isHidden(name, d) || ignored(path) || lexExcluded(rel, cfg.LexicalExclude)) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -108,7 +128,7 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		}
 		// Hidden files (.env, .npmrc, ...) often hold credentials, and files in
 		// .euignore were left out on purpose: the fallback reads neither.
-		if isHidden(name, d) || ignored(path) {
+		if isHidden(name, d) || ignored(path) || lexExcluded(rel, cfg.LexicalExclude) {
 			return nil
 		}
 		info, err := d.Info()
@@ -124,8 +144,6 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		}
 
 		lower := strings.ToLower(string(data))
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
 		relLower := strings.ToLower(rel)
 
 		var score float64

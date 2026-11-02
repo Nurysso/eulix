@@ -129,7 +129,7 @@ func (cb *ContextBuilder) multiStrategySearch(
 	querySymbolsExpanded := splitDottedSymbols(querySymbols) // dotted names+part
 	cb.debugLog.Log("[Step 1] Extracting explicit anchors...")
 	anchors := extractExplicitAnchors(query)
-	gate := buildPathGate(anchors)
+	gate := buildPathGate(anchors, cb.chunkFiles)
 	hc := newHydrationCache(cb)
 
 	// Track detailed results per strategy
@@ -970,7 +970,7 @@ func (cb *ContextBuilder) invertedKeywordSearchTFIDF(query string, topK int, hc 
 
 	keywords := extractQueryKeywords(strings.ToLower(query))
 	symbols := extractPotentialSymbols(query)
-	terms := uniqueStrings(append(keywords, symbols...))
+	terms := indexKeys(append(keywords, symbols...))
 
 	cb.invertedIdx.mu.RLock()
 	defer cb.invertedIdx.mu.RUnlock()
@@ -1024,7 +1024,7 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int, hc *
 	}
 	keywords := extractQueryKeywords(strings.ToLower(query))
 	symbols := extractPotentialSymbols(query)
-	terms := uniqueStrings(append(keywords, symbols...))
+	terms := indexKeys(append(keywords, symbols...))
 
 	if debugLevel3 {
 		cb.debugLog.Log("[invertedKeywordSearchBM25] START: terms=%v, topK=%d", terms, topK)
@@ -1066,7 +1066,12 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int, hc *
 	for idx, s := range scores {
 		candidates = append(candidates, scoredIdx{idx, s})
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].idx < candidates[j].idx
+	})
 
 	if proximityLimit > len(candidates) {
 		proximityLimit = len(candidates)
@@ -1104,7 +1109,12 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int, hc *
 			MatchDetails: strings.Join(uniqueStrings(matched[idx]), ", "),
 		})
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Score > result[j].Score })
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Score != result[j].Score {
+			return result[i].Score > result[j].Score
+		}
+		return result[i].ID < result[j].ID
+	})
 	if len(result) > topK {
 		result = result[:topK]
 	}

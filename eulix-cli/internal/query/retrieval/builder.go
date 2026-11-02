@@ -26,7 +26,6 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 		eulixDir:      eulixDir,
 		config:        cfg,
 		llmClient:     llmClient,
-		vectorMap:     make(map[string]int),
 		hydrateIdx:    make(map[string]map[[2]int]func() string),
 		sourceRoot:    sourceRoot,
 		debugLog:      debugLogger,
@@ -39,39 +38,32 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 	// Start auto-flush every 5 seconds
 	cb.debugLog.StartAutoFlush(5 * time.Second)
 
-	queryEmbedder, err := embeddings.VectorWeaver(cfg.Embeddings.Model, cfg.Embeddings.Debug)
-	if err != nil {
-		cb.debugLog.Log("Failed to initialize embedder: %v", err)
+	if err := cb.InitEngine(); err != nil {
+		cb.debugLog.Log("Failed to resolve engine: %v", err)
 		_ = cb.Close()
-		return nil, fmt.Errorf("failed to initialize embedder: %w", err)
+		return nil, err
 	}
-	cb.queryEmbedder = queryEmbedder
 
-	if err := cb.loadChunks(); err != nil {
-		cb.debugLog.Log("Failed to load chunks: %v", err)
+	// Only the embedding engine needs a query embedder; Ehnas never calls it.
+	if cb.Engine().UsesSemantic() {
+		queryEmbedder, err := embeddings.VectorWeaver(cfg.Embeddings.Model, cfg.Embeddings.Engine, cfg.Embeddings.Debug)
+		if err != nil {
+			cb.debugLog.Log("Failed to initialize embedder: %v", err)
+			_ = cb.Close()
+			return nil, fmt.Errorf("failed to initialize embedder: %w", err)
+		}
+		cb.queryEmbedder = queryEmbedder
+	}
+
+	if err := cb.loadEngineArtifacts(); err != nil {
+		cb.debugLog.Log("Failed to load artifacts: %v", err)
 		_ = cb.Close()
-		return nil, fmt.Errorf("failed to load chunks from KB: %w", err)
+		return nil, fmt.Errorf("failed to load KB: %w", err)
 	}
 
-	if err := cb.loadEmbeddings(); err != nil {
-		cb.debugLog.Log("Embeddings not loaded: %v", err)
-		cb.hasEmbeddings = false
-	} else {
-		cb.hasEmbeddings = len(cb.embeddings) > 0
-		cb.debugLog.Log("Loaded %d embeddings", len(cb.embeddings))
-	}
-
-	if err := cb.loadVectorMap(); err != nil {
-		cb.debugLog.Log("Vector map not loaded: %v", err)
-		cb.vectorMap = make(map[string]int)
-	} else {
-		cb.debugLog.Log("Loaded %d vector mappings", len(cb.vectorMap))
-	}
-
-	cb.loadAndIndexCallGraph()
 	cb.hasKB = true
-	cb.debugLog.Log("CONTEXT-BUILDER INITIALIZED: %d chunks, %d subsystem nodes, %d noise paths",
-		len(cb.chunks), len(cb.subsystemTree), len(cb.noisePaths))
+	cb.debugLog.Log("CONTEXT-BUILDER INITIALIZED (engine=%s): %d chunks, %d subsystem nodes, %d noise paths",
+		cb.Engine(), len(cb.chunks), len(cb.subsystemTree), len(cb.noisePaths))
 	return cb, nil
 }
 
@@ -96,7 +88,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	start := time.Now()
 	trace := &DebugTrace{Query: query}
 	explicitAnchor := extractExplicitAnchors(query)
-	gate := buildPathGate(explicitAnchor)
+	gate := buildPathGate(explicitAnchor, cb.chunkFiles)
 
 	cb.debugLog.Log("\n=== NEW QUERY ===")
 	cb.debugLog.Log("Query: %s", query)
@@ -109,7 +101,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	etime := time.Now()
 	var qEmb []float32
 	skipSemantic := intent.Type == IntentCallers || intent.Type == IntentCallees
-	if cb.hasEmbeddings && !skipSemantic {
+	if cb.Engine().UsesSemantic() && cb.hasEmbeddings && !skipSemantic {
 		cb.debugLog.Log("hasEmbeddings: %t, skipSemantic: %t", cb.hasEmbeddings, skipSemantic)
 		if emb, err := cb.queryEmbedder.EmbedQueryBinary(query); err == nil {
 			//Normalize(emb)
@@ -123,6 +115,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	elapsed := time.Since(etime)
 	cb.debugLog.Log("Embedder took %d ms to run", elapsed.Milliseconds())
 	budget := cb.allocateBudget(query, intent)
+	budget.StrategyWeights = cb.EnsureWeightKeys(budget.StrategyWeights)
 	trace.Budget = budget
 	cb.debugLog.Log("Budget: %d tokens for context (total: %d)",
 		budget.ContextBudget, budget.MaxTokens)
@@ -161,7 +154,7 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	}
 
 	candidateLimit := cb.candidateLimitForIntent(intent)
-	candidates := cb.multiStrategySearch(query, candidateLimit, intent, budget.StrategyWeights, trace, qEmb)
+	candidates := cb.runSearch(query, candidateLimit, intent, budget.StrategyWeights, trace, qEmb)
 	trace.TotalCandidates = len(candidates)
 	cb.debugLog.Log("Multi-strategy search: %d candidates", len(candidates))
 
@@ -191,13 +184,15 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	}
 
 	var selected []Chunk
-	if cb.hasEmbeddings {
-		trace.SelectionMethod = "mmr"
-		cb.debugLog.Log("hasEmbeddings: %t going for mmrSelect search", cb.hasEmbeddings)
+	mode := cb.SelectorFor()
+	trace.SelectionMethod = mode.MmmrSelector()
+	cb.debugLog.Log("selector: %s", trace.SelectionMethod)
+	switch mode {
+	case SelectorQueryMMR:
 		selected = cb.mmrSelect(expanded, budget.ContextBudget, qEmb, anchorFiles, trace, gate)
-	} else {
-		trace.SelectionMethod = "greedy"
-		cb.debugLog.Log("hasEmbeddings: %t going for greedy search", cb.hasEmbeddings)
+	case SelectorStructuralMMR:
+		selected = cb.structuralMMR(expanded, budget.ContextBudget, anchorFiles, trace, gate)
+	default:
 		if gate.active {
 			filtered := make([]ScoredChunk, 0, len(expanded))
 			for _, sc := range expanded {

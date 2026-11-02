@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"eulix/internal/config"
 )
 
 const secretMarker = "SYNTHETIC_SECRET"
@@ -203,6 +205,58 @@ func TestAttrsHidden(t *testing.T) {
 	for _, tc := range tests {
 		if got := attrsHidden(tc.attrs); got != tc.want {
 			t.Errorf("attrsHidden(%#x) = %v, want %v", tc.attrs, got, tc.want)
+		}
+	}
+}
+
+func TestLexExcluded(t *testing.T) {
+	pats := []string{"docs/", "*.md", "scripts/eval_mcp.py", "eval_results_*.json"}
+	for rel, want := range map[string]bool{
+		"docs":                          true,
+		"docs/a/b.go":                   true,
+		"arch.bak/pr-commits.md":        true,
+		"scripts/eval_mcp.py":           true,
+		"eval_results_run2.json":        true,
+		"eulix-cli/eval_results_x.json": true,
+		"scripts/kb_diff.py":            false,
+		"documents/a.go":                false,
+	} {
+		if got := lexExcluded(rel, pats); got != want {
+			t.Errorf("lexExcluded(%q) = %v, want %v", rel, got, want)
+		}
+	}
+}
+
+type emptyRetriever struct{}
+
+func (emptyRetriever) OpenEnded(context.Context, string, bool) (string, error) { return "", nil }
+func (emptyRetriever) Anchored(context.Context, string, []string, bool) (string, error) {
+	return "", nil
+}
+func (emptyRetriever) MultiHop(context.Context, string, []string, []string, bool) (string, error) {
+	return "", nil
+}
+
+// lexical_exclude lives under [retrievalConfig.etiya]: the grep fallback
+// honours it under etiya and ignores it under ehnas.
+func TestLexicalExcludeOnlyAppliesToEtiya(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"scripts/eval_mcp.py": "zebra quokka zebra quokka\n",
+		"cache/manager.go":    "// zebra quokka\n",
+	})
+	for engine, wantEval := range map[string]bool{"etiya": false, "ehnas": true} {
+		cfg := config.DefaultConfig()
+		cfg.Project.Engine = engine
+		cfg.RetrievalConfig.Etiya.LexicalExclude = []string{"scripts/eval_mcp.py"}
+		s := NewServer(nil, cfg, "", WithRetriever(emptyRetriever{}))
+		s.activeRepo = root
+		got, _, err := s.retrieveLocked(context.Background(), "zebra quokka", nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(got, "eval_mcp.py") != wantEval || !strings.Contains(got, "manager.go") {
+			t.Errorf("%s: eval_mcp.py returned=%v (want %v), output:\n%s", engine, !wantEval, wantEval, got)
 		}
 	}
 }

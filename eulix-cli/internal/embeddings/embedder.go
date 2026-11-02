@@ -80,15 +80,17 @@ type serveResponse struct {
 	Error     string    `json:"error"`
 }
 
-// VectorWeaver starts eulix_embed in server mode. debug, when true, streams
-// the subprocess's stderr live to the parent's logger; otherwise it's only
-// kept in a rolling buffer for diagnosing startup/crash failures.
-func VectorWeaver(model string, debug bool) (*Embedder, error) {
+// VectorWeaver starts eulix_embed in server mode. engine must be the one that
+// built the index (as analyze passes to embed), or query vectors land in a
+// different space. debug, when true, streams the subprocess's stderr live to
+// the parent's logger; otherwise it's only kept in a rolling buffer for
+// diagnosing startup/crash failures.
+func VectorWeaver(model, engine string, debug bool) (*Embedder, error) {
 	scriptPath, pythonPath, venvEnv, err := FindEulixEmbed()
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(pythonPath, scriptPath, "server", "-m", model)
+	cmd := exec.Command(pythonPath, scriptPath, "server", "-m", model, "-e", engine)
 	cmd.Env = venvEnv
 
 	// Pipe stdin so we can send JSON requests.

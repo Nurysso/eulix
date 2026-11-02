@@ -6,6 +6,8 @@ package mcp
 import (
 	"context"
 	"strings"
+
+	"eulix/internal/query/retrieval"
 )
 
 // ========== The retrieval cascade ==========
@@ -39,6 +41,11 @@ import (
 // multi-hop path.
 func (s *Server) retrieveLocked(ctx context.Context, q string, known []string, cot bool) (string, RetrievalTrace, error) {
 	cfg := s.strategy
+	if s.cfg != nil {
+		if eng, err := retrieval.ResolveEngine(s.cfg.Project.Engine); err == nil && eng == retrieval.EngineEtiya {
+			cfg.LexicalExclude = s.cfg.RetrievalConfig.Etiya.LexicalExclude
+		}
+	}
 	retr := s.retriever
 	if retr == nil {
 		retr = routerRetriever{router: s.router}
