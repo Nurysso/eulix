@@ -128,7 +128,13 @@ func buildTwinIndex(cb *ContextBuilder) *twinIndex {
 
 	var total float64
 	var langs int
-	for lang, s := range sum {
+	langOrder := make([]string, 0, len(sum))
+	for lang := range sum {
+		langOrder = append(langOrder, lang)
+	}
+	sort.Strings(langOrder)
+	for _, lang := range langOrder {
+		s := sum[lang]
 		c := float64(cnt[lang])
 		if c == 0 {
 			continue
@@ -237,7 +243,13 @@ func (cb *ContextBuilder) crossLangTwinSearch(sources map[string]ScoredChunk, to
 	bridgeScore := make(map[int]float64, topK*2)
 	detail := make(map[int]string, topK*2)
 
-	for _, src := range sources {
+	sourceIDs := make([]string, 0, len(sources))
+	for id := range sources {
+		sourceIDs = append(sourceIDs, id)
+	}
+	sort.Strings(sourceIDs)
+	for _, id := range sourceIDs {
+		src := sources[id]
 		if src.Pinned || src.Score < twinBridgeFloor {
 			continue
 		}
@@ -291,7 +303,7 @@ func (cb *ContextBuilder) crossLangTwinSearch(sources map[string]ScoredChunk, to
 		if out[i].Score != out[j].Score {
 			return out[i].Score > out[j].Score
 		}
-		return out[i].ID < out[j].ID
+		return compareEhnasChunks(out[i].Chunk, out[j].Chunk) < 0
 	})
 	if len(out) > topK*2 {
 		out = out[:topK*2]

@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -207,6 +208,11 @@ func (cb *ContextBuilder) streamKBChunks() error {
 // buildDerivedIndices populates the boilerplate detector, symbol
 // index, chunk file set, and inverted index from cb.chunks in a single pass.
 func (cb *ContextBuilder) buildDerivedIndices() {
+	// EHNAS uses slice indices for graph neighbours and seed tie-breaks.
+	// Canonicalize before building them so artifact order is not a signal.
+	if cb.Engine() == EngineEHNAS {
+		sort.SliceStable(cb.chunks, func(i, j int) bool { return compareEhnasChunks(cb.chunks[i], cb.chunks[j]) < 0 })
+	}
 	// Boilerplate detector (over the full corpus)
 	cb.buildBoilerplate()
 	cb.debugLog.Log(

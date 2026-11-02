@@ -1,6 +1,7 @@
 package retrieval
 
 import (
+	"cmp"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -9,6 +10,19 @@ import (
 	"strings"
 	"time"
 )
+
+// Source ranges disambiguate overload declarations that share a parser ID.
+func compareEhnasChunks(a, b Chunk) int {
+	return cmp.Or(strings.Compare(a.ID, b.ID), strings.Compare(a.File, b.File),
+		cmp.Compare(a.StartLine, b.StartLine), cmp.Compare(a.EndLine, b.EndLine))
+}
+
+func byEhnasScoreDesc(a, b ScoredChunk) int {
+	if a.Score == b.Score {
+		return compareEhnasChunks(a.Chunk, b.Chunk)
+	}
+	return byScoreDesc(a, b)
+}
 
 // EhnasSearch executes up to six retrieval strategies (kb_exact, exact,
 // partial, keyword, semantic, monte_carlo), merging duplicate chunk scores with
@@ -103,6 +117,7 @@ func (cb *ContextBuilder) EhnasSearch(
 	run := func(name string, fn func() []ScoredChunk, multiBoost float64) {
 		t0 := time.Now()
 		results := fn()
+		slices.SortFunc(results, byEhnasScoreDesc)
 		const maxPerStrategy = 500
 		if len(results) > maxPerStrategy {
 			if debugLevel3 {

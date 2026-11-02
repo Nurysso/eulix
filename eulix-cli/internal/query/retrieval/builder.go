@@ -9,6 +9,7 @@ package retrieval
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"eulix/internal/config"
@@ -351,6 +352,9 @@ func (cb *ContextBuilder) assembleContext(chunks []Chunk) *utils.ContextWindow {
 	srcList := make([]string, 0, len(sources))
 	for s := range sources {
 		srcList = append(srcList, s)
+	}
+	if cb.Engine() == EngineEHNAS {
+		sort.Strings(srcList)
 	}
 	return &utils.ContextWindow{Chunks: ctxChunks, TotalTokens: totalTokens, Sources: srcList}
 }
