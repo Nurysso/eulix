@@ -64,8 +64,9 @@ func lexExcluded(rel string, patterns []string) bool {
 
 // fileHit is one file that matched during the walk, with its raw score.
 type fileHit struct {
-	rel, abs string
-	score    float64
+	rel   string
+	data  []byte
+	score float64
 }
 
 // window is an inclusive line range rendered from a file.
@@ -162,7 +163,7 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 			}
 		}
 		if score > 0 {
-			hits = append(hits, fileHit{rel: rel, abs: path, score: score})
+			hits = append(hits, fileHit{rel: rel, data: data, score: score})
 		}
 		return nil
 	})
@@ -186,11 +187,7 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 	var b strings.Builder
 outer:
 	for _, h := range hits {
-		data, err := os.ReadFile(h.abs)
-		if err != nil {
-			continue
-		}
-		lines := strings.Split(string(data), "\n")
+		lines := strings.Split(string(h.data), "\n")
 		for _, w := range bestWindows(lines, weights, 3, 3) {
 			if b.Len() >= cfg.LexicalMaxBytes {
 				break outer
