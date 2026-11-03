@@ -249,6 +249,9 @@ def main():
               add_sym["selectionRange"]["start"] == {"line": 8, "character": 7} and
               add_sym["selectionRange"]["end"] == {"line": 8, "character": 10},
               json.dumps(add_sym["selectionRange"]))
+        check("documentSymbol range includes the closing body line",
+              add_sym["range"]["end"] == {"line": 10, "character": 1},
+              json.dumps(add_sym["range"]))
     check("no u32::MAX ranges leak into the outline",
           all(s["range"]["end"]["character"] != 4294967295 for s in syms))
 
@@ -404,7 +407,74 @@ def main():
     check("recovered symbols appear after fixing the file",
           "recovered" in [s["name"] for s in syms13], str([s["name"] for s in syms13]))
 
-    print("\n[13] shutdown")
+    print("\n[13] symbol and position regressions")
+    ticket = 1000
+
+    def request(method, params):
+        nonlocal ticket
+        ticket += 1
+        c.request(ticket, method, params)
+        return c.wait_for_id(ticket)
+
+    def workspace_names(query):
+        response = request("workspace/symbol", {"query": query})
+        return [s["name"] for s in (response or {}).get("result") or []]
+
+    def wait_names(query, predicate):
+        deadline = time.monotonic() + 5
+        names = []
+        while time.monotonic() < deadline:
+            names = workspace_names(query)
+            if predicate(names):
+                break
+            time.sleep(0.02)
+        return names
+
+    def open_text(path, text, language="python"):
+        c.notify("textDocument/didOpen", {"textDocument": {
+            "uri": path.as_uri(), "languageId": language, "version": 1, "text": text}})
+
+    labels = pathlib.Path(tmp, "labels148.rs")
+    open_text(labels, "fn runner_148() {}", "rust")
+    names = wait_names("runner_", lambda names: "runner_148" in names)
+    check("workspace/symbol returns the real name for a prefix query",
+          names == ["runner_148"], str(names))
+
+    eof = pathlib.Path(tmp, "eof148.py")
+    open_text(eof, "def tail148(): pass\ntail148")
+    wait_names("tail148", lambda names: names == ["tail148"])
+    response = request("textDocument/prepareRename", {
+        "textDocument": {"uri": eof.as_uri()}, "position": {"line": 1, "character": 7}})
+    eof_range = (response or {}).get("result")
+    check("EOF identifier range retains its last character without newline",
+          eof_range == {"start": {"line": 1, "character": 0},
+                        "end": {"line": 1, "character": 7}}, str(eof_range))
+
+    crlf = pathlib.Path(tmp, "crlf148.rs")
+    open_text(crlf, "fn before148() {}\r\nfn keep148() {}", "rust")
+    wait_names("before148", lambda names: names == ["before148"])
+    c.notify("textDocument/didChange", {
+        "textDocument": {"uri": crlf.as_uri(), "version": 2},
+        "contentChanges": [{"range": {"start": {"line": 0, "character": 0},
+                                     "end": {"line": 0, "character": 999}},
+                            "text": "fn after148() {}"}]})
+    wait_names("after148", lambda names: names == ["after148"])
+    response = request("textDocument/documentSymbol", {"textDocument": {"uri": crlf.as_uri()}})
+    keep = next((s for s in (response or {}).get("result") or [] if s["name"] == "keep148"), None)
+    check("past-end CRLF edit preserves the following line",
+          keep is not None and keep["range"]["start"]["line"] == 1, str(keep))
+
+    tested = pathlib.Path(tmp, "test148.rs")
+    open_text(tested, "#[test]\nfn sample148() {}\n", "rust")
+    wait_names("sample148", lambda names: names == ["sample148"])
+    response = request("textDocument/semanticTokens/full", {"textDocument": {"uri": tested.as_uri()}})
+    flat = ((response or {}).get("result") or {}).get("data", [])
+    functions = [flat[i:i + 5] for i in range(0, len(flat), 5) if flat[i + 3] == 0]
+    deprecated = caps["semanticTokensProvider"]["legend"]["tokenModifiers"].index("deprecated")
+    check("Rust test functions are not marked deprecated over JSON-RPC",
+          bool(functions) and all(not (t[4] & (1 << deprecated)) for t in functions), str(functions))
+
+    print("\n[14] shutdown")
     c.request(99, "shutdown")
     r = c.wait_for_id(99, timeout=10)
     if r is None or "result" not in r:

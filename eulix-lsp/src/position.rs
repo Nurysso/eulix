@@ -27,7 +27,7 @@ pub fn position_to_char(rope: &Rope, pos: Position) -> Option<usize> {
 
     let mut utf16_seen: u32 = 0;
     let mut char_offset: usize = 0;
-    for c in line_slice.chars() {
+    for c in line_slice.chars().take_while(|c| *c != '\r' && *c != '\n') {
         if utf16_seen >= pos.character {
             break;
         }
@@ -45,7 +45,7 @@ pub fn position_to_char(rope: &Rope, pos: Position) -> Option<usize> {
 
 // char index to LSP Position.
 pub fn char_to_position(rope: &Rope, char_idx: usize) -> Position {
-    let char_idx = char_idx.min(rope.len_chars().saturating_sub(1).max(0));
+    let char_idx = char_idx.min(rope.len_chars());
     if rope.len_chars() == 0 {
         return Position::new(0, 0);
     }
@@ -221,6 +221,41 @@ mod tests {
 
     fn r(s: &str) -> Rope {
         Rope::from_str(s)
+    }
+
+    #[test]
+    fn eof_ranges_include_the_final_character_without_a_newline() {
+        for text in ["name", "café", "𝄞", "héllo\nlast", "", "line\n"] {
+            let rope = r(text);
+            let end_line = rope.len_lines() - 1;
+            let end_column = rope
+                .line(end_line)
+                .chars()
+                .map(char::len_utf16)
+                .sum::<usize>();
+            let end = Position::new(end_line as u32, end_column as u32);
+            assert_eq!(char_to_position(&rope, rope.len_chars()), end, "{text:?}");
+            assert_eq!(chars_to_range(&rope, 0, rope.len_chars()).end, end);
+            assert_eq!(position_to_char(&rope, end), Some(rope.len_chars()));
+        }
+    }
+
+    #[test]
+    fn positions_past_line_content_do_not_cross_lf_or_crlf() {
+        for text in ["ab\r\ncd", "ab\ncd", "𝄞é\r\ncd", "\r\ncd"] {
+            let rope = r(text);
+            let expected = text
+                .chars()
+                .take_while(|c| *c != '\r' && *c != '\n')
+                .count();
+            assert_eq!(
+                position_to_char(&rope, Position::new(0, 999)),
+                Some(expected),
+                "{text:?}"
+            );
+            let range = Range::new(Position::new(0, 0), Position::new(0, 999));
+            assert_eq!(range_to_chars(&rope, range), Some((0, expected)));
+        }
     }
 
     #[test]
