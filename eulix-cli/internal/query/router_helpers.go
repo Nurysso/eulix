@@ -387,6 +387,49 @@ func (r *Router) fuzzySearch(entity string) []string {
 	return out
 }
 
+// filterServableIndex removes stale locations and caller IDs before any
+// handler can observe them. The fuzzy index is derived from the remaining
+// function and type names, so filtering once here covers every consumer.
+func filterServableIndex(index *utils.Indices, projectPath string) {
+	if index == nil {
+		return
+	}
+	servable := checksum.ServableMatcher(projectPath)
+	filterLocations := func(entries map[string][]string) {
+		for name, locations := range entries {
+			kept := locations[:0]
+			for _, location := range locations {
+				file, _, err := parseLocation(location)
+				if err == nil && servable(file) {
+					kept = append(kept, location)
+				}
+			}
+			if len(kept) == 0 {
+				delete(entries, name)
+			} else {
+				entries[name] = kept
+			}
+		}
+	}
+
+	filterLocations(index.FunctionsByName)
+	filterLocations(index.TypesByName)
+	for callee, callers := range index.FunctionsCalling {
+		kept := callers[:0]
+		for _, caller := range callers {
+			_, file, ok := strings.Cut(caller, "::")
+			if ok && servable(file) {
+				kept = append(kept, caller)
+			}
+		}
+		if len(kept) == 0 {
+			delete(index.FunctionsCalling, callee)
+		} else {
+			index.FunctionsCalling[callee] = kept
+		}
+	}
+}
+
 func fuzzyScore(pattern, target string) int {
 	if pattern == target {
 		return 1000

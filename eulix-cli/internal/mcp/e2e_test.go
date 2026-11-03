@@ -241,7 +241,7 @@ func leakyProject(t *testing.T) string {
 	secret := func(name string) string {
 		return "def " + name + "():\n    payment_key = '" + secretMarker + "'\n"
 	}
-	return billing(t, map[string]string{
+	repo := billing(t, map[string]string{
 		".env":                      "PAYMENT_KEY=" + secretMarker + "\n",
 		".config/payment.py":        secret("payment_hidden_dir"),
 		".euignore":                 "secrets.py\nconfig/**/secrets.py\n**/private/**\n",
@@ -258,6 +258,32 @@ func leakyProject(t *testing.T) string {
 		fxFunc{"config/eu/prod/secrets.py", "payment_config_eu", 1, 2},
 		fxFunc{"svc/payments/creds.py", "payment_creds", 1, 2},
 	)
+	indexPath := filepath.Join(repo, ".eulix", "kb_index.json")
+	var index utils.IndexDataRef
+	data, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &index); err != nil {
+		t.Fatal(err)
+	}
+	index.Indices.TypesByName = map[string][]string{
+		"PaymentHiddenType": {"secrets.py:1"},
+	}
+	index.Indices.FunctionsCalling = map[string][]string{
+		"payment_total": {
+			"func_payment_total::app/billing.py",
+			"func_payment_secret::secrets.py",
+		},
+	}
+	data, err = json.Marshal(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(indexPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return repo
 }
 
 // The MCP server is reachable by any agent the user runs, so nothing a user
@@ -297,6 +323,22 @@ func TestE2ENeverReturnsHiddenOrIgnoredFiles(t *testing.T) {
 			for _, m := range res.Messages {
 				check("prompt "+q["query"].(string), m.Content.(*mcpsdk.TextContent).Text)
 			}
+		}
+	}
+
+	metadataQueries := []struct {
+		query     string
+		forbidden string
+	}{
+		{"Where is payment_config_eu defined?", "config/eu/prod/secrets.py"},
+		{"Where is payment_config_e defined?", "payment_config_eu"},
+		{"Where is PaymentHiddenTyp defined?", "PaymentHiddenType"},
+		{"Where is payment_total defined?", "func_payment_secret::secrets.py"},
+	}
+	for _, tc := range metadataQueries {
+		text, _ := call(t, cs, "query", map[string]any{"query": tc.query})
+		if strings.Contains(text, tc.forbidden) {
+			t.Errorf("query %q leaked ignored index metadata %q:\n%s", tc.query, tc.forbidden, text)
 		}
 	}
 }
