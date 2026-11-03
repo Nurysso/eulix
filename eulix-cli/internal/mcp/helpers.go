@@ -218,9 +218,17 @@ func uriPath(rawURI string, windows bool) string {
 	}
 	if u, err := url.Parse(raw); err == nil && u.Path != "" {
 		p := u.Path
-		// file:///C:/repo (VS Code sends file:///c%3A/repo) parses to "/C:/repo".
-		if windows && len(p) >= 3 && p[0] == '/' && p[2] == ':' {
-			p = p[1:]
+		if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
+			p = "//" + u.Host + "/" + strings.TrimPrefix(p, "/")
+		} else if windows {
+			switch {
+			case strings.HasPrefix(p, "/?/"):
+				// file:///%3F/C:/repo is the URI form of \\?\C:\repo.
+				p = "/" + p
+			case len(p) >= 3 && p[0] == '/' && p[2] == ':':
+				// VS Code also percent-encodes the drive colon.
+				p = p[1:]
+			}
 		}
 		return filepath.FromSlash(p)
 	}

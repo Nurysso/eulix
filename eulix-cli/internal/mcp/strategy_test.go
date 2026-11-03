@@ -296,6 +296,10 @@ func TestURIPath(t *testing.T) {
 		{" /plain/path ", false, "/plain/path"},
 		{"file:///C:/Users/u/repo", true, "C:/Users/u/repo"},
 		{"file:///c%3A/Users/u/repo", true, "c:/Users/u/repo"}, // VS Code's encoding
+		{"file://server/share/repo", true, "//server/share/repo"},
+		{"file://localhost/C:/Users/u/repo", true, "C:/Users/u/repo"},
+		{"file:///%3F/C:/very/long/repo", true, "//?/C:/very/long/repo"},
+		{"file:///%3F/UNC/server/share/repo", true, "//?/UNC/server/share/repo"},
 		{"file:///C:/x", false, "/C:/x"},
 	}
 	for _, tc := range cases {
