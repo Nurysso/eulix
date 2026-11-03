@@ -1264,6 +1264,27 @@ func TestHandleUsage(t *testing.T) {
 			t.Errorf("got %q", got)
 		}
 	})
+	t.Run("never follows symlinks to hidden or ignored files", func(t *testing.T) {
+		writeFile(t, filepath.Join(dir, ".hidden.go"), "func Foo(hidden string /* HIDDEN_SECRET */) {}\n")
+		writeFile(t, filepath.Join(dir, ".hidden-dir", "secret.go"), "func Foo(dir string /* DIR_SECRET */) {}\n")
+		writeFile(t, filepath.Join(dir, "ignored.go"), "func Foo(ignored string /* IGNORED_SECRET */) {}\n")
+		writeFile(t, filepath.Join(dir, ".euignore"), "ignored.go\n")
+		if err := os.Symlink(".hidden.go", filepath.Join(dir, "visible-hidden.go")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if err := os.Symlink("ignored.go", filepath.Join(dir, "visible-ignored.go")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if err := os.Symlink(".hidden-dir", filepath.Join(dir, "visible-dir")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+
+		r := newUsageRouter(t, "visible-hidden.go:1", "visible-ignored.go:1", "visible-dir/secret.go:1")
+		got, _ := r.handleUsage("", cls(classifier.QueryTypeUsage, "Foo"))
+		if strings.Contains(got, "HIDDEN_SECRET") || strings.Contains(got, "IGNORED_SECRET") || strings.Contains(got, "DIR_SECRET") {
+			t.Errorf("followed a symlink to excluded source:\n%s", got)
+		}
+	})
 }
 
 func TestExtractDepQueryTerm(t *testing.T) {
