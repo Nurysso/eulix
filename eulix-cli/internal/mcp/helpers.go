@@ -45,6 +45,14 @@ func (s *Server) setRepoPathLocked(repoPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid repository path %q: %w", repoPath, err)
 	}
+	canonicalPath, err := filepath.EvalSymlinks(absPath)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "", fmt.Errorf("repository path does not exist: %s", absPath)
+	case err != nil:
+		return "", fmt.Errorf("cannot resolve repository path %s: %w", absPath, err)
+	}
+	absPath = canonicalPath
 
 	fi, err := os.Stat(absPath)
 	switch {

@@ -427,6 +427,45 @@ func TestE2EConcurrentQueriesStayInTheirRepo(t *testing.T) {
 	}
 }
 
+func TestSetRepoPathPinsAndRebuildsSymlinkedRoot(t *testing.T) {
+	repoA := billing(t, map[string]string{"alpha.py": "ALPHA_ONLY_MARKER\n"})
+	repoB := billing(t, map[string]string{"beta.py": "BETA_ONLY_MARKER\n"})
+	link := filepath.Join(t.TempDir(), "current")
+	if err := os.Symlink(repoA, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	s := newTestServer(t)
+	if _, err := s.SetRepoPath(link); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.GetActiveRepo(); got != repoA {
+		t.Fatalf("active repository = %q, want canonical target %q", got, repoA)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(repoB, link); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := lexicalSearch(context.Background(), s.GetActiveRepo(), "ALPHA_ONLY_MARKER", nil, DefaultStrategyConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "ALPHA_ONLY_MARKER") || strings.Contains(got, "BETA_ONLY_MARKER") {
+		t.Fatalf("bound root followed the retargeted symlink:\n%s", got)
+	}
+
+	msg, err := s.SetRepoPath(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(msg, "already set") || s.GetActiveRepo() != repoB {
+		t.Fatalf("same link did not rebuild for its new target: msg=%q active=%q", msg, s.GetActiveRepo())
+	}
+}
+
 // Roots arrive after the legacy initialize handshake. Clients on protocol
 // 2026-07-28 use stateless discovery and send no 'initialized', and roots are
 // deprecated there (SEP-2577): such clients pass repo_path instead.
