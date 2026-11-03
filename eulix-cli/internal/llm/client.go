@@ -107,7 +107,7 @@ type ollamaRequest struct {
 }
 
 type ollamaOptions struct {
-	Temperature float64 `json:"temperature,omitempty"`
+	Temperature float64 `json:"temperature"` // 0 is a valid setting; omitempty would drop it
 	NumPredict  int     `json:"num_predict,omitempty"`
 }
 
@@ -181,7 +181,7 @@ func validateConfig(cfg *config.Config) error {
 	default:
 		return fmt.Errorf(
 			"llm: unknown provider %q — use anthropic | openai | ollama | gemini | lm-studio | groq | mistral | deepseek | vllm\n"+
-				"     or set base_url to use any OpenAI-compatible endpoint",
+				"     or set baseURL in eulix.toml to use any OpenAI-compatible endpoint",
 			l.Provider,
 		)
 	}
@@ -245,8 +245,9 @@ func (c *Client) LlmResponse(prompt string) (string, error) {
 func (c *Client) queryAnthropic(prompt string) (string, error) {
 	l := c.config.LLM
 
-	baseURL := resolveBaseURL(l.Provider, l.BaseURL)
-	endpoint := resolveEndpoint(l.Provider, l.Endpoint)
+	p := resolveProvider(l)
+	baseURL := resolveBaseURL(p, l.BaseURL)
+	endpoint := resolveEndpoint(p, l.Endpoint)
 
 	body, err := json.Marshal(anthropicRequest{
 		Model:       l.Model,
@@ -282,8 +283,9 @@ func (c *Client) queryAnthropic(prompt string) (string, error) {
 func (c *Client) queryOpenAI(prompt string) (string, error) {
 	l := c.config.LLM
 
-	baseURL := resolveBaseURL(l.Provider, l.BaseURL)
-	endpoint := resolveEndpoint(l.Provider, l.Endpoint)
+	p := resolveProvider(l)
+	baseURL := resolveBaseURL(p, l.BaseURL)
+	endpoint := resolveEndpoint(p, l.Endpoint)
 
 	body, err := json.Marshal(openAIRequest{
 		Model:       l.Model,
@@ -320,8 +322,9 @@ func (c *Client) queryOpenAI(prompt string) (string, error) {
 func (c *Client) queryOllama(prompt string) (string, error) {
 	l := c.config.LLM
 
-	baseURL := resolveBaseURL(l.Provider, l.BaseURL)
-	endpoint := resolveEndpoint(l.Provider, l.Endpoint)
+	p := resolveProvider(l)
+	baseURL := resolveBaseURL(p, l.BaseURL)
+	endpoint := resolveEndpoint(p, l.Endpoint)
 
 	body, err := json.Marshal(ollamaRequest{
 		Model:    l.Model,
@@ -363,7 +366,8 @@ func (c *Client) queryGemini(prompt string) (string, error) {
 		baseURL = strings.TrimRight(l.BaseURL, "/")
 	}
 
-	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", baseURL, l.Model, l.APIKey)
+	// The key goes in a header: a URL ends up in every net/http error message.
+	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent", baseURL, l.Model)
 
 	body, err := json.Marshal(geminiRequest{
 		Contents: []geminiContent{
@@ -383,6 +387,7 @@ func (c *Client) queryGemini(prompt string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", l.APIKey)
 
 	var resp geminiResponse
 	if err := c.do(req, &resp); err != nil {
@@ -481,10 +486,13 @@ func (c *Client) buildPrompt(context *utils.ContextWindow, userQuery string) str
 	// Separate source vs metadata chunks
 	var srcChunks, metaChunks []utils.ContextChunk
 	for _, chunk := range context.Chunks {
-		if strings.TrimSpace(chunk.Content) != "" && !strings.HasPrefix(chunk.Content, "[METADATA]") {
-			srcChunks = append(srcChunks, chunk)
-		} else {
+		switch {
+		case strings.TrimSpace(chunk.Content) == "":
+			continue
+		case strings.HasPrefix(chunk.Content, "[METADATA]"):
 			metaChunks = append(metaChunks, chunk)
+		default:
+			srcChunks = append(srcChunks, chunk)
 		}
 	}
 	fmt.Fprintf(

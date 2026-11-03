@@ -55,9 +55,9 @@ func TestExtractSignaturePHP(t *testing.T) {
 			t.Run(ext+"/"+tc.name, func(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "store"+ext)
 				writeFile(t, path, tc.source)
-				got, err := extractSignature(path, tc.start)
+				got, err := extractSignatureAt(path, tc.start)
 				if err != nil || got != tc.want {
-					t.Errorf("extractSignature() = (%q, %v), want %q", got, err, tc.want)
+					t.Errorf("extractSignatureAt() = (%q, %v), want %q", got, err, tc.want)
 				}
 			})
 		}
@@ -68,10 +68,10 @@ func TestExtractSignatureIncWithoutPHPTag(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "declarations.inc")
 	// The extension is also used by C/assembly; retain the generic reader.
 	writeFile(t, path, "extern int lookup(void);\nint other(void) { return 1; }\n")
-	got, err := extractSignature(path, 1)
+	got, err := extractSignatureAt(path, 1)
 	want := "  extern int lookup(void);\n  int other(void)\n"
 	if err != nil || got != want {
-		t.Errorf("extractSignature() = (%q, %v), want %q", got, err, want)
+		t.Errorf("extractSignatureAt() = (%q, %v), want %q", got, err, want)
 	}
 }
 

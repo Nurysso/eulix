@@ -65,8 +65,15 @@ type quality struct {
 // cannot inflate coverage.
 func assess(q string, anchors []Anchor, result string, echoes ...string) quality {
 	body := result
+	// The router appends "QUERY\n<query>" (and any CoT header) after the
+	// context; only what comes before it is evidence.
+	if i := strings.LastIndex(body, "\nQUERY\n"); i >= 0 {
+		body = body[:i]
+	}
 	for _, e := range echoes {
-		if e != "" {
+		// A one-word echo is the very symbol being looked up: stripping it
+		// would delete the evidence that the result is right.
+		if strings.ContainsAny(strings.TrimSpace(e), " \t\n") {
 			body = strings.ReplaceAll(body, e, " ")
 		}
 	}

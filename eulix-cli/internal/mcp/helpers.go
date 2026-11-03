@@ -8,10 +8,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
-	"eulix/internal/cache"
 	"eulix/internal/config"
 	"eulix/internal/llm"
 	"eulix/internal/query"
@@ -78,8 +78,9 @@ func (s *Server) setRepoPathLocked(repoPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize LLM client: %w", err)
 	}
-	cacheManager, _ := cache.CacheController(cfg)
-	router, err := query.QueryTrafficController(eulixDir, cfg, llmClient, cacheManager)
+	// No history cache: MCP never reads or writes chat history, and an open
+	// history.db stays locked, breaking 'eulix chat' and 'eulix history'.
+	router, err := query.QueryTrafficController(eulixDir, cfg, llmClient, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize router for %s: %w", absPath, err)
 	}
@@ -199,12 +200,21 @@ func (s *Server) writeDebugLogLocked(queryText, result string, includeCoT bool, 
 
 // parseURIPath converts a file:// URI (as sent in MCP roots) into a local path.
 func parseURIPath(rawURI string) string {
+	return uriPath(rawURI, runtime.GOOS == "windows")
+}
+
+func uriPath(rawURI string, windows bool) string {
 	raw := strings.TrimSpace(rawURI)
 	if !strings.HasPrefix(raw, "file://") {
 		return raw
 	}
 	if u, err := url.Parse(raw); err == nil && u.Path != "" {
-		return filepath.FromSlash(u.Path)
+		p := u.Path
+		// file:///C:/repo (VS Code sends file:///c%3A/repo) parses to "/C:/repo".
+		if windows && len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+			p = p[1:]
+		}
+		return filepath.FromSlash(p)
 	}
 	return strings.TrimPrefix(raw, "file://")
 }

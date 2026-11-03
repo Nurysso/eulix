@@ -250,12 +250,6 @@ type fnParts struct {
 	docstring string
 	lineStart int
 	lineEnd   int
-	calls     []callPart // only Callee + Line used
-}
-
-type callPart struct {
-	callee string
-	line   int
 }
 
 type classParts struct {

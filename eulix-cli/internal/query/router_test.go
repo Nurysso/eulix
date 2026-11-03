@@ -270,10 +270,9 @@ func cls(qt classifier.QueryType, symbols ...string) *classifier.Classification 
 func fileSpec() M {
 	return M{
 		"Language": "go", "Loc": 40,
-		"Functions":     S{M{"Name": "Foo", "LineStart": 1, "LineEnd": 10, "Complexity": 3, "ImportanceScore": 0.5}},
-		"Classes":       S{M{"Name": "Bar", "LineStart": 12, "LineEnd": 30, "Methods": S{"m1", "m2"}}},
-		"Todos":         S{M{"Line": 3, "Text": "fix", "Priority": "high"}},
-		"SecurityNotes": S{M{"NoteType": "secret", "Line": 9, "Description": "hardcoded"}},
+		"Functions": S{M{"Name": "Foo", "LineStart": 1, "LineEnd": 10}},
+		"Classes":   S{M{"Name": "Bar", "LineStart": 12, "LineEnd": 30, "Methods": S{"m1", "m2"}}},
+		"Todos":     S{M{"Line": 3, "Text": "fix", "Priority": "high"}},
 	}
 }
 
@@ -689,48 +688,48 @@ func TestExtractSignature(t *testing.T) {
 	writeFile(t, pyFile, lines("import os", "", "def foo(a, b):", "    return a"))
 
 	t.Run("go", func(t *testing.T) {
-		got, err := extractSignature(goFile, 3)
+		got, err := extractSignatureAt(goFile, 3)
 		if err != nil || got != "  func Foo(a int, b string) error\n" {
 			t.Errorf("got (%q, %v)", got, err)
 		}
 	})
 	t.Run("python picks language from extension", func(t *testing.T) {
-		got, err := extractSignature(pyFile, 3)
+		got, err := extractSignatureAt(pyFile, 3)
 		if err != nil || got != "  def foo(a, b)\n" {
 			t.Errorf("got (%q, %v)", got, err)
 		}
 	})
 	t.Run("missing file", func(t *testing.T) {
-		if _, err := extractSignature(filepath.Join(dir, "nope.go"), 1); err == nil || !strings.Contains(err.Error(), "open") {
+		if _, err := extractSignatureAt(filepath.Join(dir, "nope.go"), 1); err == nil || !strings.Contains(err.Error(), "open") {
 			t.Errorf("err = %v", err)
 		}
 	})
 	t.Run("line out of range", func(t *testing.T) {
 		for _, n := range []int{0, -1, 999} {
-			_, err := extractSignature(goFile, n)
+			_, err := extractSignatureAt(goFile, n)
 			if err == nil || !strings.Contains(err.Error(), "out of range") {
 				t.Errorf("line %d: err = %v", n, err)
 			}
 		}
 	})
 	t.Run("last line is accepted", func(t *testing.T) {
-		if _, err := extractSignature(goFile, 6); err != nil {
+		if _, err := extractSignatureAt(goFile, 6); err != nil {
 			t.Errorf("err = %v", err)
 		}
 	})
 }
 
 func TestFormatFunctionMetrics(t *testing.T) {
-	fn := utils.KBFunction{Name: "f", LineStart: 10, LineEnd: 19, Complexity: 4, ImportanceScore: 0.5}
+	fn := utils.FunctionMetric{Name: "f", File: "a/b.go", LineStart: 10, LineEnd: 19, Complexity: 4, ImportanceScore: 0.5}
 	want := "Metrics for f (a/b.go, lines 10\u201319)\n" +
 		"  Cyclomatic complexity : 4\n" +
 		"  LOC                   : 10\n" +
 		"  Importance            : 0.50\n"
-	if got := formatFunctionMetrics(fn, "a/b.go"); got != want {
+	if got := formatFunctionMetrics(fn); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
-	one := utils.KBFunction{Name: "g", LineStart: 7, LineEnd: 7}
-	if got := formatFunctionMetrics(one, "x.go"); !strings.Contains(got, "LOC                   : 1\n") {
+	one := utils.FunctionMetric{Name: "g", File: "x.go", LineStart: 7, LineEnd: 7}
+	if got := formatFunctionMetrics(one); !strings.Contains(got, "LOC                   : 1\n") {
 		t.Errorf("single-line function should have LOC 1:\n%s", got)
 	}
 }
@@ -740,10 +739,9 @@ func TestFormatFileData(t *testing.T) {
 		fd := &utils.FileData{}
 		fill(t, fd, fileSpec())
 		want := "File: pkg/a.go  [go, 40 LOC]\n" +
-			"\nFunctions (1):\n  \u2022 Foo  (lines 1\u201310, complexity 3, importance 0.50)\n" +
+			"\nFunctions (1):\n  \u2022 Foo  (lines 1\u201310)\n" +
 			"\nClasses (1):\n  \u2022 Bar  (lines 12\u201330, 2 methods)\n" +
-			"\nTODOs (1):\n  [high] line 3: fix\n" +
-			"\nSecurity notes (1):\n  [secret] line 9: hardcoded\n"
+			"\nTODOs (1):\n  [high] line 3: fix\n"
 		if got := formatFileData("pkg/a.go", fd); got != want {
 			t.Errorf("got:\n%q\nwant:\n%q", got, want)
 		}
@@ -1180,8 +1178,10 @@ func TestHandleUsage(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "svc.go")
 	writeFile(t, src, lines("package x", "", "func Foo(a int, b string) error {", "\treturn nil", "}"))
+	// Locations are root-relative, as eulix-parser writes them.
 	newUsageRouter := func(t *testing.T, locs ...string) *Router {
 		r := newRouter(t)
+		r.config.Project.Path = dir
 		items := S{}
 		for _, l := range locs {
 			items = append(items, l)
@@ -1191,15 +1191,15 @@ func TestHandleUsage(t *testing.T) {
 	}
 
 	t.Run("prints location and signature", func(t *testing.T) {
-		r := newUsageRouter(t, src+":3")
+		r := newUsageRouter(t, "svc.go:3")
 		got, err := r.handleUsage("usage of Foo", cls(classifier.QueryTypeUsage, "Foo"))
-		want := "Usage of 'Foo'\n\n  " + src + ":3\n  func Foo(a int, b string) error\n\n"
+		want := "Usage of 'Foo'\n\n  svc.go:3\n  func Foo(a int, b string) error\n\n"
 		if err != nil || got != want {
 			t.Errorf("got (%q, %v)\nwant %q", got, err, want)
 		}
 	})
 	t.Run("duplicate locations print once", func(t *testing.T) {
-		r := newUsageRouter(t, src+":3", src+":3")
+		r := newUsageRouter(t, "svc.go:3", "svc.go:3")
 		got, _ := r.handleUsage("usage of Foo", cls(classifier.QueryTypeUsage, "Foo"))
 		if n := strings.Count(got, "func Foo("); n != 1 {
 			t.Errorf("signature printed %d times", n)
@@ -1208,14 +1208,14 @@ func TestHandleUsage(t *testing.T) {
 	t.Run("multiple locations", func(t *testing.T) {
 		other := filepath.Join(dir, "other.go")
 		writeFile(t, other, lines("package x", "func Foo() {", "}"))
-		r := newUsageRouter(t, src+":3", other+":2")
+		r := newUsageRouter(t, "svc.go:3", "other.go:2")
 		got, _ := r.handleUsage("", cls(classifier.QueryTypeUsage, "Foo"))
 		if !strings.Contains(got, "func Foo(a int, b string) error") || !strings.Contains(got, "func Foo()\n") {
 			t.Errorf("got %q", got)
 		}
 	})
 	t.Run("command prefix is stripped before entity extraction", func(t *testing.T) {
-		r := newUsageRouter(t, src+":3")
+		r := newUsageRouter(t, "svc.go:3")
 		for _, q := range []string{"usage of Foo", "show usage Foo", "find usage Foo", "uses of Foo", "use Foo", "USAGE Foo"} {
 			got, _ := r.handleUsage(q, cls(classifier.QueryTypeUsage))
 			if !strings.HasPrefix(got, "Usage of 'Foo'") {
@@ -1224,34 +1224,45 @@ func TestHandleUsage(t *testing.T) {
 		}
 	})
 	t.Run("unreadable file is reported inline", func(t *testing.T) {
-		r := newUsageRouter(t, filepath.Join(dir, "gone.go")+":3")
+		r := newUsageRouter(t, "gone.go:3")
 		got, _ := r.handleUsage("", cls(classifier.QueryTypeUsage, "Foo"))
 		if !strings.Contains(got, "could not read signature") {
 			t.Errorf("got %q", got)
 		}
 	})
 	t.Run("unknown symbol", func(t *testing.T) {
-		r := newUsageRouter(t, src+":3")
+		r := newUsageRouter(t, "svc.go:3")
 		got, _ := r.handleUsage("", cls(classifier.QueryTypeUsage, "Bar"))
 		if got != "'Bar' not found in knowledge base." {
 			t.Errorf("got %q", got)
 		}
 	})
 	t.Run("no entity", func(t *testing.T) {
-		r := newUsageRouter(t, src+":3")
+		r := newUsageRouter(t, "svc.go:3")
 		got, _ := r.handleUsage("the", cls(classifier.QueryTypeUsage))
 		if got != "Could not identify a function or class name in the query." {
 			t.Errorf("got %q", got)
 		}
 	})
 	t.Run("malformed location does not panic", func(t *testing.T) {
-		r := newUsageRouter(t, "no-colon", src+":x", src+":3")
+		r := newUsageRouter(t, "no-colon", "svc.go:x", "svc.go:3")
 		mustNotPanic(t, "handleUsage", func() {
 			got, err := r.handleUsage("", cls(classifier.QueryTypeUsage, "Foo"))
 			if err != nil || !strings.Contains(got, "func Foo(") {
 				t.Errorf("good location should still be printed: (%q, %v)", got, err)
 			}
 		})
+	})
+	t.Run("never reads outside the project or hidden files", func(t *testing.T) {
+		outside := filepath.Join(t.TempDir(), "id_rsa")
+		writeFile(t, outside, lines("API_KEY=SECRET"))
+		writeFile(t, filepath.Join(dir, ".env"), lines("API_KEY=SECRET"))
+		rel, _ := filepath.Rel(dir, outside)
+		r := newUsageRouter(t, outside+":1", filepath.ToSlash(rel)+":1", ".env:1", "svc.go:3")
+		got, _ := r.handleUsage("", cls(classifier.QueryTypeUsage, "Foo"))
+		if strings.Contains(got, "SECRET") || !strings.Contains(got, "func Foo(a int") {
+			t.Errorf("got %q", got)
+		}
 	})
 }
 
@@ -1807,7 +1818,7 @@ func TestHandleTodosQuery(t *testing.T) {
 		r := newRouter(t)
 		r.setKB(t, M{"a.go": M{"Language": "go", "Loc": 1}})
 		got, _ := r.handleTodosQuery("", nil)
-		if got != "No TODOs or security notes found in the knowledge base." {
+		if got != "No TODOs found in the knowledge base." {
 			t.Errorf("got %q", got)
 		}
 	})
@@ -1815,8 +1826,7 @@ func TestHandleTodosQuery(t *testing.T) {
 		r := newRouter(t)
 		r.setKB(t, M{"pkg/a.go": fileSpec()})
 		got, _ := r.handleTodosQuery("", nil)
-		want := "\u26a0 Security notes (1):\n  [secret] pkg/a.go:9 \u2014 hardcoded\n\n" +
-			"\U0001F534 High priority TODOs (1):\n  pkg/a.go:3 \u2014 fix\n\n"
+		want := "\U0001F534 High priority TODOs (1):\n  pkg/a.go:3 \u2014 fix\n\n"
 		if got != want {
 			t.Errorf("got %q\nwant %q", got, want)
 		}
@@ -2273,4 +2283,14 @@ func FuzzHelpers(f *testing.F) {
 			t.Fatalf("extractEntityName(%q) = %q, not a substring", s, got)
 		}
 	})
+}
+
+// extractSignatureAt reads path through a root at its directory, as handleUsage does.
+func extractSignatureAt(path string, line int) (string, error) {
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = root.Close() }()
+	return extractSignature(root, filepath.Base(path), line)
 }

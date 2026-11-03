@@ -97,6 +97,12 @@ func formatPatternList(patterns []string) string {
 // appendEuignorePatterns splits the user's comma-separated answer and
 // appends each non-empty pattern to the .euignore file, one per line.
 func appendEuignorePatterns(path, answer string) error {
+	// A file whose last line has no newline would get the first pattern glued onto it.
+	prefix := ""
+	if data, err := os.ReadFile(path); err == nil && len(data) > 0 && data[len(data)-1] != '\n' {
+		prefix = "\n"
+	}
+
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to update %s: %w", path, err)
@@ -108,9 +114,10 @@ func appendEuignorePatterns(path, answer string) error {
 		if pattern == "" {
 			continue // tolerate "a,,b" and stray commas
 		}
-		if _, err := fmt.Fprintln(f, pattern); err != nil {
+		if _, err := fmt.Fprintf(f, "%s%s\n", prefix, pattern); err != nil {
 			return fmt.Errorf("failed to update %s: %w", path, err)
 		}
+		prefix = ""
 	}
 	return nil
 }

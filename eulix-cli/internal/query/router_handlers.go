@@ -18,14 +18,10 @@ import (
 	"sort"
 	"strings"
 
+	"eulix/internal/checksum"
 	c "eulix/internal/query/classifier"
 	"eulix/internal/utils"
 )
-
-type metricsEntry struct {
-	fn   *utils.KBFunction
-	file string
-}
 
 type todoItem struct {
 	file     string
@@ -442,25 +438,10 @@ func (r *Router) handleMetrics(query string, class *c.Classification) (string, e
 		return "", fmt.Errorf("failed to parse metrics JSON: %w", err)
 	}
 
-	byName := make(map[string]metricsEntry)
-	var topComplex []metricsEntry
-
-	for _, fn := range ref.TopComplexFunctions {
-		kbFn := utils.KBFunction{
-			Name:            fn.Name,
-			LineStart:       fn.LineStart,
-			LineEnd:         fn.LineEnd,
-			Complexity:      fn.Complexity,
-			ImportanceScore: fn.ImportanceScore,
-		}
-
-		entry := metricsEntry{
-			fn:   &kbFn,
-			file: fn.File,
-		}
-
-		byName[fn.Name] = entry
-		topComplex = append(topComplex, entry)
+	topComplex := ref.TopComplexFunctions
+	byName := make(map[string]utils.FunctionMetric, len(topComplex))
+	for _, fn := range topComplex {
+		byName[fn.Name] = fn
 	}
 
 	entity := firstSymbolOrExtracted(class, query)
@@ -469,8 +450,8 @@ func (r *Router) handleMetrics(query string, class *c.Classification) (string, e
 	isProjectMetrics := projectMetricsKwRegex.MatchString(query) || len(class.Symbols) == 0
 
 	if entity != "" && !isProjectMetrics {
-		if e, ok := byName[entity]; ok {
-			return formatFunctionMetrics(*e.fn, e.file), nil
+		if fn, ok := byName[entity]; ok {
+			return formatFunctionMetrics(fn), nil
 		}
 		return fmt.Sprintf("'%s' not found in metrics index.", entity), nil
 	}
@@ -493,9 +474,9 @@ func (r *Router) handleMetrics(query string, class *c.Classification) (string, e
 	}
 
 	for i := 0; i < limit; i++ {
-		e := topComplex[i]
+		fn := topComplex[i]
 		fmt.Fprintf(&b, "  %2d. %s  (%s, complexity %d, importance %.2f)\n",
-			i+1, e.fn.Name, e.file, e.fn.Complexity, e.fn.ImportanceScore)
+			i+1, fn.Name, fn.File, fn.Complexity, fn.ImportanceScore)
 	}
 
 	return b.String(), nil
@@ -601,10 +582,6 @@ func (r *Router) handleTodosQuery(_ string, _ *c.Classification) (string, error)
 	}
 
 	var high, medium, low []todoItem
-	var secNotes []struct {
-		file, noteType, desc string
-		line                 int
-	}
 
 	// Sort paths deterministically
 	paths := make([]string, 0, len(r.kb.Structure))
@@ -626,22 +603,9 @@ func (r *Router) handleTodosQuery(_ string, _ *c.Classification) (string, error)
 				low = append(low, item)
 			}
 		}
-		for _, sn := range fd.SecurityNotes {
-			secNotes = append(secNotes, struct {
-				file, noteType, desc string
-				line                 int
-			}{path, sn.NoteType, sn.Description, sn.Line})
-		}
 	}
 
 	var b strings.Builder
-	if len(secNotes) > 0 {
-		fmt.Fprintf(&b, "⚠ Security notes (%d):\n", len(secNotes))
-		for _, sn := range secNotes {
-			fmt.Fprintf(&b, "  [%s] %s:%d — %s\n", sn.noteType, sn.file, sn.line, sn.desc)
-		}
-		b.WriteString("\n")
-	}
 
 	printTodos := func(label string, items []todoItem) {
 		if len(items) == 0 {
@@ -658,7 +622,7 @@ func (r *Router) handleTodosQuery(_ string, _ *c.Classification) (string, error)
 	printTodos("⚪ Low priority TODOs", low)
 
 	if b.Len() == 0 {
-		return "No TODOs or security notes found in the knowledge base.", nil
+		return "No TODOs found in the knowledge base.", nil
 	}
 	return b.String(), nil
 }
@@ -727,15 +691,24 @@ func (r *Router) handleUsage(query string, class *c.Classification) (string, err
 		return fmt.Sprintf("'%s' not found in knowledge base.", entity), nil
 	}
 
+	// Locations come from the repository's own .eulix files: read them inside
+	// the project only, and never from hidden or .euignore'd files.
+	root, err := os.OpenRoot(r.config.Project.Path)
+	if err != nil {
+		return "", fmt.Errorf("open project root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	servable := checksum.ServableMatcher(r.config.Project.Path)
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "Usage of '%s'\n\n", entity)
 
 	for _, loc := range dedupe(locations) {
 		file, line, err := parseLocation(loc) // "path/to/file.go:42"
-		if err != nil {
+		if err != nil || !servable(file) {
 			continue
 		}
-		sig, err := extractSignature(file, line)
+		sig, err := extractSignature(root, file, line)
 		if err != nil {
 			fmt.Fprintf(&b, "  %s — could not read signature: %v\n", loc, err)
 			continue
