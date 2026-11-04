@@ -78,7 +78,8 @@ func (cb *ContextBuilder) BuildContext(query string) (*utils.ContextWindow, erro
 
 	if cb.config.Project.DebugConfig {
 		if err := cb.writeContextToFile(ctx); err != nil {
-			fmt.Printf("failed to write debug context: %v\n", err)
+			// Not stdout: under 'eulix mcp' it carries the protocol.
+			cb.debugLog.Log("failed to write debug context: %v", err)
 		}
 	}
 

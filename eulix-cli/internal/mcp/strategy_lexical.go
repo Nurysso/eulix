@@ -84,6 +84,10 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 	if root == "" {
 		return "", nil
 	}
+	// WalkDir does not descend into a symlinked root, which would find nothing.
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
 
 	// Weight terms: anchors weigh 3x, other query terms weigh 1x. Only terms
 	// of length >= 3 are kept, so single/double-letter noise is ignored.

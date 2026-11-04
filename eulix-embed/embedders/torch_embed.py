@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from collections import defaultdict
@@ -17,6 +18,17 @@ from utils.buckets import snap_to_bucket
 from utils.constants import BUCKETS_JINA, BUCKETS_STANDARD
 from utils.req import require_ml
 from utils.types import Chunk
+
+
+def trusts_remote_code(model_name: str) -> bool:
+    """Whether model_name may run Python from its repository (trust_remote_code).
+
+    The name comes from the project's eulix.toml, which a cloned repository
+    controls, so only Jina's own Hugging Face models qualify: not any name
+    containing "jina", and never a local directory, which the repository
+    could have shipped.
+    """
+    return model_name.lower().startswith("jinaai/") and not os.path.exists(model_name)
 
 
 class EmbeddingGeneratorTorch(BucketBatchMixin):  # pylint: disable=too-many-instance-attributes
@@ -91,9 +103,7 @@ class EmbeddingGeneratorTorch(BucketBatchMixin):  # pylint: disable=too-many-ins
                 file=sys.stderr,
             )
 
-            is_jina = "jina" in model_name.lower()
-
-            if is_jina:
+            if trusts_remote_code(model_name):
                 try:
                     from sentence_transformers import SentenceTransformer
 

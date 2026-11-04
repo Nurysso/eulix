@@ -7,33 +7,31 @@ package setup
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 )
 
+// EnvFile edits a .env in place: Save rewrites only the lines of keys that
+// were Set to a new value, so comments, blank lines and other keys survive.
 type EnvFile struct {
-	path     string
-	values   map[string]string
-	keyOrder []string
-	changed  bool
+	path    string
+	values  map[string]string
+	lines   []string        // the file as loaded, without line endings
+	updated map[string]bool // keys Set to a new value since loading
+	added   []string        // keys not in the file, in Set order
+	changed bool
 }
 
 func LoadEnvFile(path string) *EnvFile {
-	envFile := &EnvFile{path: path, values: make(map[string]string)}
+	envFile := &EnvFile{path: path, values: make(map[string]string), updated: make(map[string]bool)}
 	data, err := os.ReadFile(path)
-	if err != nil {
+	if err != nil || len(data) == 0 {
 		return envFile
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		key, value, ok := parseEnvLine(line)
-		if !ok {
-			continue
+	envFile.lines = strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	for _, line := range envFile.lines {
+		if key, value, ok := parseEnvLine(line); ok {
+			envFile.values[key] = value
 		}
-		if _, exists := envFile.values[key]; !exists {
-			envFile.keyOrder = append(envFile.keyOrder, key)
-		}
-		envFile.values[key] = value
-		envFile.keyOrder = append(envFile.keyOrder, key)
 	}
 	return envFile
 }
@@ -57,9 +55,10 @@ func (envFile *EnvFile) Set(key, value string) {
 		return
 	}
 	if _, exists := envFile.values[key]; !exists {
-		envFile.keyOrder = append(envFile.keyOrder, key)
+		envFile.added = append(envFile.added, key)
 	}
 	envFile.values[key] = value
+	envFile.updated[key] = true
 	envFile.changed = true
 }
 
@@ -79,30 +78,15 @@ func (envFile *EnvFile) Save() error {
 	_ = os.Chmod(envFile.path, 0o600)
 
 	var builder strings.Builder
-	writtenKeys := make(map[string]bool, len(envFile.values))
-	for _, key := range envFile.keyOrder {
-		if writtenKeys[key] {
-			continue
+	for _, line := range envFile.lines {
+		if key, _, ok := parseEnvLine(line); ok && envFile.updated[key] {
+			line = key + "=" + envFile.values[key]
 		}
-		writtenKeys[key] = true
+		builder.WriteString(line)
+		builder.WriteString("\n")
+	}
+	for _, key := range envFile.added {
 		fmt.Fprintf(&builder, "%s=%s\n", key, envFile.values[key])
 	}
-	writeUnorderedKeys(&builder, envFile.values, writtenKeys)
 	return os.WriteFile(envFile.path, []byte(builder.String()), 0o600)
-}
-
-func writeUnorderedKeys(builder *strings.Builder, values map[string]string, writtenKeys map[string]bool) {
-	if len(writtenKeys) == len(values) {
-		return
-	}
-	var unwrittenKeys []string
-	for key := range values {
-		if !writtenKeys[key] {
-			unwrittenKeys = append(unwrittenKeys, key)
-		}
-	}
-	sort.Strings(unwrittenKeys)
-	for _, key := range unwrittenKeys {
-		fmt.Fprintf(builder, "%s=%s\n", key, values[key])
-	}
 }

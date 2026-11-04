@@ -3,13 +3,13 @@
 default: test-go
 
 test:
-	$(MAKE) -C .. test-go
+	$(MAKE) -C .. CALLER_DIR=$(CURDIR) test-go
 
 lint:
-	$(MAKE) -C .. lint-go
+	$(MAKE) -C .. CALLER_DIR=$(CURDIR) lint-go
 
 build:
-	$(MAKE) -C .. build-single
+	$(MAKE) -C .. CALLER_DIR=$(CURDIR) build-single
 
 %:
-	$(MAKE) -C .. $@
+	$(MAKE) -C .. CALLER_DIR=$(CURDIR) $@

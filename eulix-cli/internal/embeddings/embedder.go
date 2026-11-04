@@ -52,6 +52,8 @@ type Embedder struct {
 	mu             sync.Mutex
 	requestTimeout time.Duration
 	stderrTail     *stderrTail
+	stderrDone     chan struct{} // closed once stderr is fully read
+	dead           error         // set when a timeout killed the process
 	model          string
 	dim            int
 	closed         bool
@@ -111,7 +113,11 @@ func VectorWeaver(model, engine string, debug bool) (*Embedder, error) {
 	}
 
 	tail := &stderrTail{}
-	go streamStderr(model, stderr, tail, debug)
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		streamStderr(model, stderr, tail, debug)
+	}()
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start eulix_embed server: %w", err)
@@ -128,13 +134,14 @@ func VectorWeaver(model, engine string, debug bool) (*Embedder, error) {
 		model:          model,
 		requestTimeout: defaultRequestTimeout,
 		stderrTail:     tail,
+		stderrDone:     stderrDone,
 		debug:          debug,
 	}
 
 	// Block until the ready signal arrives or we time out
 	if err := e.waitReady(); err != nil {
 		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+		_ = e.reap()
 		if diag := tail.String(); diag != "" {
 			return nil, fmt.Errorf("embed process failed to start: %w\nrecent stderr:\n%s", err, diag)
 		}
@@ -229,6 +236,10 @@ func (e *Embedder) roundTrip(req any) ([]byte, error) {
 	if e.closed {
 		return nil, fmt.Errorf("embedder is closed")
 	}
+	if e.dead != nil {
+		// The timed-out read may still be inside Scan; a second one would race it.
+		return nil, e.dead
+	}
 	if err := e.enc.Encode(req); err != nil {
 		return nil, fmt.Errorf("write to embed process: %w", err)
 	}
@@ -263,6 +274,7 @@ func (e *Embedder) roundTrip(req any) ([]byte, error) {
 		// keep using this pipe, so kill it — the caller should treat this
 		// Embedder as dead and recreate it.
 		_ = e.cmd.Process.Kill()
+		e.dead = fmt.Errorf("embed process was killed after a request timed out; restart eulix to re-enable semantic search")
 		return nil, fmt.Errorf("embed process timed out after %s (process killed)", e.requestTimeout)
 	}
 }
@@ -307,7 +319,7 @@ func (e *Embedder) Close() error {
 	e.mu.Unlock()
 
 	waitDone := make(chan error, 1)
-	go func() { waitDone <- e.cmd.Wait() }()
+	go func() { waitDone <- e.reap() }()
 
 	select {
 	case err := <-waitDone:
@@ -316,6 +328,16 @@ func (e *Embedder) Close() error {
 		_ = e.cmd.Process.Kill()
 		return <-waitDone
 	}
+}
+
+// reap waits for stderr to drain, then reaps the process. exec's Wait closes
+// the stderr pipe, so calling it first can drop the server's last lines.
+func (e *Embedder) reap() error {
+	select {
+	case <-e.stderrDone:
+	case <-time.After(5 * time.Second): // a grandchild may still hold stderr open
+	}
+	return e.cmd.Wait()
 }
 
 // Embed generates an embedding vector for the given text.

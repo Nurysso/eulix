@@ -19,6 +19,7 @@ import (
 	"strings"
 	"unicode"
 
+	"eulix/internal/checksum"
 	"eulix/internal/query/classifier"
 	"eulix/internal/query/retrieval"
 	"eulix/internal/query/retrieval/mmap"
@@ -198,8 +199,7 @@ func formatFileData(path string, fd *utils.FileData) string {
 	if len(fd.Functions) > 0 {
 		fmt.Fprintf(&b, "\nFunctions (%d):\n", len(fd.Functions))
 		for _, fn := range fd.Functions {
-			fmt.Fprintf(&b, "  • %s  (lines %d–%d, complexity %d, importance %.2f)\n",
-				fn.Name, fn.LineStart, fn.LineEnd, fn.Complexity, fn.ImportanceScore)
+			fmt.Fprintf(&b, "  • %s  (lines %d–%d)\n", fn.Name, fn.LineStart, fn.LineEnd)
 		}
 	}
 
@@ -218,21 +218,14 @@ func formatFileData(path string, fd *utils.FileData) string {
 		}
 	}
 
-	if len(fd.SecurityNotes) > 0 {
-		fmt.Fprintf(&b, "\nSecurity notes (%d):\n", len(fd.SecurityNotes))
-		for _, sn := range fd.SecurityNotes {
-			fmt.Fprintf(&b, "  [%s] line %d: %s\n", sn.NoteType, sn.Line, sn.Description)
-		}
-	}
-
 	return b.String()
 }
 
 // Helper to handle the metric formatting
-func formatFunctionMetrics(fn utils.KBFunction, path string) string {
+func formatFunctionMetrics(fn utils.FunctionMetric) string {
 	return fmt.Sprintf(
 		"Metrics for %s (%s, lines %d–%d)\n  Cyclomatic complexity : %d\n  LOC                   : %d\n  Importance            : %.2f\n",
-		fn.Name, path, fn.LineStart, fn.LineEnd,
+		fn.Name, fn.File, fn.LineStart, fn.LineEnd,
 		fn.Complexity, fn.LineEnd-fn.LineStart+1, fn.ImportanceScore,
 	)
 }
@@ -464,11 +457,11 @@ func parseLocation(loc string) (string, int, error) {
 }
 
 // extractSignature opens the file at the given 1-based line number,
-// detects the language, and reads the full function signature.
-func extractSignature(filePath string, startLine int) (string, error) {
-	data, err := os.ReadFile(filePath)
+// detects the language, and reads the full function signature. The file is
+// read through root, so neither "../" nor a symlink can reach outside it.
+func extractSignature(root *os.Root, filePath string, startLine int) (string, error) {
+	data, err := root.ReadFile(filepath.FromSlash(filePath))
 	if err != nil {
-		// try relative to project root via env or cwd
 		return "", fmt.Errorf("open %s: %w", filePath, err)
 	}
 
@@ -1221,6 +1214,12 @@ func (r *Router) ensureKB() error {
 	}
 	if kb.Metadata == nil {
 		return fmt.Errorf("kb.json has no metadata")
+	}
+	servable := checksum.ServableMatcher(r.config.Project.Path)
+	for path := range kb.Structure {
+		if !servable(path) {
+			delete(kb.Structure, path)
+		}
 	}
 	r.kb = &kb
 	return nil

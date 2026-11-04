@@ -1,6 +1,6 @@
 # vizEulize
 
-A browser-based call graph explorer for Eulix, launched with `eulix vizEulize`. It loads `.eulix/kb_call_graph.json` and renders it as an interactive, searchable graph. That one file is all it needs.
+A browser-based call graph explorer for Eulix, launched with `eulix vizeulize`. It loads `.eulix/kb_call_graph.json` and renders it as an interactive, searchable graph. That one file is all it needs.
 
 ## Overview
 
@@ -18,18 +18,18 @@ Everything stays on your machine. Nothing is uploaded.
 eulix analyze
 
 # 2. Open the explorer
-eulix vizEulize
+eulix vizeulize
 ```
 
-The page is read from `~/.Eulix/bin/vizEulize.html`, so make sure it is installed there.
+The page is read from `~/.Eulix/bin/vizeulize.html`, so make sure it is installed there.
 
-By default the command looks for `.eulix/kb_call_graph.json`. The call graph path can be overridden with the command's path flag. The index file (`kb_index.json`) is no longer used by the explorer.
+By default the command looks for `.eulix/kb_call_graph.json`. The call graph path can be overridden with `--graph <path>`. The index file (`kb_index.json`) is no longer used by the explorer; the `--index` flag is still accepted but has no effect.
 
 ## Server routes
 
 | Route                   | Serves                        |
 | ----------------------- | ----------------------------- |
-| `/`                     | `~/.Eulix/bin/vizEulize.html` |
+| `/`                     | `~/.Eulix/bin/vizeulize.html` |
 | `/data/call_graph.json` | the call graph file           |
 
 The page also tries `/data/kb_call_graph.json` as a fallback.

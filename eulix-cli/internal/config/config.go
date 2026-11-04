@@ -11,6 +11,9 @@ package config
 
 import (
 	"cmp"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -261,6 +264,15 @@ func validateAndClampConfig(cfg *Config) *Config {
 	return cfg
 }
 
+// decodeConfigFile overlays the TOML file at path onto cfg. A missing file
+// means defaults; a broken one is an error, not a silent fallback.
+func decodeConfigFile(path string, cfg *Config) error {
+	if _, err := toml.DecodeFile(path, cfg); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("invalid %s: %w", path, err)
+	}
+	return nil
+}
+
 // Load loads and validates the configuration
 func Load() (*Config, error) {
 	// Read repository keys without leaking them into other repositories.
@@ -268,7 +280,9 @@ func Load() (*Config, error) {
 	cfg := *DefaultConfig()
 
 	// Overlay configuration from file if present
-	_, _ = toml.DecodeFile("eulix.toml", &cfg)
+	if err := decodeConfigFile("eulix.toml", &cfg); err != nil {
+		return nil, err
+	}
 
 	// Validate and clamp configuration values
 	cfg = *validateAndClampConfig(&cfg)
@@ -299,8 +313,9 @@ func LoadFrom(repoDir string) (*Config, error) {
 	repoEnv, _ := godotenv.Read(filepath.Join(absPath, ".env"))
 	cfg := *DefaultConfig()
 
-	tomlPath := filepath.Join(absPath, "eulix.toml")
-	_, _ = toml.DecodeFile(tomlPath, &cfg)
+	if err := decodeConfigFile(filepath.Join(absPath, "eulix.toml"), &cfg); err != nil {
+		return nil, err
+	}
 
 	cfg = *validateAndClampConfig(&cfg)
 	cfg.Project.Path = absPath

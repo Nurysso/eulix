@@ -33,6 +33,17 @@ else
     USER_HOME := $(HOME)
 endif
 
+# Absolute root so targets work no matter where make was started (sub-dir
+# Makefiles forward here with `make -C ..` and pass CALLER_DIR).
+ROOT_DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+CALLER_DIR ?= $(CURDIR)
+SCRIPTS_DIR := $(ROOT_DIR)/scripts
+KI_DIR := $(SCRIPTS_DIR)/known_issues
+PARSER_BIN ?= $(ROOT_DIR)/eulix-parser/target/release/eulix_parser
+PYTHON ?= $(if $(wildcard $(HOME)/.Eulix/.venv/bin/python),$(HOME)/.Eulix/.venv/bin/python,python3)
+# Scripts run from the directory you typed `make` in, so relative ARGS/paths resolve there.
+RUN_IN_CALLER = cd "$(CALLER_DIR)" &&
+
 # Directories
 PARSER_DIR := eulix-parser
 EMBED_DIR := eulix-embed
@@ -70,7 +81,10 @@ endif
         build-linux-amd build-linux-nvidia build-win-amd build-win-nvidia \
         build-single build-all clean \
         lint lint-rust lint-go lint-python \
-        test test-rust test-go test-python check
+        test test-rust test-go test-python check \
+        scripts-help script parser-release \
+        repro-prism check-tsx perf-rust-workspace check-prism-v2 repro-all \
+        eval-mcp kb-diff kb-field-usage kb-id-name-check vec-stats
 
 all: help
 
@@ -111,6 +125,8 @@ help:
 	@echo "  make test-go          - go test -cover ./... on eulix-cli"
 	@echo "  make test-python      - pytest on eulix-embed"
 	@echo "  make check            - Run lint and test"
+	@echo ""
+	@echo "Scripts: make scripts-help (works from any sub-directory)"
 
 # Directory Creation Targets
 $(BUILD_DIR) $(ASSETS_BINS_DIR):
@@ -236,3 +252,63 @@ test-python:
 
 # Lint + test everything
 check: lint test
+
+# ==============================================================================
+# Scripts (scripts/). Usable from the root or any sub-dir Makefile.
+# Parser-based repros use PARSER_BIN (default: eulix-parser release build).
+# Pass extra arguments with ARGS="...".
+# ==============================================================================
+scripts-help:
+	@echo "Script targets (run from anywhere in the repo):"
+	@echo "  make repro-prism          PRISM-2..6 repro        [PARSER_BIN=..]"
+	@echo "  make check-tsx            PARSE-2 (.tsx/.jsx rejected)"
+	@echo "  make perf-rust-workspace  PRISM-8 slowdown        [ARGS='40 80']"
+	@echo "  make check-prism-v2       #152 review findings"
+	@echo "  make repro-all            all parser repros above"
+	@echo "  make eval-mcp             retrieval eval          [ARGS=out.json]"
+	@echo "  make kb-diff              ARGS='a.json b.json [--depth N]'"
+	@echo "  make kb-field-usage       ARGS='--rust .. --go-dir ..'"
+	@echo "  make kb-id-name-check     ARGS=path/to/kb.json (default .eulix/kb.json)"
+	@echo "  make vec-stats            ARGS=path/to/embeddings.bin"
+	@echo "  make script SCRIPT=name.py ARGS='...'   run any file in scripts/"
+
+parser-release:
+	cd $(PARSER_DIR) && cargo build --release
+
+repro-prism: parser-release
+	$(RUN_IN_CALLER) bash $(KI_DIR)/repro_prism.sh "$(PARSER_BIN)" $(ARGS)
+
+check-tsx:
+	$(RUN_IN_CALLER) bash $(KI_DIR)/check_tsx.sh $(ARGS)
+
+perf-rust-workspace: parser-release
+	$(RUN_IN_CALLER) bash $(KI_DIR)/perf_rust_workspace.sh "$(PARSER_BIN)" $(ARGS)
+
+check-prism-v2: parser-release
+	$(RUN_IN_CALLER) bash $(SCRIPTS_DIR)/check_prism_v2_methods.sh "$(PARSER_BIN)"
+
+repro-all: repro-prism check-tsx check-prism-v2 perf-rust-workspace
+
+eval-mcp:
+	$(RUN_IN_CALLER) $(PYTHON) $(SCRIPTS_DIR)/eval_mcp.py $(ARGS)
+
+kb-diff:
+	$(RUN_IN_CALLER) uv run $(SCRIPTS_DIR)/kb_diff.py $(ARGS)
+
+kb-field-usage:
+	$(RUN_IN_CALLER) uv run $(SCRIPTS_DIR)/kb_field_usage.py $(ARGS)
+
+kb-id-name-check:
+	$(RUN_IN_CALLER) $(PYTHON) $(SCRIPTS_DIR)/kb_id_name_check.py  $(ARGS)
+
+vec-stats:
+	$(RUN_IN_CALLER) $(PYTHON) $(SCRIPTS_DIR)/vec_stats.py $(ARGS)
+
+# Generic runner: make script SCRIPT=known_issues/cross_language_edges.py ARGS=kb_call_graph.json
+script:
+	@test -n "$(SCRIPT)" || { echo "usage: make script SCRIPT=<file in scripts/> ARGS='...'"; exit 2; }
+	$(RUN_IN_CALLER) case "$(SCRIPT)" in \
+		*.sh) bash "$(SCRIPTS_DIR)/$(SCRIPT)" $(ARGS) ;; \
+		*.py) $(PYTHON) "$(SCRIPTS_DIR)/$(SCRIPT)" $(ARGS) ;; \
+		*.go) go run "$(SCRIPTS_DIR)/$(SCRIPT)" $(ARGS) ;; \
+		*) echo "unknown script type: $(SCRIPT)"; exit 2 ;; esac

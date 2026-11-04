@@ -284,16 +284,28 @@ func (s *Server) onInitialized(_ context.Context, req *mcpsdk.InitializedRequest
 			s.log.Debug("client did not provide roots", "err", err)
 			return
 		}
+		paths := make([]string, 0, len(res.Roots))
 		for _, root := range res.Roots {
-			if s.GetActiveRepo() != "" {
-				return // someone (e.g. set_repo_path) won the race
-			}
-			path := parseURIPath(root.URI)
-			if _, err := s.SetRepoPath(path); err != nil {
-				s.log.Info("client root not usable", "root", path, "err", err)
-				continue
-			}
-			return
+			paths = append(paths, parseURIPath(root.URI))
 		}
+		s.bindFromRoots(paths)
 	}()
+}
+
+// bindFromRoots binds the first usable root, unless a repository is active.
+// The check and the bind share one lock, so a set_repo_path that arrives in
+// between is never overwritten.
+func (s *Server) bindFromRoots(paths []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, path := range paths {
+		if s.activeRepo != "" {
+			return // set_repo_path or a query's repo_path got there first
+		}
+		if _, err := s.setRepoPathLocked(path); err != nil {
+			s.log.Info("client root not usable", "root", path, "err", err)
+			continue
+		}
+		return
+	}
 }

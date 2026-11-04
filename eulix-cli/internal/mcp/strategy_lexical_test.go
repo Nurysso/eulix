@@ -5,12 +5,18 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
 	"eulix/internal/config"
+	"eulix/internal/utils"
 )
 
 const secretMarker = "SYNTHETIC_SECRET"
@@ -258,5 +264,171 @@ func TestLexicalExcludeOnlyAppliesToEtiya(t *testing.T) {
 		if strings.Contains(got, "eval_mcp.py") != wantEval || !strings.Contains(got, "manager.go") {
 			t.Errorf("%s: eval_mcp.py returned=%v (want %v), output:\n%s", engine, !wantEval, wantEval, got)
 		}
+	}
+}
+
+// ignoreCorpus is a tree of tricky .euignore cases. Every file is a Python
+// function mentioning "secret", so one lexical query can see all of them.
+func ignoreCorpus(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{
+		// root rules: CRLF line endings, a >64 KiB line, then real patterns
+		".euignore": strings.Repeat("x", 70_000) + "\r\n# comment\r\nconfig/**/secrets.py\r\n**/private/**\r\n" +
+			"keys/**\r\n/anchored/\r\nlogs/\r\nneg/*.py\r\n!neg/keep.py\r\n",
+		"svc/payments/.euignore": "creds.py\n",                                 // nested rules apply below their directory
+		"crlf/.euignore":         "win.py\r\n",                                 // nested, CRLF
+		"long/.euignore":         strings.Repeat("y", 70_000) + "\nafter.py\n", // nested, long line first
+	}
+	for _, f := range []string{
+		"app/main.py",
+		"config/secrets.py", "config/prod/secrets.py", "config/eu/prod/secrets.py", "config/topsecrets.py",
+		"a/private/x.py", "private/y.py", "deep/a/b/private/z.py",
+		"keys/k1.py", "keys/sub/k2.py",
+		"svc/payments/creds.py", "svc/payments/ok.py", "svc/other/creds.py",
+		"long/after.py", "crlf/win.py", "anchored/root.py", "sub/anchored/root.py",
+		"logs/l.py", "data/logs.py", "neg/keep.py", "neg/drop.py",
+	} {
+		files[f] = "def secret_" + strings.NewReplacer("/", "_", ".", "_").Replace(f) + "():\n    return 1\n"
+	}
+	writeTree(t, root, files)
+	return root
+}
+
+// lexicalFiles returns every file the lexical fallback shows for q.
+func lexicalFiles(t *testing.T, root, q string) []string {
+	t.Helper()
+	cfg := DefaultStrategyConfig()
+	cfg.LexicalMaxFiles, cfg.LexicalMaxBytes = 1000, 1<<30
+	got, err := lexicalSearch(context.Background(), root, q, nil, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(got, "\n") {
+		if rest, ok := strings.CutPrefix(line, "### "); ok {
+			seen[rest[:strings.LastIndex(rest, ":")]] = true
+		}
+	}
+	files := make([]string, 0, len(seen))
+	for f := range seen {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	return files
+}
+
+// The files eulix-parser indexes for ignoreCorpus (verified against it), less
+// neg/keep.py: "!" negation is not supported here, so it stays hidden, which
+// errs on the safe side.
+var corpusVisible = []string{
+	"app/main.py", "config/topsecrets.py", "data/logs.py",
+	"sub/anchored/root.py", "svc/other/creds.py", "svc/payments/ok.py",
+}
+
+func TestLexicalSearchHonoursEuignoreLikeTheParser(t *testing.T) {
+	if got := lexicalFiles(t, ignoreCorpus(t), "secret"); !slices.Equal(got, corpusVisible) {
+		t.Fatalf("lexical search shows\n  %q\nwant\n  %q", got, corpusVisible)
+	}
+}
+
+// The real oracle: whatever eulix-parser leaves out of the knowledge base, the
+// lexical fallback must not show. Runs when the parser binary is available.
+func TestLexicalSearchNeverShowsWhatTheParserExcludes(t *testing.T) {
+	parser := os.Getenv("EULIX_PARSER")
+	if parser == "" {
+		parser = filepath.Join("..", "..", "..", "eulix-parser", "target", "release", "eulix_parser")
+	}
+	if _, err := os.Stat(parser); err != nil {
+		t.Skipf("eulix-parser not built (set EULIX_PARSER): %v", err)
+	}
+	root := ignoreCorpus(t)
+	out := filepath.Join(t.TempDir(), "kb.json")
+	if msg, err := exec.Command(parser, "-r", root, "-o", out, "-p", "2", "-n").CombinedOutput(); err != nil {
+		t.Fatalf("parser: %v\n%s", err, msg)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kb utils.KnowledgeBaseSimplifiedRef
+	if err := json.Unmarshal(data, &kb); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range lexicalFiles(t, root, "secret") {
+		if _, ok := kb.Structure[f]; !ok {
+			t.Errorf("lexical search shows %s, which the parser excluded", f)
+		}
+	}
+	for f := range kb.Structure {
+		if !slices.Contains(corpusVisible, f) && f != "neg/keep.py" {
+			t.Errorf("parser now indexes %s: update corpusVisible", f)
+		}
+	}
+}
+
+func TestLexicalSearchFollowsASymlinkedRoot(t *testing.T) {
+	real := t.TempDir()
+	writeTree(t, real, map[string]string{
+		"billing/pay.py": "def payment_total():\n    return 42\n",
+		".euignore":      "secret.py\n",
+		"secret.py":      "payment = '" + secretMarker + "'\n",
+	})
+	link := filepath.Join(t.TempDir(), "repo")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	got := runLexical(t, link, "payment")
+	if !strings.Contains(got, "payment_total") || strings.Contains(got, secretMarker) {
+		t.Fatalf("repo opened through a symlink:\n%s", got)
+	}
+}
+
+func TestLexicalSearchSkipsBinaryAndOversizedFiles(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"billing/pay.py": "def payment_total():\n    return 42\n",
+		"blob.bin":       "payment\x00" + secretMarker,
+		"huge.txt":       "payment " + secretMarker + "\n" + strings.Repeat("x", maxLexFileBytes),
+	})
+	if got := runLexical(t, root, "payment"); strings.Contains(got, secretMarker) || !strings.Contains(got, "payment_total") {
+		t.Fatalf("binary or oversized file returned:\n%s", got)
+	}
+}
+
+func TestLexicalSearchCapsItsOutput(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{}
+	for i := range 40 {
+		files["pkg/f"+itoa(i)+".py"] = strings.Repeat("payment line with some width to it\n", 30)
+	}
+	writeTree(t, root, files)
+	cfg := DefaultStrategyConfig()
+	got, err := lexicalSearch(context.Background(), root, "payment", nil, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(got, "### "); n == 0 || len(lexicalFiles(t, root, "payment")) != 40 {
+		t.Fatalf("expected matches, got %d windows", n)
+	}
+	files2 := map[string]bool{}
+	for _, line := range strings.Split(got, "\n") {
+		if rest, ok := strings.CutPrefix(line, "### "); ok {
+			files2[rest[:strings.LastIndex(rest, ":")]] = true
+		}
+	}
+	// One window (7 lines of at most 300 bytes) may overshoot the byte cap.
+	if len(files2) > cfg.LexicalMaxFiles || len(got) > cfg.LexicalMaxBytes+8*310 {
+		t.Fatalf("output not capped: %d files, %d bytes", len(files2), len(got))
+	}
+}
+
+func TestLexicalSearchStopsWhenCancelled(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{"pay.py": "payment\n"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := lexicalSearch(ctx, root, "payment", nil, DefaultStrategyConfig()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"eulix/internal/checksum"
 	"eulix/internal/query/retrieval/mmap"
 	"eulix/internal/utils"
 )
@@ -173,6 +174,7 @@ func (cb *ContextBuilder) streamKBChunks() error {
 	// to avoid slice growth copies. addChunksFromFile may further
 	// grow the slice if the source has more chunks than expected.
 	cb.chunks = make([]Chunk, 0, PreAllocate)
+	servable := checksum.ServableMatcher(cb.sourceRoot)
 
 	for dec.More() {
 		tok, err := dec.Token()
@@ -187,6 +189,10 @@ func (cb *ContextBuilder) streamKBChunks() error {
 		var raw json.RawMessage
 		if err := dec.Decode(&raw); err != nil {
 			return fmt.Errorf("reading FileData for %s: %w", filePath, err)
+		}
+		if !servable(filePath) {
+			cb.debugLog.Log("[LOAD] skipping %s: hidden, .euignore'd or outside the source root", filePath)
+			continue
 		}
 
 		// Decode the FileData with sonic for JIT-speed field

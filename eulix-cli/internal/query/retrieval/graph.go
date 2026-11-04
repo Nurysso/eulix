@@ -10,15 +10,12 @@ package retrieval
 import (
 	"slices"
 	"strings"
-
-	"eulix/internal/utils"
 )
 
 const (
 	topNCandidates     = 20
 	maxGraphExpansions = 15 // cap on relationship edges processed
 	maxNewChunksPerRel = 5  // cap chunks pulled per relationship, so one
-	maxCallees         = 5
 	// widely-referenced symbol can't flood the result
 )
 
@@ -284,66 +281,4 @@ func (cb *ContextBuilder) buildContextWithoutGraph(candidates []ScoredChunk, bud
 		}
 	})
 	return cb.applyBudget(candidatesCopy, budget)
-}
-
-// expandFromKBFunction resolves functions called by fn using knowledge base data
-// and returns them as scored chunks up to a maximum limit of 5 callees.
-func (cb *ContextBuilder) expandFromKBFunction(fn utils.KBFunction, filePath string, baseScore float64) []ScoredChunk {
-	log := func(format string, args ...interface{}) {
-		if cb.debugLog != nil {
-			cb.debugLog.Log(format, args...)
-		}
-	}
-
-	if cb.kbData == nil {
-		log("kbData is nil, cannot expand")
-		return nil
-	}
-
-	exp := make([]ScoredChunk, 0, maxCallees)
-
-	for i, call := range fn.Calls {
-		if len(exp) >= maxCallees {
-			break
-		}
-
-		log("Processing call %d: Callee=%s", i, call.Callee)
-
-		if call.DefinedIn == nil || *call.DefinedIn == "" {
-			log("Skipping call %s: DefinedIn missing", call.Callee)
-			continue
-		}
-		definedIn := *call.DefinedIn
-
-		fs, ok := cb.kbData.Structure[definedIn]
-		if !ok {
-			log("File not found: %s", definedIn)
-			continue
-		}
-
-		found := false
-		for _, calledFn := range fs.Functions {
-			if calledFn.Name == call.Callee {
-				score := baseScore * 0.75
-				if definedIn == filePath {
-					score *= 1.03
-				}
-				exp = append(exp, ScoredChunk{
-					Chunk:        cb.buildChunkFromKBFunction(calledFn, definedIn),
-					Score:        score,
-					Distance:     1,
-					MatchType:    "kb_called",
-					MatchDetails: "Called by " + fn.Name,
-				})
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			log("Callee %s not found in file %s", call.Callee, definedIn)
-		}
-	}
-
-	return exp
 }
