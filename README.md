@@ -140,7 +140,7 @@ Explore repository analysis, retrieval, and code navigation.
 <td width="50%" align="center" valign="top">
   <img src="https://github.com/user-attachments/assets/5a4a36d8-2804-4402-a75f-d4edb4d0a80e" alt="Eulix retrieval query" height="300" />
   <br />
-  <b>VizEulize</b>
+  <b>vizEulize</b>
 </td>
 </tr>
 </table>
@@ -238,7 +238,7 @@ and which filters participate in the claiming process?
 | `chat`       | Start the interactive interface                      |
 | `query`      | Build retrieval context or answer a direct query     |
 | `mcp`        | Expose retrieval to coding agents (stdio MCP server) |
-| `vizEulize`  | Open the call-graph explorer in your browser         |
+| `vizeulize`  | Open the call-graph explorer in your browser         |
 | `parser`     | Access the parser wrapper                            |
 | `embed`      | Run the embedding pipeline on its own                |
 | `history`    | Browse previous queries                              |
@@ -301,10 +301,10 @@ Point your editor's LSP client at the built binary. See the [eulix-lsp README](e
 
 ```bash
 eulix analyze
-eulix vizEulize
+eulix vizeulize
 ```
 
-Starts a local server on `127.0.0.1` and opens an interactive, searchable call graph in your browser — focus, direction and depth controls, filters, tags, categories. Everything stays on your machine. See the [vizEulize README](vizEulize/README.md).
+Starts a local server on `127.0.0.1` and opens an interactive, searchable call graph in your browser — focus, direction and depth controls, filters, tags, categories. Everything stays on your machine. See the [vizEulize README](vizEulize/README.md) and the [vizEulize docs](docs/vizEulize/Overview.md).
 
 ### Library
 

@@ -12,6 +12,8 @@ scratch for every query is too expensive.
 
 > **Parse once. Navigate many times.**
 
+Full documentation lives in [docs/libeulix](../docs/libeulix/Overview.md).
+
 Built with Rust + Tree-sitter.
 
 ---
@@ -65,7 +67,7 @@ cargo add libeulix
 ```toml
 # if using in eulix and want latest version and not from cargo
 [dependencies]
-libeulix = { path = "../libeulix", version = "0.8.1" }
+libeulix = { path = "../libeulix", version = "0.9.0" }
 ```
 
 Rust stable is required. The tree-sitter grammar crates need a C/C++ compiler at build time.
@@ -102,8 +104,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Parse many files and build a call graph
 
 ```rust
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use libeulix::grammar_files;
 use libeulix::analyze::call_graph::prism_v2;
 use libeulix::struc::kb_struct::FileData;
@@ -114,7 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "src/main.rs".into(),
     ];
 
-    let mut structure: HashMap<String, FileData> = HashMap::new();
+    let mut structure: BTreeMap<String, FileData> = BTreeMap::new();
     for path in &files {
         let src = std::fs::read_to_string(path)?;
         let (rel, fd) = grammar_files::parse_source(path, &src)?;
@@ -129,19 +131,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Full analysis (all passes)
+### Run the analysis passes
+
+`analyze_and_build` still works, but it is **deprecated since 0.9.0** and will
+be removed in 1.0.0. Call the passes directly instead:
 
 ```rust
-use libeulix::analyze::pipeline::analyze_and_build;
-use libeulix::struc::kb_struct::{KnowledgeBase, Metadata};
-# use std::collections::HashMap;
+use libeulix::analyze::call_graph::prism_v2;
+use libeulix::analyze::{dependencies, entry_points, patterns};
 
-# fn build_kb() -> KnowledgeBase { todo!() }
-let kb = build_kb();
-let kb = analyze_and_build(kb, verbose =false, prism =2);
-
-// kb.call_graph, kb.entry_points, kb.patterns, kb.external_dependencies
-// are now populated.
+// `kb` is a KnowledgeBase whose `structure` is already filled in.
+kb.call_graph = prism_v2::build_call_graph_v2(&kb.structure);
+prism_v2::populate_called_by_from_graph(&mut kb);
+kb.patterns = patterns::detect_patterns(&kb);
+kb.entry_points = entry_points::find_entry_points(&kb);
+kb.external_dependencies = dependencies::analyze_external_deps(&kb);
 ```
 
 ---
@@ -151,21 +155,24 @@ let kb = analyze_and_build(kb, verbose =false, prism =2);
 Everything is a free function on a module. There is no engine singleton and
 no global state — the crate is designed to be embeddable.
 
-| Module                                                         | Purpose                                           |
-| -------------------------------------------------------------- | ------------------------------------------------- |
-| `grammar_files::parse_source(path, src)`                       | Parse one in-memory source file into a `FileData` |
-| `grammar_files::parse_file(path)`                              | Read from disk and parse                          |
-| `grammar_files::language::Language::detect(path)`              | Map a path to a language                          |
-| `analyze::pipeline::analyze_and_build(kb, verbose, prism)`     | Run every analysis pass over a `KnowledgeBase`    |
-| `analyze::call_graph::prism_v1::build(&structure)`             | Fast, name-based call graph                       |
-| `analyze::call_graph::prism_v2::build_with(&structure, &opts)` | Scope-aware call graph                            |
-| `analyze::indices::generate(&kb)`                              | Fast lookup indices                               |
-| `analyze::summary::generate(&kb)`                              | Project summary                                   |
-| `analyze::metrics::generate(&kb, top_k)`                       | Complexity / importance metrics                   |
-| `analyze::entry_points::find(&kb)`                             | Entry points (main, routes, CLI commands)         |
-| `analyze::dependencies::analyze(&kb)`                          | External dependency extraction                    |
-| `analyze::patterns::detect(&kb)`                               | Architectural pattern detection                   |
-| `struc::kb_struct::*`                                          | The `FileData` / `KnowledgeBase` schema           |
+| Function                                                       | Purpose                                                      |
+| -------------------------------------------------------------- | ------------------------------------------------------------ |
+| `grammar_files::parse_source(path, src)`                       | Parse one in-memory source file into a `FileData`            |
+| `grammar_files::language::Language::detect(path)`              | Map a path to a language                                     |
+| `analyze::call_graph::prism_v1::build_call_graph(&structure)`  | Fast, name-based call graph (run `resolve_call_locations` first) |
+| `analyze::call_graph::prism_v2::build_with(&structure, &opts)` | Scope-aware call graph                                       |
+| `analyze::entry_points::find_entry_points(&kb)`                | Entry points (`main`, routes, CLI commands)                  |
+| `analyze::dependencies::analyze_external_deps(&kb)`            | External dependency extraction                               |
+| `analyze::patterns::detect_patterns(&kb)`                      | Naming, layout and architecture hints                        |
+| `analyze::indices::generate_indices_view(&kb)`                 | Fast lookup indices                                          |
+| `analyze::metrics::generate_metrics(&kb, k)`                   | Top-`k` functions by complexity                              |
+| `analyze::summary::generate_summary(&kb)`                      | Project summary                                              |
+| `analyze::pipeline::analyze_and_build(kb, verbose, prism)`     | Runs the call graph, patterns, entry points and dependencies. Deprecated. |
+| `struc::kb_struct::*`                                          | The `FileData` / `KnowledgeBase` schema                      |
+
+`structure` (the argument to the call-graph builders) is a
+`BTreeMap<String, FileData>`. For the full API, see
+[docs/libeulix/Public-API.md](../docs/libeulix/Public-API.md).
 
 The two top-level types are:
 
@@ -187,11 +194,13 @@ Both are `Serialize` / `Deserialize`, so they round-trip through JSON.
 | Go               | `.go`                                 | Stable         |
 | Python           | `.py`, `.pyw`, `.pyi`                 | Stable         |
 | Rust             | `.rs`                                 | Stable         |
-| TypeScript / TSX | `.ts`, `.tsx`, `.mts`, `.cts`         | Stable         |
-| JavaScript / JSX | `.js`, `.mjs`, `.cjs`, `.jsx`         | Needs testing  |
+| TypeScript       | `.ts`, `.mts`, `.cts`                 | Stable         |
+| JavaScript       | `.js`, `.mjs`, `.cjs`                 | Needs testing  |
 | Java             | `.java`                               | Needs testing  |
 | PHP              | `.php`, `.phtml`, `.inc`              | Needs testing  |
-| Ruby             | `.rb`                                 | In development |
+
+`.jsx` and `.tsx` files are detected as languages but are currently rejected
+by `parse_source`. Ruby is not supported.
 
 Language support is not just syntax support. Some language features make
 relationship analysis substantially harder than parsing alone — dynamic
@@ -227,7 +236,10 @@ symbol-based resolution and broad call-graph coverage at lower cost.
 
 ```rust
 use libeulix::analyze::call_graph::prism_v1;
-let cg = prism_v1::build(&structure);
+// Rewrites each call's callee to the id of the first definition with that
+// name. Without it, bare call names don't resolve.
+prism_v1::resolve_call_locations(&mut kb);
+let cg = prism_v1::build_call_graph(&kb.structure);
 ```
 
 ### PRISM v2

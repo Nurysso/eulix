@@ -12,6 +12,8 @@ without ever reparsing the repository.
 
 > **Parse the repository once. Navigate it many times.**
 
+Full documentation lives in [docs/eulix-parser](../docs/eulix-parser/Overview.md).
+
 ---
 
 ## Install
@@ -52,10 +54,15 @@ A normal run emits a set of synchronized JSON artifacts:
 | `knowledge_base_external_deps.json` | External package / dependency information                                                             |
 | `knowledge_base_patterns.json`      | Detected structural and architectural patterns                                                        |
 | `checksum.json.zst`                 | Check Sum of the parsed files                                                                         |
+| `parse_cache/`                      | Private cache that makes repeat runs fast (see [Incremental runs](#incremental-runs))                 |
 
 With`--no-analyze`, only the main knowledge-base.json artifact is written.
 
 > you can change out file name by providing -o flag with baseName.json
+
+All files are written into the directory that contains the `--output` path,
+and the seven secondary files are named after its file stem. See
+[Output Files](../docs/eulix-parser/Output-Files.md) for what each one holds.
 
 ---
 
@@ -69,11 +76,12 @@ eulix_parser [OPTIONS] --root <ROOT> --prism <PRISM>
 | --------------------- | ----- | ----------------------------------------------- | --------------------- |
 | `--root <ROOT>`       | `-r`  | Repository root                                 | Required              |
 | `--output <OUTPUT>`   | `-o`  | Knowledge-base output path                      | `knowledge_base.json` |
-| `--threads <N>`       | `-t`  | Number of parser workers                        | `4`                   |
+| `--threads <N>`       | `-t`  | Number of parser workers (`0` = physical cores) | `4`                   |
 | `--languages <LANGS>` | `-l`  | Comma-separated languages or `all`              | `all`                 |
 | `--prism <1\|2>`      | `-p`  | PRISM relationship engine version               | Required              |
-| `--no-analyze`        |       | Parse files without relationship/analysis phase | `false`               |
-| `--euignore <PATH>`   |       | Custom `.euignore` path                         | `<root>/.euignore`    |
+| `--no-analyze`        | `-n`  | Parse files without relationship/analysis phase | `false`               |
+| `--euignore <PATH>`   | `-e`  | Custom `.euignore` path                         | `<root>/.euignore`    |
+| `--parse-report <FILE>` | `-P` | Write a TSV listing every partial and failed file | off               |
 | `--verbose`           | `-v`  | Detailed phase output                           | `false`               |
 | `--version`           | `-V`  | Print version                                   |                       |
 
@@ -126,6 +134,21 @@ eulix_parser \
 
 `--no-analyze` is useful when you only need the parsed knowledge base and
 want to skip call-graph and related analysis work.
+
+---
+
+## Incremental runs
+
+Every run keeps a cache in `<output directory>/parse_cache/`. On the next run,
+files whose size and modification time are unchanged are reused without being
+read, and files whose content hash is unchanged are reused without being
+parsed. Only changed files are parsed again. The call graph and the other
+analysis files are always rebuilt, and the result is identical to a fresh full
+parse. With `--verbose`, the parser prints `Reused N cached files`.
+
+Rebuilding the parser invalidates the cache. To force a full parse, delete the
+`parse_cache` directory. The design is explained in
+[Incremental Parsing](../docs/Architecture/Incremental-Parsing.md).
 
 ---
 
@@ -229,9 +252,11 @@ At a high level:
     JSON artifacts
 ```
 
-The CLI itself does file discovery, spill-file handling, output writing,
-and progress reporting. All parsing and analysis work lives in
-[`libeulix`](../libeulix/). If you want to embed the engine in your own Rust
+The CLI itself does file discovery, spill-file handling, the incremental
+cache, output writing, and progress reporting. Each file's detailed output is
+written to disk as soon as it is parsed and `kb.json` is assembled from those
+pieces at the end; see [Spill to Disk](../docs/Architecture/Spill-To-Disk.md).
+All parsing and analysis work lives in [`libeulix`](../libeulix/). If you want to embed the engine in your own Rust
 project instead of shelling out to `eulix_parser`, depend on `libeulix`
 directly.
 

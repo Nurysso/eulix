@@ -17,8 +17,8 @@
   - Optional `--quantize` flag compresses embeddings by 4× with negligible (<1%) retrieval quality degradation.
 - **Intelligent Token Bucketing**:
   - Groups code chunks by sequence length prior to batching on GPU/CPU, eliminating padding overhead and dramatically boosting tokens/sec throughput.
-- **Code Filtering**:
-  - Optional `--no-comments` flag strips comments, docstrings, and license headers prior to embedding, focusing semantic space on actual logic.
+- **Compact chunk text**:
+  - Each function, method, class and file becomes a short text card (name, lines, signature, parameters, class bases). Docstrings are removed before embedding, and the parser's slim `kb.json` carries no calls or complexity, so cards contain only structure and names.
 
 ---
 
@@ -87,7 +87,7 @@ uv run main.py embed \
 | `-o, --output <DIR>`    | `./embeddings`                           | Directory where binary vector files will be written. |
 | `-m, --model <NAME>`    | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace model name.                              |
 | `-e, --engine <ENGINE>` | `onnx`                                   | Inference engine: `onnx` or `torch`.                 |
-| `-d, --device <DEVICE>` | `auto`                                   | Execution device: `cuda`, `mps`, or `cpu`.           |
+| `-d, --device <DEVICE>` | `auto`                                   | Execution device: `cuda`, `rocm`, `mps`, or `cpu`.   |
 | `-b, --batch-size <N>`  | auto                                     | Batch size (defaults to 64 for GPU, 16 for CPU).     |
 | `--max-chunk <N>`       | `2000`                                   | Maximum character limit per code chunk.              |
 | `--quantize`            | off                                      | Enable SQ8 int8 quantization (4× storage savings).   |
@@ -141,25 +141,29 @@ uv run main.py compare .eulix/embeddings.bin .eulix/vectors.bin
 
 | File              | Description                                                                                                 |
 | ----------------- | ----------------------------------------------------------------------------------------------------------- |
-| `embeddings.bin`  | Ordered binary list of `(id, vector)` entries preserving chunk ordering for sequential scans.               |
-| `vectors.bin`     | Keyed lookup table mapping `symbol_id → vector_offset` for $O(1)$ direct vector access via `mmap`.          |
-| `embeddings.json` | _(Optional, `--save-json`)_ Formatted JSON containing chunks, tokens, and vector coordinates for debugging. |
+| `embeddings.bin`  | Fixed-size vector records in chunk order, for O(1) access by index and memory mapping.                      |
+| `vectors.bin`     | The chunk ids, in the same order as the vectors: id number n belongs to vector number n.                    |
 
 ### Binary Format Specification
 
 ```text
-Header:
+embeddings.bin (little-endian)
   magic (4 bytes)          : "EULX"
-  version (4 bytes)        : u32 little-endian
+  version (4 bytes)        : u32 (currently 5)
   model_name_len (4 bytes) : u32
   model_name (N bytes)     : UTF-8 string
-  entry_count (4 bytes)    : u32
+  count (4 bytes)          : u32
   dimension (4 bytes)      : u32
+  quantized (1 byte)       : 0 = float32, 1 = SQ8 int8
+  then `count` fixed-size records:
+    float32 form : dimension * 4 bytes
+    SQ8 form     : 4 bytes scale (f32) + dimension bytes (int8)
 
-Payload (Repeated `entry_count` times):
-  id_len (4 bytes)         : u32
-  id_bytes (M bytes)       : UTF-8 string
-  vector (dim * 4 bytes)   : f32 array (or int8 if --quantize)
+vectors.bin (little-endian)
+  magic, version, model_name_len, model_name : as above
+  count (4 bytes)          : u32
+  then `count` entries: id_len (u32) + id (UTF-8)
+  # entry n here is the id of vector n in embeddings.bin
 ```
 
 ---
@@ -178,3 +182,5 @@ Payload (Repeated `entry_count` times):
 ## License
 
 `eulix_embed` is licensed under the [Apache License 2.0](LICENSE).
+
+Full documentation: [docs/eulix-embed](../docs/eulix-embed/Overview.md).
