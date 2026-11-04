@@ -92,11 +92,15 @@ func (cb *ContextBuilder) resetTwinIndex() {
 // structural fingerprint.
 func buildTwinIndex(cb *ContextBuilder) *twinIndex {
 	ti := &twinIndex{
-		density: make(map[string]float64),
-		relDens: make(map[string]float64),
-		sig:     make([]uint64, len(cb.chunks)),
-		twin:    make(map[uint64][]int),
-		twinDF:  make(map[uint64]int),
+		density:   make(map[string]float64),
+		relDens:   make(map[string]float64),
+		sig:       make([]uint64, len(cb.chunks)),
+		twin:      make(map[uint64][]int),
+		twinDF:    make(map[uint64]int),
+		twinClass: make([]int, len(cb.chunks)),
+	}
+	for i := range ti.twinClass {
+		ti.twinClass[i] = -1
 	}
 	if len(cb.chunks) == 0 {
 		return ti
@@ -128,7 +132,13 @@ func buildTwinIndex(cb *ContextBuilder) *twinIndex {
 
 	var total float64
 	var langs int
-	for lang, s := range sum {
+	langOrder := make([]string, 0, len(sum))
+	for lang := range sum {
+		langOrder = append(langOrder, lang)
+	}
+	sort.Strings(langOrder)
+	for _, lang := range langOrder {
+		s := sum[lang]
 		c := float64(cnt[lang])
 		if c == 0 {
 			continue
@@ -174,6 +184,17 @@ func buildTwinIndex(cb *ContextBuilder) *twinIndex {
 		}
 	}
 
+	// Stable labels must not depend on map iteration or chunk input order.
+	signatures := make([]uint64, 0, len(ti.twin))
+	for sig := range ti.twin {
+		signatures = append(signatures, sig)
+	}
+	sort.Slice(signatures, func(i, j int) bool { return signatures[i] < signatures[j] })
+	for class, sig := range signatures {
+		for _, i := range ti.twin[sig] {
+			ti.twinClass[i] = class
+		}
+	}
 	return ti
 }
 
@@ -193,7 +214,7 @@ func structuralSignature(c Chunk) (uint64, bool) {
 	norm := make([]string, 0, len(c.Symbols))
 	seen := make(map[string]bool, len(c.Symbols))
 	for _, s := range c.Symbols {
-		n := strings.ToLower(strings.TrimLeft(s, "_"))
+		n := strings.ToLower(strings.ReplaceAll(s, "_", ""))
 		if len(n) < 3 || seen[n] {
 			continue
 		}
@@ -237,7 +258,13 @@ func (cb *ContextBuilder) crossLangTwinSearch(sources map[string]ScoredChunk, to
 	bridgeScore := make(map[int]float64, topK*2)
 	detail := make(map[int]string, topK*2)
 
-	for _, src := range sources {
+	sourceIDs := make([]string, 0, len(sources))
+	for id := range sources {
+		sourceIDs = append(sourceIDs, id)
+	}
+	sort.Strings(sourceIDs)
+	for _, id := range sourceIDs {
+		src := sources[id]
 		if src.Pinned || src.Score < twinBridgeFloor {
 			continue
 		}
@@ -291,7 +318,7 @@ func (cb *ContextBuilder) crossLangTwinSearch(sources map[string]ScoredChunk, to
 		if out[i].Score != out[j].Score {
 			return out[i].Score > out[j].Score
 		}
-		return out[i].ID < out[j].ID
+		return compareEhnasChunks(out[i].Chunk, out[j].Chunk) < 0
 	})
 	if len(out) > topK*2 {
 		out = out[:topK*2]

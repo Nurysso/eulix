@@ -69,10 +69,9 @@ func TestBM25TieBreakIsDeterministic(t *testing.T) {
 			t.Fatalf("BM25 order changed: %v vs %v", want, got)
 		}
 	}
-	// Proximity (topK*4 = 12 candidates) goes to the lowest indices, c29..c18;
-	// the result keeps the lowest IDs among them.
-	if !slices.Equal(want, []string{"c18", "c19", "c20"}) {
-		t.Fatalf("want [c18 c19 c20], got %v", want)
+	// EHNAS uses stable chunk IDs before both the proximity cut and result cut.
+	if !slices.Equal(want, []string{"c00", "c01", "c02"}) {
+		t.Fatalf("want [c00 c01 c02], got %v", want)
 	}
 }
 
