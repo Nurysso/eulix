@@ -12,11 +12,11 @@ against a Go codebase, reporting which fields of each struct are ACTUALLY
 read, so you know what's safe to cut from kb.json.
 Setup:
   - Requires a Go toolchain on PATH (`go version` should work). No other
-    dependencies -- astdump.go uses only the Go standard library.
+    dependencies -- ast_dump.go uses only the Go standard library.
 
 Usage:
-  uv run scripts/kb_usage.py --rust ../eulix-parser/src/struc/kb_struct.rs --go-dir ../eulix-cli/internal/query
-  uv run scripts/kb_usage.py --rust eulix-parser/src/struc/kb_struct.rs --go-dir eulix-cli/internal/query --only Function Class FileData
+  uv run scripts/kb_field_usage.py --rust ../libeulix/src/struc/kb_struct.rs --go-dir ../eulix-cli/internal/query
+  uv run scripts/kb_field_usage.py --rust libeulix/src/struc/kb_struct.rs --go-dir eulix-cli/internal/query --only Function Class FileData
 """
 
 import argparse
@@ -105,16 +105,16 @@ def build_pascal_index(structs):
     return idx
 
 
-def run_astdump(go_files, go_bin="go", astdump_src=None):
-    astdump_src = astdump_src or os.path.join(os.path.dirname(os.path.abspath(__file__)), "astdump.go")
+def run_ast_dump(go_files, go_bin="go", ast_dump_src=None):
+    ast_dump_src = ast_dump_src or os.path.join(os.path.dirname(os.path.abspath(__file__)), "ast_dump.go")
     with tempfile.TemporaryDirectory() as td:
-        binpath = os.path.join(td, "astdump")
+        binpath = os.path.join(td, "ast_dump")
         build = subprocess.run(
-            [go_bin, "build", "-o", binpath, astdump_src],
+            [go_bin, "build", "-o", binpath, ast_dump_src],
             capture_output=True, text=True,
         )
         if build.returncode != 0:
-            print("Failed to build astdump.go:\n" + build.stderr, file=sys.stderr)
+            print("Failed to build ast_dump.go:\n" + build.stderr, file=sys.stderr)
             sys.exit(1)
         run = subprocess.run([binpath, *go_files], capture_output=True, text=True)
         if run.stderr:
@@ -216,10 +216,11 @@ def main():
     global REVERSE_NAME_MAP
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--rust", default="kb_struct.rs")
-    ap.add_argument("--go-dir", default=".")
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ap.add_argument("--rust", default=os.path.join(_root, "libeulix", "src", "struc", "kb_struct.rs"))
+    ap.add_argument("--go-dir", default=os.path.join(_root, "eulix-cli", "internal", "query"))
     ap.add_argument("--go-bin", default="go")
-    ap.add_argument("--astdump", default=None, help="path to astdump.go (default: alongside this script)")
+    ap.add_argument("--ast_dump", default=None, help="path to ast_dump.go (default: alongside this script)")
     ap.add_argument("--only", nargs="*", default=None)
     args = ap.parse_args()
 
@@ -235,7 +236,7 @@ def main():
         print(f"No .go files found under {args.go_dir}", file=sys.stderr)
         sys.exit(1)
 
-    reports = run_astdump(go_files, go_bin=args.go_bin, astdump_src=args.astdump)
+    reports = run_ast_dump(go_files, go_bin=args.go_bin, ast_dump_src=args.ast_dump)
 
     all_hits = defaultdict(lambda: defaultdict(list))
     for rep in reports:

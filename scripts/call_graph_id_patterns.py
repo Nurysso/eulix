@@ -2,6 +2,7 @@ import argparse
 import json
 import re
 import sys
+from pathlib import Path
 from collections import Counter, defaultdict
 
 
@@ -80,7 +81,9 @@ def main():
     )
     parser.add_argument(
         "json_file",
-        help="Path to the JSON file to analyze (e.g., call_graph.json)",
+        nargs="?",
+        default=str(Path(__file__).resolve().parent.parent / ".eulix" / "kb_call_graph.json"),
+        help="JSON file to analyze (default: <repo>/.eulix/kb_call_graph.json)",
     )
 
     args = parser.parse_args()

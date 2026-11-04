@@ -6,13 +6,13 @@
 default: test-rust
 
 test:
-	$(MAKE) -C .. test-rust
+	$(MAKE) -C .. CALLER_DIR=$(CURDIR) test-rust
 
 lint:
-	$(MAKE) -C .. lint-rust
+	$(MAKE) -C .. CALLER_DIR=$(CURDIR) lint-rust
 
 build:
-	$(MAKE) -C .. parsers
+	$(MAKE) -C .. CALLER_DIR=$(CURDIR) parsers
 
 %:
-	$(MAKE) -C .. $@
+	$(MAKE) -C .. CALLER_DIR=$(CURDIR) $@

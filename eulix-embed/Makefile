@@ -3,13 +3,13 @@
 default: test-python
 
 test:
-	$(MAKE) -C .. test-python
+	$(MAKE) -C .. CALLER_DIR=$(CURDIR) test-python
 
 lint:
-	$(MAKE) -C .. lint-python
+	$(MAKE) -C .. CALLER_DIR=$(CURDIR) lint-python
 
 build:
-	$(MAKE) -C .. embed-zip
+	$(MAKE) -C .. CALLER_DIR=$(CURDIR) embed-zip
 
 %:
-	$(MAKE) -C .. $@
+	$(MAKE) -C .. CALLER_DIR=$(CURDIR) $@
