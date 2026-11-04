@@ -78,6 +78,7 @@ func QueryTrafficController(
 	var indexRef utils.IndexDataRef
 	if err := mmap.DecodeJSONFile(filepath.Join(eulixDir, "kb_index.json"), &indexRef); err == nil {
 		kbIndex = indexRef.Indices
+		filterServableIndex(kbIndex, cfg.Project.Path)
 	}
 
 	var callGraphRef *utils.CallGraphRef
