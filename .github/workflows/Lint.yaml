@@ -60,6 +60,28 @@ jobs:
         working-directory: libeulix
         run: cargo clippy -- -D warnings
 
+  test-lib:
+    needs: changes
+    if: needs.changes.outputs.lib == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build and test
+        working-directory: libeulix
+        run: cargo test
+
+  test-parser:
+    needs: changes
+    if: needs.changes.outputs.parser == 'true' || needs.changes.outputs.lib == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build and test
+        working-directory: eulix-parser
+        run: cargo test
+
   test-lsp:
     needs: changes
     if: needs.changes.outputs.lsp == 'true'
