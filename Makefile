@@ -45,7 +45,9 @@ PYTHON ?= $(if $(wildcard $(HOME)/.Eulix/.venv/bin/python),$(HOME)/.Eulix/.venv/
 RUN_IN_CALLER = cd "$(CALLER_DIR)" &&
 
 # Directories
+LIB_DIR := libeulix
 PARSER_DIR := eulix-parser
+LSP_DIR := eulix-lsp
 EMBED_DIR := eulix-embed
 CLI_DIR := eulix-cli
 ASSETS_BINS_DIR := $(CLI_DIR)/internal/assets/bins
@@ -121,7 +123,7 @@ help:
 	@echo "  make lint-go          - golangci-lint run on eulix-cli"
 	@echo "  make lint-python      - lint.sh on eulix-embed"
 	@echo "  make test             - Run all tests"
-	@echo "  make test-rust        - cargo test on eulix-parser"
+	@echo "  make test-rust        - cargo test on libeulix, eulix-parser and eulix-lsp"
 	@echo "  make test-go          - go test -cover ./... on eulix-cli"
 	@echo "  make test-python      - pytest on eulix-embed"
 	@echo "  make check            - Run lint and test"
@@ -239,8 +241,12 @@ test: test-rust test-go test-python
 	@$(ECHO) "$(GREEN)✓ All tests passed$(NC)"
 
 test-rust:
+	@$(ECHO) "$(BLUE)Testing libeulix (cargo test)...$(NC)"
+	cd $(LIB_DIR) && cargo test
 	@$(ECHO) "$(BLUE)Testing eulix-parser (cargo test)...$(NC)"
 	cd $(PARSER_DIR) && cargo test
+	@$(ECHO) "$(BLUE)Testing eulix-lsp (cargo test)...$(NC)"
+	cd $(LSP_DIR) && cargo test
 
 test-go:
 	@$(ECHO) "$(BLUE)Testing eulix-cli (go test -cover)...$(NC)"
