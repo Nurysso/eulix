@@ -24,8 +24,10 @@ jobs:
           filters: |
             parser:
               - 'eulix-parser/**'
+              - '.github/workflows/Lint.yaml'
             lib:
               - 'libeulix/**'
+              - '.github/workflows/Lint.yaml'
             embed:
               - 'eulix-embed/**'
             cli:
@@ -33,6 +35,7 @@ jobs:
             lsp:
               - 'eulix-lsp/**'
               - 'libeulix/**'
+              - '.github/workflows/Lint.yaml'
 
   lint-parser:
     needs: changes
