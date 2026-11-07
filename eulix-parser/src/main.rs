@@ -84,6 +84,7 @@ mod analysis_pipeline;
 mod cache;
 mod engine;
 mod memory;
+#[cfg(not(target_os = "windows"))]
 mod os_io;
 mod output;
 mod parse;
