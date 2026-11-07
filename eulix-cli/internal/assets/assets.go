@@ -86,6 +86,49 @@ type InitializedEulixGlobal struct {
 	InstalledAt time.Time `json:"installed_at"`
 }
 
+// installBinary puts content at dest through a temp file, so a crash never
+// leaves half a binary. Windows refuses to overwrite a running executable but
+// allows renaming it, so a parser still in use by another eulix process is moved
+// aside; that process keeps running, and a later install removes the leftover.
+func installBinary(dest string, content []byte) error {
+	dir, name := filepath.Split(dest)
+	if stale, err := filepath.Glob(filepath.Join(dir, name+".old-*")); err == nil {
+		for _, old := range stale {
+			_ = os.Remove(old) // fails while that old parser still runs; retried next time
+		}
+	}
+
+	tmp, err := os.CreateTemp(dir, name+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o755); err != nil {
+		return err
+	}
+
+	err = os.Rename(tmp.Name(), dest)
+	if err == nil {
+		return nil
+	}
+	aside := fmt.Sprintf("%s.old-%d", dest, time.Now().UnixNano())
+	if moveErr := os.Rename(dest, aside); moveErr != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), dest); err != nil {
+		_ = os.Rename(aside, dest) // keep the working parser in place
+		return err
+	}
+	return nil
+}
+
 func writeHiddenFile(path string, data []byte, perm os.FileMode) error {
 	if err := os.WriteFile(path, data, perm); err != nil {
 		return err
@@ -303,7 +346,7 @@ func extractParser(dir string) error {
 		return nil // already extracted, skip
 	}
 
-	if err := os.WriteFile(destPath, content, 0o755); err != nil {
+	if err := installBinary(destPath, content); err != nil {
 		return fmt.Errorf("write extracted parser binary %q: %w", destPath, err)
 	}
 	return nil

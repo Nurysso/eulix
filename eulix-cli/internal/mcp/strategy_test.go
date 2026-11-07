@@ -299,7 +299,12 @@ func TestURIPath(t *testing.T) {
 		{"file:///C:/x", false, "/C:/x"},
 	}
 	for _, tc := range cases {
-		if got := uriPath(tc.uri, tc.windows); got != filepath.FromSlash(tc.want) {
+		// Only file:// URIs become OS-native paths; anything else is returned verbatim.
+		want := filepath.FromSlash(tc.want)
+		if !strings.HasPrefix(strings.TrimSpace(tc.uri), "file://") {
+			want = tc.want
+		}
+		if got := uriPath(tc.uri, tc.windows); got != want {
 			t.Errorf("uriPath(%q, windows=%v) = %q, want %q", tc.uri, tc.windows, got, tc.want)
 		}
 	}
