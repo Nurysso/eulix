@@ -47,6 +47,9 @@ func parseEnvLine(line string) (string, string, bool) {
 	}
 	key := strings.TrimSpace(parts[0])
 	value := strings.TrimSpace(parts[1])
+	if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
+		value = value[1 : len(value)-1]
+	}
 	return key, value, true
 }
 
@@ -74,19 +77,55 @@ func (envFile *EnvFile) Save() error {
 	if !envFile.changed {
 		return nil
 	}
-	// Explicitly secure permissions even if the file pre-existed
-	_ = os.Chmod(envFile.path, 0o600)
+	// // Explicitly secure permissions even if the file pre-existed
+	encoded := make(map[string]string, len(envFile.updated))
+	for key := range envFile.updated {
+		value, err := encodeEnvValue(key, envFile.values[key])
+		if err != nil {
+			return err
+		}
+		encoded[key] = value
+	}
+	// Lock the file down before any secret reaches it, including a file that
+	// already existed. If that fails, the keys must not be written.
+	file, err := os.OpenFile(envFile.path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := restrictToOwner(envFile.path); err != nil {
+		return fmt.Errorf("restrict permissions on %s: %w", envFile.path, err)
+	}
 
 	var builder strings.Builder
 	for _, line := range envFile.lines {
 		if key, _, ok := parseEnvLine(line); ok && envFile.updated[key] {
-			line = key + "=" + envFile.values[key]
+			line = key + "=" + encoded[key]
 		}
 		builder.WriteString(line)
 		builder.WriteString("\n")
 	}
 	for _, key := range envFile.added {
-		fmt.Fprintf(&builder, "%s=%s\n", key, envFile.values[key])
+		fmt.Fprintf(&builder, "%s=%s\n", key, encoded[key])
 	}
 	return os.WriteFile(envFile.path, []byte(builder.String()), 0o600)
+}
+
+// encodeEnvValue writes value so godotenv reads back exactly the same thing.
+// Errors name the key only: the value may be a secret.
+func encodeEnvValue(key, value string) (string, error) {
+	if strings.ContainsAny(value, "\r\n") {
+		return "", fmt.Errorf("value for %s contains a line break", key)
+	}
+	// Unquoted, " #" starts a comment and outer spaces are dropped.
+	if !strings.Contains(value, " #") && value == strings.TrimSpace(value) &&
+		!strings.HasPrefix(value, `"`) && !strings.HasPrefix(value, "'") {
+		return value, nil
+	}
+	if strings.Contains(value, "'") {
+		return "", fmt.Errorf("value for %s cannot be stored in .env: it needs quoting but contains a single quote", key)
+	}
+	return "'" + value + "'", nil
 }

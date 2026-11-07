@@ -6,7 +6,6 @@
 //go:build windows
 
 /*
-[UNTESTED]
 Windows mmap implementation.
 
 	FILE_FLAG_SEQUENTIAL_ONLY at file-open time: tells the NTFS /
@@ -34,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -72,7 +72,7 @@ func openSeqyentialWindows(path string) (*os.File, error) {
 	handle, err := windows.CreateFile(
 		pathPtr,
 		windows.GENERIC_READ,
-		windows.FILE_ATTRIBUTE_NORMAL,
+		windows.FILE_SHARE_READ,
 		nil,
 		windows.OPEN_EXISTING,
 		windows.FILE_ATTRIBUTE_NORMAL|FILE_FLAG_SEQUENTIAL_ONLY,
@@ -84,7 +84,13 @@ func openSeqyentialWindows(path string) (*os.File, error) {
 	return os.NewFile(uintptr(handle), path), nil
 }
 
-// decodeViaMmap maps path read-only via the Windows file-mapping API and
+// viewBytes exposes a mapped view as a slice. MapViewOfFile returns the address
+// as a uintptr; it points outside the Go heap, so the GC never moves it.
+func viewBytes(addr uintptr, size int64) []byte {
+	return unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&addr))), size)
+}
+
+// DecodeViaMmap maps path read-only via the Windows file-mapping API and
 // decodes JSON directly from the view.  size must equal fi.Size() for the
 // file — passing it in avoids a redundant stat syscall.
 func DecodeViaMmap(path string, size int64, v any) error {
@@ -130,7 +136,8 @@ func DecodeViaMmap(path string, size int64, v any) error {
 	}
 	defer windows.UnmapViewOfFile(addr)
 
-	data := unsafe.Slice((*byte)(unsafe.Pointer(addr)), size)
+	// data := unsafe.Slice((*byte)(unsafe.Pointer(addr)), size)
+	data := viewBytes(addr, size)
 
 	memRange := Win32MemoryRangeEntry{
 		VirtualAddress: addr,
@@ -179,8 +186,8 @@ func MmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
 		f.Close()
 		return nil, nil, fmt.Errorf("MapViewOfFile: %w", err)
 	}
-	data := unsafe.Slice((*byte)(unsafe.Pointer(addr)), size)
-
+	// data := unsafe.Slice((*byte)(unsafe.Pointer(addr)), size)
+	data := viewBytes(addr, size)
 	// Use a different name – 'range' is a keyword
 	memRange := Win32MemoryRangeEntry{
 		VirtualAddress: addr,
@@ -192,10 +199,11 @@ func MmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
 	// Close the file handle – the mapping holds its own reference
 	_ = f.Close()
 
-	return bytes.NewReader(data), func() {
+	// Once: a repeated CloseHandle could close whatever reused the handle value.
+	return bytes.NewReader(data), sync.OnceFunc(func() {
 		_ = windows.UnmapViewOfFile(addr)
 		_ = windows.CloseHandle(h)
-	}, nil
+	}), nil
 }
 
 func AllocEmbeddingMatrix(n, dim int) [][]float32 {

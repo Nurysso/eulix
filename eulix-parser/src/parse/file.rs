@@ -9,6 +9,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::cache::{self, Cached, ParseCache};
+#[cfg(not(target_os = "windows"))]
 use crate::os_io;
 use crate::parse::slim::{slim, strip_emitted};
 use crate::spill::Spill;

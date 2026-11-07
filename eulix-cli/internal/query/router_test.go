@@ -194,7 +194,7 @@ func newRouter(t testing.TB) *Router {
 	if err != nil {
 		t.Fatalf("QuerySheriff: %v", err)
 	}
-	return &Router{
+	r := &Router{
 		eulixDir:   dir,
 		config:     cfg,
 		classifier: cl,
@@ -204,6 +204,9 @@ func newRouter(t testing.TB) *Router {
 		cgIdx:      &callGraphIndex{cache: map[string]string{}},
 		cgBuild:    BuildCallGraphIndex(nil),
 	}
+	// Windows cannot delete the open log file, so close it before TempDir cleanup.
+	t.Cleanup(r.debug.Close)
+	return r
 }
 
 func (r *Router) projectPath() string { return r.config.Project.Path }
@@ -307,11 +310,11 @@ func TestBareID(t *testing.T) {
 
 func TestCallGraphShortName(t *testing.T) {
 	cases := map[string]string{
-		"func_x":                 "x",
-		"method_Router_handle":   "handle",
-		"method_A_b_c":           "b_c",
-		"method_nounderscore":    "nounderscore",
-		"func_outer.inner::a.rs": "inner",
+		"func_x":                                  "x",
+		"method_Router_handle":                    "handle",
+		"method_A_b_c":                            "b_c",
+		"method_nounderscore":                     "nounderscore",
+		"func_outer.inner::a.rs":                  "inner",
 		"method_PrinterPath_as_path.imp@42::u.rs": "imp",
 		"class_Foo::a.py":                         "Foo",
 		"x::y":                                    "x",

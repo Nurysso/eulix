@@ -11,6 +11,7 @@ package cli
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,18 @@ import (
 
 	"eulix/internal/utils"
 )
+
+// windowsFileUrl turns absolute windows path into a percent-encoded file://
+//
+//	URL. UNC paths put the server in the host position.
+func windowsFileURL(path string) string {
+	slashed := strings.ReplaceAll(path, `\`, "/")
+	if rest, ok := strings.CutPrefix(slashed, "//"); ok {
+		host, tail, _ := strings.Cut(rest, "/")
+		return (&url.URL{Scheme: "file", Host: host, Path: "/" + tail}).String()
+	}
+	return (&url.URL{Scheme: "file", Path: "/" + slashed}).String()
+}
 
 // openInBrowser launches the specified path or URL in the system's default browser.
 // It handles platform-specific quirks, absolute path resolution, and non-blocking execution.
@@ -44,10 +57,11 @@ func openInBrowser(target string) error {
 		// Properly format local file paths as file:// URIs while leaving web URLs untouched
 		destination := targetPath
 		if !isURL {
-			destination = "file:///" + filepath.ToSlash(targetPath)
+			destination = windowsFileURL(targetPath)
 		}
-		// 'cmd /c start "" <url|file>' is resilient against spaces and quotes in paths
-		cmd = exec.Command("cmd", "/c", "start", "", destination)
+		// Not 'cmd /c start': cmd.exe re-parses its command line, so an unquoted
+		// & ^ | or % in the target would split it or run as a second command.
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", destination)
 
 	case "darwin":
 		cmd = exec.Command("open", targetPath)

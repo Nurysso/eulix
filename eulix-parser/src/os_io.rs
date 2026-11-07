@@ -89,23 +89,23 @@ mod platform {
     pub fn flush_and_drop(_f: &std::fs::File) {}
 }
 
-#[cfg(target_os = "windows")]
-mod platform {
-    use std::fs::File;
-    use std::path::Path;
-
-    pub fn prefetch(_path: &Path) {}
-
-    pub fn hint_read_sequential(_f: &File) {}
-
-    pub fn done_with_file(_f: &File) {}
-
-    pub fn flush_output(_f: &File) {}
-
-    pub fn hint_write_sequential(_f: &File) {}
-
-    pub fn flush_and_drop(_f: &std::fs::File) {}
-}
+// #[cfg(target_os = "windows")]
+// mod platform {
+//     use std::fs::File;
+//     use std::path::Path;
+//
+//     pub fn prefetch(_path: &Path) {}
+//
+//     pub fn hint_read_sequential(_f: &File) {}
+//
+//     pub fn done_with_file(_f: &File) {}
+//
+//     pub fn flush_output(_f: &File) {}
+//
+//     pub fn hint_write_sequential(_f: &File) {}
+//
+//     pub fn flush_and_drop(_f: &std::fs::File) {}
+// }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod platform {

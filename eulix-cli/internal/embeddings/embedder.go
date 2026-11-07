@@ -20,7 +20,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -362,7 +361,7 @@ func (e *Embedder) IsAlive() bool {
 		return false // already reaped, process exited
 	}
 	// Signal(0) checks liveness without actually sending a signal.
-	return e.cmd.Process.Signal(syscall.Signal(0)) == nil
+	return processRunning(e.cmd.Process)
 }
 
 // BatchEmbed embeds multiple texts sequentially.

@@ -51,8 +51,12 @@ func (r *Router) SetCurrentChecksum(checksum string) {
 	r.currentChecksum = checksum
 }
 
+// Close releases the context builder and the debug log file. An open log
+// handle also stops the .eulix directory from being removed on Windows.
 func (r *Router) Close() error {
-	return r.CloseContextBuilder()
+	err := r.CloseContextBuilder()
+	r.debug.Close()
+	return err
 }
 
 // CloseContextBuilder closes the active ContextBuilder and frees its resources.

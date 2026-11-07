@@ -6,6 +6,7 @@ package cache
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"eulix/internal/config"
@@ -166,6 +167,14 @@ func TestFileIsPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Queries and answers can quote private source code.
+	// Windows has no Unix permission bits (Go always reports 0666 there);
+	// access is governed by ACLs, so the mode cannot be asserted.
+	if runtime.GOOS == "windows" {
+		if !info.Mode().IsRegular() {
+			t.Fatalf("history path is not a regular file: %v", info.Mode())
+		}
+		return
+	}
 	if perm := info.Mode().Perm(); perm&0o077 != 0 {
 		t.Fatalf("history file mode %o, want no group/other access", perm)
 	}

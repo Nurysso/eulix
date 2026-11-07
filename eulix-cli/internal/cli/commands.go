@@ -218,11 +218,10 @@ var versionCMD = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("%s: %s\n", utils.AppName, utils.AppVersion)
 
-		homeDir, err := os.UserHomeDir()
+		parserPath, err := a.ParserPath()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "eulix_parser: [Error] failed to get user home directory: %v\n", err)
+			fmt.Fprintf(os.Stderr, "eulix_parser: [Error] %v\n", err)
 		} else {
-			parserPath := filepath.Join(homeDir, ".Eulix", "bin", "eulix_parser")
 			if output, err := runSubCommand(parserPath, "--version"); err != nil {
 				fmt.Fprintf(os.Stderr, "eulix_parser: [Error] %v\n", err)
 			} else {
