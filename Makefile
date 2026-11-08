@@ -77,7 +77,8 @@ else
     NC := \033[0m
 endif
 
-.PHONY: all help build-dir parsers parser-linux parser-windows embed-zip \
+.PHONY: build-windows-native \
+        all help build-dir parsers parser-linux parser-windows embed-zip \
         build-linux-amd build-linux-nvidia build-win-amd build-win-nvidia \
         build-single build-all clean \
         lint lint-rust lint-go lint-python \
@@ -97,6 +98,7 @@ help:
 	@echo "Full Pipeline Targets:"
 	@echo "  make build-all        - Build all parser targets, zip embed, and build all Go CLI variants"
 	@echo "  make build-single     - Build for single OS and GPU (default: OS_TARGET=linux GPU=amd)"
+	@echo "  make build-windows-native - Native Windows build via build.ps1 (GPU=amd|nvidia)"
 	@echo ""
 	@echo "Specific Variant Targets:"
 	@echo "  make build-linux-amd     - Build Linux AMD/CPU CLI binary"
@@ -151,6 +153,10 @@ parser-windows: | build-dir
 	@$(ECHO) "$(BLUE)Building eulix-parser for Windows (x86_64)...$(NC)"
 	cd $(PARSER_DIR) && RUSTFLAGS="-C link-args=-ladvapi32" cargo build --release --target x86_64-pc-windows-gnu
 	$(CP) $(PARSER_DIR)/target/x86_64-pc-windows-gnu/release/eulix_parser.exe $(PARSER_WINDOWS)
+
+# Native Windows build (MSVC toolchain) via build.ps1. Usage: make build-windows-native [GPU=nvidia]
+build-windows-native:
+	powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Gpu $(GPU)
 
 # Zip Eulix Embed Python Package
 embed-zip: | build-dir

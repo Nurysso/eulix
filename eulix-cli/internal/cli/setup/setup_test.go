@@ -62,7 +62,8 @@ func TestEnvFile(t *testing.T) {
 	if got := readFile(t, path); got != want {
 		t.Fatalf("saved .env:\n%q\nwant:\n%q", got, want)
 	}
-	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+	// Windows has no Unix permission bits (Go reports 0666), so only check the mode elsewhere.
+	if info, _ := os.Stat(path); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf(".env holds API keys, want mode 0600, got %o", info.Mode().Perm())
 	}
 }

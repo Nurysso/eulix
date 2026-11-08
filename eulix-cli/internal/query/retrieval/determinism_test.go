@@ -54,9 +54,10 @@ func TestMCSeedIndicesTieBreakIsDeterministic(t *testing.T) {
 }
 
 // TestBM25TieBreakIsDeterministic BM25 sorted only by score and truncated twice, so tied chunks at
-// either cut were kept or dropped in map order. IDs run opposite to chunk
-// index here, so the two tie-breaks (index for candidates, ID for the
-// result) pick different chunks and both are checked.
+// either cut were kept or dropped in map order. Chunks are built with IDs
+// running opposite to slice order, but buildDerivedIndices sorts EHNAS
+// chunks by ID first, so input order must not matter: the candidate cut
+// (lowest index) and the result cut (lowest ID) both land on c00.
 func TestBM25TieBreakIsDeterministic(t *testing.T) {
 	chunks := make([]Chunk, 30)
 	for i := range chunks {
@@ -69,7 +70,8 @@ func TestBM25TieBreakIsDeterministic(t *testing.T) {
 			t.Fatalf("BM25 order changed: %v vs %v", want, got)
 		}
 	}
-	// EHNAS uses stable chunk IDs before both the proximity cut and result cut.
+	// Chunks are ID-sorted, so proximity (topK*4 = 12 candidates) gets
+	// c00..c11 and the result keeps the lowest IDs among them.
 	if !slices.Equal(want, []string{"c00", "c01", "c02"}) {
 		t.Fatalf("want [c00 c01 c02], got %v", want)
 	}
@@ -111,7 +113,10 @@ func testEhnasBuilder(t *testing.T, chunks []Chunk) *ContextBuilder {
 	cfg := config.DefaultConfig()
 	cfg.Project.Engine = "ehnas"
 	cfg.RetrievalConfig.Ehnas.InvertedIndexMinChunks = 0
-	cb := NewTestContextBuilder(cfg, t.TempDir(), utils.NewDebugLogger(t.TempDir()))
+	logger := utils.NewDebugLogger(t.TempDir())
+	// Windows cannot delete the open log file, so close it before TempDir cleanup.
+	t.Cleanup(logger.Close)
+	cb := NewTestContextBuilder(cfg, t.TempDir(), logger)
 	if err := cb.InitEngine(); err != nil {
 		t.Fatal(err)
 	}

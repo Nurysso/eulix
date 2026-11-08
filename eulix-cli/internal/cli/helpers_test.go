@@ -134,3 +134,21 @@ func TestWriteConfigRoundTrips(t *testing.T) {
 		t.Fatalf("config changed after write+read:\ngot  %+v\nwant %+v", got, *want)
 	}
 }
+
+func TestWindowsFileURL(t *testing.T) {
+	tests := []struct{ name, path, want string }{
+		{"plain", `C:\site\index.html`, "file:///C:/site/index.html"},
+		{"space", `C:\my site\a b.html`, "file:///C:/my%20site/a%20b.html"},
+		{"percent is not read as an escape", `C:\100%25\a.html`, "file:///C:/100%2525/a.html"},
+		{"hash and query stay in the path", `C:\a#b\c?d.html`, "file:///C:/a%23b/c%3Fd.html"},
+		{"cmd metacharacters", `C:\Tom&Jerry\a^b.html`, "file:///C:/Tom&Jerry/a%5Eb.html"},
+		{"unc", "\\\\server\\share\\a b.html", "file://server/share/a%20b.html"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := windowsFileURL(tc.path); got != tc.want {
+				t.Errorf("windowsFileURL(%q) = %q, want %q", tc.path, got, tc.want)
+			}
+		})
+	}
+}

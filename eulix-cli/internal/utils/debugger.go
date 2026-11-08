@@ -143,25 +143,31 @@ func (d *DebugLogger) Log(format string, args ...interface{}) {
 
 // Flush forces all buffered logs to disk.
 func (d *DebugLogger) Flush() {
-	if d.file == nil || d.closed {
+	if d == nil || d.file == nil {
 		return
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if d.closed {
+		return
+	}
 	if d.writer != nil {
 		_ = d.writer.Flush()
 	}
 }
 
-// Close flushes and closes the logger.
+// Close flushes and closes the logger. It is safe to call more than once.
 func (d *DebugLogger) Close() {
-	if d.file == nil || d.closed {
+	if d == nil || d.file == nil {
 		return
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if d.closed {
+		return
+	}
 	if d.writer != nil {
 		_ = d.writer.Flush()
 	}
