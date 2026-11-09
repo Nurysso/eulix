@@ -89,6 +89,8 @@ Anything fixed is not listed here as an open problem. Fixed items are kept for t
 | [MCP-1](CLI-MCP-And-TUI.md#mcp-1-a-repositorys-own-eulix-and-eulixtoml-are-trusted) | A repository's own `.eulix/` and `eulix.toml` are trusted | High | Open | Carried over |
 | [MCP-2](CLI-MCP-And-TUI.md#mcp-2-a-panic-in-a-handler-takes-the-mcp-server-down) | A panic in a handler takes the MCP server down | Low | Open | Read in code |
 | [MCP-3](CLI-MCP-And-TUI.md#mcp-3-mcp-text-search-fallback-gaps) | MCP text-search fallback gaps | Low | Open | Read in code |
+| [MCP-4](CLI-MCP-And-TUI.md#mcp-4-symlinks-inside-a-repository-are-not-followed) | Symlinks inside a repository are not followed | Low | Limitation | Reproduced |
+| [MCP-5](CLI-MCP-And-TUI.md#mcp-5-symlinks-can-still-read-or-write-outside-a-repository) | Symlinks can still read or write outside a repository | High | Partly fixed | Reproduced |
 
 ## Related Docs
 

@@ -35,7 +35,11 @@ type fxFunc struct {
 // artifacts the router loads, in the shapes eulix-parser writes them.
 func newProject(t *testing.T, files map[string]string, funcs []fxFunc) string {
 	t.Helper()
-	root := t.TempDir()
+	// The active repository is fully resolved, and macOS temp folders sit behind a symlink.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	structure := map[string]utils.FileData{}
 	byName := map[string][]string{}
 	for _, f := range funcs {
@@ -274,6 +278,8 @@ func leakyProject(t *testing.T) string {
 		"payment_total": {
 			"func_payment_total::app/billing.py",
 			"func_payment_secret::secrets.py",
+			"func_Vault::unlock::secrets.py",
+			"func_Vault::open::.hidden/b.cpp",
 		},
 	}
 	data, err = json.Marshal(index)
@@ -334,9 +340,14 @@ func TestE2ENeverReturnsHiddenOrIgnoredFiles(t *testing.T) {
 		{"Where is payment_config_e defined?", "payment_config_eu"},
 		{"Where is PaymentHiddenTyp defined?", "PaymentHiddenType"},
 		{"Where is payment_total defined?", "func_payment_secret::secrets.py"},
+		{"Where is payment_total defined?", "func_Vault::unlock::secrets.py"},
+		{"Where is payment_total defined?", "func_Vault::open::.hidden/b.cpp"},
 	}
 	for _, tc := range metadataQueries {
-		text, _ := call(t, cs, "query", map[string]any{"query": tc.query})
+		// Project memory sends later queries to retrieval, so these need a fresh
+		// server to reach the location handler that prints index entries.
+		fresh := connect(t, newTestServer(t))
+		text, _ := call(t, fresh, "query", map[string]any{"query": tc.query, "repo_path": repo})
 		if strings.Contains(text, tc.forbidden) {
 			t.Errorf("query %q leaked ignored index metadata %q:\n%s", tc.query, tc.forbidden, text)
 		}

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	a "eulix/internal/assets"
 	"eulix/internal/utils"
 )
 
@@ -121,6 +122,29 @@ func runSubCommand(name string, arg string) (string, error) {
 
 var projectMarkerFiles = []string{utils.EulixDir, ".euignore"}
 
+// hasProjectMarker reports whether dir itself holds a project marker.
+func hasProjectMarker(dir string) bool {
+	for _, marker := range projectMarkerFiles {
+		info, err := os.Stat(filepath.Join(dir, marker))
+		if err == nil && !isGlobalEulixDir(info) {
+			return true
+		}
+	}
+	return false
+}
+
+// isGlobalEulixDir reports whether info is the global install directory. On
+// case-insensitive filesystems (NTFS, default APFS) ~/.Eulix also answers to
+// ~/.eulix, which must not make the home directory look like a project.
+func isGlobalEulixDir(info os.FileInfo) bool {
+	root, err := a.EulixRoot()
+	if err != nil {
+		return false
+	}
+	global, err := os.Stat(root)
+	return err == nil && os.SameFile(info, global)
+}
+
 func findProjectRoot(startDir string) (string, error) {
 	abs, err := filepath.Abs(startDir)
 	if err != nil {
@@ -129,10 +153,8 @@ func findProjectRoot(startDir string) (string, error) {
 
 	dir := abs
 	for {
-		for _, marker := range projectMarkerFiles {
-			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
-				return dir, nil
-			}
+		if hasProjectMarker(dir) {
+			return dir, nil
 		}
 
 		parent := filepath.Dir(dir)

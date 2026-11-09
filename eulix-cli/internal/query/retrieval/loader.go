@@ -330,6 +330,30 @@ func isIdentBoundary(r rune) bool {
 	return true
 }
 
+// FilterServableCallGraph removes nodes in hidden or ignored files and the
+// edges touching them. Edges are matched by removed node ID, so calls to
+// external functions, which have no node, stay in the graph.
+func FilterServableCallGraph(ref *utils.CallGraphRef, projectPath string) {
+	servable := checksum.ServableMatcher(projectPath)
+	removed := make(map[string]bool)
+	nodes := ref.Nodes[:0]
+	for _, n := range ref.Nodes {
+		if servable(n.File) {
+			nodes = append(nodes, n)
+		} else {
+			removed[n.ID] = true
+		}
+	}
+	ref.Nodes = nodes
+	edges := ref.Edges[:0]
+	for _, e := range ref.Edges {
+		if !removed[e.From] && !removed[e.To] {
+			edges = append(edges, e)
+		}
+	}
+	ref.Edges = edges
+}
+
 // loadAndIndexCallGraph loads kb_call_graph.json and builds the
 // inter-procedural call graph used by call graph expansion during
 // retrieval. Gracefully skips if the file is absent or malformed.
@@ -344,6 +368,7 @@ func (cb *ContextBuilder) loadAndIndexCallGraph() {
 		return
 	}
 
+	FilterServableCallGraph(&cg, cb.sourceRoot)
 	cb.cgRef = &cg
 
 	if len(cg.Edges) > 0 {

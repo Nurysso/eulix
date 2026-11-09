@@ -216,6 +216,10 @@ func uriPath(rawURI string, windows bool) string {
 	if !strings.HasPrefix(raw, "file://") {
 		return raw
 	}
+	// url.Parse rejects the encoded \\?\ prefix in the host position.
+	if windows && len(raw) >= 11 && strings.EqualFold(raw[:11], "file://%3F/") {
+		raw = "file:///%3F/" + raw[11:]
+	}
 	if u, err := url.Parse(raw); err == nil && u.Path != "" {
 		p := u.Path
 		if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {

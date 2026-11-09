@@ -40,7 +40,7 @@ The best files (8 by default) are shown as windows of lines around the best-scor
 
 **What it will not read.** The walk skips common build and dependency directories (`node_modules`, `vendor`, `dist`, `build`, `target`, `__pycache__`, `venv`, `coverage`), hidden files and directories, anything matched by `.euignore`, paths in `retrievalConfig.etiya.lexical_exclude`, files over 1 MiB, empty files, binary files (a NUL byte in the first 8 KiB) and anything that is not a regular file. Hidden files are skipped because they often hold credentials; `.euignore` files were left out on purpose, so the fallback respects that too. On Windows, "hidden" includes the NTFS hidden attribute, not just a leading dot.
 
-**Bounds.** At most 20,000 files are inspected. The walk stops at its time limit (10 seconds) and returns what it has; only a cancelled request aborts it. A symbolically linked repository root is resolved first, since the directory walker does not enter a symlink.
+**Bounds.** At most 20,000 files are inspected. The walk stops at its time limit (10 seconds) and returns what it has; only a cancelled request aborts it. Binding resolves a symbolically linked repository root to the real folder. If that folder later becomes a symlink, the walk does not enter it and finds nothing. Files are read without following symlinks ([MCP-4](../../Known-Issues/CLI-MCP-And-TUI.md#mcp-4-symlinks-inside-a-repository-are-not-followed)).
 
 ### Main Components
 

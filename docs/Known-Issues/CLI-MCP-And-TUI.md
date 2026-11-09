@@ -122,6 +122,40 @@ The SDK does not recover panics, and the package has no `recover`. Fuzzing the q
 
 ---
 
+## MCP-4: Symlinks inside a repository are not followed
+
+**Severity:** Low · **Status:** Limitation · **Verification:** Reproduced (2026-11-09)
+
+**Symptom.** A symlinked source file is left out of text search, and its source does not appear in answers. This applies even when the link points to another file inside the repository.
+
+**Cause.** This is a deliberate choice, and it applies to MCP and `eulix query` alike. Following links safely would mean checking every target against the hidden-file and `.euignore` rules, on both Unix and Windows. Refusing links needs none of that. The parser's walker does not enable link following either, so these files are normally not indexed.
+
+**Workaround.** Keep a real copy of the file in the repository. Opening a repository through a symlinked path still works, because binding resolves it to the real folder first.
+
+**Not tested.** Windows junctions have not been tested. The symlink tests skip when the system does not allow creating symlinks, so check for skips in a Windows run.
+
+---
+
+## MCP-5: Symlinks can still read or write outside a repository
+
+**Severity:** High · **Status:** Partly fixed · **Verification:** Reproduced (2026-11-09)
+
+**Fixed.** Text search and the source shown in answers no longer read through symlinks. See [Fixed Issues](Fixed-Issues.md).
+
+**Still open.** These paths still follow symlinks, in `internal/mcp`, `internal/query` and the debug logger they use:
+
+- **Debug logs can damage files.** Logs under `.eulix/debug` are opened without checking for symlinks. A repository that ships such a link can make Eulix overwrite or append to a file outside the repository. One of these logs is opened on every bind, even with debugging off.
+- **Knowledge base files can be read from elsewhere.** Files under `.eulix` are read through links. A linked JSON file outside the repository can appear in an answer if it has the expected shape.
+- **A replaced repository folder is followed.** If the bound folder later becomes a symlink, the source in answers comes from the link's target. Text search does not follow it.
+
+This extends the trust problem in [MCP-1](#mcp-1-a-repositorys-own-eulix-and-eulixtoml-are-trusted).
+
+**Workaround.** Only open repositories you trust, and decline automatic roots for the rest. Before opening a cloned repository, check that `.eulix` contains no symlinks.
+
+**Fix direction.** Open everything under `.eulix` through `os.Root`, which refuses links that leave the folder on both Unix and Windows.
+
+---
+
 ## Related Docs
 
 - [Cli](../eulix-cli/Cli.md), [Chat Screen](../eulix-cli/tui/Chat-Screen.md), [MCP Overview](../eulix-cli/mcp/Overview.md), [Llm](../eulix-cli/Llm.md).

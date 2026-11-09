@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -220,10 +221,11 @@ func IgnoreMatcher(projectPath string) func(path string) bool {
 // base may still be read and served: it stays inside projectPath, has no
 // hidden component (the parser never indexes those), and the current
 // .euignore rules do not exclude it. The KB cannot be taken on trust: it can
-// predate the rules, or come inside a cloned repository.
+// predate the rules, or come inside a cloned repository. Index entries repeat
+// files, so each answer is remembered. Not safe for concurrent use.
 func ServableMatcher(projectPath string) func(rel string) bool {
 	ignored := IgnoreMatcher(projectPath)
-	return func(rel string) bool {
+	check := func(rel string) bool {
 		rel = filepath.FromSlash(rel)
 		if !filepath.IsLocal(rel) {
 			return false
@@ -235,6 +237,75 @@ func ServableMatcher(projectPath string) func(rel string) bool {
 		}
 		return !ignored(filepath.Join(projectPath, rel))
 	}
+	seen := make(map[string]bool)
+	return func(rel string) bool {
+		ok, known := seen[rel]
+		if !known {
+			ok = check(rel)
+			seen[rel] = ok
+		}
+		return ok
+	}
+}
+
+// ReadRegularNoSymlinks opens every path component relative to a pinned root.
+// Comparing each opened handle with its lstat result closes the race where a
+// regular component is replaced by a symlink between validation and use.
+func ReadRegularNoSymlinks(root *os.Root, filePath string) ([]byte, error) {
+	clean := filepath.Clean(filepath.FromSlash(filePath))
+	if clean == "." || !filepath.IsLocal(clean) {
+		return nil, fmt.Errorf("path is not local: %s", filePath)
+	}
+	parts := strings.Split(clean, string(filepath.Separator))
+	current := root
+	owned := false
+	defer func() {
+		if owned {
+			_ = current.Close()
+		}
+	}()
+	for _, part := range parts[:len(parts)-1] {
+		before, err := current.Lstat(part)
+		if err != nil {
+			return nil, err
+		}
+		if before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
+			return nil, fmt.Errorf("path component is not a real directory: %s", part)
+		}
+		next, err := current.OpenRoot(part)
+		if err != nil {
+			return nil, err
+		}
+		after, err := next.Stat(".")
+		if err != nil || !os.SameFile(before, after) {
+			_ = next.Close()
+			return nil, fmt.Errorf("path component changed while opening: %s", part)
+		}
+		if owned {
+			_ = current.Close()
+		}
+		current = next
+		owned = true
+	}
+
+	name := parts[len(parts)-1]
+	before, err := current.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("path is not a regular file: %s", filePath)
+	}
+	file, err := current.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(before, after) || !after.Mode().IsRegular() {
+		return nil, fmt.Errorf("file changed while opening: %s", filePath)
+	}
+	return io.ReadAll(file)
 }
 
 func (d *Detector) shouldIgnore(path string) bool {

@@ -85,10 +85,6 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 	if root == "" {
 		return "", nil
 	}
-	// WalkDir does not descend into a symlinked root, which would find nothing.
-	if resolved, err := filepath.EvalSymlinks(root); err == nil {
-		root = resolved
-	}
 
 	// Weight terms: anchors weigh 3x, other query terms weigh 1x. Only terms
 	// of length >= 3 are kept, so single/double-letter noise is ignored.
@@ -109,10 +105,18 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		return "", nil
 	}
 
+	// root is pinned at bind time. If it has since become a symlink, WalkDir does
+	// not enter it, so a search cannot drift to another repository.
+	rootHandle, err := os.OpenRoot(root)
+	if err != nil {
+		return "", nil
+	}
+	defer func() { _ = rootHandle.Close() }()
+
 	ignored := checksum.IgnoreMatcher(root)
 	var hits []fileHit
 	scanned := 0
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil // unreadable entry: skip
 		}
@@ -143,7 +147,8 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		if scanned++; scanned > maxLexScanFiles {
 			return filepath.SkipAll
 		}
-		data, err := os.ReadFile(path)
+		// The type above came from the folder listing and may be out of date.
+		data, err := checksum.ReadRegularNoSymlinks(rootHandle, rel)
 		if err != nil || isBinary(data) {
 			return nil
 		}
@@ -164,6 +169,11 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		}
 		if score > 0 {
 			hits = append(hits, fileHit{rel: rel, data: data, score: score})
+			// Only the top files are shown, so don't hold every match's bytes.
+			if len(hits) >= 2*cfg.LexicalMaxFiles {
+				sortHits(hits)
+				hits = hits[:cfg.LexicalMaxFiles]
+			}
 		}
 		return nil
 	})
@@ -174,12 +184,7 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		return "", nil
 	}
 
-	sort.Slice(hits, func(a, b int) bool {
-		if hits[a].score != hits[b].score {
-			return hits[a].score > hits[b].score
-		}
-		return hits[a].rel < hits[b].rel
-	})
+	sortHits(hits)
 	if len(hits) > cfg.LexicalMaxFiles {
 		hits = hits[:cfg.LexicalMaxFiles]
 	}
@@ -201,6 +206,16 @@ outer:
 		}
 	}
 	return b.String(), nil
+}
+
+// sortHits orders hits best first, with the path as a stable tie-break.
+func sortHits(hits []fileHit) {
+	sort.Slice(hits, func(a, b int) bool {
+		if hits[a].score != hits[b].score {
+			return hits[a].score > hits[b].score
+		}
+		return hits[a].rel < hits[b].rel
+	})
 }
 
 // isHidden covers both conventions: dot-prefixed names (Unix, and common

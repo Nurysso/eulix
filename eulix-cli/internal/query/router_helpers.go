@@ -10,7 +10,6 @@ package query
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -422,8 +421,8 @@ func filterServableIndex(index *utils.Indices, projectPath string) {
 	for callee, callers := range index.FunctionsCalling {
 		kept := callers[:0]
 		for _, caller := range callers {
-			_, file, ok := strings.Cut(caller, "::")
-			if ok && servable(file) {
+			// C++ names contain "::" too, so the file follows the last one.
+			if i := strings.LastIndex(caller, "::"); i >= 0 && servable(caller[i+2:]) {
 				kept = append(kept, caller)
 			}
 		}
@@ -508,7 +507,7 @@ func parseLocation(loc string) (string, int, error) {
 // detects the language, and reads the full function signature. The file is
 // read through root without following symlinks.
 func extractSignature(root *os.Root, filePath string, startLine int) (string, error) {
-	data, err := readRegularNoSymlinks(root, filePath)
+	data, err := checksum.ReadRegularNoSymlinks(root, filePath)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", filePath, err)
 	}
@@ -524,64 +523,6 @@ func extractSignature(root *os.Root, filePath string, startLine int) (string, er
 		lang = langPHP
 	}
 	return parseSig(lines, startLine-1, lang) // convert to 0-based
-}
-
-// readRegularNoSymlinks opens every path component relative to a pinned root.
-// Comparing each opened handle with its lstat result closes the race where a
-// regular component is replaced by a symlink between validation and use.
-func readRegularNoSymlinks(root *os.Root, filePath string) ([]byte, error) {
-	clean := filepath.Clean(filepath.FromSlash(filePath))
-	if clean == "." || !filepath.IsLocal(clean) {
-		return nil, fmt.Errorf("path is not local: %s", filePath)
-	}
-	parts := strings.Split(clean, string(filepath.Separator))
-	current := root
-	owned := false
-	for _, part := range parts[:len(parts)-1] {
-		before, err := current.Lstat(part)
-		if err != nil {
-			return nil, err
-		}
-		if before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
-			return nil, fmt.Errorf("path component is not a real directory: %s", part)
-		}
-		next, err := current.OpenRoot(part)
-		if err != nil {
-			return nil, err
-		}
-		after, err := next.Stat(".")
-		if err != nil || !os.SameFile(before, after) {
-			_ = next.Close()
-			return nil, fmt.Errorf("path component changed while opening: %s", part)
-		}
-		if owned {
-			_ = current.Close()
-		}
-		current = next
-		owned = true
-	}
-	if owned {
-		defer func() { _ = current.Close() }()
-	}
-
-	name := parts[len(parts)-1]
-	before, err := current.Lstat(name)
-	if err != nil {
-		return nil, err
-	}
-	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
-		return nil, fmt.Errorf("path is not a regular file: %s", filePath)
-	}
-	file, err := current.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = file.Close() }()
-	after, err := file.Stat()
-	if err != nil || !os.SameFile(before, after) || !after.Mode().IsRegular() {
-		return nil, fmt.Errorf("file changed while opening: %s", filePath)
-	}
-	return io.ReadAll(file)
 }
 
 func detectLang(path string) language {
