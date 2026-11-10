@@ -57,7 +57,7 @@ The parser is run from the embedded binary with `--root`, `-o .eulix/kb.json`, `
 
 ### `history`
 
-`history` with no sub-command opens the terminal history viewer (or a plain list with `--no-tui`). `list`, `show <id>`, `view`, `delete <id>` and `clear` do what they say; deletions ask for confirmation. `cache` is a leftover alias. The data comes from [Cache](Cache.md).
+`history` with no sub-command opens the terminal history viewer (or a plain list with `--no-tui`). `list`, `show <id>`, `view`, `delete <id>` and `clear` do what they say; deletions ask for confirmation. `cache` is deprecated: it only prints a notice pointing to `history`, like `checksum`. The data comes from [Cache](Cache.md).
 
 ### Other commands
 

@@ -2,7 +2,7 @@
 
 This guide shows how to install Eulix with the install script, and how to build it from source.
 
-> **Platforms:** Linux (x86-64) and Windows 10/11 (64-bit) have release builds. macOS has no release binary; build it from source.
+> **Platforms:** Linux (x86-64) and Windows 11 (64-bit) have release builds. The release also publishes a macOS (Apple Silicon, `darwin-arm64`) binary, but `install.sh` refuses to run on macOS, so download it from the release page or build from source.
 > **Last verified against:** `ad744e9`. I read the install scripts, `build.sh` and the `Makefile`; I did not run the installers.
 
 ## Which way should I install?
@@ -252,7 +252,11 @@ CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath \
   -o ~/.local/bin/eulix ./cmd/eulix/main.go
 ```
 
-Binaries you build are not notarized. If macOS blocks one, run `xattr -d com.apple.quarantine ~/.local/bin/eulix`. Release binaries have not been tested on macOS.
+Binaries you build are not notarized. If macOS blocks one, run `xattr -d com.apple.quarantine ~/.local/bin/eulix`. The `darwin-arm64` release binary has not been tested on macOS.
+
+### Upgrading from v0.8.3
+
+Node IDs changed in v0.9.0. In v0.8.3 they held the absolute path of the machine (`class_AuthBase::/home/.../src/requests/auth.py`); now they are relative to the repository (`class_AuthBase::src/requests/auth.py`). After upgrading, run `eulix analyze` again in each repository so the knowledge base and the embeddings are rebuilt.
 
 ### File names and the parser hash
 

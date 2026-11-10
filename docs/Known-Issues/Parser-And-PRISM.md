@@ -92,9 +92,11 @@ An earlier measurement on the Eulix repository itself found 125 of 1,932 call ed
 
 **Symptom and cause.** Python, TypeScript and Rust parsers store the receiver of a call in its own field. Go and Java store it in `defined_in` instead (`m.Save()` is recorded as callee `Save` with `defined_in = "m"`), and v2 does not read `defined_in`, so the resolver never sees `m`. Java constructor calls are recorded as `new Foo`, and only the PHP path removes the `new `. JavaScript keeps the qualified text (`this.hello`) in the callee, which the older path cannot use.
 
+**False edges in Go (added 2026-11-10).** The same gap also creates wrong edges. For `fmt.Println`, the Go parser stores only `Println` as the callee and puts `fmt` in `defined_in` (`libeulix/src/grammar_files/go.rs`). `eulix-parser`'s slim step then clears `defined_in` (`eulix-parser/src/parse/slim.rs`), and for Go it also clears the imports, so PRISM v1 and v2 resolve the call by its bare name. In a small module, `os.Exit(1)` links to a local `func Exit`, `sub.Helper()` links to a local `Helper` instead of the one in `sub/`, and `s.Close()` links to a top-level `func Close` instead of `(*Store).Close`. On cobra with `-p 2`, four `exec.Command(...)` calls in the tests link to `struct_Command`. v0.8.3 does the same, so this is not a regression. Reported in review, not re-run for this page.
+
 **Workaround.** See PRISM-2.
 
-**Fix direction.** Have these parsers fill the receiver field and extend receiver-aware resolution to them, then strip `new ` for Java. This is the prerequisite for fixing PRISM-2.
+**Fix direction.** Have these parsers fill the receiver field, keep Go imports through slim, and extend receiver-aware resolution to them, then strip `new ` for Java. This is the prerequisite for fixing PRISM-2.
 
 ---
 

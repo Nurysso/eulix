@@ -92,7 +92,6 @@ The package README says cold queries on an analyzed repository should complete i
 | Beta. | The protocol surface is verified, but retrieval quality under real agents is still being tuned. | Report bad results with the debug log. |
 | The assistant must support tool calling. | MCP only works with models that emit structured tool calls. Some local models do not. | Choose a tool-capable model. |
 | Multi-hop retrieval relies on an implicit contract. | Anchors are passed to the router by appending a `Key symbols:` line to the question. If the router's prompt format changes, multi-hop can silently weaken. | Test after changing the router. |
-| The package README is partly out of date. | It still lists known gaps (hidden files, `.euignore`) that a later hardening change fixed. | Trust these pages. |
 
 ## Related Docs
 

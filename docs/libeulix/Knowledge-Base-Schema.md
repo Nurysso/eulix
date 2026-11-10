@@ -66,10 +66,10 @@ KnowledgeBase
 | --- | --- | --- |
 | Function | `func_{name}::{path}` | `func_helper::app/models.py` |
 | Method | `method_{Class}_{name}::{path}` | `method_Form_save::app/models.py` |
-| Class / struct | `class_{name}::{path}` or `struct_{name}::{path}` | `class_Form::app/models.py` |
-| Nested function | `func_{outer}.{inner}::{path}`, tagged `nested` | `func_outer.helper::a.rs` |
+| Type | `class_`, `struct_`, `interface_`, `trait_`, `enum_` or `union_`, then `{name}::{path}` | `class_Form::app/models.py` |
+| Nested function | `{scope}.{inner}::{path}`, tagged `nested`. `{scope}` is the enclosing function's or method's id without the path, so a function nested in a method looks like `method_Form_save.helper::{path}`. On a name clash `@{line}` is added: `{scope}.{inner}@{line}::{path}` | `func_outer.helper::a.rs`, `func_outer.helper@12::a.rs` |
 
-Which prefix a language uses for its types varies (Go and C use `struct_`, JavaScript uses `class_`). Ids are how the call graph refers to nodes, so treat them as opaque strings and do not parse them in your own code.
+Which type prefix is used depends on the language and the declaration (Go and C use `struct_`, JavaScript uses `class_`, TypeScript and Java interfaces use `interface_`, Rust traits use `trait_`). Ids are how the call graph refers to nodes, so treat them as opaque strings and do not parse them in your own code.
 
 **Edges.** A `CallGraphEdge` has `edge_type` set to `call` or `inheritance`, a `conditional` flag, and `call_site_line`. The type's source comment also mentions `uses`, but neither PRISM version emits it.
 

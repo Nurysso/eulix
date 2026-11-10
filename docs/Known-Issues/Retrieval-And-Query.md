@@ -63,6 +63,8 @@ Read [Overview](Overview.md) for the legend. Most entries here are *Read in code
 
 **Fix direction.** Drop numeric tokens from feedback terms, and cap feedback terms that are type names in the seeds' signatures.
 
+**Note.** This was measured before [#158](https://github.com/Nurysso/eulix/pull/158) (EHNAS call layer, determinism and twin fixes). Re-run the benchmark before relying on it.
+
 ---
 
 ## RET-5: EHNAS: several benchmark questions still fall back to text search
@@ -80,13 +82,17 @@ With 20 questions, a single one moves the "ranked first" figure by 5 points. Tre
 
 **Caveat when benchmarking.** The text-search fallback skips hidden directories but searches the rest of the repository. Result files written to the repository root get found by later queries, which adds noise. Write results under `.eulix/` instead.
 
+**Note.** This was measured before [#158](https://github.com/Nurysso/eulix/pull/158) (EHNAS call layer, determinism and twin fixes). Re-run the benchmark before relying on it.
+
 ---
 
 ## RET-6: The Monte Carlo lexical layer depends on map order
 
 **Severity:** Low · **Status:** Open · **Verification:** Carried over
 
-`buildLexLayer` sums 32-bit edge weights while iterating a map of postings. Different iteration orders round differently, which can change which neighbour a walker picks. The layer exists only when the inverted index is built (`inverted_index_min_chunks`). Fix: iterate the postings in sorted key order. The stemmer used for matching also has suffix-only rules, so irregular forms (`index`/`indices`, `entry`/`entries`) and `-er` words (`parser`/`parse`) do not meet.
+`buildLexLayer` sums 32-bit edge weights while iterating a map of postings. Different iteration orders round differently, which can change which neighbour a walker picks. The layer exists only when the inverted index is built (`inverted_index_min_chunks`). Fix: iterate the postings in sorted key order.
+
+Two related details in `walk_graph.go`: the walk's random generator is seeded only from the number of seeds and chunks (`rawSeed`), and the XOR with a hash of the query is commented out, so two different queries with the same counts share one random sequence. This keeps runs repeatable, but it is not documented as intended. Also, `mcDiagEnabled` is `true`, so the diagnostic counters stay compiled into the hot path. The stemmer used for matching also has suffix-only rules, so irregular forms (`index`/`indices`, `entry`/`entries`) and `-er` words (`parser`/`parse`) do not meet.
 
 ---
 

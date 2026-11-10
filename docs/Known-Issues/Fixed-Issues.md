@@ -59,6 +59,20 @@ The five rows from "Opening a repository could overwrite a file outside it" to "
 | Smaller EHNAS changes. | Random seed choice for tied walk seeds; a 5000+ anchor pin set the score floor too high. | Tie-breaks in seed picking and final ordering; the pre-selection floor ignores pinned chunks; per-engine config sections. | Retrieval package tests. |
 | `eulix-embed` README and help text disagreed with the code (EMB-8). | The README listed a `--no-comments` flag that does not exist and a commented-out `--save-json`, and a binary format without the `quantized` byte and scales. `embed --help` said the engine default was `torch` (it is `onnx`), the server help named the wrong default model, and `-d` omitted `rocm`. | README and help strings corrected to match the code. | `embed --help` output checked by hand. |
 | The query embedder ignored the configured engine. | With `engine = "torch"`, queries still used ONNX. | `VectorWeaver` passes `-e <engine>` (commit `6e1050a`). | None recorded. See [EMB-1](Embeddings.md#emb-1-onnx-on-rocm-produces-wrong-embeddings) for what remains. |
+| EHNAS call layer had no edges on real knowledge bases ([#155](https://github.com/Nurysso/eulix/issues/155) item 1). | The call layer looked up endpoints by bare name and found none. | Endpoints are looked up by full node ID first, with the name lookup kept for older graphs ([#158](https://github.com/Nurysso/eulix/pull/158)). | `walk_graph_test.go`. |
+| The same EHNAS query could return different chunks between runs (#155 item 2). | Results such as `application context` on flask changed run to run. | Ties break by chunk ID before every cut, and EHNAS sorts its chunks into a canonical order before building indices (#158). | `ehnas_determinism_test.go`. |
+| The MMR twin penalty never applied, and `parse_config`/`ParseConfig` never became twins (#155 items 3 and 5). | Redundant ports of the same function both made it into the context. | Twin groups get stable classes, and all underscores are removed before hashing (#158). | `twins_test.go`. |
+| Candidates past `3*topK` could outrank the novelty-weighted ones (#155 item 4). | Novelty weighting had no effect on the tail. | The whole candidate list is weighted before the final sort (#158). | `novelty_test.go`. |
+
+## LSP
+
+| Problem | What users saw | Fix | Test |
+| --- | --- | --- | --- |
+| `workspace/symbol` replaced every result's name with the query. | Searching `ru` listed symbols called `ru` instead of `run`. | Results keep their real names ([#154](https://github.com/Nurysso/eulix/pull/154)). | Rust handler tests and `e2e_lsp.py`. |
+| Positions were wrong at the edges of a line or file. | A range ending at EOF without a trailing newline lost its last character; a column past the end of a line crossed a `\r\n` into the next line. | Fixed in `position.rs` (#154). | Rust handler tests and `e2e_lsp.py`. |
+| `DocumentSymbol.range` covered only the first line, and `#[test]` functions were marked deprecated. | Outlines and folding were wrong; tests showed as struck through. | The range covers the whole declaration, and `#[test]` no longer sets the deprecated modifier (#154). | Rust handler tests and `e2e_lsp.py`. |
+
+The other two items from [#148](https://github.com/Nurysso/eulix/issues/148) are open as [LSP-1 and LSP-2](LSP.md).
 
 ## Parser and PRISM
 

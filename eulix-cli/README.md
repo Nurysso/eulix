@@ -117,7 +117,7 @@ eulix [command] [flags]
 | `chat` | | Open the interactive terminal interface. Refuses to start if the code changed by more than 30% since the last analysis, and asks first above 10%. |
 | `query` | `<question>` | Answer factual questions (locations, usage, call graphs, entry points, dependencies, metrics, todos, file structure) directly, and print the retrieved context and reasoning instructions for everything else. It does **not** call a language model. |
 | `mcp` | `[path]` | Start the MCP server on standard input and output. Flags: `--repo`, `--timeout`, `--cot`. Beta. |
-| `history` | `list`, `show <id>`, `view`, `delete <id>`, `clear` | Browse recorded questions and answers. `--no-tui` prints a plain list. `cache` is an alias. |
+| `history` | `list`, `show <id>`, `view`, `delete <id>`, `clear` | Browse recorded questions and answers. `--no-tui` prints a plain list. `cache` is deprecated and only prints a notice. |
 | `vizeulize` | `--graph <path>` | Open the call-graph explorer in your browser. |
 | `version` | | Show the versions of `eulix`, `eulix_parser` and `eulix_embed`. |
 

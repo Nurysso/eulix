@@ -269,7 +269,7 @@ The MC walk is the only stage whose cost is _constant_ in corpus size — the la
 [retrievalConfig]
 pre_mmr_score_floor_ratio = 0.05   # shared fallback
 max_context_chunks = 30
-mmr_diversity_factor = 0.65
+mmr_diversity_factor = 0.85
 
 [retrievalConfig.etiya]            # optional overrides
 # pre_mmr_score_floor_ratio, mmr_diversity_factor, max_context_chunks, semantic_min_similarity

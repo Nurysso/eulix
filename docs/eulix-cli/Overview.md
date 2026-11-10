@@ -70,7 +70,7 @@ These are the commands registered in the code today.
 | `chat` | Opens the interactive terminal interface. |
 | `query "<question>"` | Builds the context prompt for a question and prints it. It does **not** call a language model. |
 | `mcp [path]` | Starts the MCP server for AI coding agents. Beta. |
-| `history` (`list`, `show`, `view`, `delete`, `clear`) | Browses recorded questions and answers. `cache` is an alias. |
+| `history` (`list`, `show`, `view`, `delete`, `clear`) | Browses recorded questions and answers. `cache` is deprecated and only prints a notice, like `checksum`. |
 | `vizeulize` | Opens the call-graph explorer. See [vizEulize](../vizEulize/Overview.md). |
 | `checksum` | Deprecated; prints a notice. |
 | `config` | Placeholder; prints "coming soon". |
@@ -148,8 +148,6 @@ The retrieval engine memory-maps large files and streams the knowledge base inst
 | The `[checksum]` thresholds in `eulix.toml` are not used. | `chat` uses fixed values of 10% and 30%. | Treat them as fixed for now. |
 | Replies are not streamed. | The LLM client waits for the full response. | None. |
 | First run needs `uv` and network access. | The Python environment is built on demand. | Install `uv` first. |
-| `eulix-cli/README.md` says the project is GPL-3.0, and says history is kept in SQLite. | Both statements are out of date. The repository is Apache-2.0, and history is a bbolt database. | Trust the repository `LICENSE`. |
-| The README says the `glados` and `aspirine` commands work. | They are deprecated stubs. | None. |
 
 ## Related Docs
 

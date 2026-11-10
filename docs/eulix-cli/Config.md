@@ -136,7 +136,6 @@ With `ANTHROPIC_API_KEY` set in your environment or `.env`, this is enough.
 | Limitation | Why it happens | Workaround |
 | --- | --- | --- |
 | `Project.Path` is absolute and written into the file. | The default is the directory where `init` ran. | Update it if you move the project. |
-| The code default for `mmr_diversity_factor` is 0.85, but the CLI README documents 0.65. | The README is out of date; 0.65 is the default of an internal constant used when none is configured. | Set the key explicitly. |
 | `[checksum]` values have no effect. | `chat` uses fixed limits. | None. |
 | Out-of-range values are clamped without a warning. | By design. | Check `eulix.toml` against this page. |
 | A `# TODO` in the source calls the retrieval section unfinished. | More settings are expected. | Expect additions. |

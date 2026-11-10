@@ -11,7 +11,7 @@ PRISM v2 is the scope-aware call-graph builder in `libeulix`: it resolves each c
 
 v2 keeps the same goal as [PRISM v1](PRISM-V1.md), which is to link every call to the definition it probably means. What changes is how it chooses. Instead of "the first function with that name anywhere", v2 asks "which function with that name is *closest* to where the call is made?" It looks in the same file first, then in what the file imports, then in the same directory, and only then across the whole project.
 
-It also knows about classes. When code inside a method calls `self.validate()`, v2 starts at the method's own class, then walks up through its parent classes, and then down through its subclasses to find a method with that name. And when a name is shared by too many definitions to guess responsibly, v2 draws no edge at all. A missing edge is usually better for retrieval than a wrong one.
+It also knows about classes. When code inside a method calls `self.validate()`, v2 starts at the method's own class and walks up through its parent classes to find a method with that name. (PHP also searches subclasses; see below.) And when a name is shared by too many definitions to guess responsibly, v2 draws no edge at all. A missing edge is usually better for retrieval than a wrong one.
 
 The source documents a target of roughly 1.4 seconds and 3.1 GB of peak memory for a ~64,000-file polyglot repository. That number comes from a source comment and was not re-measured for this page.
 
@@ -70,7 +70,7 @@ v2 does exactly that for a function name. It checks the **same file**, then the 
 | 3. Same directory | Definitions in the caller's directory | In most languages a directory is a package. |
 | 4. Whole project | Every definition with the name, but only if there are no more than `max_ambiguous` (default 8) | The last resort, and the only one that can abstain. |
 
-When several candidates survive on one rung, `pick` prefers the better-fitting *kind* (a plain call prefers a function, then a class, and methods only when not strict; a method call prefers a method, then a function), then the candidate whose path shares more leading directories with the caller, and finally the lowest index, which makes the result repeatable.
+When several candidates survive on one rung, `pick` prefers the better-fitting *kind* (a plain call prefers a function, then a class; a method call prefers a method, then a function). For PHP a plain call can still fall back to a method when not strict. For Python, TypeScript and Rust a bare `foo()` never resolves to a method, then the candidate whose path shares more leading directories with the caller, and finally the lowest index, which makes the result repeatable.
 
 **Why this way.** Nearer scopes are right more often than far ones, and checking them first costs almost nothing, because the candidate lists are sorted so each rung is a binary search and not a scan. The cap is the key design choice: if a name is that common and nothing nearer settled it, any pick would be a coin toss.
 
@@ -82,9 +82,9 @@ If a name comes from an import that points *outside* the project (the standard l
 
 **The problem.** `self.validate()` should resolve to a method of the enclosing class or something it inherits from, not to any function named `validate`.
 
-**The approach.** The lookup tries the class's own methods, then its ancestors with a breadth-first walk, then its descendants, so an override in a subclass is also found. The walk is capped at 64 levels, and a visited set guards against cycles.
+**The approach.** For Python, TypeScript and Rust, a `self.`/`this.` call looks only in the class's own methods and then its ancestors, with a breadth-first walk (`receiver_method` in `prism_v2/receivers.rs`). A method found only in a subclass does not count. PHP is different: `$this->m()` also searches descendants, so an override in a subclass is found, while `X::m()` and `self::m()` look only upwards (`prism_v2/php.rs`). The walk is capped at 64 levels, and a visited set guards against cycles.
 
-**Why this way.** Inherited methods are the common case, so ancestors come first. Subclasses come second so that a call on a base class can still find an override. The cap protects against cyclic or adversarial hierarchies.
+**Why this way.** Inherited methods are the common case, so ancestors come first. A subclass override does not tell the resolver what a receiver's class has, so outside PHP it is not used; PHP keeps the descendant search because `$this` there can be any subclass at run time. The cap protects against cyclic or adversarial hierarchies.
 
 ### Receiver-aware resolution
 
