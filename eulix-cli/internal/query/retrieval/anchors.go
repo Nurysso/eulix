@@ -234,6 +234,23 @@ func symbolEqualsFold(syms []string, target string) bool {
 	return false
 }
 
+// IDWithoutFile removes the file from a parser node ID. C++ names contain "::"
+// too ("func_Foo::bar::src/a.cpp"), so in a prefixed ID the file follows the
+// last one. An unprefixed ID keeps only what precedes the first.
+func IDWithoutFile(id string) string {
+	i := strings.Index(id, "::")
+	for _, prefix := range []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"} {
+		if strings.HasPrefix(id, prefix) {
+			i = strings.LastIndex(id, "::")
+			break
+		}
+	}
+	if i < 0 {
+		return id
+	}
+	return id[:i]
+}
+
 // lookupCallGraphNode checks the call-graph node table for an entity, trying
 // every '_'-seprated suffix for each node key. this is what makes
 // `method_SQLCompiler_get_from_clause` match entity `get_from_clause`
@@ -247,9 +264,7 @@ func (cb *ContextBuilder) lookupCallGraphNode(entity string) (string, bool) {
 	}
 	entityLow := strings.ToLower(entity)
 	for key, n := range cb.cgBuild.Nodes {
-		if i := strings.Index(key, "::"); i != -1 {
-			key = key[:i]
-		}
+		key = IDWithoutFile(key)
 		if i := strings.Index(key, "@"); i != -1 {
 			key = key[:i]
 		}
@@ -257,7 +272,7 @@ func (cb *ContextBuilder) lookupCallGraphNode(entity string) (string, bool) {
 			return n.NodeType, true
 		}
 		for i := 0; i < len(key); i++ {
-			if (key[i] == '_' || key[i] == '.') && strings.ToLower(key[i+1:]) == entityLow {
+			if (key[i] == '_' || key[i] == '.' || key[i] == ':') && strings.ToLower(key[i+1:]) == entityLow {
 				return n.NodeType, true
 			}
 		}

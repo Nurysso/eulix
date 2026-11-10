@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -276,6 +277,20 @@ func buildRouterCallGraph(ref *utils.CallGraphRef) *callGraph {
 	return &callGraph{Functions: fns}
 }
 
+// servableDeps hides hidden and ignored files from each dependency's users, and
+// drops a dependency that only those files use.
+func servableDeps(deps []utils.ExternalDependency, servable func(string) bool) []utils.ExternalDependency {
+	kept := deps[:0]
+	for _, d := range deps {
+		listed := len(d.UsedBy) > 0
+		d.UsedBy = slices.DeleteFunc(d.UsedBy, func(f string) bool { return !servable(f) })
+		if !listed || len(d.UsedBy) > 0 {
+			kept = append(kept, d)
+		}
+	}
+	return kept
+}
+
 func (r *Router) handleDependency(query string, _ *c.Classification) (string, error) {
 	entity := extractDepQueryTerm(query)
 	entityLow := strings.ToLower(entity)
@@ -292,6 +307,7 @@ func (r *Router) handleDependency(query string, _ *c.Classification) (string, er
 	if err != nil {
 		return "", fmt.Errorf("could not load external deps: %w", err)
 	}
+	deps = servableDeps(deps, checksum.ServableMatcher(r.config.Project.Path))
 
 	idx := buildDepIndex(deps)
 
@@ -438,7 +454,8 @@ func (r *Router) handleMetrics(query string, class *c.Classification) (string, e
 		return "", fmt.Errorf("failed to parse metrics JSON: %w", err)
 	}
 
-	topComplex := ref.TopComplexFunctions
+	servable := checksum.ServableMatcher(r.config.Project.Path)
+	topComplex := slices.DeleteFunc(ref.TopComplexFunctions, func(fn utils.FunctionMetric) bool { return !servable(fn.File) })
 	byName := make(map[string]utils.FunctionMetric, len(topComplex))
 	for _, fn := range topComplex {
 		byName[fn.Name] = fn
@@ -497,8 +514,9 @@ func (r *Router) handleEntryPoints(_ string, _ *c.Classification) (string, error
 	var b strings.Builder
 	b.WriteString("Entry points \n")
 
+	servable := checksum.ServableMatcher(r.config.Project.Path)
 	byType := make(map[string][]utils.EntryPoint)
-	for _, ep := range ref.EntryPoints {
+	for _, ep := range slices.DeleteFunc(ref.EntryPoints, func(ep utils.EntryPoint) bool { return !servable(ep.File) }) {
 		byType[ep.EntryType] = append(byType[ep.EntryType], ep)
 	}
 

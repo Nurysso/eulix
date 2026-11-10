@@ -204,13 +204,8 @@ func resolveProvider(l config.LLMConfig) string {
 
 func (c *Client) LlmResponse(prompt string) (string, error) {
 	if c.config.Project.DebugConfig {
-		logDir := filepath.Join(c.config.Project.Path, utils.EulixDir, "debug")
-		if err := os.MkdirAll(logDir, 0o755); err != nil {
-			return "", fmt.Errorf("failed to create debug directory: %w", err)
-		}
-
-		logFile := filepath.Join(logDir, "llmdebug.log")
-		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		f, err := utils.OpenEulixFile(filepath.Join(c.config.Project.Path, utils.EulixDir),
+			filepath.Join("debug", "llmdebug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 		if err != nil {
 			return "", fmt.Errorf("failed to open debug log file: %w", err)
 		}

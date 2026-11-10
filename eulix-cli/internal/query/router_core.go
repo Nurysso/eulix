@@ -66,6 +66,9 @@ func QueryTrafficController(
 	llmClient *llm.Client,
 	cacheManager *cache.Manager,
 ) (*Router, error) {
+	if err := utils.CheckEulixDir(eulixDir); err != nil {
+		return nil, err
+	}
 	debugLogger := utils.NewDebugLogger(eulixDir)
 	debugLogger.StartAutoFlush(5 * time.Second) // once
 

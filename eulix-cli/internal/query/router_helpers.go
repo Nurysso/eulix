@@ -96,6 +96,10 @@ func (r *Router) ensureContextBuilder() error {
 	if _, err := os.Stat(sourceRoot); os.IsNotExist(err) {
 		return fmt.Errorf("source root does not exist: %s", sourceRoot)
 	}
+	// This runs again after an idle release, and a pull may have added a link since.
+	if err := utils.CheckEulixDir(r.eulixDir); err != nil {
+		return err
+	}
 	//if r.config.Project.DebugConfig {
 	// fmt.Printf("[INFO] Initializing context builder with source root: %s\n", sourceRoot)
 	//}
@@ -118,9 +122,7 @@ func (r *Router) ensureContextBuilder() error {
 
 // bareID strips the node-type prefix and file path that eulix-parser emits.
 func bareID(id string) string {
-	if i := strings.Index(id, "::"); i != -1 {
-		id = id[:i]
-	}
+	id = retrieval.IDWithoutFile(id)
 	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(id, prefix) {
@@ -889,10 +891,7 @@ func BuildCallGraphIndex(ref *utils.CallGraphRef) *retrieval.CallGraphIdx {
 // callGraphShortName extracts the bare symbol name from a prefixed/namespaced key.
 // "func_generate_vectors_streaming::eulix-embed/pipeline/onnx_pipeline.py" → "generate_vectors_streaming"
 func callGraphShortName(key string) string {
-	// Strip file path suffix separated by ::
-	if idx := strings.Index(key, "::"); idx != -1 {
-		key = key[:idx]
-	}
+	key = retrieval.IDWithoutFile(key)
 
 	// Strip known type prefixes
 	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
@@ -908,7 +907,8 @@ func callGraphShortName(key string) string {
 			}
 		}
 		if prefix == "func_" {
-			return nestedName(after)
+			// "Foo::bar" → "bar", as "Router.handle" → "handle".
+			return nestedName(after[strings.LastIndex(after, ":")+1:])
 		}
 		return after
 	}

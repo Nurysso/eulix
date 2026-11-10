@@ -38,6 +38,11 @@ func analyzeProject(projectPath string) error {
 func analyzeWithPipeline(projectPath string, pipeline func(string, *config.Config) error) error {
 	startTime := time.Now()
 
+	// The parser and embedder write here and follow links, and a clone can ship this folder.
+	if err := utils.CheckEulixDir(filepath.Join(projectPath, utils.EulixDir)); err != nil {
+		return err
+	}
+
 	// Load config (used for parser and embedding settings)
 	cfg, err := config.Load()
 	if err != nil {

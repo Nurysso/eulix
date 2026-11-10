@@ -10,16 +10,20 @@ This file is have helpers for cli stuff
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
 	a "eulix/internal/assets"
+	"eulix/internal/checksum"
 	"eulix/internal/utils"
 )
 
@@ -88,13 +92,41 @@ func openInBrowser(target string) error {
 	return nil
 }
 
-func writeQueryDebugLog(eulixDir, query, result string) error {
-	logFile := filepath.Join(eulixDir, "debug", "query-debug.log")
-	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
-		return fmt.Errorf("failed to create debug directory: %w", err)
+// servableCallGraphJSON returns a call graph without hidden or ignored files.
+// It keeps the JSON generic because the viewer reads fields the router does not.
+func servableCallGraphJSON(path, projectPath string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var g struct {
+		Nodes          []map[string]any `json:"nodes"`
+		Edges          []map[string]any `json:"edges"`
+		Tags           map[string]any   `json:"tags"`
+		FileCategories map[string]any   `json:"file_categories"`
+	}
+	if err := json.Unmarshal(data, &g); err != nil {
+		return nil, err
 	}
 
-	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	servable := checksum.ServableMatcher(projectPath)
+	removed := make(map[any]bool)
+	g.Nodes = slices.DeleteFunc(g.Nodes, func(n map[string]any) bool {
+		file, _ := n["file"].(string)
+		if servable(file) {
+			return false
+		}
+		removed[n["id"]] = true
+		return true
+	})
+	g.Edges = slices.DeleteFunc(g.Edges, func(e map[string]any) bool { return removed[e["from"]] || removed[e["to"]] })
+	maps.DeleteFunc(g.Tags, func(id string, _ any) bool { return removed[id] })
+	maps.DeleteFunc(g.FileCategories, func(file string, _ any) bool { return !servable(file) })
+	return json.Marshal(g)
+}
+
+func writeQueryDebugLog(eulixDir, query, result string) error {
+	f, err := utils.OpenEulixFile(eulixDir, filepath.Join("debug", "query-debug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		return fmt.Errorf("failed to open debug log file: %w", err)
 	}
