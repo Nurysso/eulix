@@ -179,3 +179,23 @@ func TestFileIsPrivate(t *testing.T) {
 		t.Fatalf("history file mode %o, want no group/other access", perm)
 	}
 }
+
+// A repository can ship .eulix, so its history.db may be a link to any file.
+func TestRefusesSymlinkedDatabase(t *testing.T) {
+	victim := filepath.Join(t.TempDir(), "victim.txt")
+	if err := os.WriteFile(victim, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "history.db")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	m, err := CacheController(&config.Config{Cache: config.CacheConfig{Enable: true, Path: link}})
+	if err == nil {
+		_ = m.Close()
+		t.Error("opened the database through a link")
+	}
+	if fi, _ := os.Stat(victim); fi.Size() != 0 {
+		t.Errorf("wrote %d bytes through the link", fi.Size())
+	}
+}

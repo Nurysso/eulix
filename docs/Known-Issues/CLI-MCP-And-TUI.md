@@ -89,6 +89,20 @@ All in `internal/llm/client.go`:
 
 ---
 
+## CLI-8: "Call graph of" questions can look up the wrong word
+
+**Severity:** Medium · **Status:** Open · **Verification:** Reproduced (2026-11-10)
+
+**Symptom.** `eulix query "call graph of main"` answers `'of' not found in call graph.` The same happens for any name with no capital letter or underscore, and for C++ names such as `Vault::unlock`. Through MCP, "call graph of Vault::unlock" looks up `Key` instead. Names such as `DecodeJSONFile` and `payment_total` work.
+
+**Cause.** When the classifier finds no symbol, `extractEntityName` in `internal/query/router_helpers.go` prefers a word that looks like code, then falls back to the first word not on its stop list. "of" is not on that list. `isLikelySymbol` rejects names containing `:`, so under MCP the capitalised `Key` from the appended `Key symbols:` line wins (see [MCP-3](#mcp-3-mcp-text-search-fallback-gaps)).
+
+**Workaround.** Ask "who calls main" or "who calls Vault::unlock". Both find the symbol.
+
+**Fix direction.** Add "of" to the stop words, accept `::` in `isLikelySymbol`, and leave the appended `Key symbols:` line out when picking the symbol.
+
+---
+
 ## MCP-1: A repository's own `.eulix/` and `eulix.toml` are trusted
 
 **Severity:** High · **Status:** Open · **Verification:** Carried over
@@ -118,7 +132,38 @@ The SDK does not recover panics, and the package has no `recover`. Fuzzing the q
 - It does not remove identical content across files, so repositories with backup trees waste budget. Use `.euignore` or `lexical_exclude`.
 - `retrievalConfig.etiya.lexical_exclude` is read only when the engine is `etiya`.
 - The client "roots" feature the server uses to find a repository is deprecated in newer protocol versions, and clients on those versions never send the message that triggers it. For them, use `--repo`, `set_repo_path` or `repo_path`.
-- Multi-hop retrieval depends on an implicit contract: anchors are handed to the router by appending a `Key symbols:` line to the question. Changing the router's prompt format could silently weaken it.
+- Multi-hop retrieval depends on an implicit contract: anchors are handed to the router by appending a `Key symbols:` line to the question. Changing the router's prompt format could silently weaken it, and the line already sends one call graph question to the wrong symbol ([CLI-8](#cli-8-call-graph-of-questions-can-look-up-the-wrong-word)).
+
+---
+
+## MCP-4: Symlinks inside a repository are not followed
+
+**Severity:** Low · **Status:** Limitation · **Verification:** Reproduced (2026-11-10, with the `eulix` binary)
+
+**Symptom.** A symlinked source file is left out of text search, and its source does not appear in answers. This applies even when the link points to another file inside the repository.
+
+**Cause.** This is a deliberate choice, and it applies to MCP and `eulix query` alike. Following links safely would mean checking every target against the hidden-file and `.euignore` rules, on both Unix and Windows. Refusing links needs none of that. The parser's walker does not enable link following either, so these files are normally not indexed.
+
+A `.eulix` folder that is a symlink, or that contains one, is refused outright, and `eulix analyze`, `eulix chat`, `eulix query` and the MCP server stop with an error naming the link.
+
+**Workaround.** Keep a real copy of the file in the repository, and remove any link from `.eulix`. Opening a repository through a symlinked path still works, because binding resolves it to the real folder first.
+
+**Not tested.** Windows junctions have not been tested. The symlink tests skip when the system does not allow creating symlinks, so check for skips in a Windows run.
+
+---
+
+## MCP-5: Small gaps remain in the symlink checks
+
+**Severity:** Low · **Status:** Partly fixed · **Verification:** Read in code
+
+The serious routes are closed: see [Fixed Issues](Fixed-Issues.md). The `.eulix` check runs when a router or context builder is built, so these narrower cases remain:
+
+- **A link added after that check.** Metrics, entry points and dependencies are read again for each question. Until the next build, a link added by a pull can pull in a JSON file from outside the repository. Debug logs are not affected, because each write refuses such links itself.
+- **A symlinked `.eulix` in `eulix chat`.** The history database opens before the check, so an empty `history.db` can be created in the link's target before the command stops.
+- **A replaced folder outside MCP.** Only the MCP server checks that the bound folder is still the same one. A long-running `eulix chat` does not.
+- **Files outside `.eulix`.** `eulix.toml` and `.euignore` are read through links. Their contents act as settings and rules and are not shown in answers. This belongs with [MCP-1](#mcp-1-a-repositorys-own-eulix-and-eulixtoml-are-trusted).
+
+**Not tested.** None of this has run on native Windows, including whether junctions are refused.
 
 ---
 

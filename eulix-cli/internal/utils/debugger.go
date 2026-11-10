@@ -36,13 +36,7 @@ func NewDebugLogger(eulixDir ...string) *DebugLogger {
 		return &DebugLogger{buf: &bytes.Buffer{}}
 	}
 
-	logPath := filepath.Join(eulixDir[0], "debug", "context_debug.log")
-
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return &DebugLogger{buf: &bytes.Buffer{}} // silent fallback (in-memory)
-	}
-
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	f, err := OpenEulixFile(eulixDir[0], filepath.Join("debug", "context_debug.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC)
 	if err != nil {
 		return &DebugLogger{buf: &bytes.Buffer{}} // silent fallback (in-memory)
 	}

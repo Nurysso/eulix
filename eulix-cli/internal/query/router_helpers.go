@@ -10,7 +10,6 @@ package query
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -97,6 +96,10 @@ func (r *Router) ensureContextBuilder() error {
 	if _, err := os.Stat(sourceRoot); os.IsNotExist(err) {
 		return fmt.Errorf("source root does not exist: %s", sourceRoot)
 	}
+	// This runs again after an idle release, and a pull may have added a link since.
+	if err := utils.CheckEulixDir(r.eulixDir); err != nil {
+		return err
+	}
 	//if r.config.Project.DebugConfig {
 	// fmt.Printf("[INFO] Initializing context builder with source root: %s\n", sourceRoot)
 	//}
@@ -119,9 +122,7 @@ func (r *Router) ensureContextBuilder() error {
 
 // bareID strips the node-type prefix and file path that eulix-parser emits.
 func bareID(id string) string {
-	if i := strings.Index(id, "::"); i != -1 {
-		id = id[:i]
-	}
+	id = retrieval.IDWithoutFile(id)
 	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(id, prefix) {
@@ -422,8 +423,8 @@ func filterServableIndex(index *utils.Indices, projectPath string) {
 	for callee, callers := range index.FunctionsCalling {
 		kept := callers[:0]
 		for _, caller := range callers {
-			_, file, ok := strings.Cut(caller, "::")
-			if ok && servable(file) {
+			// C++ names contain "::" too, so the file follows the last one.
+			if i := strings.LastIndex(caller, "::"); i >= 0 && servable(caller[i+2:]) {
 				kept = append(kept, caller)
 			}
 		}
@@ -508,7 +509,7 @@ func parseLocation(loc string) (string, int, error) {
 // detects the language, and reads the full function signature. The file is
 // read through root without following symlinks.
 func extractSignature(root *os.Root, filePath string, startLine int) (string, error) {
-	data, err := readRegularNoSymlinks(root, filePath)
+	data, err := checksum.ReadRegularNoSymlinks(root, filePath)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", filePath, err)
 	}
@@ -524,64 +525,6 @@ func extractSignature(root *os.Root, filePath string, startLine int) (string, er
 		lang = langPHP
 	}
 	return parseSig(lines, startLine-1, lang) // convert to 0-based
-}
-
-// readRegularNoSymlinks opens every path component relative to a pinned root.
-// Comparing each opened handle with its lstat result closes the race where a
-// regular component is replaced by a symlink between validation and use.
-func readRegularNoSymlinks(root *os.Root, filePath string) ([]byte, error) {
-	clean := filepath.Clean(filepath.FromSlash(filePath))
-	if clean == "." || !filepath.IsLocal(clean) {
-		return nil, fmt.Errorf("path is not local: %s", filePath)
-	}
-	parts := strings.Split(clean, string(filepath.Separator))
-	current := root
-	owned := false
-	for _, part := range parts[:len(parts)-1] {
-		before, err := current.Lstat(part)
-		if err != nil {
-			return nil, err
-		}
-		if before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
-			return nil, fmt.Errorf("path component is not a real directory: %s", part)
-		}
-		next, err := current.OpenRoot(part)
-		if err != nil {
-			return nil, err
-		}
-		after, err := next.Stat(".")
-		if err != nil || !os.SameFile(before, after) {
-			_ = next.Close()
-			return nil, fmt.Errorf("path component changed while opening: %s", part)
-		}
-		if owned {
-			_ = current.Close()
-		}
-		current = next
-		owned = true
-	}
-	if owned {
-		defer func() { _ = current.Close() }()
-	}
-
-	name := parts[len(parts)-1]
-	before, err := current.Lstat(name)
-	if err != nil {
-		return nil, err
-	}
-	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
-		return nil, fmt.Errorf("path is not a regular file: %s", filePath)
-	}
-	file, err := current.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = file.Close() }()
-	after, err := file.Stat()
-	if err != nil || !os.SameFile(before, after) || !after.Mode().IsRegular() {
-		return nil, fmt.Errorf("file changed while opening: %s", filePath)
-	}
-	return io.ReadAll(file)
 }
 
 func detectLang(path string) language {
@@ -948,10 +891,7 @@ func BuildCallGraphIndex(ref *utils.CallGraphRef) *retrieval.CallGraphIdx {
 // callGraphShortName extracts the bare symbol name from a prefixed/namespaced key.
 // "func_generate_vectors_streaming::eulix-embed/pipeline/onnx_pipeline.py" → "generate_vectors_streaming"
 func callGraphShortName(key string) string {
-	// Strip file path suffix separated by ::
-	if idx := strings.Index(key, "::"); idx != -1 {
-		key = key[:idx]
-	}
+	key = retrieval.IDWithoutFile(key)
 
 	// Strip known type prefixes
 	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
@@ -967,7 +907,8 @@ func callGraphShortName(key string) string {
 			}
 		}
 		if prefix == "func_" {
-			return nestedName(after)
+			// "Foo::bar" → "bar", as "Router.handle" → "handle".
+			return nestedName(after[strings.LastIndex(after, ":")+1:])
 		}
 		return after
 	}

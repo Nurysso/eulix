@@ -53,7 +53,6 @@ None are supported today.
 | --- | --- | --- |
 | Not reachable from the command line. | The commands are stubs and unregistered. | Re-run `eulix analyze` after deleting the damaged file. |
 | The binary layout described here may be out of date. | The code reads a float32 payload, but `analyze` asks the embedder for quantized output and the loader reads an int8 format with a scale. | Check the loader in [Index Loading](query/retrieval/Index-Loading.md) before reviving these tools. |
-| The CLI README lists both commands as working. | It was not updated. | Ignore that section. |
 
 ## Related Docs
 

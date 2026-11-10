@@ -61,9 +61,8 @@ const testDocAdmissionFloor = 60.0
 const subsysFinalK = 5
 
 // logSubsystemsToFile writes the constructed subsystem tree nodes to a debug log file.
-func logSubsystemsToFile(nodes []*SubsystemNode) error {
-	logPath := filepath.Join(utils.EulixDir, "debug", "susbstemDebug.log")
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+func logSubsystemsToFile(eulixDir string, nodes []*SubsystemNode) error {
+	f, err := utils.OpenEulixFile(eulixDir, filepath.Join("debug", "susbstemDebug.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC)
 	if err != nil {
 		return fmt.Errorf("failed to open subsystem.log: %w", err)
 	}
@@ -175,7 +174,7 @@ func (cb *ContextBuilder) buildSubsystemTree() {
 		}
 	}
 
-	if err := logSubsystemsToFile(cb.subsystemTree); err != nil {
+	if err := logSubsystemsToFile(cb.eulixDir, cb.subsystemTree); err != nil {
 		cb.debugLog.Log("Failed to write to subsystem.log: %v", err)
 	}
 

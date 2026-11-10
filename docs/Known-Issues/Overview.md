@@ -44,6 +44,7 @@ Anything fixed is not listed here as an open problem. Fixed items are kept for t
 | [Retrieval And Query](Retrieval-And-Query.md) | How context is chosen (`eulix-cli` retrieval and router). |
 | [Embeddings](Embeddings.md) | The embedding tool and the query embedder. |
 | [CLI, MCP And TUI](CLI-MCP-And-TUI.md) | The command line, the chat screens, the MCP server and the model client. |
+| [LSP](LSP.md) | The language server (`eulix-lsp`). |
 | [Fixed Issues](Fixed-Issues.md) | Resolved problems and the tests that guard them. |
 
 ## Summary of open items
@@ -54,7 +55,7 @@ Anything fixed is not listed here as an open problem. Fixed items are kept for t
 | [PRISM-2](Parser-And-PRISM.md#prism-2-v2-never-links-calls-to-methods-in-go-java-javascript-c-and-c) | PRISM v2 never links calls to methods in Go, Java, JavaScript, C and C++ | High | Partly fixed | Reproduced |
 | [PRISM-3](Parser-And-PRISM.md#prism-3-calls-on-a-receiver-of-unknown-type-get-no-edge-in-v2) | Calls on a receiver of unknown type get no edge in v2 | Medium | By design | Reproduced |
 | [PRISM-4](Parser-And-PRISM.md#prism-4-calls-resolve-across-languages) | Calls resolve across languages | High | Open | Reproduced |
-| [PRISM-5](Parser-And-PRISM.md#prism-5-go-and-java-receivers-never-reach-the-resolver-java-new-calls-never-resolve) | Go and Java receivers never reach the resolver; Java `new` calls never resolve | Medium | Open | Reproduced |
+| [PRISM-5](Parser-And-PRISM.md#prism-5-go-and-java-receivers-never-reach-the-resolver-java-new-calls-never-resolve) | Go and Java receivers never reach the resolver (missing and false edges); Java `new` calls never resolve | Medium | Open | Reproduced |
 | [PRISM-6](Parser-And-PRISM.md#prism-6-javascript-classes-record-no-base-class) | JavaScript classes record no base class | Medium | Open | Reproduced |
 | [PRISM-7](Parser-And-PRISM.md#prism-7-c-calls-are-recorded-twice) | C++ calls are recorded twice | Medium | Open | Reproduced |
 | [PRISM-8](Parser-And-PRISM.md#prism-8-v2-is-very-slow-on-large-rust-workspaces-with-shared-type-names) | PRISM v2 is very slow on large Rust workspaces with shared type names | Medium | Open | Reproduced |
@@ -86,9 +87,14 @@ Anything fixed is not listed here as an open problem. Fixed items are kept for t
 | [CLI-5](CLI-MCP-And-TUI.md#cli-5-model-requests-cannot-be-cancelled-are-not-streamed-and-have-three-smaller-defects) | Model requests cannot be cancelled, are not streamed, and have three smaller defects | Medium | Open | Read in code |
 | [CLI-6](CLI-MCP-And-TUI.md#cli-6-history-entries-with-equal-timestamps-list-in-arbitrary-order) | History entries with equal timestamps list in arbitrary order | Low | Open | Read in code |
 | [CLI-7](CLI-MCP-And-TUI.md#cli-7-developer-facing-loose-ends) | Developer-facing loose ends (logger races, lint config, stale comments, dead repair tools) | Low | Open | Read in code |
+| [CLI-8](CLI-MCP-And-TUI.md#cli-8-call-graph-of-questions-can-look-up-the-wrong-word) | "Call graph of" questions can look up the wrong word | Medium | Open | Reproduced |
 | [MCP-1](CLI-MCP-And-TUI.md#mcp-1-a-repositorys-own-eulix-and-eulixtoml-are-trusted) | A repository's own `.eulix/` and `eulix.toml` are trusted | High | Open | Carried over |
 | [MCP-2](CLI-MCP-And-TUI.md#mcp-2-a-panic-in-a-handler-takes-the-mcp-server-down) | A panic in a handler takes the MCP server down | Low | Open | Read in code |
 | [MCP-3](CLI-MCP-And-TUI.md#mcp-3-mcp-text-search-fallback-gaps) | MCP text-search fallback gaps | Low | Open | Read in code |
+| [MCP-4](CLI-MCP-And-TUI.md#mcp-4-symlinks-inside-a-repository-are-not-followed) | Symlinks inside a repository are not followed | Low | Limitation | Reproduced |
+| [MCP-5](CLI-MCP-And-TUI.md#mcp-5-small-gaps-remain-in-the-symlink-checks) | Small gaps remain in the symlink checks | Low | Partly fixed | Read in code |
+| [LSP-1](LSP.md#lsp-1-background-scans-are-not-cancelled-and-overwrite-open-buffers) | Background scans are not cancelled and overwrite open buffers | Medium | Open | Read in code |
+| [LSP-2](LSP.md#lsp-2-the-file-watcher-indexes-files-outside-the-workspace-root) | The file watcher indexes files outside the workspace root | Medium | Open | Read in code |
 
 ## Related Docs
 

@@ -59,7 +59,6 @@ Expected result: the saved question, reasoning and answer for the chosen entry.
 | Limitation | Why it happens | Workaround |
 | --- | --- | --- |
 | Only one program can open the database at a time. | bbolt takes an exclusive file lock. | Close other `eulix` sessions. The MCP server avoids this by never opening it. |
-| The old README calls this a SQLite database. | It is bbolt. | Ignore the README on this point. |
 | Entries are never expired. | By design. | `eulix history clear`. |
 | Duplicate entries from chat. | Two writers, one store. | Delete duplicates by ID. |
 

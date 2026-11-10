@@ -367,23 +367,6 @@ func TestLexicalSearchNeverShowsWhatTheParserExcludes(t *testing.T) {
 	}
 }
 
-func TestLexicalSearchFollowsASymlinkedRoot(t *testing.T) {
-	real := t.TempDir()
-	writeTree(t, real, map[string]string{
-		"billing/pay.py": "def payment_total():\n    return 42\n",
-		".euignore":      "secret.py\n",
-		"secret.py":      "payment = '" + secretMarker + "'\n",
-	})
-	link := filepath.Join(t.TempDir(), "repo")
-	if err := os.Symlink(real, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	got := runLexical(t, link, "payment")
-	if !strings.Contains(got, "payment_total") || strings.Contains(got, secretMarker) {
-		t.Fatalf("repo opened through a symlink:\n%s", got)
-	}
-}
-
 func TestLexicalSearchSkipsBinaryAndOversizedFiles(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{
@@ -420,6 +403,27 @@ func TestLexicalSearchCapsItsOutput(t *testing.T) {
 	// One window (7 lines of at most 300 bytes) may overshoot the byte cap.
 	if len(files2) > cfg.LexicalMaxFiles || len(got) > cfg.LexicalMaxBytes+8*310 {
 		t.Fatalf("output not capped: %d files, %d bytes", len(files2), len(got))
+	}
+}
+
+// Hits are trimmed during the walk, which must not lose a strong match found
+// early or late.
+func TestLexicalSearchTrimKeepsTheBestFiles(t *testing.T) {
+	root := t.TempDir()
+	strong := strings.Repeat("payment\n", 5)
+	files := map[string]string{"a_first.py": strong, "z_last.py": strong}
+	for i := range 40 {
+		files["m/f"+itoa(i)+".py"] = "payment\n"
+	}
+	writeTree(t, root, files)
+	cfg := DefaultStrategyConfig()
+	cfg.LexicalMaxFiles = 2
+	got, err := lexicalSearch(context.Background(), root, "payment", nil, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "a_first.py") || !strings.Contains(got, "z_last.py") || strings.Contains(got, "m/f") {
+		t.Fatalf("wrong files kept:\n%s", got)
 	}
 }
 

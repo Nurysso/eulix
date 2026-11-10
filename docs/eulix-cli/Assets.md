@@ -27,8 +27,10 @@ A single self-contained file is easy to install and to update. But a program tha
 
 - `CheckUv`, to confirm the `uv` tool is on `PATH`;
 - `CheckVenv`, to confirm `~/.Eulix/.venv` exists and reports Python 3.11;
-- `InstallEmbedDeps`, which runs `uv pip install` against the embedding tool's requirements file into that environment;
-- `GlobalInitialized`, which writes a hidden `~/.Eulix/.initialized` JSON file with the app name, version and install time.
+- `GlobalInitialized`, which writes a hidden `~/.Eulix/.initialized` JSON file with the app name, version and install time;
+- `InstallEmbedDeps`, which runs `uv pip install` against the embedding tool's requirements file into that environment.
+
+`.initialized` is written *before* the dependencies are installed (`cmd/eulix/main.go`), so if `InstallEmbedDeps` fails, the next run does not retry it.
 
 The requirements file name is chosen at build time with another linker setting (`embed_requirements`, for example `onnx-amd.txt`).
 

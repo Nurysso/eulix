@@ -62,6 +62,7 @@ type Server struct {
 	// mu guards all mutable state below and serializes queries.
 	mu           sync.Mutex
 	activeRepo   string
+	activeInfo   os.FileInfo // the folder bound as activeRepo
 	eulixDir     string
 	cfg          *config.Config
 	router       *query.Router

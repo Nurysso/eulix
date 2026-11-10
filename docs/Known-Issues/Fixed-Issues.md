@@ -8,6 +8,8 @@ Problems that used to exist and no longer do, with the test that now guards each
 
 I did not re-test these fixes. Test names are taken from the maintainers' notes. Where a fix is a recent commit, the commit is named. If one of these returns, move it back to the matching page and mark it *Open*.
 
+The five rows from "Opening a repository could overwrite a file outside it" to "C++ names were cut short in call graphs" are the exception. On 2026-11-10 each was checked with the real `eulix` binary against hostile test repositories: every problem appeared on commit `0120ec9` and none appeared after the fix. That check ran on Linux only.
+
 ## MCP server and security
 
 | Problem | What users saw | Fix | Test |
@@ -19,7 +21,13 @@ I did not re-test these fixes. Test names are taken from the maintainers' notes.
 | The request path could corrupt the protocol stream. | The MCP client got a parse error and dropped the session, because two error cases printed to standard output. | Both go to standard error or the debug log. | `TestE2ENothingIsWrittenToStdout`. |
 | Single-symbol queries got text-search output instead of the answer. | An exact symbol such as `payment_total` returned lexical matches under a "low-confidence" note. The scorer removed the query from the result before scoring, which deleted the symbol from the retrieved code. | Only the part before the router's `QUERY` echo is scored, and only multi-word echoes are stripped. The same query now scores 0.93 at the multi-hop stage. | `TestCascadeSingleSymbolQueryKeepsItsSemanticAnswer`. |
 | A running MCP server locked chat history. | While an editor ran `eulix mcp` in a project, `eulix chat` and `eulix history` failed after a 2-second timeout. | MCP builds its routers without a history cache. | `TestE2EBindingDoesNotLockChatHistory`. |
-| Symlinked repository paths got no text-search fallback. | The directory walker does not enter a symlinked root. | The root is resolved first. | `TestLexicalSearchFollowsASymlinkedRoot`. |
+| Symlinked repository paths got no text-search fallback. | The directory walker does not enter a symlinked root. | Binding resolves the root to the real folder, and search stays on it. | `TestSetRepoPathPinsAndRebuildsSymlinkedRoot`, `TestPRGap8LexicalSearchDoesNotFollowRootReplacedAfterBind`. |
+| Symlinks could expose hidden, ignored or outside files. | With `app/billing.py` linked to `.env`, a query returned the `.env` contents. A file swapped for a symlink during a text search could return a file from outside the repository. | Text search and the source shown in answers read through `checksum.ReadRegularNoSymlinks`, which refuses links at every path component. Small gaps remain: see [MCP-5](CLI-MCP-And-TUI.md#mcp-5-small-gaps-remain-in-the-symlink-checks). | `TestPRGap1LexicalWalkDoesNotFollowSwappedSymlink`, `TestPRGap4QueryDoesNotFollowSymlinkToExcludedFile`. |
+| Opening a repository could overwrite a file outside it. | A repository shipping a `.eulix` debug log as a symlink had the linked file emptied on bind, even with debugging off. Other logs appended repository source to the linked file, and `eulix analyze` wrote its output through such links. | Eulix-side logs open through `utils.OpenEulixFile`, whose `os.Root` refuses links that leave `.eulix`. `utils.CheckEulixDir` refuses a `.eulix` holding links before the router, context builder or `eulix analyze` run. | `TestBindRefusesSymlinksInEulixDir`, `TestDebugLogLinkAddedAfterBindIsNotWrittenThrough`, `TestOpenEulixFile`, `TestAnalyzeRefusesSymlinksInEulixDir`, `TestRefusesSymlinkedDatabase`. |
+| Answers could read `.eulix` files from outside the repository. | A `.eulix` JSON file linked to an outside file appeared in answers if it had the expected shape. | `utils.CheckEulixDir` refuses the link. | `TestCheckEulixDir`, `TestBindRefusesSymlinksInEulixDir`. |
+| A replaced repository folder was served against the old index. | If the bound folder became a symlink or a different folder, the source in answers came from the other one. | The MCP server compares the folder with the one it bound, refuses the query if it changed, and rebuilds on the next bind. | `TestQueryRefusesReplacedRepoFolder`. |
+| Reports named ignored files. | Entry points, metrics and dependencies named files in `.euignore`, including from `eulix vizeulize`'s call graph. | Each report and the viewer's default graph pass through `ServableMatcher`. A path passed with `--graph` is shown as given. | `TestAnswersHideIgnoredFilesFromKBReports`, `TestServableCallGraphJSON`. |
+| C++ names were cut short in call graphs. | `Foo::bar` showed as `Foo`, and a search for `bar` found nothing. | `retrieval.IDWithoutFile` takes the file from after the last `::` in a prefixed ID. | `TestBareID`, `TestCallGraphShortName`, `TestLookupCallGraphNodeFindsNestedFunctions`. |
 | Workspace roots never bound on Windows. | `file:///C:/repo` became `\C:\repo`. | The slash before a drive letter is dropped. | `TestURIPath`. |
 | Roots binding could overwrite an explicit `set_repo_path`. | The check and the bind took the lock separately. | They share one lock. | `TestRootsNeverOverrideAnExplicitChoice`. |
 
@@ -51,6 +59,20 @@ I did not re-test these fixes. Test names are taken from the maintainers' notes.
 | Smaller EHNAS changes. | Random seed choice for tied walk seeds; a 5000+ anchor pin set the score floor too high. | Tie-breaks in seed picking and final ordering; the pre-selection floor ignores pinned chunks; per-engine config sections. | Retrieval package tests. |
 | `eulix-embed` README and help text disagreed with the code (EMB-8). | The README listed a `--no-comments` flag that does not exist and a commented-out `--save-json`, and a binary format without the `quantized` byte and scales. `embed --help` said the engine default was `torch` (it is `onnx`), the server help named the wrong default model, and `-d` omitted `rocm`. | README and help strings corrected to match the code. | `embed --help` output checked by hand. |
 | The query embedder ignored the configured engine. | With `engine = "torch"`, queries still used ONNX. | `VectorWeaver` passes `-e <engine>` (commit `6e1050a`). | None recorded. See [EMB-1](Embeddings.md#emb-1-onnx-on-rocm-produces-wrong-embeddings) for what remains. |
+| EHNAS call layer had no edges on real knowledge bases ([#155](https://github.com/Nurysso/eulix/issues/155) item 1). | The call layer looked up endpoints by bare name and found none. | Endpoints are looked up by full node ID first, with the name lookup kept for older graphs ([#158](https://github.com/Nurysso/eulix/pull/158)). | `walk_graph_test.go`. |
+| The same EHNAS query could return different chunks between runs (#155 item 2). | Results such as `application context` on flask changed run to run. | Ties break by chunk ID before every cut, and EHNAS sorts its chunks into a canonical order before building indices (#158). | `ehnas_determinism_test.go`. |
+| The MMR twin penalty never applied, and `parse_config`/`ParseConfig` never became twins (#155 items 3 and 5). | Redundant ports of the same function both made it into the context. | Twin groups get stable classes, and all underscores are removed before hashing (#158). | `twins_test.go`. |
+| Candidates past `3*topK` could outrank the novelty-weighted ones (#155 item 4). | Novelty weighting had no effect on the tail. | The whole candidate list is weighted before the final sort (#158). | `novelty_test.go`. |
+
+## LSP
+
+| Problem | What users saw | Fix | Test |
+| --- | --- | --- | --- |
+| `workspace/symbol` replaced every result's name with the query. | Searching `ru` listed symbols called `ru` instead of `run`. | Results keep their real names ([#154](https://github.com/Nurysso/eulix/pull/154)). | Rust handler tests and `e2e_lsp.py`. |
+| Positions were wrong at the edges of a line or file. | A range ending at EOF without a trailing newline lost its last character; a column past the end of a line crossed a `\r\n` into the next line. | Fixed in `position.rs` (#154). | Rust handler tests and `e2e_lsp.py`. |
+| `DocumentSymbol.range` covered only the first line, and `#[test]` functions were marked deprecated. | Outlines and folding were wrong; tests showed as struck through. | The range covers the whole declaration, and `#[test]` no longer sets the deprecated modifier (#154). | Rust handler tests and `e2e_lsp.py`. |
+
+The other two items from [#148](https://github.com/Nurysso/eulix/issues/148) are open as [LSP-1 and LSP-2](LSP.md).
 
 ## Parser and PRISM
 

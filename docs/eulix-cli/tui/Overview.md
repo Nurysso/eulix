@@ -86,7 +86,6 @@ Styles are created once, not per frame. Each message caches its rendered text. T
 | Replies are not streamed. | The model client returns a whole response. | None yet. |
 | No test coverage. | No `_test.go` files exist in `tui`. | Test by hand. |
 | `StateTyping` is defined but never used. | Leftover from an earlier design. | None; it does no harm. |
-| The CLI README mentions model selection and streaming in the interface. | I found neither in the code. | Trust this page. |
 | Opening history takes you out of the chat for good. | See [History Viewer](History-Viewer.md). | Re-run `eulix chat`. |
 
 ## Related Docs

@@ -150,9 +150,18 @@ var vizEulizeCMD = &cobra.Command{
 			return fmt.Errorf("could not find vizeulize.html at %s: %w", htmlPath, err)
 		}
 
-		// Fallback defaults to .eulix directory files if not specified via flags
+		// Fallback defaults to .eulix directory files if not specified via flags.
+		// A path named by flag is shown as given; the project's own graph is filtered.
+		var filteredGraph []byte
 		if graphPath == "" {
 			graphPath = filepath.Join(utils.EulixDir, "kb_call_graph.json")
+			if err := utils.CheckEulixDir(utils.EulixDir); err != nil {
+				return err
+			}
+			filteredGraph, err = servableCallGraphJSON(graphPath, ".")
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("could not read call graph: %w", err)
+			}
 		}
 		if indexPath == "" {
 			indexPath = filepath.Join(utils.EulixDir, "kb_index.json")
@@ -174,6 +183,10 @@ var vizEulizeCMD = &cobra.Command{
 
 		mux.HandleFunc("/data/call_graph.json", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
+			if filteredGraph != nil {
+				_, _ = w.Write(filteredGraph)
+				return
+			}
 			http.ServeFile(w, r, graphPath)
 		})
 

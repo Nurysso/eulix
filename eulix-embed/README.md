@@ -85,7 +85,7 @@ uv run main.py embed \
 | ----------------------- | ---------------------------------------- | ---------------------------------------------------- |
 | `-k, --kb-path <PATH>`  | `knowledge_base.json`                    | Path to the input knowledge base JSON.               |
 | `-o, --output <DIR>`    | `./embeddings`                           | Directory where binary vector files will be written. |
-| `-m, --model <NAME>`    | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace model name.                              |
+| `-m, --model <NAME>`    | `BAAI/bge-base-en-v1.5`                  | HuggingFace model name.                              |
 | `-e, --engine <ENGINE>` | `onnx`                                   | Inference engine: `onnx` or `torch`.                 |
 | `-d, --device <DEVICE>` | `auto`                                   | Execution device: `cuda`, `rocm`, `mps`, or `cpu`.   |
 | `-b, --batch-size <N>`  | auto                                     | Batch size (defaults to 64 for GPU, 16 for CPU).     |
@@ -108,7 +108,7 @@ uv run main.py query \
 | Flag                    | Default                                  | Description                        |
 | ----------------------- | ---------------------------------------- | ---------------------------------- |
 | `-q, --query <TEXT>`    | _(Required)_                             | Query string to embed.             |
-| `-m, --model <NAME>`    | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace model name.            |
+| `-m, --model <NAME>`    | `BAAI/bge-base-en-v1.5`                  | HuggingFace model name.            |
 | `-e, --engine <ENGINE>` | `onnx`                                   | `onnx` or `torch`.                 |
 | `-f, --format <FMT>`    | `json`                                   | Output format: `json` or `binary`. |
 
@@ -174,7 +174,7 @@ vectors.bin (little-endian)
 | ---------------------------------------- | --------- | --------- | ----------------------------------------------------------- |
 | `BAAI/bge-base-en-v1.5`                  | 768       | Fast      | **Recommended default**: Superior semantic code retrieval.  |
 | `BAAI/bge-small-en-v1.5`                 | 384       | Very Fast | Resource-constrained environments and quick local indexing. |
-| `sentence-transformers/all-MiniLM-L6-v2` | 384       | Very Fast | Baseline general-purpose embedding model.                   |
+| `BAAI/bge-base-en-v1.5`                  | 384       | Very Fast | Baseline general-purpose embedding model.                   |
 | `jinaai/jina-embeddings-v2-base-code`    | 768       | Moderate  | Long-context code structures (up to 8192 tokens).           |
 
 ---

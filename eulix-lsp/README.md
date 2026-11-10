@@ -1,13 +1,13 @@
 # eulix-lsp
 
-A language server that plumbs the [libeulix](https://crates.io/crates/libeulix) 0.8.1
+A language server that plumbs the [libeulix](https://crates.io/crates/libeulix) 0.9.0
 knowledge base over LSP. Supports C, C++, Go, Java, JavaScript, PHP, Python, Rust,
 and TypeScript: symbols, go-to-definition, references, hover, completion, call
 hierarchy, semantic tokens, and workspace diagnostics.
 
 ```zsh
 cargo build --release
-./target/release/eulix-lsp
+./target/release/eulixlsp
 ```
 
 ## Features

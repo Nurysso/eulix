@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	"eulix/internal/checksum"
 	"eulix/internal/query/strip"
 	"eulix/internal/utils"
 )
@@ -207,7 +208,8 @@ func (fc *fileCache) read(name string) ([]byte, error) {
 		}
 		name = rel
 	}
-	return fc.root.ReadFile(name)
+	// A symlink could list a hidden or ignored file under a visible name.
+	return checksum.ReadRegularNoSymlinks(fc.root, name)
 }
 
 func (cb *ContextBuilder) prefetchFiles(chunks []Chunk, cache *fileCache) {
