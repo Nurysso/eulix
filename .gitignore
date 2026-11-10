@@ -33,3 +33,6 @@ eulix-cli/internal/assets/bins/eulix_parser_macos_arm
 
 # script output
 script-test-dump/
+
+# local notes
+DONTADD/

@@ -9,6 +9,7 @@ The human-facing entry points are [Welcome](Welcome.md) and [README](README.md).
 
 Welcome
 Installation
+scripts
 README
 */*
 */*/*

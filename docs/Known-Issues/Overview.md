@@ -86,11 +86,12 @@ Anything fixed is not listed here as an open problem. Fixed items are kept for t
 | [CLI-5](CLI-MCP-And-TUI.md#cli-5-model-requests-cannot-be-cancelled-are-not-streamed-and-have-three-smaller-defects) | Model requests cannot be cancelled, are not streamed, and have three smaller defects | Medium | Open | Read in code |
 | [CLI-6](CLI-MCP-And-TUI.md#cli-6-history-entries-with-equal-timestamps-list-in-arbitrary-order) | History entries with equal timestamps list in arbitrary order | Low | Open | Read in code |
 | [CLI-7](CLI-MCP-And-TUI.md#cli-7-developer-facing-loose-ends) | Developer-facing loose ends (logger races, lint config, stale comments, dead repair tools) | Low | Open | Read in code |
+| [CLI-8](CLI-MCP-And-TUI.md#cli-8-call-graph-of-questions-can-look-up-the-wrong-word) | "Call graph of" questions can look up the wrong word | Medium | Open | Reproduced |
 | [MCP-1](CLI-MCP-And-TUI.md#mcp-1-a-repositorys-own-eulix-and-eulixtoml-are-trusted) | A repository's own `.eulix/` and `eulix.toml` are trusted | High | Open | Carried over |
 | [MCP-2](CLI-MCP-And-TUI.md#mcp-2-a-panic-in-a-handler-takes-the-mcp-server-down) | A panic in a handler takes the MCP server down | Low | Open | Read in code |
 | [MCP-3](CLI-MCP-And-TUI.md#mcp-3-mcp-text-search-fallback-gaps) | MCP text-search fallback gaps | Low | Open | Read in code |
 | [MCP-4](CLI-MCP-And-TUI.md#mcp-4-symlinks-inside-a-repository-are-not-followed) | Symlinks inside a repository are not followed | Low | Limitation | Reproduced |
-| [MCP-5](CLI-MCP-And-TUI.md#mcp-5-symlinks-can-still-read-or-write-outside-a-repository) | Symlinks can still read or write outside a repository | High | Partly fixed | Reproduced |
+| [MCP-5](CLI-MCP-And-TUI.md#mcp-5-small-gaps-remain-in-the-symlink-checks) | Small gaps remain in the symlink checks | Low | Partly fixed | Read in code |
 
 ## Related Docs
 

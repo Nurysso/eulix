@@ -1,0 +1,4 @@
+sphinx>=7.2,<9
+myst-parser>=3.0
+furo>=2024.1.29
+codespell>=2.3
