@@ -188,3 +188,30 @@ func TestSaveReportsUnwritablePath(t *testing.T) {
 		t.Fatal("Save into a missing folder should fail")
 	}
 }
+
+func TestSaveRejectsTrailingBackslashThatBreaksFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("KEEP=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := LoadEnvFile(path)
+	env.Set("API_KEY", `abc #def\`)
+	if err := env.Save(); err == nil {
+		t.Fatal("want an error for a quoted value ending in a backslash")
+	}
+	got, err := godotenv.Read(path)
+	if err != nil || got["KEEP"] != "1" {
+		t.Fatalf("file must stay readable, got %v, %v", got, err)
+	}
+}
+
+func TestSaveOverwritesReadOnlyEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("OLD=1\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	saveKey(t, path, "API_KEY", "secret")
+	if got, _ := godotenv.Read(path); got["API_KEY"] != "secret" || got["OLD"] != "1" {
+		t.Fatalf("got %v", got)
+	}
+}

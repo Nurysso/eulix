@@ -187,9 +187,7 @@ func TestPRGap8LexicalSearchDoesNotFollowRootReplacedAfterBind(t *testing.T) {
 		t.Fatal(err)
 	}
 	active := s.GetActiveRepo()
-	if err := os.Rename(active, active+"-moved"); err != nil {
-		t.Fatal(err)
-	}
+	moveAside(t, active)
 	if err := os.Symlink(repoB, active); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}

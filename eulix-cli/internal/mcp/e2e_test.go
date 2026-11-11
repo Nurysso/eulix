@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,8 +93,13 @@ func connectWith(t *testing.T, s *Server, version string, roots ...string) *mcps
 	}
 	c := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "eulix-test-client", Version: "1"}, nil)
 	for _, r := range roots {
-		//nolint:staticcheck // roots are deprecated, but legacy clients still send them
-		c.AddRoots(&mcpsdk.Root{URI: "file://" + filepath.ToSlash(r)})
+		p := filepath.ToSlash(r)
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p // C:/x must become file:///C:/x, not a host named C:
+		}
+		// Roots are deprecated (SEP-2577) with no replacement, but the server
+		// still binds from them for legacy clients, so the tests keep sending them.
+		c.AddRoots(&mcpsdk.Root{URI: "file://" + p}) //nolint:staticcheck // SA1019: see above
 	}
 	cs, err := c.Connect(ctx, ct, &mcpsdk.ClientSessionOptions{ProtocolVersion: version})
 	if err != nil {
@@ -112,8 +118,16 @@ func connectWith(t *testing.T, s *Server, version string, roots ...string) *mcps
 // developer's real ~/.Eulix.
 func newTestServer(t *testing.T, opts ...Option) *Server {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	return NewServer(nil, nil, "", opts...)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads this on Windows
+	return NewServer(nil, nil, "", append([]Option{testLogger(t)}, opts...)...)
+}
+
+// testLogger sends server logs to the test's own output, shown only with -v or
+// when the test fails, instead of straight to stderr.
+func testLogger(t *testing.T) Option {
+	return WithLogger(slog.New(slog.NewTextHandler(t.Output(), nil)).With("component", "eulix-mcp"))
 }
 
 // call invokes a tool and returns its text and whether it reported an error.

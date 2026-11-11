@@ -99,15 +99,16 @@ func (d *DebugLogger) Lines() []string {
 //
 // Format: [HH:MM:SS] <formatted message>
 func (d *DebugLogger) Log(format string, args ...interface{}) {
-	if d == nil || d.closed {
-		return
-	}
-	if d.writer == nil && d.buf == nil {
+	if d == nil {
 		return
 	}
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	if d.closed || (d.writer == nil && d.buf == nil) {
+		return
+	}
 
 	now := time.Now()
 	msg := fmt.Sprintf(

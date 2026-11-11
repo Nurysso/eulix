@@ -103,7 +103,7 @@ func DecodeViaMmap(path string, size int64, v any) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Close the stat-then mmap TOCTOU windows
 	fi, err := f.Stat()
@@ -159,12 +159,12 @@ func MmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
 	}
 	fi, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, nil, err
 	}
 	size = fi.Size()
 	if SizeOverflows(size) || size == 0 {
-		f.Close()
+		_ = f.Close()
 		return nil, nil, fmt.Errorf("MmapForSequentialRead: invalid size %d for %s", size, path)
 	}
 
@@ -176,14 +176,14 @@ func MmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
 		nil,
 	)
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, nil, fmt.Errorf("CreateFileMapping: %w", err)
 	}
 
 	addr, err := windows.MapViewOfFile(h, windows.FILE_MAP_READ, 0, 0, 0)
 	if err != nil {
 		windows.CloseHandle(h)
-		f.Close()
+		_ = f.Close()
 		return nil, nil, fmt.Errorf("MapViewOfFile: %w", err)
 	}
 	// data := unsafe.Slice((*byte)(unsafe.Pointer(addr)), size)

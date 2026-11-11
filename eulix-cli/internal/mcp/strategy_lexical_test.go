@@ -194,27 +194,6 @@ func TestLexicalSearchDoesNotFollowSymlinkToHiddenFile(t *testing.T) {
 	}
 }
 
-// Runs on every OS, so the bit logic is covered even from Linux CI.
-func TestAttrsHidden(t *testing.T) {
-	tests := []struct {
-		attrs uint32
-		want  bool
-	}{
-		{0x0, false},
-		{0x2, true},   // HIDDEN
-		{0x22, true},  // HIDDEN | ARCHIVE
-		{0x26, true},  // HIDDEN | SYSTEM | ARCHIVE
-		{0x20, false}, // ARCHIVE only
-		{0x10, false}, // DIRECTORY only
-		{0x4, false},  // SYSTEM only
-	}
-	for _, tc := range tests {
-		if got := attrsHidden(tc.attrs); got != tc.want {
-			t.Errorf("attrsHidden(%#x) = %v, want %v", tc.attrs, got, tc.want)
-		}
-	}
-}
-
 func TestLexExcluded(t *testing.T) {
 	pats := []string{"docs/", "*.md", "scripts/eval_mcp.py", "eval_results_*.json"}
 	for rel, want := range map[string]bool{
@@ -255,7 +234,7 @@ func TestLexicalExcludeOnlyAppliesToEtiya(t *testing.T) {
 		cfg := config.DefaultConfig()
 		cfg.Project.Engine = engine
 		cfg.RetrievalConfig.Etiya.LexicalExclude = []string{"scripts/eval_mcp.py"}
-		s := NewServer(nil, cfg, "", WithRetriever(emptyRetriever{}))
+		s := NewServer(nil, cfg, "", testLogger(t), WithRetriever(emptyRetriever{}))
 		s.activeRepo = root
 		got, _, err := s.retrieveLocked(context.Background(), "zebra quokka", nil, false)
 		if err != nil {

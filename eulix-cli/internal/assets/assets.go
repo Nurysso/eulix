@@ -92,9 +92,12 @@ type InitializedEulixGlobal struct {
 // aside; that process keeps running, and a later install removes the leftover.
 func installBinary(dest string, content []byte) error {
 	dir, name := filepath.Split(dest)
-	if stale, err := filepath.Glob(filepath.Join(dir, name+".old-*")); err == nil {
-		for _, old := range stale {
-			_ = os.Remove(old) // fails while that old parser still runs; retried next time
+	// ReadDir, not Glob: dir may contain []*? which Glob would read as a pattern.
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), name+".old-") {
+				_ = os.Remove(filepath.Join(dir, e.Name())) // fails while that old parser still runs; retried next time
+			}
 		}
 	}
 
@@ -179,10 +182,10 @@ func Hashes() ([]FileHash, error) {
 
 	var fileHashes []FileHash
 	for _, zf := range zr.File {
-		if zf.FileInfo().IsDir() {
+		if zipEntryIsDir(zf) {
 			continue
 		}
-		relName := zf.Name
+		relName := zipName(zf)
 		if strip != "" {
 			relName = strings.TrimPrefix(relName, strip+"/")
 		}
@@ -369,7 +372,7 @@ func extractEmbedZip(dir string) error {
 	strip := commonTopLevelDir(zr.File)
 
 	for _, zf := range zr.File {
-		relName := zf.Name
+		relName := zipName(zf)
 		if strip != "" {
 			relName = strings.TrimPrefix(relName, strip+"/")
 			if relName == "" {
@@ -384,7 +387,7 @@ func extractEmbedZip(dir string) error {
 			return fmt.Errorf("refusing to extract entry outside target dir: %q", zf.Name)
 		}
 
-		if zf.FileInfo().IsDir() {
+		if zipEntryIsDir(zf) {
 			if err := os.MkdirAll(destPath, 0o755); err != nil {
 				return fmt.Errorf("create dir %q: %w", destPath, err)
 			}
@@ -416,12 +419,22 @@ func extractEmbedZip(dir string) error {
 	return nil
 }
 
+// zipName returns the entry name with "/" separators. Windows PowerShell 5.1's
+// Compress-Archive writes "\", which the zip spec forbids but readers see.
+func zipName(zf *zip.File) string {
+	return strings.ReplaceAll(zf.Name, `\`, "/")
+}
+
+func zipEntryIsDir(zf *zip.File) bool {
+	return zf.FileInfo().IsDir() || strings.HasSuffix(zipName(zf), "/")
+}
+
 // commonTopLevelDir returns the single shared top-level directory name that
 // every entry in files is nested under, or "" if there isn't exactly one
 func commonTopLevelDir(files []*zip.File) string {
 	top := ""
 	for _, zf := range files {
-		clean := path.Clean(zf.Name)
+		clean := path.Clean(zipName(zf))
 		parts := strings.SplitN(clean, "/", 2)
 
 		if len(parts) < 2 {
@@ -430,7 +443,7 @@ func commonTopLevelDir(files []*zip.File) string {
 			// "eulix_embed") or a genuine file sitting at the archive root.
 			// Only the former is compatible with a single common wrapper; a
 			// root-level file means there is no common wrapper to strip.
-			if !zf.FileInfo().IsDir() {
+			if !zipEntryIsDir(zf) {
 				return ""
 			}
 			if top == "" {

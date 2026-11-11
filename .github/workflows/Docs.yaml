@@ -1,12 +1,17 @@
 name: Docs
 
-# Weekly health check of docs/:
-# - stale external links (Sphinx linkcheck)
-# - broken internal links, anchors and pages missing from the toctree (Sphinx build)
+# Health check of docs/ (the site itself is built in a separate repo):
+# - dead links: relative links, #anchors and external URLs (lychee)
 # - spelling (codespell)
-# If any check fails, a single "Docs check failed" issue is opened (or commented on
+# Runs on PRs/pushes that touch docs/, and weekly to catch external links that rot.
+# If the scheduled run fails, a single "Docs check failed" issue is opened (or commented on
 # if it is already open), because failures of scheduled runs are otherwise easy to miss.
 on:
+  push:
+    branches: [main]
+    paths: ["docs/**", ".github/workflows/Docs.yaml"]
+  pull_request:
+    paths: ["docs/**", ".github/workflows/Docs.yaml"]
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
   workflow_dispatch:
@@ -15,35 +20,36 @@ permissions:
   contents: read
 
 concurrency:
-  group: docs-check
+  group: docs-check-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  external-links:
-    name: Stale external links
+  links:
+    name: Dead links
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - name: linkcheck
-        working-directory: docs
-        run: uv run --with-requirements requirements.txt sphinx-build -E -b linkcheck . _build/linkcheck
+      - name: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          fail: true
+          args: >-
+            --no-progress
+            --include-fragments
+            --root-dir ${{ github.workspace }}/docs
+            --max-retries 3
+            --accept 200,202,206,429
+            --exclude-path docs/_build
+            'docs/**/*.md'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Upload report
-        if: failure()
+        # act has no artifact server, so skip the upload when running locally.
+        if: failure() && !env.ACT
         uses: actions/upload-artifact@v4
         with:
-          name: linkcheck-report
-          path: docs/_build/linkcheck/output.txt
-
-  internal-links:
-    name: Internal links, anchors and structure
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - name: Build (warnings are errors)
-        working-directory: docs
-        run: uv run --with-requirements requirements.txt sphinx-build -W --keep-going -E -b html . _build/html
+          name: link-report
+          path: lychee/out.md
 
   spelling:
     name: Spelling
@@ -53,11 +59,11 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: codespell
         working-directory: docs
-        run: uv run --with-requirements requirements.txt codespell .
+        run: uvx codespell
 
   report:
     name: Open issue on failure
-    needs: [external-links, internal-links, spelling]
+    needs: [links, spelling]
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:
@@ -72,8 +78,8 @@ jobs:
         run: |
           body="The weekly docs check failed: $RUN_URL
 
-          Results: external links: ${{ needs.external-links.result }}, internal links: ${{ needs.internal-links.result }}, spelling: ${{ needs.spelling.result }}.
-          The linkcheck report is attached to the run as \`linkcheck-report\`."
+          Results: links: ${{ needs.links.result }}, spelling: ${{ needs.spelling.result }}.
+          The link report is attached to the run as \`link-report\`."
           existing=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"

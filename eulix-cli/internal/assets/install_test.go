@@ -4,6 +4,8 @@
 package assets
 
 import (
+	"archive/zip"
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,5 +73,52 @@ func TestInstallBinaryReplacesRunningExecutable(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
 		t.Fatalf("old parser not cleaned up: %v", entries)
+	}
+}
+
+func TestInstallBinaryCleanupIgnoresGlobCharsInDir(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "[ab]", "bin")
+	other := filepath.Join(root, "a", "bin")
+	for _, d := range []string{real, other} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	leftover := filepath.Join(real, "eulix_parser.old-1")
+	outside := filepath.Join(other, "eulix_parser.old-1")
+	for _, f := range []string{leftover, outside} {
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := installBinary(filepath.Join(real, "eulix_parser"), []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("file outside the install dir was deleted: %v", err)
+	}
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Errorf("leftover in the install dir was not removed: %v", err)
+	}
+}
+
+func TestCommonTopLevelDirHandlesBackslashEntries(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, n := range []string{`eulix-embed\main.py`, `eulix-embed\sub\a.py`} {
+		if _, err := zw.Create(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := commonTopLevelDir(zr.File); got != "eulix-embed" {
+		t.Fatalf("got %q, want eulix-embed", got)
 	}
 }

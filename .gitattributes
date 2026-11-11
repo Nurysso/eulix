@@ -1,0 +1,2 @@
+# Keep LF in the working tree on every OS (Go, gofmt and the repo all use LF).
+* text=auto eol=lf

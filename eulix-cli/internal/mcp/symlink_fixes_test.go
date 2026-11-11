@@ -5,8 +5,11 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -20,6 +23,18 @@ func newVictim(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return victim
+}
+
+// moveAside renames the bound repository folder. Windows refuses while the
+// server holds files open in it, so a bound folder cannot be swapped there.
+func moveAside(t *testing.T, active string) {
+	t.Helper()
+	if err := os.Rename(active, active+"-moved"); err != nil {
+		if runtime.GOOS == "windows" && errors.Is(err, fs.ErrPermission) {
+			t.Skip("Windows cannot rename a folder with open files, so the bound folder cannot be replaced")
+		}
+		t.Fatal(err)
+	}
 }
 
 func mustBeIntact(t *testing.T, victim string) {
@@ -102,9 +117,7 @@ func TestQueryRefusesReplacedRepoFolder(t *testing.T) {
 			t.Fatal(err)
 		}
 		active := s.GetActiveRepo()
-		if err := os.Rename(active, active+"-moved"); err != nil {
-			t.Fatal(err)
-		}
+		moveAside(t, active)
 		with(active)
 		return active
 	}
