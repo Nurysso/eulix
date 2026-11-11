@@ -93,12 +93,13 @@ func connectWith(t *testing.T, s *Server, version string, roots ...string) *mcps
 	}
 	c := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "eulix-test-client", Version: "1"}, nil)
 	for _, r := range roots {
-		//nolint:staticcheck // roots are deprecated, but legacy clients still send them
 		p := filepath.ToSlash(r)
 		if !strings.HasPrefix(p, "/") {
 			p = "/" + p // C:/x must become file:///C:/x, not a host named C:
 		}
-		c.AddRoots(&mcpsdk.Root{URI: "file://" + p})
+		// Roots are deprecated (SEP-2577) with no replacement, but the server
+		// still binds from them for legacy clients, so the tests keep sending them.
+		c.AddRoots(&mcpsdk.Root{URI: "file://" + p}) //nolint:staticcheck // SA1019: see above
 	}
 	cs, err := c.Connect(ctx, ct, &mcpsdk.ClientSessionOptions{ProtocolVersion: version})
 	if err != nil {
