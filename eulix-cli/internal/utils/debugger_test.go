@@ -72,3 +72,20 @@ func TestDebugLogger_FileConcurrentThenClose(t *testing.T) {
 		}
 	}
 }
+
+// Run with -race: Log reads closed, which Close writes.
+func TestDebugLogger_LogRacesClose(t *testing.T) {
+	d := NewDebugLogger(t.TempDir())
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range 200 {
+				d.Log("line %d", i)
+			}
+		}()
+	}
+	d.Close()
+	wg.Wait()
+}

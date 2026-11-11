@@ -2,10 +2,10 @@
 
 Known problems in the `eulix` command line, the terminal screens, the MCP server and the model client.
 
-> **Scope:** `eulix-cli` (`internal/cli`, `internal/tui`, `internal/mcp`, `internal/llm`, `internal/cache`, `internal/utils`)  
+> **Scope:** `eulix-cli` (`internal/cli`, `internal/tui`, `internal/mcp`, `internal/llm`, `internal/cache`, `internal/utils`)
 > **Last verified against:** `ad744e9` (2026-11-03)
 
-These entries were found by reading the current code; I did not run the screens or the server. Where an entry says *probably*, I am inferring the behaviour from the code. Read [Overview](Overview.md) for the legend.
+These entries were found by reading the current code; I did not run the screens or the server. Where an entry says _probably_, I am inferring the behaviour from the code. Read [Overview](Overview.md) for the legend.
 
 ---
 
@@ -164,6 +164,34 @@ The serious routes are closed: see [Fixed Issues](Fixed-Issues.md). The `.eulix`
 - **Files outside `.eulix`.** `eulix.toml` and `.euignore` are read through links. Their contents act as settings and rules and are not shown in answers. This belongs with [MCP-1](#mcp-1-a-repositorys-own-eulix-and-eulixtoml-are-trusted).
 
 **Not tested.** None of this has run on native Windows, including whether junctions are refused.
+
+---
+
+## CLI-9: On Windows, a bound repository folder can't be moved or renamed
+
+**Severity:** Medium · **Status:** Open · **Verification:** Reproduced (Windows only)
+
+**Symptom.** While `eulix mcp` (or `eulix chat`) has a project loaded, renaming or moving the project folder or its `.eulix` fails with "Access is denied".
+
+**Cause.** The query router always opens `.eulix/debug/context_debug.log` and `susbstemDebug.log` and keeps them open, even with debugging off. Windows refuses to rename a folder that holds an open file.
+
+**Workaround.** Wait for the MCP idle release, or stop the server first.
+
+**Fix direction.** Open the debug files only when debugging is on, or open them for each write. Test: `TestWinIssue_BoundRepoFolderCannotBeMoved` (`go test -tags winissues ./internal/mcp`). Details: [Windows-issues.md](../eulix-cli/windows-issues.md).
+
+---
+
+## CLI-10: On Windows, a project opened through a directory junction doesn't work
+
+**Severity:** Medium · **Status:** Open · **Verification:** Reproduced (Windows only)
+
+**Symptom.** Binding a repository through a junction (`mklink /J`) succeeds, but every MCP query is refused with "changed after it was bound", and lexical search finds nothing. Running `eulix analyze` through a junction gives an empty checksum scan.
+
+**Cause.** Since Go 1.23 a junction is not a symlink: `filepath.EvalSymlinks` leaves it unresolved, `os.Stat` (at bind) and `os.Lstat` (at query) disagree, and `filepath.WalkDir` does not enter a junction root.
+
+**Workaround.** Open the project by its real path.
+
+**Fix direction.** Resolve the root to its final path (for example `GetFinalPathNameByHandle`) before pinning and walking it. Tests: `TestWinIssue_RepoBoundThroughJunctionIsUnusable`, `TestWinIssue_ScanThroughJunctionRootFindsNothing` (`-tags winissues`).
 
 ---
 

@@ -58,8 +58,10 @@ func TestGetVenvPython(t *testing.T) {
 }
 
 func TestFindEulixEmbedMissingScript(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	if _, _, _, err := FindEulixEmbed(); err == nil || !strings.Contains(err.Error(), "main.py") {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads this on Windows
+	if _, _, _, err := FindEulixEmbed(); err == nil || !strings.Contains(err.Error(), filepath.Join(home, ".Eulix", "eulix_embed", "main.py")) {
 		t.Fatalf("want an error naming the expected script, got %v", err)
 	}
 }

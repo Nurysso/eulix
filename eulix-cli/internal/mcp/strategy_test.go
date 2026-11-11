@@ -54,7 +54,7 @@ func routerStyle(q string, chunks ...string) string {
 
 func cascade(t *testing.T, r Retriever, root, q string, known ...string) (string, RetrievalTrace, error) {
 	t.Helper()
-	s := NewServer(nil, nil, "", WithRetriever(r))
+	s := NewServer(nil, nil, "", testLogger(t), WithRetriever(r))
 	s.activeRepo = root
 	return s.retrieveLocked(context.Background(), q, known, false)
 }
@@ -150,7 +150,7 @@ func TestCascadeErrors(t *testing.T) {
 func TestCascadeHonoursCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &scripted{open: "weak", onOpen: cancel}
-	s := NewServer(nil, nil, "", WithRetriever(r))
+	s := NewServer(nil, nil, "", testLogger(t), WithRetriever(r))
 	s.activeRepo = t.TempDir()
 	if _, _, err := s.retrieveLocked(ctx, "zebra quokka", nil, false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("want context.Canceled, got %v", err)
@@ -177,7 +177,7 @@ func TestCascadeMemoryLearnsOnlyFromTrustedResults(t *testing.T) {
 	q := vague
 	weakText := routerStyle(q, "tiny tax_helper")
 	r := &scripted{open: weakText}
-	s := NewServer(nil, nil, "", WithRetriever(r))
+	s := NewServer(nil, nil, "", testLogger(t), WithRetriever(r))
 	s.activeRepo = t.TempDir()
 	if _, _, err := s.retrieveLocked(context.Background(), q, nil, false); err != nil {
 		t.Fatal(err)

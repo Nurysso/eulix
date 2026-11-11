@@ -88,6 +88,8 @@ Anything fixed is not listed here as an open problem. Fixed items are kept for t
 | [CLI-6](CLI-MCP-And-TUI.md#cli-6-history-entries-with-equal-timestamps-list-in-arbitrary-order) | History entries with equal timestamps list in arbitrary order | Low | Open | Read in code |
 | [CLI-7](CLI-MCP-And-TUI.md#cli-7-developer-facing-loose-ends) | Developer-facing loose ends (logger races, lint config, stale comments, dead repair tools) | Low | Open | Read in code |
 | [CLI-8](CLI-MCP-And-TUI.md#cli-8-call-graph-of-questions-can-look-up-the-wrong-word) | "Call graph of" questions can look up the wrong word | Medium | Open | Reproduced |
+| [CLI-9](CLI-MCP-And-TUI.md#cli-9-on-windows-a-bound-repository-folder-cant-be-moved-or-renamed) | On Windows, a bound repository folder can't be moved or renamed | Medium | Open | Reproduced |
+| [CLI-10](CLI-MCP-And-TUI.md#cli-10-on-windows-a-project-opened-through-a-directory-junction-doesnt-work) | On Windows, a project opened through a directory junction doesn't work | Medium | Open | Reproduced |
 | [MCP-1](CLI-MCP-And-TUI.md#mcp-1-a-repositorys-own-eulix-and-eulixtoml-are-trusted) | A repository's own `.eulix/` and `eulix.toml` are trusted | High | Open | Carried over |
 | [MCP-2](CLI-MCP-And-TUI.md#mcp-2-a-panic-in-a-handler-takes-the-mcp-server-down) | A panic in a handler takes the MCP server down | Low | Open | Read in code |
 | [MCP-3](CLI-MCP-And-TUI.md#mcp-3-mcp-text-search-fallback-gaps) | MCP text-search fallback gaps | Low | Open | Read in code |

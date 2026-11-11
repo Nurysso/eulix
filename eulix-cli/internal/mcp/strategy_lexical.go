@@ -221,7 +221,7 @@ func sortHits(hits []fileHit) {
 // isHidden covers both conventions: dot-prefixed names (Unix, and common
 // on Windows for .env/.npmrc) and the NTFS hidden attribute.
 func isHidden(name string, d fs.DirEntry) bool {
-	return strings.HasPrefix(name, ".") || hiddenByAttr(d)
+	return strings.HasPrefix(name, ".") || checksum.HiddenByAttr(d)
 }
 
 // bestWindows picks up to maxWin non-overlapping windows around the

@@ -230,8 +230,10 @@ func ServableMatcher(projectPath string) func(rel string) bool {
 		if !filepath.IsLocal(rel) {
 			return false
 		}
+		path := projectPath
 		for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
-			if strings.HasPrefix(part, ".") {
+			path = filepath.Join(path, part)
+			if strings.HasPrefix(part, ".") || hiddenPath(path) {
 				return false
 			}
 		}
@@ -500,7 +502,7 @@ func (d *Detector) scan(_ *Checksum) (*Checksum, error) {
 			return skip()
 		}
 		// Rust's walker skips hidden entries and doesn't follow symlinks.
-		if strings.HasPrefix(e.Name(), ".") || e.Type()&fs.ModeSymlink != 0 {
+		if strings.HasPrefix(e.Name(), ".") || HiddenByAttr(e) || e.Type()&fs.ModeSymlink != 0 {
 			return skip()
 		}
 		rel, err := filepath.Rel(root, p)

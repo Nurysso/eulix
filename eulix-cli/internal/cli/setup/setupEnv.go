@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/joho/godotenv"
 )
 
 // EnvFile edits a .env in place: Save rewrites only the lines of keys that
@@ -88,6 +90,7 @@ func (envFile *EnvFile) Save() error {
 	}
 	// Lock the file down before any secret reaches it, including a file that
 	// already existed. If that fails, the keys must not be written.
+	_ = os.Chmod(envFile.path, 0o600) // a read-only (0400) .env the user owns must stay savable
 	file, err := os.OpenFile(envFile.path, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -127,5 +130,11 @@ func encodeEnvValue(key, value string) (string, error) {
 	if strings.Contains(value, "'") {
 		return "", fmt.Errorf("value for %s cannot be stored in .env: it needs quoting but contains a single quote", key)
 	}
-	return "'" + value + "'", nil
+	quoted := "'" + value + "'"
+	// godotenv reads a trailing "\'" as an escaped quote and then drops the
+	// whole file, so refuse anything that does not read back unchanged.
+	if got, err := godotenv.Unmarshal(key + "=" + quoted); err != nil || got[key] != value {
+		return "", fmt.Errorf("value for %s cannot be stored in .env: it does not read back unchanged when quoted", key)
+	}
+	return quoted, nil
 }

@@ -1,4 +1,4 @@
-package mcp
+package checksum
 
 // winAttrHidden is FILE_ATTRIBUTE_HIDDEN (0x2). It's defined here rather than
 // via syscall so the bit logic compiles, and can be tested, on every OS.
