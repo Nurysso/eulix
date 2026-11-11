@@ -14,6 +14,7 @@ jobs:
       lib: ${{ steps.filter.outputs.lib }}
       embed: ${{ steps.filter.outputs.embed }}
       cli: ${{ steps.filter.outputs.cli }}
+      lsp: ${{ steps.filter.outputs.lsp }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -23,12 +24,18 @@ jobs:
           filters: |
             parser:
               - 'eulix-parser/**'
+              - '.github/workflows/Lint.yaml'
             lib:
               - 'libeulix/**'
+              - '.github/workflows/Lint.yaml'
             embed:
               - 'eulix-embed/**'
             cli:
               - 'eulix-cli/**'
+            lsp:
+              - 'eulix-lsp/**'
+              - 'libeulix/**'
+              - '.github/workflows/Lint.yaml'
 
   lint-parser:
     needs: changes
@@ -55,6 +62,39 @@ jobs:
       - name: Run clippy
         working-directory: libeulix
         run: cargo clippy -- -D warnings
+
+  test-lib:
+    needs: changes
+    if: needs.changes.outputs.lib == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build and test
+        working-directory: libeulix
+        run: cargo test
+
+  test-parser:
+    needs: changes
+    if: needs.changes.outputs.parser == 'true' || needs.changes.outputs.lib == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build and test
+        working-directory: eulix-parser
+        run: cargo test
+
+  test-lsp:
+    needs: changes
+    if: needs.changes.outputs.lsp == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build and test
+        working-directory: eulix-lsp
+        run: cargo test
 
   lint-embed:
     needs: changes
