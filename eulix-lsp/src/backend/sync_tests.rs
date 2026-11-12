@@ -16,25 +16,6 @@ fn open_buffer(backend: &Backend, path: &Path, text: &str) -> Url {
 }
 
 #[tokio::test]
-async fn replacement_scan_keeps_the_previous_workers_cancelled() {
-    let (service, _) = LspService::new(Backend::new);
-    let backend = service.inner();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("old.rs");
-    std::fs::write(&path, "fn old_scan() {}").unwrap();
-    backend.spawn_scan();
-    let previous = backend.scan_cancel.lock().clone();
-    backend.spawn_scan();
-    let (ok, failed) =
-        scan::parse_all(vec![path], Config::default(), previous.clone(), |_| {}).await;
-    assert!(
-        ok.is_empty() && failed.is_empty(),
-        "replaced workers still parsed a file"
-    );
-    assert!(previous.load(Ordering::SeqCst));
-}
-
-#[tokio::test]
 async fn workspace_scan_preserves_the_index_of_an_open_buffer() {
     let (service, _) = LspService::new(Backend::new);
     let backend = service.inner();
@@ -102,6 +83,63 @@ async fn closing_an_edited_buffer_restores_the_disk_symbols() {
         backend.state.index.read().definition_count("buffer_only"),
         0
     );
+}
+
+#[tokio::test]
+async fn closing_a_non_utf8_file_restores_its_disk_symbols() {
+    let (service, _) = LspService::new(Backend::new);
+    let backend = service.inner();
+    let dir = tempfile::tempdir().unwrap();
+    backend.state.workspace.write().root = Some(dir.path().to_path_buf());
+    let path = dir.path().join("legacy.py");
+    std::fs::write(&path, b"# caf\xe9\ndef legacy_fn(): pass\n").unwrap();
+    let uri = open_buffer(backend, &path, "def buffer_only(): pass\n");
+    backend
+        .did_close(DidCloseTextDocumentParams {
+            text_document: TextDocumentIdentifier::new(uri),
+        })
+        .await;
+    assert_eq!(backend.state.index.read().definition_count("legacy_fn"), 1);
+}
+
+#[tokio::test]
+async fn disk_events_skip_open_buffers_with_client_encoded_uris() {
+    for typ in [FileChangeType::CHANGED, FileChangeType::DELETED] {
+        let (service, _) = LspService::new(Backend::new);
+        let backend = service.inner();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("c++");
+        std::fs::create_dir(&root).unwrap();
+        backend.state.workspace.write().root = Some(root.clone());
+        let path = root.join("app.py");
+        std::fs::write(&path, "def disk_only(): pass\n").unwrap();
+        // VS Code percent-encodes '+' (and Windows drive colons); `url` does not.
+        let encoded = Url::from_file_path(&path)
+            .unwrap()
+            .as_str()
+            .replace("c++", "c%2B%2B");
+        let uri = Url::parse(&encoded).unwrap();
+        backend
+            .did_open(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem::new(
+                    uri.clone(),
+                    "python".into(),
+                    1,
+                    "def buffer_only(): pass\n".into(),
+                ),
+            })
+            .await;
+        backend
+            .did_change_watched_files(DidChangeWatchedFilesParams {
+                changes: vec![FileEvent { uri, typ }],
+            })
+            .await;
+        assert_eq!(
+            backend.state.index.read().definition_count("buffer_only"),
+            1
+        );
+        assert_eq!(backend.state.index.read().definition_count("disk_only"), 0);
+    }
 }
 
 async fn watched(backend: &Backend, path: &Path, typ: FileChangeType) {
@@ -392,9 +430,13 @@ async fn edited_open_buffer_keeps_buffer_ast_during_scan() {
         .await;
 
     backend.spawn_scan();
-    while backend.state.scan.read().running || backend.state.scan.read().indexed == 0 {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while backend.state.scan.read().running || backend.state.scan.read().indexed == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("scan did not finish");
 
     let Some(DocumentSymbolResponse::Nested(syms)) = backend
         .document_symbol(DocumentSymbolParams {

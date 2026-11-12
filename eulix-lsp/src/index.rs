@@ -164,6 +164,7 @@ impl Index {
             }
         }
 
+        let mut seen: HashSet<(&str, usize)> = HashSet::new();
         for call in parsed
             .functions
             .iter()
@@ -177,19 +178,17 @@ impl Index {
             )
         {
             let (callee, line) = call;
-            if callee.is_empty() {
+            // remove_file ran above, so duplicates can only come from this file.
+            if callee.is_empty() || !seen.insert((callee, line)) {
                 continue;
             }
-            let entry = CallRef {
-                path: path.to_path_buf(),
-                line,
-            };
-            let sites = self.calls.entry(callee.to_string()).or_default();
-            // Guard against duplicates from overlapping call ranges without
-            // sorting the whole list on every insert.
-            if !sites.contains(&entry) {
-                sites.push(entry);
-            }
+            self.calls
+                .entry(callee.to_string())
+                .or_default()
+                .push(CallRef {
+                    path: path.to_path_buf(),
+                    line,
+                });
             called.insert(callee.to_string());
         }
 
@@ -467,6 +466,18 @@ mod tests {
         let sites = ix.call_sites("dup");
         assert_eq!(sites.len(), 2, "identical call site recorded twice");
         assert!(sites[0].line < sites[1].line, "call sites must be ordered");
+    }
+
+    #[test]
+    fn same_call_line_in_two_files_is_kept_and_reindex_does_not_duplicate() {
+        let mut ix = Index::new();
+        let mut f = func("caller", 1, 20);
+        f.calls = vec![call("dup", 7)];
+        let parsed = parsed_with(vec![f], vec![]);
+        ix.index_file(Path::new("/w/a.rs"), &parsed);
+        ix.index_file(Path::new("/w/b.rs"), &parsed);
+        ix.index_file(Path::new("/w/a.rs"), &parsed);
+        assert_eq!(ix.call_sites("dup").len(), 2);
     }
 
     #[test]
