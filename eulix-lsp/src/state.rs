@@ -11,9 +11,8 @@
 //! a yield point parks a tokio worker thread instead of releasing it. Every
 //! accessor below is lock-and-copy; none of them return a guard.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -89,6 +88,16 @@ pub struct Documents {
     pub tasks: HashMap<Url, JoinHandle<()>>,
 }
 
+impl Documents {
+    // By path, not URI: clients percent-encode differently than `Url::from_file_path`.
+    fn open_paths(&self) -> HashSet<PathBuf> {
+        self.open
+            .keys()
+            .filter_map(|u| u.to_file_path().ok())
+            .collect()
+    }
+}
+
 #[derive(Default)]
 pub struct Workspace {
     pub root: Option<PathBuf>,
@@ -124,8 +133,6 @@ pub struct ServerState {
     pub documents: RwLock<Documents>,
     pub index: RwLock<Index>,
     pub scan: RwLock<ScanState>,
-    // Set by `shutdown`. The scan loop polls it between files.
-    pub shutdown: AtomicBool,
     disk_updates: RwLock<DiskUpdates>,
 }
 
@@ -143,13 +150,8 @@ impl ServerState {
             documents: RwLock::new(Documents::default()),
             index: RwLock::new(Index::new()),
             scan: RwLock::new(ScanState::default()),
-            shutdown: AtomicBool::new(false),
             disk_updates: RwLock::new(DiskUpdates::default()),
         }
-    }
-
-    pub fn is_shutdown(&self) -> bool {
-        self.shutdown.load(Ordering::Relaxed)
     }
 
     // Cancel every pending debounce task. Called on shutdown and on exit.
@@ -226,16 +228,14 @@ impl ServerState {
         let docs = self.documents.read();
         let mut updates = self.disk_updates.write();
         let mut workspace = self.workspace.write();
+        let open = docs.open_paths();
         for (path, parsed) in files {
             let current = updates.versions.entry(path.clone()).or_default();
             if *current > ticket {
                 continue;
             }
             *current = ticket;
-            let open = Url::from_file_path(path)
-                .ok()
-                .is_some_and(|uri| docs.open.contains_key(&uri));
-            if open {
+            if open.contains(path) {
                 continue;
             }
             index.index_file(path, parsed);
@@ -252,10 +252,7 @@ impl ServerState {
             return;
         }
         *current = ticket;
-        let open = Url::from_file_path(path)
-            .ok()
-            .is_some_and(|uri| docs.open.contains_key(&uri));
-        if open {
+        if docs.open_paths().contains(path) {
             return;
         }
         index.remove_file(path);
@@ -316,13 +313,5 @@ mod tests {
         assert!(st.index.read().resolve("foo", &path, None).is_some());
         st.forget(&path);
         assert!(st.index.read().resolve("foo", &path, None).is_none());
-    }
-
-    #[test]
-    fn shutdown_flag_round_trips() {
-        let st = ServerState::new();
-        assert!(!st.is_shutdown());
-        st.shutdown.store(true, Ordering::Relaxed);
-        assert!(st.is_shutdown());
     }
 }

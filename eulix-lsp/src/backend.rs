@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use parking_lot::Mutex;
 use ropey::Rope;
 use tokio::time::sleep;
 use tower_lsp::jsonrpc::Result;
@@ -36,7 +35,7 @@ pub struct Backend {
     state: Arc<ServerState>,
     // Set when we shut down. The scan loop checks this between files so it
     // can bail out early.
-    scan_cancel: Arc<Mutex<Arc<AtomicBool>>>,
+    scan_cancel: Arc<AtomicBool>,
 }
 
 impl Backend {
@@ -44,7 +43,7 @@ impl Backend {
         Self {
             client,
             state: Arc::new(ServerState::new()),
-            scan_cancel: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
+            scan_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -150,24 +149,12 @@ impl Backend {
     fn spawn_scan(&self) {
         let state = self.state.clone();
         let client = self.client.clone();
-        let active = self.scan_cancel.clone();
-        let root = state.workspace.read().root.clone();
+        // Only `initialized` starts a scan, so the flag is only ever set by shutdown.
+        let cancel = self.scan_cancel.clone();
+        let Some(root) = state.workspace.read().root.clone() else {
+            return;
+        };
         let cfg = state.config.read().clone();
-        let cancel = Arc::new(AtomicBool::new(false));
-        {
-            let mut current = active.lock();
-            if state.is_shutdown() {
-                return;
-            }
-            // Each run owns a token that can never be revived by a rescan.
-            current.store(true, Ordering::SeqCst);
-            *current = cancel.clone();
-            let mut progress = state.scan.write();
-            // Supersede the previous run, but do not start new progress
-            // until the walk finds files, matching empty-scan behavior.
-            progress.running = false;
-        }
-        let Some(root) = root else { return };
         let disk_ticket = state.reserve_disk_update();
 
         tokio::spawn(async move {
@@ -185,17 +172,12 @@ impl Backend {
                     Ok(v) => v,
                     Err(e) => {
                         error!(error = %e, "workspace walk failed");
-                        let current = active.lock();
-                        if Arc::ptr_eq(&current, &cancel) && !cancel.load(Ordering::SeqCst) {
-                            let mut progress = state.scan.write();
-                            progress.running = false;
-                            progress.last_error = Some(format!("workspace walk failed: {e}"));
-                        }
+                        state.scan.write().last_error = Some(format!("workspace walk failed: {e}"));
                         return;
                     }
                 }
             };
-            if cancel.load(Ordering::SeqCst) || state.is_shutdown() {
+            if cancel.load(Ordering::SeqCst) {
                 return;
             }
             if paths.is_empty() {
@@ -203,10 +185,6 @@ impl Backend {
                 return;
             }
             {
-                let current = active.lock();
-                if !Arc::ptr_eq(&current, &cancel) || cancel.load(Ordering::SeqCst) {
-                    return;
-                }
                 let mut progress = state.scan.write();
                 progress.running = true;
                 progress.indexed = 0;
@@ -216,30 +194,18 @@ impl Backend {
 
             let on_progress = {
                 let state = state.clone();
-                let active = active.clone();
-                let cancel = cancel.clone();
-                move |n: usize| {
-                    let current = active.lock();
-                    if Arc::ptr_eq(&current, &cancel) && !cancel.load(Ordering::SeqCst) {
-                        state.scan.write().indexed = n;
-                    }
-                }
+                move |n: usize| state.scan.write().indexed = n
             };
             let (ok, failed) =
                 scan::parse_all(paths, cfg.clone(), cancel.clone(), on_progress).await;
 
+            if cancel.load(Ordering::SeqCst) {
+                debug!("scan cancelled, discarding");
+                state.scan.write().running = false;
+                return;
+            }
+            state.commit_disk_batch(&ok, disk_ticket);
             {
-                // Serialize completion with token replacement so an old run
-                // cannot commit or finish a newer run's progress.
-                let current = active.lock();
-                if !Arc::ptr_eq(&current, &cancel)
-                    || cancel.load(Ordering::SeqCst)
-                    || state.is_shutdown()
-                {
-                    debug!("scan superseded, discarding");
-                    return;
-                }
-                state.commit_disk_batch(&ok, disk_ticket);
                 let mut s = state.scan.write();
                 s.running = false;
                 s.indexed = ok.len();
@@ -495,8 +461,7 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
-        self.state.shutdown.store(true, Ordering::SeqCst);
-        self.scan_cancel.lock().store(true, Ordering::SeqCst);
+        self.scan_cancel.store(true, Ordering::SeqCst);
         self.state.scan.write().running = false;
         self.state.abort_all_tasks();
         info!("shutdown requested");
@@ -659,8 +624,10 @@ impl LanguageServer for Backend {
             self.state.forget_disk(&path, ticket);
             return;
         };
-        match tokio::fs::read_to_string(read_path).await {
-            Ok(text) => {
+        match tokio::fs::read(read_path).await {
+            Ok(bytes) => {
+                // Lossy like the scan, so non-UTF-8 files keep their symbols.
+                let text = String::from_utf8_lossy(&bytes).into_owned();
                 let cfg = self.state.config.read().clone();
                 match Self::parse_one(path.clone(), text, cfg).await {
                     Ok(parsed) => self.state.commit_disk(path, parsed, ticket),
@@ -704,10 +671,11 @@ impl LanguageServer for Backend {
                     // clears them. Disk events must not clear an open session.
                 }
                 _ => {
-                    let Ok(text) = tokio::fs::read_to_string(&read_path).await else {
+                    let Ok(bytes) = tokio::fs::read(&read_path).await else {
                         self.state.forget_disk(&path, ticket);
                         continue;
                     };
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
                     let cfg = self.state.config.read().clone();
                     match Self::parse_one(path.clone(), text, cfg).await {
                         Ok(parsed) => {
@@ -1421,6 +1389,8 @@ mod php_tests;
 mod symbol_tests;
 #[cfg(test)]
 mod sync_tests;
+#[cfg(test)]
+mod uri_tests;
 
 // Distinguish `function foo()` from a same-line `Other::foo()` before
 // choosing a declaration by its enclosing span (which can include attributes).
