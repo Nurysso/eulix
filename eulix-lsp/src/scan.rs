@@ -29,7 +29,11 @@ use crate::syntax::{self, ParsedFile};
 // Returns `(paths, truncated)`. `truncated` is set when the cap was hit, so
 // the caller can tell the user the index is partial instead of implying the
 // whole workspace is covered.
-pub fn collect_source_files(root: &Path, cfg: &Config) -> (Vec<PathBuf>, bool) {
+pub fn collect_source_files(
+    root: &Path,
+    cfg: &Config,
+    cancel: Option<&AtomicBool>,
+) -> (Vec<PathBuf>, bool) {
     let mut builder = WalkBuilder::new(root);
     // `.euignore` is eulix's own ignore file, so honour it.
     builder.add_custom_ignore_filename(".euignore");
@@ -57,6 +61,9 @@ pub fn collect_source_files(root: &Path, cfg: &Config) -> (Vec<PathBuf>, bool) {
     let mut truncated = false;
 
     for entry in builder.build().flatten() {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            break;
+        }
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
@@ -198,7 +205,7 @@ mod tests {
         fs::create_dir(root.join("target")).unwrap();
         fs::write(root.join("target/dep.rs"), "fn d() {}").unwrap();
 
-        let (files, truncated) = collect_source_files(root, &cfg());
+        let (files, truncated) = collect_source_files(root, &cfg(), None);
         let names: Vec<_> = files
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
@@ -222,7 +229,7 @@ mod tests {
         }
         let mut c = cfg();
         c.max_scan_files = 3;
-        let (files, truncated) = collect_source_files(root, &c);
+        let (files, truncated) = collect_source_files(root, &c, None);
         assert_eq!(files.len(), 3);
         assert!(
             truncated,
@@ -268,7 +275,7 @@ mod tests {
         fs::write(root.join("keep.rs"), "fn k() {}").unwrap();
         fs::write(root.join(".euignore"), "gen/\n").unwrap();
 
-        let (files, _) = collect_source_files(root, &cfg());
+        let (files, _) = collect_source_files(root, &cfg(), None);
         let names: Vec<_> = files
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().to_string())

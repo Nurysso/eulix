@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use ropey::Rope;
 use tokio::time::sleep;
 use tower_lsp::jsonrpc::Result;
@@ -20,7 +21,7 @@ use crate::config::Config;
 use crate::index::Def;
 use crate::position::{self, WordHit};
 use crate::scan;
-use crate::state::{Document, ServerState};
+use crate::state::{Document, DocumentRevision, ServerState};
 use crate::syntax::{self, ParsedFile};
 use crate::{convert, diagnostics};
 
@@ -35,7 +36,7 @@ pub struct Backend {
     state: Arc<ServerState>,
     // Set when we shut down. The scan loop checks this between files so it
     // can bail out early.
-    scan_cancel: Arc<AtomicBool>,
+    scan_cancel: Arc<Mutex<Arc<AtomicBool>>>,
 }
 
 impl Backend {
@@ -43,7 +44,7 @@ impl Backend {
         Self {
             client,
             state: Arc::new(ServerState::new()),
-            scan_cancel: Arc::new(AtomicBool::new(false)),
+            scan_cancel: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
         }
     }
 
@@ -115,11 +116,17 @@ impl Backend {
         path: PathBuf,
         parsed: Option<Arc<ParsedFile>>,
         parse_error: Option<String>,
-        version: Option<i32>,
+        revision: DocumentRevision,
     ) {
+        if !self
+            .state
+            .commit_buffer(&uri, &path, parsed.clone(), parse_error.clone(), &revision)
+        {
+            return;
+        }
+        let version = Some(revision.version);
         match parsed {
             Some(p) => {
-                self.state.commit(path.clone(), p.clone());
                 let diags = {
                     let rope = self.state.text_for_uri(&uri).map(|(r, _)| r);
                     let cfg = self.state.config.read().clone();
@@ -143,69 +150,96 @@ impl Backend {
     fn spawn_scan(&self) {
         let state = self.state.clone();
         let client = self.client.clone();
-        let cancel = self.scan_cancel.clone();
-
-        // Kick any in-flight scan so this one supersedes it.
-        cancel.store(true, Ordering::SeqCst);
-        cancel.store(false, Ordering::SeqCst);
+        let active = self.scan_cancel.clone();
+        let root = state.workspace.read().root.clone();
+        let cfg = state.config.read().clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        {
+            let mut current = active.lock();
+            if state.is_shutdown() {
+                return;
+            }
+            // Each run owns a token that can never be revived by a rescan.
+            current.store(true, Ordering::SeqCst);
+            *current = cancel.clone();
+            let mut progress = state.scan.write();
+            // Supersede the previous run, but do not start new progress
+            // until the walk finds files, matching empty-scan behavior.
+            progress.running = false;
+        }
+        let Some(root) = root else { return };
+        let disk_ticket = state.reserve_disk_update();
 
         tokio::spawn(async move {
-            let Some(root) = state.workspace.read().root.clone() else {
-                return;
-            };
-            let cfg = state.config.read().clone();
-
             // Walking the tree is I/O bound and blocking, so keep it off the
             // reactor.
             let (paths, truncated) = {
                 let root = root.clone();
                 let cfg = cfg.clone();
-                match tokio::task::spawn_blocking(move || scan::collect_source_files(&root, &cfg))
-                    .await
+                let walk_cancel = cancel.clone();
+                match tokio::task::spawn_blocking(move || {
+                    scan::collect_source_files(&root, &cfg, Some(&walk_cancel))
+                })
+                .await
                 {
                     Ok(v) => v,
                     Err(e) => {
                         error!(error = %e, "workspace walk failed");
+                        let current = active.lock();
+                        if Arc::ptr_eq(&current, &cancel) && !cancel.load(Ordering::SeqCst) {
+                            let mut progress = state.scan.write();
+                            progress.running = false;
+                            progress.last_error = Some(format!("workspace walk failed: {e}"));
+                        }
                         return;
                     }
                 }
             };
+            if cancel.load(Ordering::SeqCst) || state.is_shutdown() {
+                return;
+            }
             if paths.is_empty() {
                 info!("workspace scan found no indexable files");
                 return;
             }
+            {
+                let current = active.lock();
+                if !Arc::ptr_eq(&current, &cancel) || cancel.load(Ordering::SeqCst) {
+                    return;
+                }
+                let mut progress = state.scan.write();
+                progress.running = true;
+                progress.indexed = 0;
+                progress.last_error = None;
+            }
             info!(files = paths.len(), truncated, "workspace scan starting");
 
-            state.scan.write().running = true;
             let on_progress = {
                 let state = state.clone();
-                move |n: usize| state.scan.write().indexed = n
+                let active = active.clone();
+                let cancel = cancel.clone();
+                move |n: usize| {
+                    let current = active.lock();
+                    if Arc::ptr_eq(&current, &cancel) && !cancel.load(Ordering::SeqCst) {
+                        state.scan.write().indexed = n;
+                    }
+                }
             };
             let (ok, failed) =
                 scan::parse_all(paths, cfg.clone(), cancel.clone(), on_progress).await;
 
-            if cancel.load(Ordering::SeqCst) || state.is_shutdown() {
-                debug!("scan superseded, discarding");
-                state.scan.write().running = false;
-                return;
-            }
-
-            // Publish everything in one pass so nobody ever sees a half-built
-            // index.
             {
-                let mut ix = state.index.write();
-                for (path, parsed) in &ok {
-                    ix.index_file(path, parsed);
+                // Serialize completion with token replacement so an old run
+                // cannot commit or finish a newer run's progress.
+                let current = active.lock();
+                if !Arc::ptr_eq(&current, &cancel)
+                    || cancel.load(Ordering::SeqCst)
+                    || state.is_shutdown()
+                {
+                    debug!("scan superseded, discarding");
+                    return;
                 }
-            }
-            {
-                let mut ws = state.workspace.write();
-                for (path, parsed) in &ok {
-                    ws.files.insert(path.clone(), parsed.clone());
-                }
-            }
-
-            {
+                state.commit_disk_batch(&ok, disk_ticket);
                 let mut s = state.scan.write();
                 s.running = false;
                 s.indexed = ok.len();
@@ -234,30 +268,30 @@ impl Backend {
 
     // Reparse a document after the debounce window, but only if it is still
     // the current version.
-    fn spawn_debounced_reparse(&self, uri: Url, path: PathBuf, text: String, version: i32) {
+    fn spawn_debounced_reparse(
+        &self,
+        uri: Url,
+        path: PathBuf,
+        text: String,
+        revision: DocumentRevision,
+    ) {
         let state = self.state.clone();
         let client = self.client.clone();
         let delay = Duration::from_millis(state.config.read().debounce_ms);
-        let generation = {
-            let mut docs = state.documents.write();
-            match docs.open.get_mut(&uri) {
-                Some(d) => {
-                    d.generation += 1;
-                    d.generation
-                }
-                None => return,
-            }
-        };
-
-        // Cancel this document's previous pending task.
-        if let Some(prev) = state.documents.write().tasks.remove(&uri) {
+        let mut docs = state.documents.write();
+        if !docs.open.get(&uri).is_some_and(|d| d.matches(&revision)) {
+            return;
+        }
+        if let Some(prev) = docs.tasks.remove(&uri) {
             prev.abort();
         }
+        let task_state = state.clone();
 
         // The task gets its own clone of the URI; the caller keeps the
         // original to use as the map key.
         let task_uri = uri.clone();
         let handle = tokio::spawn(async move {
+            let state = task_state;
             sleep(delay).await;
 
             // The document might have been closed or superseded during the
@@ -265,7 +299,7 @@ impl Backend {
             {
                 let docs = state.documents.read();
                 match docs.open.get(&task_uri) {
-                    Some(d) if d.generation == generation => {}
+                    Some(d) if d.matches(&revision) => {}
                     _ => return,
                 }
             }
@@ -273,20 +307,10 @@ impl Backend {
             let cfg = state.config.read().clone();
             match Self::parse_one(path.clone(), text, cfg).await {
                 Ok(parsed) => {
+                    if !state.commit_buffer(&task_uri, &path, Some(parsed.clone()), None, &revision)
                     {
-                        let mut docs = state.documents.write();
-                        match docs.open.get_mut(&task_uri) {
-                            Some(d) if d.generation == generation => {
-                                d.parsed = Some(parsed.clone());
-                                d.parse_error = None;
-                            }
-                            // A newer generation replaced us while the parse
-                            // was running, so this result is stale and the
-                            // newer task will handle it.
-                            _ => return,
-                        }
+                        return;
                     }
-                    state.index.write().index_file(&path, &parsed);
                     let diags = {
                         let rope = state.text_for_uri(&task_uri).map(|(r, _)| r);
                         let cfg = state.config.read().clone();
@@ -301,7 +325,7 @@ impl Backend {
                         )
                     };
                     client
-                        .publish_diagnostics(task_uri, diags, Some(version))
+                        .publish_diagnostics(task_uri, diags, Some(revision.version))
                         .await;
                 }
                 Err(e) => {
@@ -310,13 +334,39 @@ impl Backend {
             }
         });
 
-        self.state.documents.write().tasks.insert(uri, handle);
+        docs.tasks.insert(uri, handle);
     }
 }
 
 fn line_range(line_1based: usize) -> Range {
     let l = line_1based.saturating_sub(1) as u32;
     Range::new(Position::new(l, 0), Position::new(l, u32::MAX))
+}
+
+// Keep the configured workspace spelling as the identity, like the scan.
+// Ignore symlink entries below it, including symlink directories; canonical
+// aliases of a symlink root must not create a second index entry. Missing
+// components are allowed so deletion events can remove already-gone paths.
+async fn resolve_workspace_path(
+    path: &Path,
+    root: &Path,
+    canonical_root: &Path,
+) -> Option<PathBuf> {
+    let relative = path.strip_prefix(root).ok()?;
+    let mut resolved = canonical_root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return None;
+        };
+        resolved.push(name);
+        match tokio::fs::symlink_metadata(&resolved).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => return None,
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    Some(resolved)
 }
 
 // === LSP surface ===
@@ -446,7 +496,8 @@ impl LanguageServer for Backend {
 
     async fn shutdown(&self) -> Result<()> {
         self.state.shutdown.store(true, Ordering::SeqCst);
-        self.scan_cancel.store(true, Ordering::SeqCst);
+        self.scan_cancel.lock().store(true, Ordering::SeqCst);
+        self.state.scan.write().running = false;
         self.state.abort_all_tasks();
         info!("shutdown requested");
         tokio::spawn(async {
@@ -468,35 +519,31 @@ impl LanguageServer for Backend {
         };
         let text = params.text_document.text;
         let version = params.text_document.version;
-        {
+        let revision = {
+            let mut index = self.state.index.write();
             let mut docs = self.state.documents.write();
-            docs.open
-                .insert(uri.clone(), Document::new(text.clone(), version, None));
-        }
+            if let Some(previous) = docs.tasks.remove(&uri) {
+                previous.abort();
+            }
+            let doc = Document::new(text.clone(), version, None);
+            let revision = doc.revision();
+            docs.open.insert(uri.clone(), doc);
+            // This session owns the path before its first parse completes,
+            // including when that parse fails. Never expose a disk snapshot.
+            index.remove_file(&path);
+            self.state.workspace.write().files.remove(&path);
+            revision
+        };
 
         let cfg = self.state.config.read().clone();
         match Self::parse_one(path.clone(), text, cfg).await {
             Ok(parsed) => {
-                {
-                    let mut docs = self.state.documents.write();
-                    if let Some(d) = docs.open.get_mut(&uri) {
-                        d.parsed = Some(parsed.clone());
-                        d.parse_error = None;
-                    }
-                }
-                self.apply_parse(uri.clone(), path, Some(parsed), None, Some(version))
-                    .await;
+                self.apply_parse(uri, path, Some(parsed), None, revision)
+                    .await
             }
             Err(e) => {
                 warn!(%uri, error = %e, "parse failed on open; buffer still tracked");
-                {
-                    let mut docs = self.state.documents.write();
-                    if let Some(d) = docs.open.get_mut(&uri) {
-                        d.parse_error = Some(e.clone());
-                    }
-                }
-                self.apply_parse(uri.clone(), path, None, Some(e), Some(version))
-                    .await;
+                self.apply_parse(uri, path, None, Some(e), revision).await;
             }
         }
     }
@@ -511,7 +558,7 @@ impl LanguageServer for Backend {
         // Apply the edits to the Rope. This is synchronous and we hold the
         //  lock only briefly because later changes assume the buffer
         //  already reflects this one.
-        let text = {
+        let (text, revision) = {
             let mut docs = self.state.documents.write();
             let Some(doc) = docs.open.get_mut(&uri) else {
                 warn!(%uri, "did_change for a document that is not open; ignoring");
@@ -537,17 +584,13 @@ impl LanguageServer for Backend {
                 }
             }
             doc.version = version;
-            doc.text.to_string()
+            doc.generation += 1;
+            // Keep the last buffer AST usable during debounce or a failed
+            // reparse. Disk updates cannot replace this buffer's content.
+            (doc.text.to_string(), doc.revision())
         };
 
-        {
-            let mut docs = self.state.documents.write();
-            if let Some(d) = docs.open.get_mut(&uri) {
-                d.parsed = None;
-            }
-        }
-
-        self.spawn_debounced_reparse(uri, path, text, version);
+        self.spawn_debounced_reparse(uri, path, text, revision);
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -557,26 +600,21 @@ impl LanguageServer for Backend {
         };
 
         // Skip the debounce. A save means the user wants current answers.
-        if let Some(h) = self.state.documents.write().tasks.remove(&uri) {
-            h.abort();
-        }
-        let Some((rope, version)) = self.state.text_for_uri(&uri) else {
-            return;
+        let (text, revision) = {
+            let mut docs = self.state.documents.write();
+            if let Some(h) = docs.tasks.remove(&uri) {
+                h.abort();
+            }
+            let Some(doc) = docs.open.get(&uri) else {
+                return;
+            };
+            (doc.text.to_string(), doc.revision())
         };
-        let text = rope.to_string();
         let cfg = self.state.config.read().clone();
-
         match Self::parse_one(path.clone(), text, cfg).await {
             Ok(parsed) => {
-                {
-                    let mut docs = self.state.documents.write();
-                    if let Some(d) = docs.open.get_mut(&uri) {
-                        d.parsed = Some(parsed.clone());
-                        d.parse_error = None;
-                    }
-                }
-                self.apply_parse(uri, path, Some(parsed), None, Some(version))
-                    .await;
+                self.apply_parse(uri, path, Some(parsed), None, revision)
+                    .await
             }
             Err(e) => debug!(error = %e, "reparse on save failed"),
         }
@@ -584,17 +622,63 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
+        let path = self.path_for(&uri);
         {
+            let mut index = self.state.index.write();
             let mut docs = self.state.documents.write();
             docs.open.remove(&uri);
+            if let Some(path) = &path {
+                // Relinquish buffer content before any close-time I/O.
+                index.remove_file(path);
+                self.state.workspace.write().files.remove(path);
+            }
             if let Some(h) = docs.tasks.remove(&uri) {
                 h.abort();
             }
         }
-        self.client.publish_diagnostics(uri, Vec::new(), None).await;
+        let Some(path) = path else {
+            return;
+        };
+        let ticket = self.state.reserve_disk_update();
+        self.state.activate_disk_update(&path, ticket);
+        self.client
+            .publish_diagnostics(uri.clone(), Vec::new(), None)
+            .await;
+        // Only workspace files regain disk symbols after close. The same
+        // scope and symlink policy applies to watcher and close-time reads.
+        let root = self.state.workspace.read().root.clone();
+        let read_path = if let Some(root) = root {
+            match tokio::fs::canonicalize(&root).await {
+                Ok(canonical_root) => resolve_workspace_path(&path, &root, &canonical_root).await,
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        let Some(read_path) = read_path else {
+            self.state.forget_disk(&path, ticket);
+            return;
+        };
+        match tokio::fs::read_to_string(read_path).await {
+            Ok(text) => {
+                let cfg = self.state.config.read().clone();
+                match Self::parse_one(path.clone(), text, cfg).await {
+                    Ok(parsed) => self.state.commit_disk(path, parsed, ticket),
+                    Err(_) => self.state.forget_disk(&path, ticket),
+                }
+            }
+            Err(_) => self.state.forget_disk(&path, ticket),
+        }
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let Some(root) = self.state.workspace.read().root.clone() else {
+            return;
+        };
+        let ticket = self.state.reserve_disk_update();
+        let Ok(canonical_root) = tokio::fs::canonicalize(&root).await else {
+            return;
+        };
         let mut changed = 0usize;
         let mut removed = 0usize;
         for ev in params.changes {
@@ -605,20 +689,32 @@ impl LanguageServer for Backend {
             if !syntax::is_supported(&path) {
                 continue;
             }
+            let Some(read_path) = resolve_workspace_path(&path, &root, &canonical_root).await
+            else {
+                continue;
+            };
+            if !self.state.activate_disk_update(&path, ticket) {
+                continue;
+            }
             match ev.typ {
                 FileChangeType::DELETED => {
-                    self.state.forget(&path);
+                    self.state.forget_disk(&path, ticket);
                     removed += 1;
-                    self.client.publish_diagnostics(uri, Vec::new(), None).await;
+                    // Diagnostics belong to the buffer lifecycle; didClose
+                    // clears them. Disk events must not clear an open session.
                 }
                 _ => {
-                    let Ok(text) = tokio::fs::read_to_string(&path).await else {
+                    let Ok(text) = tokio::fs::read_to_string(&read_path).await else {
+                        self.state.forget_disk(&path, ticket);
                         continue;
                     };
                     let cfg = self.state.config.read().clone();
-                    if let Ok(parsed) = Self::parse_one(path.clone(), text, cfg).await {
-                        self.state.commit(path, parsed);
-                        changed += 1;
+                    match Self::parse_one(path.clone(), text, cfg).await {
+                        Ok(parsed) => {
+                            self.state.commit_disk(path, parsed, ticket);
+                            changed += 1;
+                        }
+                        Err(_) => self.state.forget_disk(&path, ticket),
                     }
                 }
             }
@@ -1323,6 +1419,8 @@ mod call_tests;
 mod php_tests;
 #[cfg(test)]
 mod symbol_tests;
+#[cfg(test)]
+mod sync_tests;
 
 // Distinguish `function foo()` from a same-line `Other::foo()` before
 // choosing a declaration by its enclosing span (which can include attributes).
