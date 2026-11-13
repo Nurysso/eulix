@@ -6,9 +6,11 @@ package utils
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestDebugLogger_InMemory(t *testing.T) {
@@ -70,6 +72,50 @@ func TestDebugLogger_FileConcurrentThenClose(t *testing.T) {
 		if !strings.HasSuffix(l, pad) {
 			t.Fatalf("torn or stray line on disk: %q", l)
 		}
+	}
+}
+
+// RET-9: the router and every context builder it creates call StartAutoFlush
+// on the same logger. That must run one goroutine, and Close must stop it.
+func TestDebugLogger_AutoFlushStartsOnceAndStopsOnClose(t *testing.T) {
+	dir := t.TempDir()
+	d := NewDebugLogger(dir)
+	before := runtime.NumGoroutine()
+
+	for range 5 {
+		d.StartAutoFlush(time.Millisecond)
+	}
+	if extra := runtime.NumGoroutine() - before; extra > 1 {
+		t.Fatalf("%d goroutines started by 5 StartAutoFlush calls, want 1", extra)
+	}
+
+	// The one goroutine does flush: the line reaches disk with no Flush call.
+	d.Log("auto flushed")
+	logPath := filepath.Join(dir, "debug", "context_debug.log")
+	waitFor(t, "the auto-flush to write the line", func() bool {
+		data, _ := os.ReadFile(logPath)
+		return strings.Contains(string(data), "auto flushed")
+	})
+
+	d.Close()
+	waitFor(t, "Close to stop the auto-flush goroutine", func() bool {
+		return runtime.NumGoroutine() <= before
+	})
+
+	d.StartAutoFlush(time.Millisecond) // after Close: must not start one
+	if extra := runtime.NumGoroutine() - before; extra > 0 {
+		t.Fatalf("StartAutoFlush after Close started %d goroutines", extra)
+	}
+}
+
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

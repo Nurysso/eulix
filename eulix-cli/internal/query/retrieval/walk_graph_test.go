@@ -56,7 +56,9 @@ func TestCallLayerRequestsCorpus(t *testing.T) {
 	}
 	cfg := config.DefaultConfig()
 	cfg.Project.Engine = "ehnas"
-	cb, err := ContextWindowCreator(filepath.Join(root, "requests"), cfg, nil, "", utils.NewDebugLogger(t.TempDir()))
+	dbg := utils.NewDebugLogger(t.TempDir())
+	t.Cleanup(dbg.Close) // the builder doesn't close a logger it was given
+	cb, err := ContextWindowCreator(filepath.Join(root, "requests"), cfg, nil, "", dbg)
 	if err != nil {
 		t.Fatal(err)
 	}

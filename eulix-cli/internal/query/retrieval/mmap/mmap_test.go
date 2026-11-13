@@ -4,13 +4,16 @@ package mmap_test
 //
 // Strategy:
 //   - SizeOverflows / ErrFileTooLargeForPath: pure unit tests, no I/O.
-//   - DecodeJSONFile / OpenForSequentialRead: table-driven, using real temp
-//     files so both the mmap path (files ≥ 4 MiB) and the buffered-reader
-//     fallback path (files < 4 MiB) are exercised without mocking OS calls.
+//   - DecodeJSONFile: table-driven, using real temp files so both the mmap
+//     path (files ≥ 4 MiB) and the buffered-reader fallback path (files
+//     < 4 MiB) are exercised without mocking OS calls.
+//   - OpenForSequentialRead: always buffered, never mapped; tested at both
+//     sizes, plus a rewrite of the file while it is being read.
 //   - FlushPretouchLogs: behavioural test on a real DebugLogger instance.
 //   - All tests are parallel-safe: each test creates its own temp directory.
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -565,6 +568,50 @@ func TestOpenForSequentialRead_large_cleanup_after_partial_read(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Error("cleanup blocked for more than 5 seconds")
+	}
+}
+
+// A large kb.json must stream through a buffer, not a mapping: a mapping keeps
+// every page it passes resident (212 MB peak for a 178 MB kb.json, vs 31 MB).
+func TestOpenForSequentialRead_largeIsNotMapped(t *testing.T) {
+	t.Parallel()
+	dir := mustTempDir(t)
+	path := writeTempFile(t, dir, "large.json", makeLargeJSON(mmapThreshold+4096))
+
+	r, cleanup, err := mmap.OpenForSequentialRead(path)
+	if err != nil {
+		t.Fatalf("OpenForSequentialRead: %v", err)
+	}
+	defer cleanup()
+
+	if _, ok := r.(*bufio.Reader); !ok {
+		t.Fatalf("got %T for a file over the mmap threshold; want *bufio.Reader", r)
+	}
+}
+
+// The parser rewrites kb.json in place (truncate, then write). Through a
+// mapping that crashed the reader with SIGBUS on Linux and macOS, and the
+// rewrite itself failed on Windows. A buffered reader just reaches the new end
+// of file early, and the JSON decode reports the error.
+func TestOpenForSequentialRead_fileRewrittenWhileReading(t *testing.T) {
+	t.Parallel()
+	dir := mustTempDir(t)
+	path := writeTempFile(t, dir, "kb.json", makeLargeJSON(16<<20))
+
+	r, cleanup, err := mmap.OpenForSequentialRead(path)
+	if err != nil {
+		t.Fatalf("OpenForSequentialRead: %v", err)
+	}
+	defer cleanup()
+
+	if _, err := io.ReadFull(r, make([]byte, 4096)); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"structure":{`), 0o600); err != nil {
+		t.Fatalf("rewriting the file while it is open for reading: %v", err)
+	}
+	if _, err := io.ReadAll(r); err != nil {
+		t.Fatalf("reading after the rewrite: %v", err)
 	}
 }
 

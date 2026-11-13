@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -74,6 +75,14 @@ func TestPRGap2LexicalSearchMemoryStaysBounded(t *testing.T) {
 		}
 	}
 	corpus := uint64(len(body) * files)
+
+	// HeapAlloc is process-wide and includes garbage not yet collected. With
+	// the default GOGC=100 the search's garbage can pile up to the size of
+	// whatever else is live (other tests' leftovers under -count=N) before a
+	// GC runs, which reads as growth. A low GOGC keeps that headroom to ~10%
+	// of the live heap, so the peak measures what the search itself holds.
+	// Not parallel, so changing the process-wide setting is safe here.
+	defer debug.SetGCPercent(debug.SetGCPercent(10))
 
 	runtime.GC()
 	var m runtime.MemStats

@@ -8,11 +8,9 @@
 /*
 mmap_darwin.go macOS mmap flags and madvise hints.
 
-	macOS doesn't have Linux's MAP_POPULATE or MADV_HUGEPAGE, but the
-	unified buffer cache (UBC) treats MAP_SHARED and MAP_PRIVATE
-	identically for read-only access. We use MAP_PRIVATE to keep the
-	working set exclusive no shared cache pollution between
-	processes and rely on MADV_SEQUENTIAL for readahead.
+	macOS doesn't have Linux's MAP_POPULATE or MADV_HUGEPAGE. The
+	mapping is read-only MAP_PRIVATE, and MADV_SEQUENTIAL drives
+	readahead.
 */
 package mmap
 
@@ -23,10 +21,10 @@ import (
 )
 
 // mmapPlatform macOS.
-// MAP_PRIVATE is preferred over MAP_SHARED because the UBC backs
-// both identically for read-only access, and MAP_PRIVATE keeps the
-// working set exclusive. For a 2-4 GB JSON this means the pages
-// we touch don't evict other processes' hot data.
+// MAP_PRIVATE and MAP_SHARED behave the same here: we never write, so
+// no copy-on-write happens, and both map the same pages of the unified
+// buffer cache (UBC). The flag has no effect on caching or on what
+// other processes keep in memory; MAP_SHARED would work just as well.
 func mmapPlatform(f *os.File, size int) ([]byte, error) {
 	return unix.Mmap(
 		int(f.Fd()),

@@ -115,13 +115,17 @@ func connectWith(t *testing.T, s *Server, version string, roots ...string) *mcps
 }
 
 // newTestServer returns a server with no repository bound, isolated from the
-// developer's real ~/.Eulix.
+// developer's real ~/.Eulix. It is closed when the test ends: otherwise its
+// idle timer keeps the router and a loaded context builder (~46 MB of
+// preallocated chunks) alive for minutes, and -count=N piles them up.
 func newTestServer(t *testing.T, opts ...Option) *Server {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads this on Windows
-	return NewServer(nil, nil, "", append([]Option{testLogger(t)}, opts...)...)
+	s := NewServer(nil, nil, "", append([]Option{testLogger(t)}, opts...)...)
+	t.Cleanup(func() { _ = s.Close() })
+	return s
 }
 
 // testLogger sends server logs to the test's own output, shown only with -v or

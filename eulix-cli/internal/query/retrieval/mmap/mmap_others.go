@@ -13,18 +13,13 @@ package mmap
 
 import (
 	"errors"
-	"io"
 )
 
 var errNoMmap = errors.New("mmap not supported on this platform")
 
+// DecodeJSONFile (mmap_loaders.go) falls back to a buffered reader on this error.
 func DecodeViaMmap(_ string, _ int64, _ any) error {
 	return errNoMmap
-}
-
-// OpenForSequentialRead (mmap_loaders.go) falls back to a buffered reader on this error.
-func MmapForSequentialRead(_ string, _ int64) (io.Reader, func(), error) {
-	return nil, nil, errNoMmap
 }
 
 func AllocEmbeddingMatrix(n, dim int) [][]float32 {

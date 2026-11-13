@@ -137,7 +137,7 @@ Expected result: after `analyze`, a `.eulix/` folder with the files above; after
 
 ## Performance Notes
 
-The retrieval engine memory-maps large files and streams the knowledge base instead of loading it whole; see [Mmap](query/retrieval/Mmap.md) and [Index Loading](query/retrieval/Index-Loading.md). The MCP server keeps the loaded index in memory between questions and frees it after five idle minutes by default.
+The retrieval engine memory-maps large index and call-graph files while it decodes them, and streams `kb.json` through a buffered reader instead of loading it whole; see [Mmap](query/retrieval/Mmap.md) and [Index Loading](query/retrieval/Index-Loading.md). The MCP server keeps the loaded index in memory between questions and frees it after five idle minutes by default.
 
 ## Limitations
 

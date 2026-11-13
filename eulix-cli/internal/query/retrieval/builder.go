@@ -20,6 +20,7 @@ import (
 )
 
 // ContextWindowCreator initializes ContextBuilder, loads index artifacts, and sets up search resources.
+// The caller keeps ownership of debugLogger and must close it; cb.Close does not.
 func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Client, sourceRoot string, debugLogger *utils.DebugLogger) (*ContextBuilder, error) {
 	// Flush stored init pretouch results into context_debug.log immediately
 	mmap.FlushPretouchLogs(debugLogger)
@@ -36,7 +37,8 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 
 	cb.debugLog.Log("Initializing ContextBuilder with source root: %s", sourceRoot)
 
-	// Start auto-flush every 5 seconds
+	// Flush every 5 seconds. A no-op when the caller (the router) already
+	// started it: one goroutine per logger, stopped by the logger's Close.
 	cb.debugLog.StartAutoFlush(5 * time.Second)
 
 	if err := cb.InitEngine(); err != nil {

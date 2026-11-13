@@ -19,7 +19,9 @@ func determinismBuilder(t *testing.T, chunks []Chunk, engine string, inverted bo
 	if inverted {
 		cfg.RetrievalConfig.Ehnas.InvertedIndexMinChunks = 0
 	}
-	cb := NewTestContextBuilder(cfg, t.TempDir(), utils.NewDebugLogger(t.TempDir()))
+	logger := utils.NewDebugLogger(t.TempDir())
+	t.Cleanup(logger.Close) // Windows can't delete the open log during TempDir cleanup
+	cb := NewTestContextBuilder(cfg, t.TempDir(), logger)
 	if err := cb.InitEngine(); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +146,9 @@ func TestEhnasCorpusQueriesRepeatAndReverse(t *testing.T) {
 				cfg := config.DefaultConfig()
 				cfg.Project.Engine = "ehnas"
 				cfg.Project.DebugConfig = false
-				cb, err := ContextWindowCreator(filepath.Join(root, tc.repo), cfg, nil, filepath.Join(os.Getenv("EULIX_TEST_CORPORA"), tc.repo), utils.NewDebugLogger(t.TempDir()))
+				dbg := utils.NewDebugLogger(t.TempDir())
+				t.Cleanup(dbg.Close) // the builder doesn't close a logger it was given
+				cb, err := ContextWindowCreator(filepath.Join(root, tc.repo), cfg, nil, filepath.Join(os.Getenv("EULIX_TEST_CORPORA"), tc.repo), dbg)
 				if err != nil {
 					t.Fatal(err)
 				}

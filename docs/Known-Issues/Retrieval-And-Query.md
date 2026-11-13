@@ -112,11 +112,47 @@ Location and call-graph answers come from `kb_index.json` and `kb_call_graph.jso
 
 ---
 
-## RET-9: Goroutine leak per repository switch; debug logging stops after the first idle release
+## RET-10: Rewriting `kb.json` while Eulix reads it can crash the reader
 
-**Severity:** Low · **Status:** Open · **Verification:** Carried over
+**Severity:** Low · **Status:** Won't fix · **Verification:** Reproduced on Linux (2026-11-13, `60aec81`); the Windows part is read in code
 
-Every router starts a debug-log flush goroutine that never stops, and closing the router closes the log only if a context builder exists. A long-lived MCP server that keeps switching repositories accumulates them. Separately, closing a context builder closes the router's shared debug logger, so `context_debug.log` stays silent for the rest of an MCP session after the first idle release.
+**Symptom.** If `eulix analyze` rewrites the knowledge base while another Eulix process (the MCP server or `eulix chat`) is still loading it, the loading process can die with `fatal error: fault` and `signal SIGBUS` on Linux and macOS. On Windows nothing crashes; the parser's write fails instead, with a sharing violation or `ERROR_USER_MAPPED_FILE` (1224).
+
+**Cause.** `DecodeJSONFile` memory-maps files of 4 MiB or more while it decodes them whole ([Mmap](../eulix-cli/query/retrieval/Mmap.md)): `kb_index.json`, `kb_call_graph.json`, and `kb.json` when a question needs the full knowledge base (`ensureKB` in `router_helpers.go`). The streaming chunk load of `kb.json` reads through a buffer and is not affected. The parser writes `kb.json`, `kb_index.json` and `kb_call_graph.json` in place with `File::create`, which empties the file first (`eulix-parser/src/output.rs`). On Linux and macOS, reading a mapped page that now lies past the end of the file raises `SIGBUS`, and Go cannot recover from it by default. The size re-check in `DecodeViaMmap` covers only the moment before the file is mapped, not the parse. On Windows the reader opens the file without write sharing, and a mapped view blocks truncation, so the writer is refused.
+
+To reproduce it, map a 16 MB file, rewrite it in place, then read on through the mapping: the process crashes with `SIGBUS`.
+
+**Why it is not fixed.** The parser and the CLI are not meant to run at the same time on the same repository. Both are fast, so if it does happen, running the failed command again recovers: `eulix analyze` rebuilds a half-written knowledge base, and the next query loads the new one. The possible fixes (the parser writing to a temporary file and renaming it, or catching the fault with `debug.SetPanicOnFault`) add code to a path that normal use never reaches.
+
+**Workaround.** Don't run `eulix analyze` on a repository while a query on that same repository is loading. If either one fails, run it again.
+
+---
+
+## RET-11: Quitting chat during a vector search can crash on Linux
+
+**Severity:** Low · **Status:** Won't fix · **Verification:** Read in code
+
+**Symptom.** On Linux, pressing Ctrl+C in `eulix chat` while a question is in its vector search can end with a segmentation fault and a Go stack trace instead of a clean exit.
+
+**Cause.** On Linux the embedding matrix lives in its own memory mapping (`AllocEmbeddingMatrixOwned` in `mmap_linux.go`), and closing the context builder unmaps it. The router hands a query its context builder and then releases its lock (`router_core.go`), so nothing stops `Close` from running while that query is still reading vectors. Chat runs each question in the background (`tui/app.go`), and on quit `chat.go` closes the router without waiting for the question. On macOS and Windows the matrix is ordinary Go memory, so the same timing frees it a little later and nothing crashes.
+
+**Why it is not fixed.** The MCP server is the main way Eulix is used, and it cannot hit this: each query holds the server lock, and both the idle release and the repository switch wait for that lock. In chat the window is only the vector search, not the model call, and the process is exiting anyway. The fix, a read lock or reference count held for all of `BuildContext`, would touch every query path to prevent a crash that only happens on the way out.
+
+**Workaround.** Let the current question finish before quitting chat.
+
+---
+
+## RET-12: A knowledge-base file that fails to decode is parsed twice
+
+**Severity:** Low · **Status:** Won't fix · **Verification:** Read in code
+
+**Symptom.** When `kb.json`, `kb_index.json` or `kb_call_graph.json` is corrupt and 4 MiB or larger, Eulix takes about twice as long to report the error.
+
+**Cause.** `DecodeJSONFile` (`mmap_loaders.go`) falls back to the buffered reader after any error from the mapped decode, not only when the file can't be mapped. A JSON syntax or type error is therefore hit twice: once through the mapping, then again through the reader.
+
+**Why it is not fixed.** This is intended. One unconditional fallback keeps the loader simple, and the second parse only costs time on a knowledge base that is already broken, which `eulix analyze` rebuilds quickly.
+
+**Workaround.** Run `eulix analyze` to rebuild the knowledge base.
 
 ---
 
@@ -124,4 +160,5 @@ Every router starts a debug-log flush goroutine that never stops, and closing th
 
 - [Retrieval Overview](../eulix-cli/query/retrieval/Overview.md): the pipeline.
 - [Search Pipeline](../eulix-cli/query/retrieval/Search-Pipeline.md): where RET-1 and RET-2 occur.
+- [Mmap](../eulix-cli/query/retrieval/Mmap.md): the file-mapping helpers behind RET-10 to RET-12.
 - [Fixed Issues](Fixed-Issues.md): the EHNAS fixes already shipped.

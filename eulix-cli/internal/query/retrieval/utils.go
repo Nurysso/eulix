@@ -31,6 +31,12 @@ import (
 var debugLevel3 = utils.IsDebugLevel3()
 
 // Close cleans up resources used by ContextBuilder and frees memory.
+//
+// It does not close cb.debugLog: the logger belongs to whoever passed it to
+// ContextWindowCreator. The router shares one logger with every builder it
+// creates and closes it in Router.Close; closing it here silenced
+// context_debug.log for the rest of an MCP session after the first idle
+// release (RET-9).
 func (cb *ContextBuilder) Close() error {
 	if cb == nil {
 		return nil
@@ -39,10 +45,7 @@ func (cb *ContextBuilder) Close() error {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
-	if cb.debugLog != nil {
-		cb.debugLog.Log("Closing ContextBuilder...")
-		cb.debugLog.Close()
-	}
+	cb.debugLog.Log("Closing ContextBuilder...")
 	var releaseErr error
 	if cb.embeddingRelease != nil {
 		releaseErr = cb.embeddingRelease()
@@ -207,7 +210,10 @@ func (cb *ContextBuilder) writeContextToFile(ctx *utils.ContextWindow) error {
 	return err
 }
 
-func jsonSkipToKey(dec *json.Decoder, target string) error {
+// jsonSkipToKey advances dec to the value of the top-level key target.
+// The values of keys before it are skipped; if seen is non-nil, it gets each
+// skipped key and its raw value (streamKBChunks reads "metadata" this way).
+func jsonSkipToKey(dec *json.Decoder, target string, seen func(key string, raw json.RawMessage)) error {
 	// Consume the opening '{' of the top-level object
 	if _, err := dec.Token(); err != nil {
 		return err
@@ -227,6 +233,9 @@ func jsonSkipToKey(dec *json.Decoder, target string) error {
 		var skip json.RawMessage
 		if err := dec.Decode(&skip); err != nil {
 			return fmt.Errorf("skipping key %q: %w", key, err)
+		}
+		if seen != nil {
+			seen(key, skip)
 		}
 	}
 	return fmt.Errorf("key %q not found", target)

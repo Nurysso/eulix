@@ -4,18 +4,18 @@
 // Package mmap hold os specific mmap helper code.
 
 /*
-Mmap backed json loader, optimised for 2-4GB kb.json
+JSON loaders for the knowledge-base files, sized for 2-4GB kb.json
 on machines with 16gb RAM OS(win11/ linux kernel / darwin)
 Memory model:
 	raw file bytes parsed struct (heap)
 	os.ReadFile + Unmarshal 	in heap 	in heap		~2x file
-	mmap + Unmarshal	page cache 		in heap		->~ file
-	mmap + streaming Decode 	page cache 		built incrementally -> bounded
-Platform notes:
-	- Linux kernel(tested on 6.18 lts): MAP_POPULATE + MADV_SEQUENTIAL + MADV_HUGEPAGE.
-	- Windows 11: FILE_FLAG_SEQUENTIAL_ONLY at file-open time +
-	- PrefetchVirtualMemory after MapViewOfFile.
-	- macOS: MADV_SEQUENTIAL via the UBC; MAP_PRIVATE preferred to keep the working set exclusive.
+	mmap + Unmarshal (DecodeJSONFile)	page cache 		in heap		->~ file
+	buffered streaming Decode (OpenForSequentialRead)	1 MiB buffer 		built incrementally -> bounded
+Platform notes (DecodeViaMmap):
+	- Linux kernel(tested on 6.18 lts): MAP_SHARED + MADV_SEQUENTIAL + MADV_HUGEPAGE.
+	- Windows 11: FILE_FLAG_SEQUENTIAL_SCAN at file-open time +
+	  PrefetchVirtualMemory over the whole view after MapViewOfFile.
+	- macOS: MAP_PRIVATE + MADV_SEQUENTIAL.
 */
 
 package mmap
@@ -47,7 +47,8 @@ const (
 	// Smaller files fall back to standard buffered I/O.
 	mmapThreshold = 4 << 20
 
-	// jsonBufSize specifies the I/O read buffer size (1 MiB) for the non-mmap fallback path.
+	// jsonBufSize specifies the I/O read buffer size (1 MiB) for the buffered
+	// paths: decodeViaReader and OpenForSequentialRead.
 	// This balances minimal syscall frequency on large files against low heap allocation pressure.
 	jsonBufSize = 1 << 20
 )
@@ -126,6 +127,8 @@ func FlushPretouchLogs(logger *utils.DebugLogger) {
 // Mmap failures fall back transparently to buffered reader. The
 // fallback s intentional and silent at this layer, same os.Open
 // will fail again in the fallback path, surfacing the real cause.
+// Any error falls back, decode errors included, so a corrupt file is parsed
+// twice. Intended: RET-12 in docs/Known-Issues/Retrieval-And-Query.md.
 func DecodeJSONFile(path string, v any) error {
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -158,27 +161,17 @@ func decodeViaReader(path string, v any) error {
 		Decode(v)
 }
 
-// OpenForSequentialRead returns an io.Reader over path, using mmap with
-// sequential-read hints for large files and a buffered file reader otherwise.
+// OpenForSequentialRead returns a buffered reader over path for a single
+// front-to-back pass, and a cleanup func that closes the file. The caller must
+// always call cleanup once it is done with the reader.
 //
-// The returned cleanup func must always be called once reader is no longer
-// in use (this is true even for the buffered-reader fallback,
-// releasing the file handle on cleanup so the caller has a single shutdown path
-// regardless of which backend was used
+// No mmap here, whatever the size. The streaming caller (json.Decoder in
+// loader.go) copies every byte into its own buffer anyway, so a mapping saves
+// no copy, and every page it passes stays resident until unmap: a 178 MB
+// kb.json peaked at 212 MB mapped and 31 MB read through this buffer, and the
+// buffered read was ~5% faster. Reading also can't SIGBUS if the file is
+// replaced or truncated underneath us; a short file just fails to decode.
 func OpenForSequentialRead(path string) (r io.Reader, cleanup func(), err error) {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	size := fi.Size()
-
-	if size >= mmapThreshold && !SizeOverflows(size) {
-		if r, cleanup, err := MmapForSequentialRead(path, size); err == nil {
-			return r, cleanup, nil
-		}
-		// mmap unsupported or failed — fall through to buffered reader.
-	}
-
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err

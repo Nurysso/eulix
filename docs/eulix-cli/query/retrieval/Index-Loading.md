@@ -25,7 +25,7 @@ A **chunk** is the unit of retrieval: one function, one method, or one class. Fo
 
 The knowledge base can be several gigabytes. The old design decoded it fully into a large structure and then copied it into chunks, which could need 8 to 12 GB for a 4 GB source tree and run out of memory on 16 GB machines. The current design (`streamKBChunks`) never builds the whole structure:
 
-- It memory-maps the file with sequential-read hints ([Mmap](Mmap.md)).
+- It reads the file through a 1 MiB buffer, without memory-mapping it: a mapping would keep every page the walk passes in memory until the end ([Mmap](Mmap.md#why-the-streaming-reader-doesnt-map)).
 - It walks the JSON token by token with the standard decoder, which supports streaming.
 - For each file entry, it decodes just that entry with the fast Sonic decoder, turns it into chunks, and lets the decoded data be freed before the next one.
 

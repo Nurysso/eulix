@@ -25,6 +25,7 @@ Every entry has an ID, a severity, a status and a verification note, then a shor
 | Partly fixed | Some part is fixed; the rest remains. The entry says which.               |
 | By design    | Behaviour that was chosen on purpose. Listed because it surprises people. |
 | Limitation   | Something Eulix does not do, and is not planned to do soon.               |
+| Won't fix    | A known bug we chose not to fix. The entry says why.                      |
 
 **Verification** says how confident to be in the entry:
 
@@ -72,7 +73,9 @@ Anything fixed is not listed here as an open problem. Fixed items are kept for t
 | [RET-6](Retrieval-And-Query.md#ret-6-the-monte-carlo-lexical-layer-depends-on-map-order)                                    | The Monte Carlo lexical layer depends on map order                                         | Low      | Open         | Carried over |
 | [RET-7](Retrieval-And-Query.md#ret-7-embedder-is-never-restarted-after-a-timeout)                                           | Embedder is never restarted after a timeout                                                | Medium   | Open         | Carried over |
 | [RET-8](Retrieval-And-Query.md#ret-8-names-from-a-stale-knowledge-base-can-still-appear)                                    | Names from a stale knowledge base can still appear                                         | Low      | Open         | Carried over |
-| [RET-9](Retrieval-And-Query.md#ret-9-goroutine-leak-per-repository-switch-debug-logging-stops-after-the-first-idle-release) | Each repository switch leaks a goroutine; debug logging stops after the first idle release | Low      | Open         | Carried over |
+| [RET-10](Retrieval-And-Query.md#ret-10-rewriting-kbjson-while-eulix-reads-it-can-crash-the-reader)                          | Rewriting `kb.json` while Eulix reads it can crash the reader                              | Low      | Won't fix    | Reproduced   |
+| [RET-11](Retrieval-And-Query.md#ret-11-quitting-chat-during-a-vector-search-can-crash-on-linux)                             | Quitting chat during a vector search can crash on Linux                                    | Low      | Won't fix    | Read in code |
+| [RET-12](Retrieval-And-Query.md#ret-12-a-knowledge-base-file-that-fails-to-decode-is-parsed-twice)                          | A knowledge-base file that fails to decode is parsed twice                                 | Low      | Won't fix    | Read in code |
 | [EMB-1](Embeddings.md#emb-1-onnx-on-rocm-produces-wrong-embeddings)                                                         | ONNX on ROCm produces wrong embeddings                                                     | High     | Partly fixed | Carried over |
 | [EMB-2](Embeddings.md#emb-2-a-repository-still-chooses-which-embedding-model-is-downloaded)                                 | A repository still chooses which embedding model is downloaded                             | Medium   | Open         | Carried over |
 | [EMB-3](Embeddings.md#emb-3-rocm-prints-null-no-such-file-or-directory)                                                     | ROCm prints `(null): No such file or directory`                                            | Low      | Limitation   | Carried over |

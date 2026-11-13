@@ -141,6 +141,10 @@ func (r *Router) PromptOrAnswerWithCoT(query string, includeCoT bool) (string, e
 		return "", err
 	}
 
+	// cb is used after the lock is released, so Close can run mid-query. On
+	// Linux that unmaps the embeddings under us. MCP serializes queries and
+	// Close; chat's quit path doesn't. Won't fix: RET-11 in
+	// docs/Known-Issues/Retrieval-And-Query.md.
 	r.mu.RLock()
 	cb := r.contextBuilder
 	r.mu.RUnlock()

@@ -1,0 +1,185 @@
+name: Test
+
+# Runs each project's tests when its files change. Lint.yaml stays lint-only.
+#
+# The compiled projects (eulix-cli and the Rust crates) are tested on Linux,
+# Windows and macOS, the three systems Release.yaml ships to: they have
+# OS-specific code (mmap, path handling, junctions). eulix-embed and vizEulize
+# run on Linux. A manual run (workflow_dispatch) tests everything.
+
+on:
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.27' # same toolchain Release.yaml builds with
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      cli: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.cli == 'true' }}
+      embed: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.embed == 'true' }}
+      viz: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.viz == 'true' }}
+      # JSON list of the Rust crates to test, e.g. ["libeulix","eulix-parser"].
+      rust: ${{ github.event_name == 'workflow_dispatch' && '["libeulix","eulix-parser","eulix-lsp"]' || steps.rust.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          base: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
+          filters: |
+            workflow: &workflow
+              - '.github/workflows/Test.yaml'
+            cli:
+              - *workflow
+              - 'eulix-cli/**'
+            embed:
+              - *workflow
+              - 'eulix-embed/**'
+            viz:
+              - *workflow
+              - 'vizEulize/**'
+      # Filter names are the crate folders, so `changes` is the matrix list.
+      # eulix-parser and eulix-lsp depend on libeulix, so its changes test all three.
+      - uses: dorny/paths-filter@v3
+        id: rust
+        with:
+          base: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
+          filters: |
+            libeulix:
+              - '.github/workflows/Test.yaml'
+              - 'libeulix/**'
+            eulix-parser:
+              - '.github/workflows/Test.yaml'
+              - 'libeulix/**'
+              - 'eulix-parser/**'
+            eulix-lsp:
+              - '.github/workflows/Test.yaml'
+              - 'libeulix/**'
+              - 'eulix-lsp/**'
+
+  eulix-cli:
+    name: eulix-cli (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.cli == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            flags: -race
+          # -race needs cgo and a C toolchain on Windows; macOS kept the same.
+          - os: windows-latest
+            flags: ''
+          - os: macos-14
+            flags: ''
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # go:embed needs these files to exist. No test runs them: the one test
+      # that needs a real parser (EULIX_PARSER) skips when it isn't built.
+      - name: Create mock embedded assets
+        run: |
+          mkdir -p eulix-cli/internal/assets/bins
+          cd eulix-cli/internal/assets/bins
+          touch eulix-embed.zip eulix_parser_linux eulix_parser_windows.exe eulix_parser_darwin
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: eulix-cli/go.sum
+
+      - name: go test
+        working-directory: eulix-cli
+        run: go test ${{ matrix.flags }} ./...
+
+  rust:
+    name: ${{ matrix.crate }} (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust != '[]'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: ${{ fromJSON(needs.changes.outputs.rust) }}
+        os: [ubuntu-latest, windows-latest, macos-14]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.crate }} -> target
+
+      - name: cargo test
+        working-directory: ${{ matrix.crate }}
+        env:
+          # eulix-parser links rpmalloc, which needs advapi32 on MSVC (as in Release.yaml).
+          RUSTFLAGS: ${{ runner.os == 'Windows' && matrix.crate == 'eulix-parser' && '-C link-arg=advapi32.lib' || '' }}
+        run: cargo test --locked
+
+  eulix-embed:
+    name: eulix-embed
+    needs: changes
+    if: needs.changes.outputs.embed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # the minimum: mypy.ini's target, and numpy 2.4 needs >=3.11
+          cache: pip
+          cache-dependency-path: eulix-embed/requiremenents/requirements.base.txt
+
+      # The ML libraries (torch, onnxruntime, transformers) are imported lazily
+      # and mocked in the tests, so the base requirements are enough.
+      - name: Install dependencies
+        run: pip install -r eulix-embed/requiremenents/requirements.base.txt pytest
+
+      - name: pytest
+        working-directory: eulix-embed
+        run: python -m pytest
+
+  vizEulize:
+    name: vizEulize
+    needs: changes
+    if: needs.changes.outputs.viz == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: node --test
+        working-directory: vizEulize
+        run: |
+          shopt -s nullglob
+          tests=(*.test.mjs)
+          if [ ${#tests[@]} -eq 0 ]; then
+            echo "No *.test.mjs files in vizEulize; nothing to run."
+            exit 0
+          fi
+          node --test "${tests[@]}"

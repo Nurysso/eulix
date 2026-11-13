@@ -23,6 +23,9 @@ type DebugLogger struct {
 	buf    *bytes.Buffer // currently used for test
 	mu     sync.Mutex
 	closed bool
+	// stopFlush ends the StartAutoFlush goroutine; Close closes it.
+	// nil until StartAutoFlush runs, so the goroutine starts at most once.
+	stopFlush chan struct{}
 }
 
 func IsDebugLevel3() bool {
@@ -152,7 +155,8 @@ func (d *DebugLogger) Flush() {
 	}
 }
 
-// Close flushes and closes the logger. It is safe to call more than once.
+// Close flushes and closes the logger and stops its auto-flush goroutine.
+// It is safe to call more than once.
 func (d *DebugLogger) Close() {
 	if d == nil || d.file == nil {
 		return
@@ -163,6 +167,9 @@ func (d *DebugLogger) Close() {
 	if d.closed {
 		return
 	}
+	if d.stopFlush != nil {
+		close(d.stopFlush)
+	}
 	if d.writer != nil {
 		_ = d.writer.Flush()
 	}
@@ -170,16 +177,33 @@ func (d *DebugLogger) Close() {
 	d.closed = true
 }
 
-// StartAutoFlush starts a goroutine that periodically flushes logs to disk.
+// StartAutoFlush starts a goroutine that periodically flushes logs to disk
+// until Close. It starts at most one goroutine per logger, however often it
+// is called, and none after Close: the router and every context builder it
+// creates share one logger, and each used to start its own goroutine that
+// never stopped (RET-9).
 func (d *DebugLogger) StartAutoFlush(interval time.Duration) {
-	if d.file == nil {
+	if d == nil || d.file == nil {
 		return
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed || d.stopFlush != nil {
+		return
+	}
+	stop := make(chan struct{})
+	d.stopFlush = stop
+
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			d.Flush()
+		for {
+			select {
+			case <-ticker.C:
+				d.Flush()
+			case <-stop:
+				return
+			}
 		}
 	}()
 }
