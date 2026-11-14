@@ -1,5 +1,42 @@
 # Changelog
 
+## Eulix_parser v0.9.0 - Unreleased
+
+Changes since v0.8.1, the version that shipped with Eulix v0.8.3. Built on libeulix 0.9.0, so it also gets the PHP parser, the iterative tree walks and the call-graph fixes listed in [libeulix/changelog.md](../libeulix/changelog.md).
+
+### Added
+
+- **Incremental parsing** (#149). Unchanged files are no longer re-parsed. Each run stores every file's `kb.json` fragment and its slimmed `FileData` in `.eulix/parse_cache/` (`index.<gen>.json.zst`, `emit.<gen>.spill`, `slim.<gen>.spill`).
+  - A file whose size and mtime match, with an mtime more than 2 s before the cached run started, is reused without being read. Any other file is read and hashed with xxh3-128, and parsed only when the hash differs.
+  - Reused and parsed files go through the same accumulator, so totals, languages, the syntax report and external dependencies match a full parse byte for byte. The call graph is still rebuilt from scratch.
+  - The cache key is the format number, the parser version, the git SHA, and the size and mtime of the running binary, so any rebuild invalidates it, uncommitted grammar edits included.
+  - A bad index, a key mismatch or a record that fails its CRC falls back to parsing that file; the cache never fails a run. The index is written to a temp file and renamed, and only generations up to the one this run loaded are deleted, so a concurrent run's files survive.
+- **PHP** (#83): `php` in `--languages` and in `all` (`.php`, `.phtml`, `.inc`). A `.inc` file is collected only when it holds PHP code, since C, C++ and assembler projects use the extension too. Slimming keeps the imports, namespace, `extends` class, traits and `static` flag that PRISM v2 needs until the call graph is built. A PHP file's `{main}` holds its top-level code and is not counted in `total_functions`.
+- A determinism test: a 300-file Python/Rust/JS fixture plus a Go fixture, parsed with `-t 1` and `-t 8`, with every JSON output compared byte for byte (#149).
+
+### Changed
+
+- Symbol IDs are built from the path relative to `--root` (`func_name::src/a.py`). They used to carry the absolute path, so they embedded the user's home directory, changed when the repository moved and didn't match the structure keys (#120).
+- Every JSON output comes out in the same order on every run (ordered maps in libeulix), and `rel_path` always uses `/`, so keys and order match on Windows (#149).
+- `-t`/`--threads` now also sizes file discovery (#147) and the analysis phase. Analysis used to start rayon's global pool with one thread per core, so `-t 2` on a 32-thread machine ran Phase 2 on 35 threads (#127).
+- Changed files are detected from size and mtime instead of a content hash, so each file is read once instead of twice (#147).
+- eulix_parser runs its own analysis pipeline instead of libeulix's deprecated `analyze_and_build` (`7cc429f`).
+- Slimming keeps every parameter's name and clears only its type and default, so PRISM v2 can tell a call to a parameter from a call to a global function (#135).
+- Depends on libeulix by path, keeping the version for crates.io. Publishing to crates.io needs a libeulix release with the matching version (#83).
+- Removed unused Windows-specific code (#161).
+
+### Removed
+
+- `--resume`/`-u`, its spill rehydration and `SpillGuard`. A crashed run now starts over from the last committed parse-cache generation (#149).
+
+### Fixed
+
+- External dependencies were lost because `slim()` cleared the imports before they were read. Imports are now collected per file before slimming (`775f357`).
+- A long expression chain in generated or minified code (about 2,400 to 2,650 terms) overflowed rayon's 2 MiB stack and aborted the whole process. Worker threads now get a 64 MiB stack, which gets through 77,000 to 85,000 terms with peak RSS and time within run-to-run noise (#127).
+- Extensions match in any case, so `UPPER.PY` and `Main.JAVA` are collected (#127).
+- One byte of invalid UTF-8, like a Latin-1 `é` in a comment, failed the whole file. Invalid bytes are now replaced with U+FFFD and the file is reported as partial, with an error at the line of the first bad byte, so `--parse-report` still shows it (#127).
+- A file that couldn't be read aborted the walk. It is now recorded as failed and the walk goes on (#147).
+
 ## Eulix_parser v0.7.7 (2026-9-28)
 
 ### Summary
@@ -17,7 +54,7 @@ We identified which fields in kb.json were unnecessary for the downstream worklo
   copy of the structure map is allocated. Analysis still runs on the full in-memory
   data; only the written output is simplified.
 - All the grammar files now uses `regex::Regex` instead of `regex::bytes::Regex`.
-- parser/utils.rs created to store common shared functions accross the grammar files.
+- parser/utils.rs created to store common shared functions across the grammar files.
 
 ### Performance
 

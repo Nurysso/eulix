@@ -87,7 +87,7 @@ Call graph:
       "file": "eulix-cli/cmd/eulix/main.go"
     }
   ],
-  "edges": [{ "from": "<node id>", "to": "<node id>", "edge_type": "calls", "conditional": false }],
+  "edges": [{ "from": "<node id>", "to": "<node id>", "edge_type": "call", "conditional": false }],
   "tags": { "<node id>": ["exported", "testing"] },
   "file_categories": { "eulix-cli/cmd/eulix/main.go": "cli" }
 }

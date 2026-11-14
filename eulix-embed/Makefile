@@ -1,15 +1,6 @@
-.PHONY: default test lint build
+ALIAS_default := test-python
+ALIAS_test := test-python
+ALIAS_lint := lint-python
+ALIAS_build := embed-zip
 
-default: test-python
-
-test:
-	$(MAKE) -C .. CALLER_DIR=$(CURDIR) test-python
-
-lint:
-	$(MAKE) -C .. CALLER_DIR=$(CURDIR) lint-python
-
-build:
-	$(MAKE) -C .. CALLER_DIR=$(CURDIR) embed-zip
-
-%:
-	$(MAKE) -C .. CALLER_DIR=$(CURDIR) $@
+include ../make/forward.mk

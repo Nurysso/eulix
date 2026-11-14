@@ -86,9 +86,59 @@ endif
         scripts-help script parser-release \
         repro-prism check-tsx perf-rust-workspace check-prism-v2 repro-all \
         eval-mcp kb-diff kb-field-usage kb-id-name-check vec-stats \
-        bench-run bench-compare bench-list bench-clean bench-test
+        bench-run bench-compare bench-list bench-clean bench-test \
+        install install-cli install-parser install-lsp install-viz
 
 all: help
+
+# ------------------------------------------------------------------------------
+# Quick installs from source: make install <cli|parser|lsp|viz>
+# ------------------------------------------------------------------------------
+INSTALL_PROJECTS := cli parser lsp viz
+INSTALL_NAME := $(word 2,$(MAKECMDGOALS))
+EULIX_HOME := $(USER_HOME)/.Eulix
+ifeq ($(DETECTED_OS),Windows)
+    HOST_OS_TARGET := windows
+else
+    HOST_OS_TARGET := linux
+endif
+
+install:
+ifeq ($(filter $(INSTALL_NAME),$(INSTALL_PROJECTS)),)
+	@$(ECHO) "$(RED)Usage: make install <$(subst $() ,|,$(INSTALL_PROJECTS))>$(NC)"
+	@exit 1
+else
+	@$(MAKE) --no-print-directory install-$(INSTALL_NAME)
+endif
+
+# The project name after `install` is only an argument: make it a no-op goal.
+ifneq ($(filter install,$(MAKECMDGOALS)),)
+$(INSTALL_PROJECTS):
+	@:
+endif
+
+install-cli:
+	@$(MAKE) --no-print-directory build-single OS_TARGET=$(HOST_OS_TARGET) GPU=$(GPU)
+	$(MKDIR) "$(INSTALL_DIR)"
+	$(CP) "$(BUILD_DIR)/eulix_$(HOST_OS_TARGET)_$(GPU)$(EXE_EXT)" "$(INSTALL_DIR)/eulix$(EXE_EXT)"
+	@$(ECHO) "$(GREEN)✓ Installed eulix → $(INSTALL_DIR)$(NC)"
+
+install-parser:
+	cd $(PARSER_DIR) && cargo build --release
+	$(MKDIR) "$(INSTALL_DIR)"
+	$(CP) "$(PARSER_DIR)/target/release/eulix_parser$(EXE_EXT)" "$(INSTALL_DIR)/"
+	@$(ECHO) "$(GREEN)✓ Installed eulix_parser → $(INSTALL_DIR)$(NC)"
+
+install-lsp:
+	cd eulix-lsp && cargo build --release
+	$(MKDIR) "$(INSTALL_DIR)"
+	$(CP) "eulix-lsp/target/release/eulixlsp$(EXE_EXT)" "$(INSTALL_DIR)/"
+	@$(ECHO) "$(GREEN)✓ Installed eulixlsp → $(INSTALL_DIR)$(NC)"
+
+install-viz:
+	$(MKDIR) "$(EULIX_HOME)/bin"
+	$(CP) "vizEulize/vizeulize.html" "$(EULIX_HOME)/bin/vizeulize.html"
+	@$(ECHO) "$(GREEN)✓ Installed vizeulize.html → $(EULIX_HOME)/bin$(NC)"
 
 help:
 	@echo "Eulix Build System"
@@ -114,6 +164,12 @@ help:
 	@echo "Custom Parameters:"
 	@echo "  make build-single OS_TARGET=windows GPU=nvidia"
 	@echo "  make build-single OS_TARGET=linux GPU=amd"
+	@echo ""
+	@echo "Quick install from source (into $(INSTALL_DIR)):"
+	@echo "  make install cli      - Build and install the eulix CLI (GPU=amd|nvidia)"
+	@echo "  make install parser   - Build and install eulix_parser"
+	@echo "  make install lsp      - Build and install eulixlsp (unreleased)"
+	@echo "  make install viz      - Copy vizeulize.html to ~/.Eulix/bin"
 	@echo ""
 	@echo "Clean:"
 	@echo "  make clean            - Remove build artifacts and assets"

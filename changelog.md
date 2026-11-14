@@ -1,18 +1,65 @@
 # Changelog
 
-## **_[Unreleased]_** - PHP support
+## Eulix v0.9.0 - Unreleased
 
-- **libeulix:** new PHP parser (`.php`, `.phtml`, and `.inc` holding PHP code) on `tree-sitter-php` 0.25 with the inline-HTML grammar. Extracts functions, methods, classes, interfaces, traits and enums (access modifier, `static`, docblocks, attributes), `include`/`require` (literal or dynamic) and `use` imports, globals (`define`, `const`, top-level variables, `global $x`), complexity, TODOs and security notes (`eval`, shell execution, `unserialize`, SQL built from variables in `mysql_query`/`mysqli_query`). Class names are written fully qualified; top-level code becomes a `{main}` function per file; legacy `$s{0}` string offsets parse like `$s[0]`. New `PhpInfo` in `LanguageSpecificInfo`.
-- **PRISM v2:** PHP call sites go through `resolve_php_call`: exact qualified class names, namespace-then-global functions, for known receivers the class, its traits and its `extends` chain (interfaces last), then `__call`/`__callStatic`, `include`/`require` as a scope tier, name-only method matches only for a method name defined once in the project, and never to a static method from `->`. Other languages resolve exactly as before.
-- **PRISM v2 (all languages):** duplicate declarations of one id in a file (`#ifdef` branches) now produce one call edge per target instead of one per declaration.
-- **eulix_parser:** `php` in `--languages` and in `all`; a `.inc` file counts as PHP only when it holds PHP code (C, C++ and assembler use the extension too); PHP keeps its imports, namespace, `extends`, traits and `static` until the call graph is built; a PHP file's `{main}` is not counted in `total_functions`.
-- **eulix CLI:** PHP comment stripping in retrieval (`//`, `#`, `/* */`; HTML, strings, heredocs and `#[...]` attributes are left alone); a `.inc` file is stripped as PHP only when it holds PHP code.
-- **eulix-lsp:** serves `.php` and `.phtml` files and maps `PhpInfo`; `.inc` stays out, since C, C++ and assembler share it.
+Changes since v0.8.3 (2026-10-14). Each component's changelog has the full list.
+
+| Component    | Version         | Changelog                                              |
+| ------------ | --------------- | ------------------------------------------------------ |
+| eulix CLI    | v0.8.3 → v0.9.0 | [eulix-cli/changelog.md](eulix-cli/changelog.md)       |
+| eulix_parser | 0.8.1 → 0.9.0   | [eulix-parser/changelog.md](eulix-parser/changelog.md) |
+| libeulix     | 0.8.2 → 0.9.0   | [libeulix/changelog.md](libeulix/changelog.md)         |
+| eulix-lsp    | 0.2.0 (unreleased, `make install lsp`) | [eulix-lsp/changelog.md](eulix-lsp/changelog.md) |
+| eulix_embed  | 0.4.1 → 0.4.2   | [eulix-embed/changelog.md](eulix-embed/changelog.md)   |
+| VizEulize    | → 0.2.0 (installed by `install.sh`) | [vizEulize/changelog.md](vizEulize/changelog.md) |
+
+libeulix is published on crates.io.
+
+### Highlights
+
+- **PHP support** end to end: a PHP parser and PHP call resolution in libeulix, `php` in eulix_parser, comment stripping and signatures in retrieval, and references and call hierarchy in eulix-lsp.
+- **Incremental parsing:** eulix_parser reuses unchanged files from `.eulix/parse_cache/`, and the output matches a full parse byte for byte.
+- **EHNAS**, a new retrieval engine alongside etiya, with engine-specific configuration.
+- **More accurate call graphs:** receiver-aware method calls for Python, TypeScript and Rust, nested functions with scoped IDs, and a deterministic PRISM v1. C++ templates and inline members, decorated Python methods, TypeScript functions bound to variables and methods of generic Rust impls are no longer dropped.
+- **Steadier parsing:** every grammar walks its syntax tree without recursion, every output comes out in the same order on every run, and files with invalid UTF-8 are parsed as partial instead of failing.
+- **Vector search fix:** embedding rows are matched to chunks by id. Before, every vector from the second file on was paired with the wrong chunk.
+- **Security:** MCP and retrieval no longer read hidden, `.euignore`d or out-of-repo files, symlink and `.eulix` escapes are closed, and eulix_embed blocks `trust_remote_code`.
+- **Windows:** a native build script, `.env` locked to its owner, and safer parser installs and file opening.
+
+### Upgrade notes
+
+- libeulix 0.9.0 changes its Rust API: a new `PhpInfo` variant, `BTreeMap`/`BTreeSet` in serialized types and a new `FunctionCall` field. `analyze_and_build` is deprecated.
+- Symbol IDs changed: they use the path relative to the project root, TypeScript interface IDs include the file path, and nested functions get scoped IDs. The first `eulix analyze` after upgrading runs a full analysis.
+- `eulix_parser --resume`/`-u` is gone; the parse cache replaces it.
+- A repository's `.env` is no longer exported into the process environment; only the provider key is read from it.
+- eulix_embed's default model is now `BAAI/bge-base-en-v1.5`.
+
+### Build, CI and install
+
+- Each build target builds only its own parser, so a Linux build no longer needs the Windows toolchain (#92).
+- Makefile, release and script builds pass the right `-X` name (`assets.ParserHash`). The old name was accepted silently, so the hash stayed empty and the startup check of the embedded parser against the build manifest was skipped (#92, #94).
+- Native Windows build with `build.ps1` (#161).
+- Build and release workflow fixes; builds ignore `__init__.py` files (#138, #143).
+- The installers download the latest tag (`9830743`) and use the right checksum file name (#163).
+- CI: lint runs on `dev` and on libeulix-only changes (#122). A new `Test.yaml` runs every project's tests (Go and Rust on Linux, Windows and macOS), and `Lint.yaml` stays lint-only (`f9006ea`). A docs workflow checks the docs weekly (#163).
+- `.gitattributes` keeps LF line endings in the working tree on every OS (#164).
+
+### Docs
+
+- Documentation rewritten from the current code, one folder per subsystem (libeulix, eulix-parser, eulix-embed, eulix-cli, vizEulize), plus Welcome, Installation, Architecture (spill to disk, incremental parsing) and Known-Issues pages. Known issues have IDs, severity, status and how each was verified, and fixed issues are recorded (#157).
+- PHP is in the README's language lists and support table (#83).
+- LSP architecture and benchmarking notes (#165).
+- Component READMEs corrected: command tables, config reference, function names, license, binary and file names (#157).
+
+### Benchmarks and scripts
+
+- `make bench-compare A=... B=...` compares two versions with isolated builds and `HOME`, cached by commit. It measures accuracy, indexing and query time and memory, and parser quality (GPU with CPU fallback) on eulix, flask, gin, ripgrep, gson and Linux (`--large`), flags regressions over 10%, writes a Markdown report and exits 1. A v0.8.3 comparison is included (`f816dcd`).
+- Scripts used to find bugs are under `scripts/` (#157).
 
 ## Eulix_embed v0.4.1 (2026-10-02)
 
 - Linter fixes and lint.sh uses ruff for most of the lints
-- compare command that was used for verfication of few entries from embeddings.bin and vectors.bin can now verfiy entire of embeddings.bin and vectors.bin
+- compare command that was used for verification of few entries from embeddings.bin and vectors.bin can now verify entire of embeddings.bin and vectors.bin
 
 ## **_[Unreleased]_** - VizEulize Call Graph Visualization Tool Added
 
@@ -71,7 +118,7 @@ We identified which fields in kb.json were unnecessary for the downstream worklo
   copy of the structure map is allocated. Analysis still runs on the full in-memory
   data; only the written output is simplified.
 - All the grammar files now uses `regex::Regex` instead of `regex::bytes::Regex`.
-- parser/utils.rs created to store common shared functions accross the grammar files.
+- parser/utils.rs created to store common shared functions across the grammar files.
 
 ### Performance
 

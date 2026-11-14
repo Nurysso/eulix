@@ -1,15 +1,6 @@
-.PHONY: default test lint build
+ALIAS_default := test-go
+ALIAS_test := test-go
+ALIAS_lint := lint-go
+ALIAS_build := build-single
 
-default: test-go
-
-test:
-	$(MAKE) -C .. CALLER_DIR=$(CURDIR) test-go
-
-lint:
-	$(MAKE) -C .. CALLER_DIR=$(CURDIR) lint-go
-
-build:
-	$(MAKE) -C .. CALLER_DIR=$(CURDIR) build-single
-
-%:
-	$(MAKE) -C .. CALLER_DIR=$(CURDIR) $@
+include ../make/forward.mk
