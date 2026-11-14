@@ -121,6 +121,12 @@ func runAnalysisPipeline(projectPath string, cfg *config.Config) error {
 	}
 	fmt.Println("✓ Parser completed")
 
+	// Only etiya reads embeddings.bin/vectors.bin; ehnas is embedding-free.
+	if !needsEmbeddings(cfg) {
+		fmt.Println("Skipping embeddings (engine: ehnas does not use them)")
+		return nil
+	}
+
 	fmt.Println("Generating embeddings...")
 	venvPath := filepath.Join(homeDir, ".Eulix", ".venv")
 	pythonPath, venvEnv, err := embeddings.GetVenvPython(venvPath)

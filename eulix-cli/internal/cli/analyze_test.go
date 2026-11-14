@@ -53,7 +53,7 @@ func (f *analysisFixture) configure(model, engine string, prism int) {
 	f.write("eulix.toml", fmt.Sprintf("[embeddings]\nmodel = %q\nengine = %q\n[parser]\nprismVersion = %d\n", model, engine, prism))
 }
 
-func (f *analysisFixture) pipeline(_ string, _ *config.Config) error {
+func (f *analysisFixture) pipeline(_ string, cfg *config.Config) error {
 	f.t.Helper()
 	f.calls++
 	for _, name := range []string{"kb.json", "kb_index.json", "kb_call_graph.json"} {
@@ -77,6 +77,9 @@ func (f *analysisFixture) pipeline(_ string, _ *config.Config) error {
 	f.write(filepath.Join(utils.EulixDir, utils.ChecksumFileName), string(encoder.EncodeAll(data, nil)))
 	if err := encoder.Close(); err != nil {
 		f.t.Fatal(err)
+	}
+	if !needsEmbeddings(cfg) {
+		return nil // mirrors runAnalysisPipeline: ehnas skips the embedder
 	}
 	if f.fail {
 		return errors.New("embedding generation failed")
@@ -161,6 +164,36 @@ func TestAnalyzeRerunsWhenPipelineSettingsChange(t *testing.T) {
 		if f.calls != i+1 {
 			t.Fatalf("pipeline calls = %d after settings change %d", f.calls, i)
 		}
+	}
+}
+
+func TestAnalyzeEhnasSkipsEmbeddings(t *testing.T) {
+	f := newAnalysisFixture(t)
+	ehnas := func(model string) {
+		f.write("eulix.toml", fmt.Sprintf("[project]\nengine = \"ehnas\"\n[embeddings]\nmodel = %q\nengine = \"onnx\"\n[parser]\nprismVersion = 2\n", model))
+	}
+	ehnas("model-a")
+	if err := f.run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, utils.EulixDir, "embeddings.bin")); !os.IsNotExist(err) {
+		t.Fatalf("ehnas wrote embeddings.bin: %v", err)
+	}
+	// Complete without embedding artifacts, and the embedding model is irrelevant.
+	ehnas("model-b")
+	if err := f.run(); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 1 {
+		t.Fatalf("pipeline calls = %d, want ehnas analysis to be complete", f.calls)
+	}
+	// Switching to etiya needs embeddings, so it must re-run.
+	f.configure("model-b", "onnx", 2)
+	if err := f.run(); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 2 {
+		t.Fatalf("pipeline calls = %d, want re-run after switching to etiya", f.calls)
 	}
 }
 
