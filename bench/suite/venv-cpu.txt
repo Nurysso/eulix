@@ -1,0 +1,6 @@
+# CPU-only additions to eulix-embed/requiremenents/requirements.base.txt for the
+# benchmark's Python environment. Never add onnxruntime-rocm or onnxruntime-gpu:
+# they share the `onnxruntime` import name and would let the embedder pick a GPU.
+# Changing this file creates a new venv and invalidates timing and accuracy results.
+onnxruntime==1.32.0
+tokenizers==0.23.3

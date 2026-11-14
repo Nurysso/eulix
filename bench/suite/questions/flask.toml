@@ -1,0 +1,44 @@
+# Latency-only questions for the Flask (Python) corpus: no `expect`, so they time
+# query speed without grading. Phrased "How does/is/are ..." so they reach
+# retrieval instead of a direct-answer class.
+schema = 1
+
+[[q]]
+id = "flask-01"
+text = "How does full_dispatch_request run before_request functions and build the response"
+
+[[q]]
+id = "flask-02"
+text = "How is the app context pushed and popped around a request"
+
+[[q]]
+id = "flask-03"
+text = "How is the secure cookie session serialized and signed"
+
+[[q]]
+id = "flask-04"
+text = "How does a blueprint register its routes on the application"
+
+[[q]]
+id = "flask-05"
+text = "How does add_url_rule create the endpoint for a view function"
+
+[[q]]
+id = "flask-06"
+text = "How are error handlers found for a raised exception"
+
+[[q]]
+id = "flask-07"
+text = "How is the Jinja environment created for rendering templates"
+
+[[q]]
+id = "flask-08"
+text = "How does the config load values from prefixed environment variables"
+
+[[q]]
+id = "flask-09"
+text = "How does the flask CLI find and load the application"
+
+[[q]]
+id = "flask-10"
+text = "How does the JSON provider serialize a response"

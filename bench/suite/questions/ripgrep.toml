@@ -1,0 +1,44 @@
+# Latency-only questions for the ripgrep (Rust) corpus: no `expect`, so they time
+# query speed without grading. Phrased "How does/is/are ..." so they reach
+# retrieval instead of a direct-answer class.
+schema = 1
+
+[[q]]
+id = "ripgrep-01"
+text = "How does the searcher read lines from its line buffer"
+
+[[q]]
+id = "ripgrep-02"
+text = "How are gitignore rules matched against a path"
+
+[[q]]
+id = "ripgrep-03"
+text = "How does the parallel directory walker distribute work between threads"
+
+[[q]]
+id = "ripgrep-04"
+text = "How is a glob pattern compiled into a regex"
+
+[[q]]
+id = "ripgrep-05"
+text = "How does the standard printer write a matching line with context"
+
+[[q]]
+id = "ripgrep-06"
+text = "How are literals extracted to speed up regex matching"
+
+[[q]]
+id = "ripgrep-07"
+text = "How does the JSON printer report each match"
+
+[[q]]
+id = "ripgrep-08"
+text = "How does the CLI decompress compressed files before searching them"
+
+[[q]]
+id = "ripgrep-09"
+text = "How are file type definitions used to filter files"
+
+[[q]]
+id = "ripgrep-10"
+text = "How does the summary printer count matches per file"

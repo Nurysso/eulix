@@ -85,7 +85,8 @@ endif
         test test-rust test-go test-python check \
         scripts-help script parser-release \
         repro-prism check-tsx perf-rust-workspace check-prism-v2 repro-all \
-        eval-mcp kb-diff kb-field-usage kb-id-name-check vec-stats
+        eval-mcp kb-diff kb-field-usage kb-id-name-check vec-stats \
+        bench-run bench-compare bench-list bench-clean bench-test
 
 all: help
 
@@ -277,6 +278,13 @@ scripts-help:
 	@echo "  make kb-id-name-check     ARGS=path/to/kb.json (default .eulix/kb.json)"
 	@echo "  make vec-stats            ARGS=path/to/embeddings.bin"
 	@echo "  make script SCRIPT=name.py ARGS='...'   run any file in scripts/"
+	@echo ""
+	@echo "Version benchmark (bench/, state in ~/.Eulix/bench; docs/Architecture/Benchmarking.md):"
+	@echo "  make bench-compare A=v0.8.3 B=HEAD [ARGS='--corpus eulix --groups retrieval']"
+	@echo "  make bench-run REV=HEAD [ARGS=..]   measure one version and save the results"
+	@echo "  make bench-list                     what has been measured"
+	@echo "  make bench-clean ARGS='--work'      free disk space"
+	@echo "  make bench-test                     harness unit tests"
 
 parser-release:
 	cd $(PARSER_DIR) && cargo build --release
@@ -309,6 +317,26 @@ kb-id-name-check:
 
 vec-stats:
 	$(RUN_IN_CALLER) $(PYTHON) $(SCRIPTS_DIR)/vec_stats.py $(ARGS)
+
+# Version benchmark. System python3 (3.11+), not $(PYTHON): that is eulix's own
+# venv, and the harness needs only the standard library.
+BENCH := python3 $(ROOT_DIR)/bench/eulix_bench.py
+
+bench-run:
+	$(RUN_IN_CALLER) $(BENCH) run $(or $(REV),HEAD) $(ARGS)
+
+bench-compare:
+	@test -n "$(A)" -a -n "$(B)" || { echo "usage: make bench-compare A=v0.8.3 B=HEAD [ARGS='..']"; exit 2; }
+	$(RUN_IN_CALLER) $(BENCH) compare $(A) $(B) $(ARGS)
+
+bench-list:
+	$(RUN_IN_CALLER) $(BENCH) list $(ARGS)
+
+bench-clean:
+	$(RUN_IN_CALLER) $(BENCH) clean $(ARGS)
+
+bench-test:
+	python3 -m unittest discover -s $(ROOT_DIR)/bench/tests
 
 # Generic runner: make script SCRIPT=known_issues/cross_language_edges.py ARGS=kb_call_graph.json
 script:
