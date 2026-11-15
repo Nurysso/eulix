@@ -77,6 +77,15 @@ fn rust_import<'a>(
     // The parser retains visibility and `use` on public reexports. These
     // prefixes do not belong to the module root (`pub use self::...`).
     let source = source.split_once(" use ").map_or(source, |(_, path)| path);
+    // The crate a whole use tree starts from (`grep_regex` in
+    // `grep_regex::{A, B}`); empty for `use {a::X, b::Y}`.
+    let tree_root = source
+        .trim()
+        .split("::")
+        .next()
+        .filter(|s| !s.contains('{'))
+        .unwrap_or("")
+        .trim();
     let mut pending = vec![(String::new(), source, None)];
     while let Some((prefix, source, parent_binding)) = pending.pop() {
         let source = source.trim();
@@ -146,7 +155,9 @@ fn rust_import<'a>(
                 && !out.names.contains_key(binding)
                 && !out.namespaces.contains_key(binding)
             {
-                out.rust_foreign_types.entry(binding).or_insert(symbol);
+                out.rust_foreign_types
+                    .entry(binding)
+                    .or_insert((symbol, tree_root));
             }
             continue;
         }
@@ -315,8 +326,8 @@ impl Resolver<'_> {
         seek: Seek,
     ) -> Option<Option<u32>> {
         let imports = &self.imports[file as usize];
-        if let Some(original) = imports.rust_foreign_types.get(binding) {
-            return Some(self.rust_type_outside_crate(original, file));
+        if let Some(&(original, krate)) = imports.rust_foreign_types.get(binding) {
+            return Some(self.rust_type_outside_crate(original, krate, file));
         }
         let original = imports.symbols.get(binding)?;
         let target = imports.names.get(binding).copied().flatten();
@@ -429,9 +440,9 @@ impl Resolver<'_> {
         let receiver = receiver.strip_prefix("new ").unwrap_or(receiver);
         let receiver = receiver.strip_suffix("()").unwrap_or(receiver);
         let imports = &self.imports[file as usize];
-        if let Some(original) = imports.rust_foreign_types.get(receiver) {
+        if let Some(&(original, krate)) = imports.rust_foreign_types.get(receiver) {
             return self
-                .rust_type_outside_crate(original, file)
+                .rust_type_outside_crate(original, krate, file)
                 .and_then(|class| self.receiver_method(class, name));
         }
         // External aliases are authoritative. Internal namespaces without

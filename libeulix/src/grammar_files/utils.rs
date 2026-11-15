@@ -71,6 +71,40 @@ impl Nested {
     }
 }
 
+/// C/C++ nodes that only wrap top-level items: conditional compilation
+/// (include guards, `#ifdef FEATURE`) and `extern "C" { ... }`.
+pub(super) const C_ITEM_WRAPPERS: &[&str] = &[
+    "preproc_if",
+    "preproc_ifdef",
+    "preproc_else",
+    "preproc_elif",
+    "preproc_elifdef",
+    "linkage_specification",
+];
+
+/// The top-level items of a C/C++ file in source order, looking through
+/// `C_ITEM_WRAPPERS` (and the `{ ... }` of `extern "C"`). Both branches of an
+/// `#if`/`#else` are returned: without a preprocessor either may be live.
+pub(super) fn c_top_level_items<'t>(root: Node<'t>) -> Vec<Node<'t>> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        let mut cursor = n.walk();
+        for k in n.children(&mut cursor) {
+            let wrapper = C_ITEM_WRAPPERS.contains(&k.kind())
+                || (k.kind() == "declaration_list" && n.kind() == "linkage_specification");
+            if wrapper {
+                stack.push(k);
+            } else {
+                out.push(k);
+            }
+        }
+    }
+    // Items never overlap, so start offsets give source order.
+    out.sort_by_key(|n| n.start_byte());
+    out
+}
+
 #[allow(clippy::expect_used)] // patterns are compile-time literals; failure = programmer bug at first use
 pub fn static_regex(pattern: &str) -> Regex {
     Regex::new(pattern).expect("static regex pattern must be valid")

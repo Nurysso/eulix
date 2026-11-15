@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex, walk};
+use super::utils::{c_top_level_items, extract_todos, static_regex, walk, C_ITEM_WRAPPERS};
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
 use regex::Regex;
@@ -591,9 +591,8 @@ impl CppParser {
 
     fn extract_imports(&self, root: &Node) -> Vec<Import> {
         let mut imports = Vec::new();
-        let mut cursor = root.walk();
 
-        for child in root.children(&mut cursor) {
+        for child in c_top_level_items(*root) {
             if child.kind() == "preproc_include" {
                 let text = self.get_node_text(&child);
                 if let Some(caps) = INCLUDE_RE.captures(&text) {
@@ -713,7 +712,11 @@ impl CppParser {
                         return Some(Some(body));
                     }
                 }
-                "template_declaration" => {
+                "template_declaration" | "declaration_list" => {
+                    return Some(None);
+                }
+                // include guards, `#ifdef`, `extern "C" { ... }`
+                kind if C_ITEM_WRAPPERS.contains(&kind) => {
                     return Some(None);
                 }
                 _ => {}
@@ -985,7 +988,11 @@ impl CppParser {
                         return Some(Some(body));
                     }
                 }
-                "template_declaration" => {
+                "template_declaration" | "declaration_list" => {
+                    return Some(None);
+                }
+                // include guards, `#ifdef`, `extern "C" { ... }`
+                kind if C_ITEM_WRAPPERS.contains(&kind) => {
                     return Some(None);
                 }
                 _ => {}
@@ -1325,9 +1332,8 @@ impl CppParser {
 
     fn extract_global_vars(&self, root: &Node) -> Vec<GlobalVar> {
         let mut vars = Vec::new();
-        let mut cursor = root.walk();
 
-        for child in root.children(&mut cursor) {
+        for child in c_top_level_items(*root) {
             if child.kind() == "declaration" {
                 let declarator = child.child_by_field_name("declarator");
                 let is_func = declarator
@@ -1352,7 +1358,16 @@ impl CppParser {
             .unwrap_or_default();
 
         let declarator = node.child_by_field_name("declarator")?;
-        let name = self.extract_declarator_name(&declarator);
+        // `int n = 0;` is an init_declarator: the name is its inner
+        // declarator, not the whole `n = 0` text.
+        let name_node = if declarator.kind() == "init_declarator" {
+            declarator
+                .child_by_field_name("declarator")
+                .unwrap_or(declarator)
+        } else {
+            declarator
+        };
+        let name = self.extract_declarator_name(&name_node);
 
         if name.is_empty() {
             return None;
@@ -2024,12 +2039,122 @@ impl CppParser {
     }
 }
 
+/// C++-only syntax, checked on header text with comments, strings and
+/// preprocessor lines removed: a class with a body or base list, a
+/// namespace, a template, an access specifier, or the `::` scope operator.
+static CPP_SYNTAX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    static_regex(concat!(
+        r"\bclass\s+[A-Za-z_]\w*(\s+final)?\s*[:{]",
+        r"|\bnamespace(\s+[A-Za-z_][\w:]*)?\s*\{",
+        r"|\btemplate\s*<",
+        r"|(?m)^\s*(public|private|protected)\s*:",
+        r"|\w::~?\w|::\s*[A-Za-z_]\w*\s*\(",
+        r"|\busing\s+namespace\b",
+    ))
+});
+
+/// Whether a `.h` header is C++ rather than C. The extension is shared, so
+/// only the text can tell; a C header's `extern "C"` guard does not count.
+pub fn looks_like_cpp(src: &str) -> bool {
+    CPP_SYNTAX_RE.is_match(&code_only(src))
+}
+
+/// The source without comments, string/char literals and `#` lines.
+fn code_only(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    let mut line_start = true;
+    while let Some(c) = chars.next() {
+        match c {
+            '/' if chars.peek() == Some(&'/') => {
+                while chars.peek().is_some_and(|&n| n != '\n') {
+                    chars.next();
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = ' ';
+                for n in chars.by_ref() {
+                    if prev == '*' && n == '/' {
+                        break;
+                    }
+                    if n == '\n' {
+                        out.push('\n');
+                    }
+                    prev = n;
+                }
+                out.push(' ');
+            }
+            '"' | '\'' => {
+                let mut escaped = false;
+                for n in chars.by_ref() {
+                    if n == '\n' || (!escaped && n == c) {
+                        break;
+                    }
+                    escaped = !escaped && n == '\\';
+                }
+                out.push(' ');
+            }
+            '#' if line_start => {
+                // a directive, with backslash-continued lines
+                let mut prev = ' ';
+                while let Some(&n) = chars.peek() {
+                    if n == '\n' && prev != '\\' {
+                        break;
+                    }
+                    prev = n;
+                    chars.next();
+                }
+            }
+            _ => out.push(c),
+        }
+        if c == '\n' {
+            line_start = true;
+        } else if !c.is_whitespace() {
+            line_start = false;
+        }
+    }
+    out
+}
+
+/// `class EXPORT_MACRO Name : Base {` / `struct __declspec(dllexport) Name {`:
+/// the export annotation between the keyword and the name.
+static EXPORT_MACRO_RE: LazyLock<Regex> = LazyLock::new(|| {
+    static_regex(concat!(
+        r"\b(?:class|struct)\s+",
+        r"((?:[A-Z][A-Z0-9_]*|__declspec\s*\([^)]*\)|__attribute__\s*\(\([^)]*\)\))\s+)+",
+        r"[A-Za-z_]\w*(?:\s*<[^>{;]*>)?\s*(?:final\s*)?[:{]",
+    ))
+});
+
+/// Without a preprocessor, tree-sitter reads `class LIB Name : Base {` as a
+/// function `Name`, losing the class and its methods. Blank the annotation
+/// with spaces of the same length, so lines and byte offsets do not move.
+fn blank_export_macros(src: &str) -> std::borrow::Cow<'_, str> {
+    if !EXPORT_MACRO_RE.is_match(src) {
+        return std::borrow::Cow::Borrowed(src);
+    }
+    let mut out = src.to_string();
+    for caps in EXPORT_MACRO_RE.captures_iter(src) {
+        if let Some(m) = caps.get(1) {
+            let blank: String = m
+                .as_str()
+                .chars()
+                .map(|c| if c == '\n' { '\n' } else { ' ' })
+                .collect();
+            out.replace_range(m.range(), &blank);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 pub fn parse_source(path: &Path, source_code: &str) -> Result<(String, FileData), String> {
     // Strips leading "./" or ".\" if present, otherwise leaves path as is
     let clean_path = path.strip_prefix("./").unwrap_or(path);
     let path_str = clean_path.to_string_lossy().to_string();
 
-    let mut parser = CppParser::new(source_code.to_string(), path_str.clone());
+    let source_code = blank_export_macros(source_code);
+    let mut parser = CppParser::new(source_code.into_owned(), path_str.clone());
     let file_data = parser.parse()?;
 
     Ok((path_str, file_data))
@@ -2044,6 +2169,93 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
 #[cfg(test)]
 mod tests {
     #![expect(clippy::expect_used)]
+
+    #[test]
+    fn cpp_headers_are_told_apart_from_c_headers() {
+        for cpp in [
+            "class Box {\npublic:\n  int size() const { return n; }\n};",
+            "namespace tinyxml2 {\nint f();\n}",
+            "template <typename T> T id(T x) { return x; }",
+            "struct S { int f(); };\nint S::f() { return 1; }",
+            "class Fwd;\nusing namespace std;",
+        ] {
+            assert!(super::looks_like_cpp(cpp), "{cpp}");
+        }
+        for c in [
+            "#ifdef __cplusplus\nextern \"C\" {\n#endif\nint cJSON_Version(void);\n#ifdef __cplusplus\n}\n#endif",
+            "/* see Foo::bar and class X { } */\nstruct point { int x; };",
+            "#define CAT(a, b) a::b\nconst char *s = \"a::b class X {\";\nstruct class_list;",
+            "typedef struct node { struct node *next; } node;",
+        ] {
+            assert!(!super::looks_like_cpp(c), "{c}");
+        }
+    }
+
+    #[test]
+    fn items_inside_include_guards_and_extern_c_are_extracted() {
+        let src = "#ifndef BOX_H\n#define BOX_H\n#include <vector>\nnamespace ns {\nclass Box {\npublic:\n  int size() const { return 1; }\n};\n}\nextern \"C\" {\nint c_api() { return 2; }\n}\n#if FEATURE\nint feature() { return 3; }\n#endif\nstatic int counter = 0;\n#endif\n";
+        let (_, fd) = crate::grammar_files::parse_source(std::path::Path::new("box.hpp"), src)
+            .expect("parses");
+        let classes: Vec<&str> = fd.classes.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(classes, vec!["Box"]);
+        assert_eq!(fd.classes[0].methods.len(), 1);
+        let fns: Vec<&str> = fd.functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            fns.contains(&"c_api") && fns.contains(&"feature"),
+            "{fns:?}"
+        );
+        assert!(fd.imports.iter().any(|i| i.module == "vector"));
+        assert!(fd.global_vars.iter().any(|v| v.name == "counter"));
+    }
+
+    #[test]
+    fn export_macros_between_class_and_name_do_not_hide_the_class() {
+        let src = "#define LIB\nclass LIB XMLNode : public Base {\npublic:\n  int f() { return g(); }\n};\nstruct __declspec(dllexport) Pt { int x() { return 0; } };\nclass Q_CORE_EXPORT Tmpl<int> final {\n  void h() {}\n};\n";
+        let (_, fd) =
+            crate::grammar_files::parse_source(std::path::Path::new("lib.h"), src).expect("parses");
+        let names: Vec<&str> = fd.classes.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            names.contains(&"XMLNode") && names.contains(&"Pt"),
+            "{names:?}"
+        );
+        let node = fd
+            .classes
+            .iter()
+            .find(|c| c.name == "XMLNode")
+            .expect("XMLNode");
+        assert_eq!(node.line_start, 2);
+        assert_eq!(
+            node.methods
+                .iter()
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["f"]
+        );
+        assert!(!fd.functions.iter().any(|f| f.name == "XMLNode"));
+        // plain declarations are untouched
+        assert_eq!(super::blank_export_macros("class A {};"), "class A {};");
+    }
+
+    #[test]
+    fn a_cpp_header_with_the_h_extension_is_parsed_as_cpp() {
+        let src = "class Box {\npublic:\n  int size() const { return n; }\n  int twice() const { return size() * 2; }\nprivate:\n  int n = 1;\n};\n";
+        let (_, fd) =
+            crate::grammar_files::parse_source(std::path::Path::new("box.h"), src).expect("parses");
+        assert_eq!(fd.language, "cpp");
+        let class = fd.classes.iter().find(|c| c.name == "Box").expect("Box");
+        let names: Vec<&str> = class.methods.iter().map(|m| m.name.as_str()).collect();
+        assert!(
+            names.contains(&"size") && names.contains(&"twice"),
+            "{names:?}"
+        );
+
+        let (_, c) = crate::grammar_files::parse_source(
+            std::path::Path::new("point.h"),
+            "struct point { int x; };\nint point_x(const struct point *p);\n",
+        )
+        .expect("parses");
+        assert_eq!(c.language, "c");
+    }
 
     #[test]
     fn deep_expression_on_small_stack() {

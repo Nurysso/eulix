@@ -106,6 +106,65 @@ static OPERATOR_TRAIT_MAP: LazyLock<HashMap<&'static str, &'static str>> = LazyL
 
 const NESTED_KINDS: &[&str] = &["function_item"];
 
+/// The type an `impl` block is for, as a bare name: `Wrapper<T>`,
+/// `crate::m::Wrapper<T>`, `&'a mut P`, `Box<dyn Tr>` -> `Wrapper`, `Wrapper`,
+/// `P`, `Box`.
+fn impl_type_name(raw: &str) -> String {
+    let mut t = raw.trim();
+    loop {
+        let before = t;
+        t = t.trim_start_matches('&').trim_start();
+        if let Some(rest) = t.strip_prefix('\'') {
+            // a lifetime: `'a mut P` -> `mut P`
+            t = rest
+                .trim_start_matches(|c: char| c.is_alphanumeric() || c == '_')
+                .trim_start();
+        }
+        for kw in ["mut ", "dyn ", "const "] {
+            t = t.strip_prefix(kw).unwrap_or(t).trim_start();
+        }
+        if t == before {
+            break;
+        }
+    }
+    let base = t.split('<').next().unwrap_or(t).trim();
+    base.rsplit("::").next().unwrap_or(base).trim().to_string()
+}
+
+/// Type parameter names of an impl: `<'a, T: Clone, const N: usize, U = X>`
+/// -> `T`, `N`, `U`.
+fn impl_generic_params(text: &str) -> Vec<String> {
+    let inner = text.trim().trim_start_matches('<').trim_end_matches('>');
+    let (mut depth, mut start, mut parts) = (0usize, 0usize, Vec::new());
+    for (i, ch) in inner.char_indices() {
+        match ch {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(&inner[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&inner[start..]);
+    parts
+        .into_iter()
+        .map(str::trim)
+        .filter(|p| !p.starts_with('\''))
+        .map(|p| p.strip_prefix("const ").unwrap_or(p))
+        .map(|p| {
+            p.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect::<String>()
+        })
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Id prefix of an impl-only entry: methods of a type declared elsewhere.
+pub const IMPL_PREFIX: &str = "impl_";
+
 pub struct RustParser {
     source_code: String,
     file_path: String,
@@ -425,14 +484,37 @@ impl RustParser {
         None
     }
 
+    /// The file root and the body of every inline `mod name { ... }` in it,
+    /// nested ones included. Items (functions, types, impls, consts) live
+    /// directly in one of these; `mod tests` blocks are the common case.
+    /// Walked with an explicit stack, like the rest of the parser.
+    fn item_scopes<'t>(&self, root: &Node<'t>) -> Vec<Node<'t>> {
+        let mut scopes = vec![*root];
+        let mut i = 0;
+        while i < scopes.len() {
+            let scope = scopes[i];
+            let mut cursor = scope.walk();
+            for child in scope.children(&mut cursor) {
+                if child.kind() == "mod_item" {
+                    if let Some(body) = child.child_by_field_name("body") {
+                        scopes.push(body);
+                    }
+                }
+            }
+            i += 1;
+        }
+        scopes
+    }
+
     fn extract_functions(&self, root: &Node) -> Vec<Function> {
         let mut functions = Vec::new();
-        let mut cursor = root.walk();
-
-        for child in root.children(&mut cursor) {
-            if child.kind() == "function_item" {
-                if let Some(func) = self.parse_function(&child, "", None) {
-                    functions.push(func);
+        for scope in self.item_scopes(root) {
+            let mut cursor = scope.walk();
+            for child in scope.children(&mut cursor) {
+                if child.kind() == "function_item" {
+                    if let Some(func) = self.parse_function(&child, "", None) {
+                        functions.push(func);
+                    }
                 }
             }
         }
@@ -604,9 +686,15 @@ impl RustParser {
     fn extract_structs_and_enums(&self, root: &Node) -> Vec<Class> {
         let mut items: Vec<Class> = Vec::new();
         let mut methods_map: BTreeMap<String, Vec<Function>> = BTreeMap::new();
-        let mut cursor = root.walk();
+        // First and last line of each type's impl blocks in this file.
+        let mut impl_spans: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        let scopes = self.item_scopes(root);
+        let children = scopes.iter().flat_map(|scope| {
+            let mut cursor = scope.walk();
+            scope.children(&mut cursor).collect::<Vec<_>>()
+        });
 
-        for child in root.children(&mut cursor) {
+        for child in children {
             match child.kind() {
                 "struct_item" => {
                     if let Some(class) = self.parse_struct(&child) {
@@ -633,11 +721,7 @@ impl RustParser {
                     let trait_type = child.child_by_field_name("trait");
                     let self_type = child
                         .child_by_field_name("type")
-                        .map(|t| {
-                            let raw = self.get_node_text(&t);
-                            let base = raw.split('<').next().unwrap_or(&raw).trim();
-                            base.rsplit("::").next().unwrap_or(base).trim().to_string()
-                        })
+                        .map(|t| impl_type_name(&self.get_node_text(&t)))
                         .unwrap_or_default();
 
                     let (impl_trait_name, key) = match &trait_type {
@@ -648,8 +732,24 @@ impl RustParser {
                         }
                         None => (None, self_type.clone()),
                     };
+                    // `impl<P: Tr> Tr for &mut P` is for every P, not a type
+                    // named P: bucket it as `<P>`, which no type is called.
+                    let generic = child
+                        .child_by_field_name("type_parameters")
+                        .is_some_and(|tp| {
+                            impl_generic_params(&self.get_node_text(&tp)).contains(&key)
+                        });
+                    let bucket = if generic {
+                        format!("<{key}>")
+                    } else {
+                        key.clone()
+                    };
 
                     if !key.is_empty() {
+                        let (start, end) =
+                            (child.start_position().row + 1, child.end_position().row + 1);
+                        let span = impl_spans.entry(bucket.clone()).or_insert((start, end));
+                        *span = (span.0.min(start), span.1.max(end));
                         if let Some(body) = child.child_by_field_name("body") {
                             let ctx = impl_trait_name.as_deref().map(|t| TraitContext {
                                 trait_name: t.to_string(),
@@ -662,7 +762,7 @@ impl RustParser {
                                     if let Some(method) =
                                         self.parse_function(&item, &key, ctx.as_ref())
                                     {
-                                        methods_map.entry(key.clone()).or_default().push(method);
+                                        methods_map.entry(bucket.clone()).or_default().push(method);
                                     }
                                 }
                             }
@@ -677,6 +777,31 @@ impl RustParser {
             if let Some(methods) = methods_map.remove(&class.name) {
                 class.methods = methods;
             }
+        }
+
+        // `impl` blocks for a type declared in another file (or another
+        // crate) keep their methods in an impl-only entry, `impl_{Type}`.
+        // PRISM v2 attaches its methods to the type it resolves to.
+        for (key, methods) in methods_map {
+            let (line_start, line_end) = impl_spans.get(&key).copied().unwrap_or((0, 0));
+            items.push(Class {
+                id: format!("{}{}::{}", IMPL_PREFIX, key, self.file_path),
+                name: key,
+                bases: vec![],
+                docstring: String::new(),
+                line_start,
+                line_end,
+                methods,
+                attributes: vec![],
+                decorators: vec!["impl".to_string()],
+                lang_info: LanguageSpecificInfo {
+                    rust: Some(Box::new(RustInfo {
+                        item_kind: Some("impl".to_string()),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+            });
         }
 
         items
@@ -949,16 +1074,14 @@ impl RustParser {
 
     fn extract_global_vars(&self, root: &Node) -> Vec<GlobalVar> {
         let mut vars = Vec::new();
-        let mut cursor = root.walk();
-
-        for child in root.children(&mut cursor) {
-            match child.kind() {
-                "const_item" | "static_item" => {
+        for scope in self.item_scopes(root) {
+            let mut cursor = scope.walk();
+            for child in scope.children(&mut cursor) {
+                if matches!(child.kind(), "const_item" | "static_item") {
                     if let Some(v) = self.parse_global_var(&child) {
                         vars.push(v);
                     }
                 }
-                _ => {}
             }
         }
 
@@ -1554,6 +1677,116 @@ mod tests {
             .as_deref()
             .expect("rust info present");
         assert_eq!(info.derives, vec!["Debug", "Clone", "PartialEq"]);
+    }
+
+    #[test]
+    fn items_inside_inline_modules_are_extracted() {
+        // PARSE-5: only the file root used to be scanned.
+        let src = r#"
+pub fn top() { inner::a(); }
+mod inner {
+    pub fn a() { b(); }
+    fn b() {}
+    pub struct S;
+    impl S { pub fn x(&self) {} }
+    pub const LIMIT: usize = 3;
+    mod deeper { pub fn c() {} }
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn t() { super::top(); }
+}
+mod declared_elsewhere;
+"#;
+        let fd = parse_source(Path::new("lib.rs"), src)
+            .expect("valid rust parses")
+            .1;
+        let fns: Vec<&str> = fd.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(fns, vec!["top", "a", "b", "t", "c"]);
+        assert_eq!(fd.classes.len(), 1);
+        assert_eq!(fd.classes[0].name, "S");
+        let methods: Vec<&str> = fd.classes[0]
+            .methods
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        assert_eq!(methods, vec!["x"]);
+        assert!(fd.global_vars.iter().any(|v| v.name == "LIMIT"));
+        let a = fd.functions.iter().find(|f| f.name == "a").expect("a");
+        assert!(
+            a.calls.iter().any(|c| c.callee == "b"),
+            "calls inside a module are kept"
+        );
+    }
+
+    #[test]
+    fn impl_type_names_drop_references_lifetimes_and_paths() {
+        for (raw, want) in [
+            ("Wrapper<T>", "Wrapper"),
+            ("crate::m::Wrapper<T>", "Wrapper"),
+            ("&'a mut P", "P"),
+            ("&mut Vec<u8>", "Vec"),
+            ("&'static str", "str"),
+            ("Box<dyn Tr>", "Box"),
+        ] {
+            assert_eq!(impl_type_name(raw), want, "{raw}");
+        }
+    }
+
+    #[test]
+    fn blanket_impls_are_not_keyed_as_a_type_named_like_the_parameter() {
+        let src = "pub struct P; impl<'a, P: Tr> Tr for &'a mut P { fn go(&self) {} }";
+        let fd = parse_source(Path::new("src/lib.rs"), src)
+            .expect("parses")
+            .1;
+        let p = fd
+            .classes
+            .iter()
+            .find(|c| c.id == "struct_P::src/lib.rs")
+            .expect("P");
+        assert!(p.methods.is_empty(), "the blanket impl is not P's");
+        assert!(fd.classes.iter().any(|c| c.id == "impl_<P>::src/lib.rs"));
+        assert_eq!(
+            impl_generic_params("<'a, T: Clone + Iterator<Item = u8>, const N: usize, U = X>"),
+            vec!["T", "N", "U"]
+        );
+    }
+
+    #[test]
+    fn impl_for_a_type_declared_elsewhere_keeps_its_methods() {
+        // The impl's type is not in this file: its methods used to be dropped.
+        let src = r#"
+use crate::E;
+impl E { pub fn show(&self) { helper(); } }
+impl std::fmt::Display for crate::E {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { Ok(()) }
+}
+pub struct Local;
+impl Local { fn own(&self) {} }
+fn helper() {}
+"#;
+        let fd = parse_source(Path::new("src/other.rs"), src)
+            .expect("valid rust parses")
+            .1;
+        let local = fd
+            .classes
+            .iter()
+            .find(|c| c.name == "Local")
+            .expect("Local");
+        assert_eq!(local.methods.len(), 1);
+        let e = fd
+            .classes
+            .iter()
+            .find(|c| c.id == "impl_E::src/other.rs")
+            .expect("impl-only entry for E");
+        let ids: Vec<&str> = e.methods.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["method_E_show::src/other.rs", "method_E_fmt::src/other.rs"]
+        );
+        assert_eq!((e.line_start, e.line_end), (3, 6));
+        assert_eq!(e.decorators, vec!["impl"]);
     }
 
     #[test]

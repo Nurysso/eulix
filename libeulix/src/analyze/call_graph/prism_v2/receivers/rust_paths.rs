@@ -60,6 +60,31 @@ fn standalone_target(path: &str) -> bool {
     })
 }
 
+/// `crates/regex/src` (a crate root) against an imported crate name:
+/// the package directory `regex` matches `regex` and `grep_regex`.
+fn package_matches(crate_root: &str, krate: &str) -> bool {
+    if krate.is_empty() {
+        return false;
+    }
+    let package = crate_root.strip_suffix("/src").unwrap_or(crate_root);
+    let dir = package
+        .rsplit('/')
+        .next()
+        .unwrap_or(package)
+        .replace('-', "_");
+    !dir.is_empty() && (krate == dir || krate.ends_with(&format!("_{dir}")))
+}
+
+/// A file somewhere under a `tests/`, `benches/` or `examples/` target
+/// directory (`tests/util.rs`, `tests/common/mod.rs`): a module of a test or
+/// example target, never part of the library another crate imports.
+fn standalone_dir(path: &str) -> bool {
+    ["tests/", "benches/", "examples/"]
+        .iter()
+        .any(|directory| path.starts_with(directory) || path.contains(&format!("/{directory}")))
+        && !path.contains("/src/")
+}
+
 fn crate_root<'a>(path: &'a str, index: &ModuleIndex<'_>) -> &'a str {
     if standalone_target(path) {
         return dir_of(path);
@@ -172,7 +197,17 @@ impl Resolver<'_> {
         false
     }
 
-    pub(super) fn rust_type_outside_crate(&self, name: &str, file: u32) -> Option<u32> {
+    /// `krate` is the crate root the type was imported from (`grep_regex`).
+    /// Without Cargo metadata the package name is unknown, but workspaces
+    /// usually name a package after its directory, often with a shared
+    /// prefix (`grep-regex` in `crates/regex`); a candidate whose package
+    /// directory matches that way is preferred over other crates' homonyms.
+    pub(super) fn rust_type_outside_crate(
+        &self,
+        name: &str,
+        krate: &str,
+        file: u32,
+    ) -> Option<u32> {
         let caller = self.files[file as usize];
         let root = crate_root(caller, self.module_index);
         let root_files = module_file(root, caller, self.module_index);
@@ -187,6 +222,11 @@ impl Resolver<'_> {
                     return false;
                 }
                 let target = self.files[target_file];
+                // Another crate's tests/benches/examples files are their own
+                // targets; nothing outside them can import their types.
+                if standalone_target(target) || standalone_dir(target) {
+                    return false;
+                }
                 let target_root = crate_root(target, self.module_index);
                 let target_roots = module_file(target_root, target, self.module_index);
                 if self.rust_crate_contains(root_files, target_file as u32)
@@ -201,8 +241,18 @@ impl Resolver<'_> {
                     (Some(a), Some(b)) => a != b,
                     _ => root != target_root,
                 }
-            });
-        let (found, count) = self.pick(candidates, Want::Class, true, file, true);
+            })
+            .collect::<Vec<_>>();
+        let named: Vec<u32> = candidates
+            .iter()
+            .copied()
+            .filter(|&c| {
+                let target = self.files[self.nodes[c as usize].file as usize];
+                package_matches(crate_root(target, self.module_index), krate)
+            })
+            .collect();
+        let pool = if named.is_empty() { candidates } else { named };
+        let (found, count) = self.pick(pool.into_iter(), Want::Class, true, file, true);
         (count <= self.max_ambiguous.max(1))
             .then_some(found)
             .flatten()
@@ -231,9 +281,9 @@ impl Resolver<'_> {
         // A module path and a callable value may share a Rust binding name.
         // Preserve the module for qualified calls without losing bare imports.
         if !module_binding {
-            if let Some(original) = imports.rust_foreign_types.get(receiver) {
+            if let Some(&(original, krate)) = imports.rust_foreign_types.get(receiver) {
                 return Some(
-                    self.rust_type_outside_crate(original, file)
+                    self.rust_type_outside_crate(original, krate, file)
                         .and_then(|class| self.receiver_method(class, name)),
                 );
             }

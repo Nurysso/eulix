@@ -94,13 +94,15 @@ fn rust_standalone_targets_can_import_the_package_type_by_crate_name() {
         );
 
         // Separate standalone targets are distinct crates, despite sharing
-        // a directory. A type in the caller file remains excluded.
+        // a directory, and none can import another: `use util::Builder`
+        // names the package's library, never a sibling test/bench/example.
+        // A type in the caller file remains excluded as well.
         let g = build_call_graph_v2(&structure(&[
             (caller, "use util::Builder; mod local { pub struct Builder; impl Builder { pub fn new() {} } } fn run() { Builder::new(); }"),
             (other_target, "pub struct Builder; impl Builder { pub fn new() {} }"),
         ]));
         assert!(
-            edge(
+            !edge(
                 &g,
                 &format!("func_run::{caller}"),
                 &format!("method_Builder_new::{other_target}")

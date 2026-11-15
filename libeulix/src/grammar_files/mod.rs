@@ -19,6 +19,15 @@ use std::path::Path;
 
 pub fn parse_source(path: &Path, src: &str) -> Result<(String, FileData), String> {
     match Language::detect(path) {
+        // `.h` is shared by C and C++; a C++ header needs the C++ grammar.
+        Language::C
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("h"))
+                && cpp::looks_like_cpp(src) =>
+        {
+            cpp::parse_source(path, src)
+        }
         Language::C => c::parse_source(path, src),
         Language::Cpp => cpp::parse_source(path, src),
         Language::Python => python::parse_source(path, src),

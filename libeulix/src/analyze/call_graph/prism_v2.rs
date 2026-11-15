@@ -41,6 +41,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 mod php;
 mod receivers;
 use crate::grammar_files::php::FALLBACK_TAG;
+use crate::grammar_files::rust::IMPL_PREFIX;
 use crate::grammar_files::utils::NESTED_TAG;
 use php::{include_closures, php_name, php_namespace, IncludeIndex, PhpHierarchy};
 
@@ -172,8 +173,9 @@ struct FileImports<'a> {
     internal_names: HashSet<&'a str>,
     /// Rust binding -> crate-local module path; None is explicitly external.
     rust_paths: Map<&'a str, Option<String>>,
-    /// Unknown-root Rust type imports bind in another crate, not this one.
-    rust_foreign_types: Map<&'a str, &'a str>,
+    /// Unknown-root Rust type imports bind in another crate, not this one:
+    /// binding -> (type name, crate root as written in the `use`).
+    rust_foreign_types: Map<&'a str, (&'a str, &'a str)>,
     /// Namespace binding -> original module path (for dotted Python receivers).
     namespace_modules: Map<&'a str, Cow<'a, str>>,
     /// TypeScript reexports, distinct from imports visible in this file.
@@ -529,6 +531,14 @@ impl<'a> Resolver<'a> {
             let n = &self.nodes[c as usize];
             // PHP and the other languages never call into each other.
             if self.php[n.file as usize] != self.php[file as usize] {
+                continue;
+            }
+            // Go and C have no constructor calls (`T(x)` is a conversion or
+            // a cast, `T{}` a literal), so a type is never what a call runs.
+            if n.kind == Kind::Class
+                && !matches!(want, Seek::Shape(Want::Class) | Seek::Only(Kind::Class))
+                && matches!(self.languages[file as usize], "go" | "c")
+            {
                 continue;
             }
             let Some(r) = rank_seek(want, n.kind, strict) else {
@@ -909,7 +919,11 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                 for class in &fd.classes {
                     ex.nodes.push(Node {
                         id: &class.id,
-                        name: if php {
+                        name: if class.id.starts_with(IMPL_PREFIX) {
+                            // An impl-only entry is not a type: it must never
+                            // answer a lookup for the type's name.
+                            Cow::Borrowed(&class.id)
+                        } else if php {
                             php_name(&class.name, &class.lang_info)
                         } else if receivers::enabled(&fd.language) {
                             Cow::Borrowed(&class.name)
@@ -1088,6 +1102,37 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
         strict_imports: opts.strict_imports,
     };
 
+    // Rust `impl` blocks in another file than their type (`impl_{Type}`
+    // entries): resolve the type from that file and give it the methods.
+    let impl_owner: Map<u32, u32> = nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.kind == Kind::Class && n.id.starts_with(IMPL_PREFIX))
+        .filter_map(|(i, n)| {
+            let name = n.id.strip_prefix(IMPL_PREFIX)?.rsplit_once("::")?.0;
+            let ty = r.resolve_base(name, n.file)?;
+            (ty as usize != i && nodes[ty as usize].kind == Kind::Class).then_some((i as u32, ty))
+        })
+        .collect();
+    fn rebind<'s>(v: &[(u32, &'s str, u32)], owner: &Map<u32, u32>) -> Vec<(u32, &'s str, u32)> {
+        let mut v: Vec<_> = v
+            .iter()
+            .map(|&(c, name, m)| (owner.get(&c).copied().unwrap_or(c), name, m))
+            .collect();
+        v.sort_unstable();
+        v
+    }
+    let rebound = (!impl_owner.is_empty()).then(|| {
+        (
+            rebind(&methods, &impl_owner),
+            rebind(&legacy_methods, &impl_owner),
+        )
+    });
+    if let Some((m, l)) = &rebound {
+        r.methods = m;
+        r.legacy_methods = l;
+    }
+
     // 3. Inheritance edges, then the class hierarchy used by method lookup.
     //
     // Inheritance has to be resolved and materialised before calls, because
@@ -1176,6 +1221,8 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                     let Some(&cidx) = r.node_map.get(class.id.as_str()) else {
                         continue;
                     };
+                    // `self` inside an impl-only entry is the type it extends.
+                    let cidx = impl_owner.get(&cidx).copied().unwrap_or(cidx);
                     for m in &class.methods {
                         let Some(&from) = r.node_map.get(m.id.as_str()) else {
                             continue;

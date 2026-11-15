@@ -259,3 +259,26 @@ fn nested_callback_receiver_is_not_inferred_from_a_unique_method() {
         "method_Request_header::app.ts"
     ));
 }
+#[test]
+fn go_calls_never_land_on_a_struct_of_the_same_name() {
+    // PRISM-10: `c.JSON(...)` linked to `type JSON struct` in another package.
+    let g = graph(&[
+        ("render/json.go", "package render\n\ntype JSON struct{ Data any }\n"),
+        (
+            "ctx.go",
+            "package demo\n\ntype Ctx struct{}\n\nfunc (c *Ctx) JSON(code int) {}\n\nfunc handle(c *Ctx) {\n\tc.JSON(200)\n\tError()\n}\n\ntype Error struct{}\n",
+        ),
+    ]);
+    assert!(!g
+        .edges
+        .iter()
+        .any(|e| e.edge_type == "call" && e.to.starts_with("struct_")));
+}
+#[test]
+fn c_calls_never_land_on_a_struct_of_the_same_name() {
+    let g = graph(&[(
+        "a.c",
+        "struct point { int x; };\nint run(void) { return point(); }\n",
+    )]);
+    assert!(!edge(&g, "func_run::a.c", "struct_point::a.c"));
+}

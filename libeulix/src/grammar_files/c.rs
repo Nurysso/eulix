@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex, walk};
+use super::utils::{c_top_level_items, extract_todos, static_regex, walk};
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
 use regex::Regex;
@@ -336,9 +336,8 @@ impl CParser {
 
     fn extract_imports(&self, root: &Node) -> Vec<Import> {
         let mut imports = Vec::new();
-        let mut cursor = root.walk();
 
-        for child in root.children(&mut cursor) {
+        for child in c_top_level_items(*root) {
             if child.kind() == "preproc_include" {
                 let text = self.get_node_text(&child);
                 if let Some(caps) = INCLUDE_RE.captures(&text) {
@@ -404,9 +403,8 @@ impl CParser {
         fn_ptr_map: &HashMap<String, String>,
     ) -> Vec<Function> {
         let mut functions = Vec::new();
-        let mut cursor = root.walk();
 
-        for child in root.children(&mut cursor) {
+        for child in c_top_level_items(*root) {
             if child.kind() == "function_definition" {
                 if let Some(func) = self.parse_function(&child, "", fn_ptr_map) {
                     functions.push(func);
@@ -934,9 +932,8 @@ impl CParser {
 
     fn extract_structs(&self, root: &Node) -> Vec<Class> {
         let mut structs = Vec::new();
-        let mut cursor = root.walk();
 
-        for child in root.children(&mut cursor) {
+        for child in c_top_level_items(*root) {
             match child.kind() {
                 "struct_specifier" | "union_specifier" => {
                     if let Some(s) = self.parse_struct_specifier(&child) {
@@ -1180,8 +1177,7 @@ impl CParser {
 
     fn extract_global_vars(&self, root: &Node) -> Vec<GlobalVar> {
         let mut vars = Vec::new();
-        let mut cursor = root.walk();
-        for child in root.children(&mut cursor) {
+        for child in c_top_level_items(*root) {
             if child.kind() == "declaration"
                 && child
                     .child_by_field_name("declarator")
@@ -1404,6 +1400,36 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
 mod tests {
     #![expect(clippy::expect_used)]
     #![expect(clippy::unwrap_used)]
+
+    #[test]
+    fn items_inside_include_guards_ifdefs_and_extern_c_are_extracted() {
+        let src = r#"#ifndef POINT_H
+#define POINT_H
+#include "other.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+struct point { int x; };
+static int GLOBAL_N = 3;
+int point_x(const struct point *p) { return helper(p); }
+#ifdef FAST
+static int helper(const struct point *p) { return p->x; }
+#else
+static int helper(const struct point *p) { return p->x + 0; }
+#endif
+#ifdef __cplusplus
+}
+#endif
+#endif
+"#;
+        let (_, fd) = crate::grammar_files::parse_source(std::path::Path::new("point.c"), src)
+            .expect("parses");
+        let fns: Vec<&str> = fd.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(fns, vec!["point_x", "helper", "helper"]);
+        assert!(fd.classes.iter().any(|c| c.name == "point"));
+        assert!(fd.imports.iter().any(|i| i.module == "other.h"));
+        assert!(fd.global_vars.iter().any(|v| v.name == "GLOBAL_N"));
+    }
 
     #[test]
     fn deep_expression_on_small_stack() {

@@ -321,3 +321,116 @@ fn rust_integration_test_keeps_imported_tuple_struct() {
         "struct_Record::crates/example/src/lib.rs"
     ));
 }
+#[test]
+fn rust_type_from_another_crate_skips_that_crates_test_targets() {
+    // A file under another crate's tests/, benches/ or examples/ is its own
+    // target and can never be imported, so its homonym must not win.
+    let g = graph(&[
+        (
+            "crates/printer/src/summary.rs",
+            "#[cfg(test)] mod tests { use grep_regex::RegexMatcher; #[test] fn t() { let m = RegexMatcher::new(\"a\"); } }",
+        ),
+        ("crates/regex/src/lib.rs", "mod matcher; pub use matcher::RegexMatcher;"),
+        (
+            "crates/regex/src/matcher.rs",
+            "pub struct RegexMatcher; impl RegexMatcher { pub fn new(p: &str) -> RegexMatcher { RegexMatcher } }",
+        ),
+        (
+            "crates/matcher/tests/util.rs",
+            "pub struct RegexMatcher; impl RegexMatcher { pub fn new(p: &str) -> RegexMatcher { RegexMatcher } }",
+        ),
+    ]);
+    assert!(!edge(
+        &g,
+        "func_t::crates/printer/src/summary.rs",
+        "method_RegexMatcher_new::crates/matcher/tests/util.rs"
+    ));
+    assert!(edge(
+        &g,
+        "func_t::crates/printer/src/summary.rs",
+        "method_RegexMatcher_new::crates/regex/src/matcher.rs"
+    ));
+}
+#[test]
+fn rust_imported_crate_name_picks_its_package_among_homonyms() {
+    // `grep_regex` is the package in crates/regex; crates/pcre2 has a
+    // RegexMatcher too, and neither is the caller's crate.
+    let g = graph(&[
+        (
+            "crates/printer/src/summary.rs",
+            "use grep_regex::RegexMatcher; fn t() { let m = RegexMatcher::new(\"a\"); }",
+        ),
+        (
+            "crates/pcre2/src/matcher.rs",
+            "pub struct RegexMatcher; impl RegexMatcher { pub fn new(p: &str) -> RegexMatcher { RegexMatcher } }",
+        ),
+        (
+            "crates/regex/src/matcher.rs",
+            "pub struct RegexMatcher; impl RegexMatcher { pub fn new(p: &str) -> RegexMatcher { RegexMatcher } }",
+        ),
+    ]);
+    assert!(edge(
+        &g,
+        "func_t::crates/printer/src/summary.rs",
+        "method_RegexMatcher_new::crates/regex/src/matcher.rs"
+    ));
+    assert!(!edge(
+        &g,
+        "func_t::crates/printer/src/summary.rs",
+        "method_RegexMatcher_new::crates/pcre2/src/matcher.rs"
+    ));
+}
+#[test]
+fn rust_impl_in_another_file_gives_its_methods_to_the_type() {
+    let g = graph(&[
+        (
+            "src/lib.rs",
+            "mod other; pub struct E; impl E { fn go(&self) { self.show(); Self::make(); } } pub fn run() { E::make(); }",
+        ),
+        (
+            "src/other.rs",
+            "use crate::E; impl E { pub fn show(&self) { helper(); } pub fn make() -> E { E } pub fn twice(&self) { self.go(); } } fn helper() {}",
+        ),
+    ]);
+    // ...and `self` in the other impl reaches the type's own methods.
+    assert!(edge(
+        &g,
+        "method_E_twice::src/other.rs",
+        "method_E_go::src/lib.rs"
+    ));
+    // `self` / `Self` in the type's own file reach methods of its other impl.
+    assert!(edge(
+        &g,
+        "method_E_go::src/lib.rs",
+        "method_E_show::src/other.rs"
+    ));
+    assert!(edge(
+        &g,
+        "method_E_go::src/lib.rs",
+        "method_E_make::src/other.rs"
+    ));
+    assert!(edge(
+        &g,
+        "func_run::src/lib.rs",
+        "method_E_make::src/other.rs"
+    ));
+    assert!(edge(
+        &g,
+        "method_E_show::src/other.rs",
+        "func_helper::src/other.rs"
+    ));
+    // The impl-only entry is not a type a call can land on.
+    assert!(!g.edges.iter().any(|e| e.to.starts_with("impl_")));
+}
+#[test]
+fn rust_impl_of_a_foreign_type_keeps_its_methods_without_a_owner() {
+    let g = graph(&[(
+        "src/lib.rs",
+        "trait Shout { fn shout(&self); } impl Shout for String { fn shout(&self) { loud(); } } fn loud() {}",
+    )]);
+    assert!(edge(
+        &g,
+        "method_String_shout::src/lib.rs",
+        "func_loud::src/lib.rs"
+    ));
+}
