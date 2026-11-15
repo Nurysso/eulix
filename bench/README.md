@@ -10,6 +10,8 @@ make bench-list                                    # what has been measured
 make bench-test                                    # harness unit tests
 ```
 
+To time just the parser binary you have built, with no comparison and no embedding, use `scripts/parser_perf.sh -t 12 -p 2 <repo> [<repo>...]` (three cold runs per repo by default). The parser numbers in the READMEs come from it.
+
 Results are saved in `~/.Eulix/bench`, keyed by commit, so a version is measured once. Reports go to `~/.Eulix/bench/reports/`.
 
 | Path | What it holds |

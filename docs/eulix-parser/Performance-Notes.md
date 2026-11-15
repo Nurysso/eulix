@@ -4,8 +4,8 @@ This page collects the measured performance of `eulix_parser` and the lessons re
 
 > **Crate / path:** `eulix-parser/`  
 > **Language:** Rust  
-> **Status:** reference; numbers are from version 0.8.1 and were not re-measured for this page  
-> **Last verified against:** `ad744e9` (code); benchmark figures come from the README
+> **Status:** reference; numbers are from version 0.9.0 (re-measured 2026-11-15)  
+> **Last verified against:** `5ecd16d` (code); figures from `scripts/parser_perf.sh`
 
 ## Overview
 
@@ -17,45 +17,46 @@ Performance decisions in this project were made from measurements, and some of t
 
 ## How It Works
 
-The benchmark below is a single run on the Linux kernel, on an AMD Ryzen 5 5600X with 12 parser threads and PRISM v2:
+The benchmark below is the median of three cold runs on the Linux kernel, on an AMD Ryzen 5 5600X with 12 parser threads and PRISM v2 (eulix-parser v0.9.0):
 
 ```bash
-eulix_parser --root linux -o test/kb.json --threads 12 --verbose --prism 2
+scripts/parser_perf.sh -t 12 -p 2 linux
 ```
 
 | Measure | Result |
 | --- | --- |
-| Files discovered and parsed | 64,460 (none skipped or failed) |
-| Lines of code | 35,810,828 |
-| Functions / classes / methods | 612,250 / 206,142 / 3,324 |
-| Parse time | 37.98 s |
-| Relationships and indices | 6.57 s |
-| Summary and metrics | 0.35 s |
-| Output generation | about 4.08 s |
-| Total reported by the parser | 48.98 s |
-| Total from `/usr/bin/time` | 52.85 s |
-| Call graph | 732,364 nodes, 1,301,641 edges |
-| Peak memory | about 8.32 GB |
-| CPU utilization | 694% |
+| Files discovered and parsed | 64,460 (none failed; 32,122 partial, almost all C) |
+| Lines of code | 37,322,695 |
+| Functions / classes / methods | 647,514 / 211,297 / 7,978 |
+| Parse time | 48.69 s |
+| Relationships and indices | 1.99 s |
+| Summary and metrics | 0.26 s |
+| Total reported by the parser | 53.85 s (runs: 52.18, 53.85, 54.66 s) |
+| Total from `/usr/bin/time` | 54.44 s |
+| Call graph | 774,876 nodes, 1,506,441 edges |
+| Peak memory | 3,749 MB (range 3,688–3,749 MB) |
 
-The headline reading is that parsing dominates (about 78% of the total), which is why [incremental parsing](../Architecture/Incremental-Parsing.md) targets it. The figures describe a full parse of the repository. They say nothing about the cost of a repeat run.
+The headline reading is that parsing dominates (about 90% of the total), which is why [incremental parsing](../Architecture/Incremental-Parsing.md) targets it. The figures describe a full parse of the repository. They say nothing about the cost of a repeat run.
+
+On smaller repositories with the same flags: gin (99 files, 24,515 lines) parses in 0.12 s at 85–93 MB, and the JDK (20,058 files, 6.76M lines) in 11.84–12.42 s at 1,349–1,396 MB.
 
 ### Main Components
 
-Output sizes for the same run, from the README:
+Output sizes for the same run:
 
 | File | Size |
 | --- | --- |
 | `kb.json` | about 353 MB |
-| `kb_index.json` | about 380 MB |
-| `kb_call_graph.json` | about 364 MB |
-| `kb_external_deps.json` | about 12 MB |
+| `kb_index.json` | about 332 MB |
+| `kb_call_graph.json` | about 434 MB |
+| `kb_external_deps.json` | about 10 MB |
 | `kb_summary.json` | about 3 MB |
-| `kb_metrics.json`, `kb_entry_points.json`, `kb_patterns.json` | under 50 KB each |
+| `kb_entry_points.json` | about 237 KB |
+| `kb_metrics.json`, `kb_patterns.json` | under 5 KB each |
 
 ### Data In, Data Out
 
-The history of `kb.json` on this repository: about 2.06 GB in v0.7.6, about 0.67 GB in v0.7.7 (a 67.3% cut, with write volume down 48.9% and the output phase from 6.89 s to 4.08 s), and about 353 MB in the v0.8.1 table. The v0.7.7 change targeted the serialized form only. The changelog is explicit that in-memory structures were not reduced.
+The history of `kb.json` on this repository: about 2.06 GB in v0.7.6, about 0.67 GB in v0.7.7 (a 67.3% cut, with write volume down 48.9% and the output phase from 6.89 s to 4.08 s), about 353 MB in v0.8.1, and still about 353 MB in v0.9.0 (on a slightly larger kernel tree). The v0.7.7 change targeted the serialized form only. The changelog is explicit that in-memory structures were not reduced.
 
 ## Key Algorithms
 

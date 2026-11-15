@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="416" viewBox="0 0 1000 416" role="img" aria-labelledby="title desc">
+<title id="title">Eulix architecture</title>
+<desc id="desc">Pipeline diagram. eulix-parser (Rust) parses the repository with Tree-sitter, builds the PRISM v2 call graph and writes .eulix/kb*.json. eulix-embed (Python, ETIYA only) embeds chunks with ONNX Runtime or PyTorch into .eulix/embeddings.bin. eulix-cli (Go) routes queries through the ETIYA or EHNAS engine. The MCP server hands ranked context to your AI agent. EHNAS skips the embedding stage.</desc>
+<style>.sans{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif}.mono{font-family:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace}.num{font-variant-numeric:tabular-nums}.bg{fill:#f6f8fa;stroke:#d1d9e0}.node{fill:#ffffff;stroke:#d1d9e0}.chip{fill:#f6f8fa;stroke:#d1d9e0}.grid{stroke:#e1e6eb}.axis{stroke:#afb8c1}.ink{fill:#1f2328}.ink2{fill:#59636e}.accent{fill:#6250d6}.trace{fill:none;stroke:#6250d6}.context{fill:#818b98}.flow{fill:none;stroke:#59636e}.head{fill:#59636e}@media (prefers-color-scheme:dark){.bg{fill:#161b22;stroke:#3d444d}.node{fill:#0d1117;stroke:#3d444d}.chip{fill:#161b22;stroke:#3d444d}.grid{stroke:#262c36}.axis{stroke:#545d68}.ink{fill:#f0f6fc}.ink2{fill:#9198a1}.accent{fill:#9085e9}.trace{fill:none;stroke:#9085e9}.context{fill:#656c76}.flow{fill:none;stroke:#9198a1}.head{fill:#9198a1}}</style>
+<rect class="bg" x="0.5" y="0.5" width="999" height="415" rx="12"/>
+<text x="28" y="44" class="sans ink" font-size="18" font-weight="600">From repository to agent context</text>
+<text x="28" y="68" class="sans ink2" font-size="13">One Go binary ships the Rust parser and the Python embedder. Everything runs on your machine.</text>
+<path class="trace" stroke-width="2" stroke-linecap="round" d="M128.0,148C128.0,92 624.0,92 624.0,141"/>
+<path class="accent" d="M624.0,149L619.0,140L629.0,140Z"/>
+<rect class="chip" x="276.1" y="93.5" width="199.9" height="26" rx="13"/>
+<circle class="accent" cx="292.1" cy="106.5" r="4"/>
+<text x="304.1" y="111" class="sans ink" font-size="13">EHNAS skips embedding</text>
+<rect class="node" x="25.0" y="150" width="206" height="168" rx="10"/>
+<text x="41" y="182" class="mono ink" font-size="15" font-weight="600">eulix-parser</text>
+<rect class="chip" x="41.0" y="194" width="42.6" height="20" rx="10"/>
+<text x="62.3" y="208" class="sans ink2" font-size="11.5" text-anchor="middle">Rust</text>
+<line class="grid" x1="41" y1="228" x2="215" y2="228" stroke-width="1"/>
+<text x="41" y="252" class="sans ink2" font-size="13">Tree-sitter parsing</text>
+<text x="41" y="274" class="sans ink2" font-size="13">PRISM v2 call graph</text>
+<text x="41" y="296" class="sans ink2" font-size="13">Incremental cache</text>
+<text x="128" y="344" class="mono ink2" font-size="12" text-anchor="middle">.eulix/kb*.json</text>
+<line class="flow" x1="235" y1="234" x2="263" y2="234" stroke-width="1.5"/><path class="head" d="M269,234L261,229.5L261,238.5Z"/>
+<rect class="node" x="273.0" y="150" width="206" height="168" rx="10"/>
+<text x="289" y="182" class="mono ink" font-size="15" font-weight="600">eulix-embed</text>
+<rect class="chip" x="289.0" y="194" width="56.2" height="20" rx="10"/>
+<text x="317.1" y="208" class="sans ink2" font-size="11.5" text-anchor="middle">Python</text>
+<rect class="chip" x="351.227" y="194" width="85.1" height="20" rx="10"/>
+<text x="393.8" y="208" class="sans ink2" font-size="11.5" text-anchor="middle">ETIYA only</text>
+<line class="grid" x1="289" y1="228" x2="463" y2="228" stroke-width="1"/>
+<text x="289" y="252" class="sans ink2" font-size="13">ONNX or PyTorch</text>
+<text x="289" y="274" class="sans ink2" font-size="13">GPU or CPU</text>
+<text x="289" y="296" class="sans ink2" font-size="13">SQ8 vectors</text>
+<text x="376" y="344" class="mono ink2" font-size="12" text-anchor="middle">.eulix/embeddings.bin</text>
+<line class="flow" x1="483" y1="234" x2="511" y2="234" stroke-width="1.5"/><path class="head" d="M517,234L509,229.5L509,238.5Z"/>
+<rect class="node" x="521.0" y="150" width="206" height="168" rx="10"/>
+<text x="537" y="182" class="mono ink" font-size="15" font-weight="600">eulix-cli</text>
+<rect class="chip" x="537.0" y="194" width="31.2" height="20" rx="10"/>
+<text x="552.6" y="208" class="sans ink2" font-size="11.5" text-anchor="middle">Go</text>
+<line class="grid" x1="537" y1="228" x2="711" y2="228" stroke-width="1"/>
+<text x="537" y="252" class="sans ink2" font-size="13">Query router</text>
+<text x="537" y="274" class="sans ink2" font-size="13">ETIYA · EHNAS</text>
+<text x="537" y="296" class="sans ink2" font-size="13">Budgeted MMR</text>
+<text x="624" y="344" class="mono ink2" font-size="12" text-anchor="middle">reads .eulix/</text>
+<line class="flow" x1="731" y1="234" x2="759" y2="234" stroke-width="1.5"/><path class="head" d="M765,234L757,229.5L757,238.5Z"/>
+<rect class="node" x="769.0" y="150" width="206" height="168" rx="10"/>
+<text x="785" y="182" class="mono ink" font-size="15" font-weight="600">MCP server</text>
+<rect class="chip" x="785.0" y="194" width="44.3" height="20" rx="10"/>
+<text x="807.2" y="208" class="sans ink2" font-size="11.5" text-anchor="middle">stdio</text>
+<line class="grid" x1="785" y1="228" x2="959" y2="228" stroke-width="1"/>
+<text x="785" y="252" class="sans ink2" font-size="13">4 tools, 2 prompts</text>
+<text x="785" y="274" class="sans ink2" font-size="13">Ranked context</text>
+<text x="785" y="296" class="sans ink2" font-size="13">Session memory</text>
+<text x="872" y="344" class="mono ink2" font-size="12" text-anchor="middle">→ your AI agent</text>
+<text x="28" y="388" class="sans ink2" font-size="12">eulix-cli also serves eulix chat (terminal Q&amp;A) and eulix vizeulize (call-graph explorer) from the same index.</text>
+</svg>
