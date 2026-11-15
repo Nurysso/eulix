@@ -136,7 +136,8 @@ jobs:
         env:
           # eulix-parser links rpmalloc, which needs advapi32 on MSVC (as in Release.yaml).
           RUSTFLAGS: ${{ runner.os == 'Windows' && matrix.crate == 'eulix-parser' && '-C link-arg=advapi32.lib' || '' }}
-        run: cargo test --locked
+        # libeulix is a library and ships no Cargo.lock, so --locked can't apply to it.
+        run: cargo test ${{ matrix.crate != 'libeulix' && '--locked' || '' }}
 
   eulix-embed:
     name: eulix-embed
