@@ -1,0 +1,9 @@
+{
+  "name": "eulix-callgraph-tsref",
+  "private": true,
+  "type": "module",
+  "description": "Reference call sites for TS/JS corpora (bench/callgraph)",
+  "dependencies": {
+    "typescript": "5.9.3"
+  }
+}

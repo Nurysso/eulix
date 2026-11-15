@@ -24,6 +24,7 @@ Results are saved in `~/.Eulix/bench`, keyed by commit, so a version is measured
 | `suite/eulix.toml.tmpl` | The eulix config every version runs with |
 | `suite/venv-cpu.txt` | CPU-only additions to the embedder's Python requirements |
 | `tests/` | Unit tests (standard library `unittest`) |
+| `callgraph/` | Call-graph accuracy harness: PRISM v1/v2 against each language's own tooling ([README](callgraph/README.md)) |
 | `results/` | Written-up comparisons: [v0.8.3 vs f9006ea](results/v0.8.3-vs-f9006ea.md) |
 
 How it works, why, and the flag rules: [docs/Architecture/Benchmarking.md](../docs/Architecture/Benchmarking.md).

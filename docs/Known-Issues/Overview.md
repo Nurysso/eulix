@@ -3,7 +3,7 @@
 This section lists the bugs and limitations that Eulix has today, how serious they are, how we know about them, and what to do in the meantime.
 
 > **Scope:** all subsystems
-> **Last verified against:** `ad744e9` (2026-11-03)
+> **Last verified against:** `ad744e9` (2026-11-03); newer entries name their own commit
 
 ## How to read this section
 
@@ -31,7 +31,7 @@ Every entry has an ID, a severity, a status and a verification note, then a shor
 
 | Label        | Meaning                                                                     |
 | ------------ | --------------------------------------------------------------------------- |
-| Reproduced   | I ran it on 2026-11-03 against the current code and saw the problem.        |
+| Reproduced   | I ran it against the commit the page names (2026-11-03 unless the entry gives another date) and saw the problem. |
 | Read in code | I found it by reading the current source; I did not run it.                 |
 | Carried over | From an earlier document written by the maintainers. I did not re-check it. |
 
@@ -61,10 +61,16 @@ Anything fixed is not listed here as an open problem. Fixed items are kept for t
 | [PRISM-7](Parser-And-PRISM.md#prism-7-c-calls-are-recorded-twice)                                                           | C++ calls are recorded twice                                                               | Medium   | Open         | Reproduced   |
 | [PRISM-8](Parser-And-PRISM.md#prism-8-v2-is-very-slow-on-large-rust-workspaces-with-shared-type-names)                      | PRISM v2 is very slow on large Rust workspaces with shared type names                      | Medium   | Open         | Reproduced   |
 | [PRISM-9](Parser-And-PRISM.md#prism-9-php-call-graph-is-partial-for-dynamic-code)                                           | PHP call graph is partial for dynamic code                                                 | Low      | Limitation   | Carried over |
+| [PRISM-10](Parser-And-PRISM.md#prism-10-go-calls-link-to-same-named-struct-types-and-to-look-alike-functions)                 | Go calls link to same-named struct types and to look-alike functions                       | High     | Open         | Reproduced   |
+| [PRISM-11](Parser-And-PRISM.md#prism-11-javascript-calls-on-built-in-objects-link-to-project-functions-of-the-same-name)      | JavaScript calls on built-in objects link to project functions of the same name            | Medium   | Open         | Reproduced   |
 | [PARSE-1](Parser-And-PRISM.md#parse-1-unsupported-languages)                                                                | Unsupported languages (Ruby, C# and others)                                                | Medium   | Limitation   | Read in code |
 | [PARSE-2](Parser-And-PRISM.md#parse-2-jsx-and-tsx-files-are-rejected)                                                       | `.jsx` and `.tsx` files are rejected                                                       | High     | Open         | Reproduced   |
 | [PARSE-3](Parser-And-PRISM.md#parse-3-c-and-c-files-parse-only-partly)                                                      | C and C++ files parse only partly                                                          | Low      | By design    | Carried over |
 | [PARSE-4](Parser-And-PRISM.md#parse-4-dependency_graph-is-never-filled-some-cargo-features-do-nothing)                      | `dependency_graph` is never filled; some Cargo features do nothing                         | Low      | Open         | Read in code |
+| [PARSE-5](Parser-And-PRISM.md#parse-5-rust-items-inside-inline-mod-blocks-are-not-extracted)                                  | Rust items inside inline `mod` blocks (including `mod tests`) are not extracted            | High     | Open         | Reproduced   |
+| [PARSE-6](Parser-And-PRISM.md#parse-6-c-code-in-h-headers-is-parsed-as-c)                                                     | C++ code in `.h` headers is parsed as C                                                    | High     | Open         | Reproduced   |
+| [PARSE-7](Parser-And-PRISM.md#parse-7-java-methods-inside-anonymous-classes-are-not-extracted)                                | Java methods inside anonymous classes are not extracted                                    | Medium   | Open         | Reproduced   |
+| [PARSE-8](Parser-And-PRISM.md#parse-8-overloads-and-same-name-definitions-in-one-file-share-one-id)                           | Overloads and same-name definitions in one file share one id                               | Medium   | Open         | Reproduced   |
 | [RET-1](Retrieval-And-Query.md#ret-1-the-kb_exact-search-strategy-never-returns-anything)                                   | The `kb_exact` search strategy never returns anything                                      | High     | Open         | Read in code |
 | [RET-2](Retrieval-And-Query.md#ret-2-cross-root-demotion-only-works-for-two-folder-names)                                   | Cross-root demotion only works for two folder names                                        | Medium   | Open         | Read in code |
 | [RET-3](Retrieval-And-Query.md#ret-3-deep-multi-hop-questions-may-be-answered-inaccurately)                                 | Deep multi-hop questions may be answered inaccurately                                      | Medium   | Open         | Carried over |

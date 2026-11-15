@@ -87,6 +87,7 @@ endif
         repro-prism check-tsx perf-rust-workspace check-prism-v2 repro-all \
         eval-mcp kb-diff kb-field-usage kb-id-name-check vec-stats \
         bench-run bench-compare bench-list bench-clean bench-test \
+        bench-callgraph bench-callgraph-micro bench-callgraph-test \
         install install-cli install-parser install-lsp install-viz
 
 all: help
@@ -341,6 +342,11 @@ scripts-help:
 	@echo "  make bench-list                     what has been measured"
 	@echo "  make bench-clean ARGS='--work'      free disk space"
 	@echo "  make bench-test                     harness unit tests"
+	@echo ""
+	@echo "Call-graph accuracy (bench/callgraph/, state in ~/.Eulix/bench/callgraph):"
+	@echo "  make bench-callgraph [ARGS='--lang go,java --prism 2']   score PRISM against language tooling"
+	@echo "  make bench-callgraph-micro          tiny fixtures per language, seconds"
+	@echo "  make bench-callgraph-test           scoring unit tests"
 
 parser-release:
 	cd $(PARSER_DIR) && cargo build --release
@@ -393,6 +399,17 @@ bench-clean:
 
 bench-test:
 	python3 -m unittest discover -s $(ROOT_DIR)/bench/tests
+
+CALLGRAPH := python3 $(ROOT_DIR)/bench/callgraph/cg_eval.py
+
+bench-callgraph: parser-release
+	$(RUN_IN_CALLER) $(CALLGRAPH) $(ARGS)
+
+bench-callgraph-micro: parser-release
+	$(RUN_IN_CALLER) $(CALLGRAPH) --set micro $(ARGS)
+
+bench-callgraph-test:
+	python3 -m unittest discover -s $(ROOT_DIR)/bench/callgraph/tests
 
 # Generic runner: make script SCRIPT=known_issues/cross_language_edges.py ARGS=kb_call_graph.json
 script:
