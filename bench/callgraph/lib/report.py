@@ -77,6 +77,7 @@ def write(results: list[dict], meta: dict, out: Path) -> Path:
                    ["eulix call edges (raw / unique / duplicates)", f'{e["call_edges_raw"]} / {e["call_edges_unique"]} / {e["duplicate_edges"]}'],
                    ["eulix edges the reference cannot confirm", e.get("unverifiable", sc["summary"]["unverifiable_edges"])],
                    ["eulix edges matched via a nearby line (multi-line calls)", e["fuzzy_line_matches"]],
+                   ["correct pairs recorded at another call of the caller (v2 keeps one line per pair)", e.get("pairs_correct_for_another_call_of_the_caller", 0)],
                    ["extra targets on an otherwise correct call", e["extra_targets"]],
                    ["cross-language edges", e["cross_language_edges"]],
                    ["eulix ids shared by several definitions (overloads)", e.get("colliding_ids", 0)],

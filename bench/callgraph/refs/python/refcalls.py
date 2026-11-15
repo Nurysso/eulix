@@ -98,6 +98,13 @@ for path in py_files():
             defs = script.goto(line, col, follow_imports=True)
             if not defs or all(d.type in ("statement", "param", "instance") for d in defs):
                 defs = script.infer(line, col) or defs
+            # jedi bundles typeshed stubs for some third-party packages, flask
+            # among them: goto can land in its own `flask/app.pyi` although the
+            # code being analysed IS flask. infer() reaches the source.
+            elif any(str(d.module_path or "").endswith(".pyi") for d in defs):
+                real = [d for d in script.infer(line, col) if not str(d.module_path or "").endswith(".pyi")]
+                if real:
+                    defs = [d for d in defs if not str(d.module_path or "").endswith(".pyi")] + real
         except Exception:
             defs = []
         status, k, targets = classify(defs)

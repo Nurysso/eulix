@@ -123,4 +123,5 @@ The PRISM v2 source documents a target profile of about 1.4 seconds and 3.1 GB o
 - [Knowledge Base Schema](Knowledge-Base-Schema.md): every field of the output.
 - [Analysis Passes](Analysis-Passes.md): what each pass in `analyze/` computes.
 - [PRISM v1](PRISM-V1.md) and [PRISM v2](PRISM-V2.md): the two call-resolution algorithms.
+- [Call-Graph Accuracy](Call-Graph-Accuracy.md): how often their edges are right, per language.
 - [Parser And PRISM issues](../Known-Issues/Parser-And-PRISM.md): current problems.

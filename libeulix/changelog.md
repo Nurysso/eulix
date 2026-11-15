@@ -39,6 +39,10 @@ Changes since 0.8.2, the version that shipped with Eulix v0.8.3. This is a break
 - `FileWalker` hashes size and mtime instead of file contents, so each file is read once, by the parser. The unused `lines` field and `total_lines` are gone from the checksum (#147).
 - TypeScript interface IDs include the file path (`interface_Name::path`), like class IDs, so same-named interfaces in different files are no longer merged into one node (#134).
 - `classify_file` returns `&'static str` instead of allocating a `String` (#141).
+- **Rust:** an `impl` block whose type is declared in another file, or another crate, is kept as an impl-only `Class`, `impl_{Type}::{path}`, with the decorator `impl` and `item_kind` `impl`, instead of being dropped with its methods. A blanket impl (`impl<T> Tr for T`) is `impl_<T>::{path}`. PRISM v2 gives the entry's methods, and `self` inside them, to the type it resolves to.
+- **C/C++:** `parse_source` sends a `.h` file with C++-only syntax (a class with a body, a namespace, a template, an access specifier, `::`) to the C++ parser (`cpp::looks_like_cpp`). `Language::detect` still maps `.h` to C.
+- **PRISM v2:** a call from a Go or C file never resolves to a type, since `T(x)` is a conversion or a cast there, so `c.JSON(...)` no longer links to `type JSON struct` (part of PRISM-10). On gin, wrong caller → callee pairs fall from 832 to 448.
+- **PRISM v2, Rust:** a type imported from another crate prefers the package whose directory matches the crate name (`grep_regex` → `crates/regex`), and never resolves into another crate's `tests/`, `benches/` or `examples/`.
 
 ### Deprecated
 
@@ -55,5 +59,10 @@ Changes since 0.8.2, the version that shipped with Eulix v0.8.3. This is a break
 - **Indices:** `files_by_category` was empty and method calls were missing from `functions_calling` (#141). `functions_calling` lists a caller once per callee and line (#152).
 - **Summary:** `key_features` in `kb_summary.json` changed on every run. Files are now walked in path order, an opener is the first sentence of the first paragraph, tag-only docblocks (`@param`, `@see`, `{@inheritdoc}`) are skipped, and paragraphs split on CRLF and CR line endings too (#88).
 - **FileWalker:** one unreadable file stopped the walk. Errors are now collected per file and the walk goes on; failed paths still reach the parser, so they are recorded as failed (#147).
+- **Rust:** items inside inline `mod` blocks, including every `#[cfg(test)] mod tests`, were not extracted (PARSE-5). On ripgrep, PRISM v2's correct caller → callee pairs go from 967 to 1,645.
+- **C and C++:** everything inside `#if`/`#ifdef`/`#else` blocks, which include guards wrap around every header, and inside `extern "C" { ... }` was skipped (`c_top_level_items`). On tinyxml2, calls into functions eulix had no node for fall from 685 to 26.
+- **C++:** `class EXPORT_MACRO Name : Base {` was read as a function `Name` (PARSE-6); the annotation is now blanked before parsing, keeping offsets. Global variable names no longer include their initializer (`counter = 0`).
+
+These were found with the call-graph accuracy harness in `bench/callgraph/`; measurements are in [Call-Graph Accuracy](../docs/libeulix/Call-Graph-Accuracy.md).
 
 _Earlier libeulix changes were tracked with eulix_parser; see the root [changelog](../changelog.md)._

@@ -161,7 +161,7 @@ Both are `Serialize` / `Deserialize`, so they round-trip through JSON. Full API:
 | Language | Extensions | Status |
 | :-- | :-- | :-- |
 | C | `.c`, `.h` | Stable |
-| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | Stable |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx`, and `.h` files that use C++ syntax | Stable |
 | Go | `.go` | Stable |
 | Python | `.py`, `.pyw`, `.pyi` | Stable |
 | Rust | `.rs` | Stable |

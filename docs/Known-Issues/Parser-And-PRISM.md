@@ -3,11 +3,11 @@
 Known problems in `libeulix` and `eulix-parser`: how files are parsed, and how PRISM links calls to definitions.
 
 > **Scope:** `libeulix`, `eulix-parser`  
-> **Last verified against:** `ad744e9` (2026-11-03); PRISM-10, PRISM-11 and PARSE-5 to PARSE-8 against `5ecd16d` (2026-11-15)
+> **Last verified against:** `ad744e9` (2026-11-03); PRISM-10, PRISM-11, PARSE-7 and PARSE-8 against `5ecd16d` (2026-11-15)
 
 Entries marked *Reproduced* were checked on 2026-11-03 by building the parser from this commit and parsing a small multi-language project with `--prism 2` (and `--prism 1` for comparison). The test project had a Python class hierarchy, a Go type with methods, a Java class, a C++ struct, a JavaScript subclass, a Rust `impl` and a TypeScript class. Read [Overview](Overview.md) for the legend.
 
-PRISM-10, PRISM-11 and PARSE-5 to PARSE-8 were found on 2026-11-15 by the call-graph accuracy harness ([bench/callgraph](../../bench/callgraph/README.md)), which scores PRISM against each language's own tooling on one real project per language. Each was then reproduced on `5ecd16d` with a minimal project of a few lines, given in its entry.
+PRISM-10, PRISM-11, PARSE-7 and PARSE-8 were found on 2026-11-15 by the call-graph accuracy harness ([bench/callgraph](../../bench/callgraph/README.md)), which scores PRISM against each language's own tooling on one real project per language. Each was then reproduced on `5ecd16d` with a minimal project of a few lines, given in its entry.
 
 ## What the test project showed
 
@@ -29,20 +29,20 @@ PRISM v1, run on the same files, linked the Go, Java and C++ method calls, but a
 
 ## Measured on real code
 
-The accuracy harness, run on `5ecd16d` (2026-11-15). Each count is a unique caller → callee pair, which is what v2 stores. Precision = correct edges / edges eulix made; recall = calls the language's own tooling resolves into the project that eulix links correctly. See the [harness README](../../bench/callgraph/README.md) for how sites are matched and what each reference tool can and cannot see.
+The accuracy harness on `5ecd16d`, the parser before the fixes of 2026-11-15, scored by the harness as corrected after its audit (see [How The Benchmark Was Checked](../libeulix/Call-Graph-Accuracy.md#how-the-benchmark-was-checked)). Each count is a unique caller → callee pair, which is what v2 stores. Precision = correct edges / edges eulix made; recall = calls the language's own tooling resolves into the project that eulix links correctly. Current numbers, after the fixes, are in [Call-Graph Accuracy](../libeulix/Call-Graph-Accuracy.md).
 
 | Corpus | Language | v2 precision | v2 recall | v2 F1 | v1 precision | v1 recall |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| gin 1.12.0 | Go | 55.8% | 44.1% | 49.2% | 59.5% | 78.9% |
-| gson 2.15.0 | Java | – | 0.0% | – | 56.3% | 58.4% |
-| flask 3.1.3 | Python | 98.2% | 75.0% | 85.0% | 62.0% | 75.0% |
-| ripgrep 15.2.0 | Rust | 99.4% | 39.2% | 56.2% | 39.6% | 55.5% |
-| class-validator 0.15.1 | TypeScript | 100.0% | 91.0% | 95.3% | 95.5% | 96.0% |
-| axios 1.21.1 | JavaScript | 91.2% | 72.7% | 80.9% | 97.5% | 53.5% |
+| gin 1.12.0 | Go | 56.0% | 43.9% | 49.2% | 61.9% | 78.6% |
+| gson 2.15.0 | Java | – | 0.0% | – | 64.0% | 58.6% |
+| flask 3.1.3 | Python | 98.2% | 74.0% | 84.4% | 62.8% | 74.9% |
+| ripgrep 15.2.0 | Rust | 99.4% | 39.2% | 56.2% | 41.2% | 55.7% |
+| class-validator 0.15.1 | TypeScript | 100.0% | 90.3% | 94.9% | 94.8% | 95.3% |
+| axios 1.21.1 | JavaScript | 91.5% | 82.8% | 87.0% | 97.5% | 60.7% |
 | cJSON 1.7.19 | C | 100.0% | 99.8% | 99.9% | 99.4% | 99.1% |
-| tinyxml2 11.0.0 | C++ | 94.9% | 88.8% | 91.7% | 89.7% | 8.3% |
+| tinyxml2 11.0.0 | C++ | 95.7% | 91.7% | 93.6% | 90.0% | 8.6% |
 
-Recall only counts calls made from inside a function eulix knows about, and to a function eulix knows about. PARSE-5 to PARSE-7 hide whole groups of functions (on ripgrep, 7,345 of 15,066 call sites are inside functions eulix never extracted), so the real coverage is lower than these numbers. Reproduce with `make bench-callgraph`.
+Recall only counts calls made from inside a function eulix knows about, and to a function eulix knows about. At the time, Rust inline modules and C/C++ preprocessor blocks hid whole groups of functions (on ripgrep, 7,345 of 15,066 call sites were inside functions eulix never extracted), so the real coverage was lower than these numbers. Those, and several other gaps found the same day, are now fixed (see [Fixed Issues](Fixed-Issues.md#parser-and-prism)); this table is the baseline they were measured against. Reproduce current numbers with `make bench-callgraph`.
 
 ---
 
@@ -72,7 +72,7 @@ I did not repeat this measurement. **Guidance:** use v2 (the default) for precis
 Measured on 2026-11-15 (`5ecd16d`, see [Measured on real code](#measured-on-real-code)):
 
 - **Java gets no call edges at all**, not just no method edges. Every Java function is a method, static ones included, so v2 linked none of the 1,088 resolvable caller → callee pairs in gson; a static `util()` called from `run()` in the same class gets no edge either.
-- **Go:** v2 linked 0 of 1,315 method-call pairs in gin; plain function calls were found (98%). Worse, many of those method calls are linked to a struct of the same name instead: see PRISM-10.
+- **Go:** v2 linked 0 of 1,340 method-call pairs in gin; plain function calls were found (98%). Before the fixes of 2026-11-15 many of those method calls were also linked to a struct of the same name; that part of PRISM-10 is fixed, while some still land on look-alike package functions.
 - **JavaScript:** `this.hello()` and `c.greet()` (on `const c = new Child()`) get no edge from v1 either, so the workaround below does not help for JavaScript.
 
 **Cause.** The parsers write method ids as `method_{Class}_{name}::{path}`. For languages without receiver-aware resolution, v2 still indexes a method under the name taken from its id, which is `{Class}_{name}` and which no call site is spelled as. The fix for this (commit `95f1288`) indexes methods by their declared name, but only for the languages that keep a separate receiver on each call: **Python, TypeScript and Rust**. PHP has always had its own rules. The other languages still use the older path, so their methods can never be found by name.
@@ -121,7 +121,7 @@ An earlier measurement on the Eulix repository itself found 125 of 1,932 call ed
 
 **Workaround.** See PRISM-2.
 
-On gin the same bare-name lookup produces hundreds of wrong edges, most of them to struct types; that is tracked separately as PRISM-10.
+On gin the same bare-name lookup produced hundreds of wrong edges. The ones to struct types are fixed; the ones to look-alike package functions remain, tracked as PRISM-10.
 
 **Fix direction.** Have these parsers fill the receiver field, keep Go imports through slim, and extend receiver-aware resolution to them, then strip `new ` for Java. This is the prerequisite for fixing PRISM-2.
 
@@ -195,9 +195,11 @@ The earlier measurement on WordPress 7.2-alpha (1,885 files) reported that 99.86
 
 ## PRISM-10: Go calls link to same-named struct types and to look-alike functions
 
-**Severity:** High · **Status:** Open · **Verification:** Reproduced (2026-11-15, `5ecd16d`)
+**Severity:** High · **Status:** Partly fixed · **Verification:** Reproduced (2026-11-15, `5ecd16d`)
 
-**Symptom.** In Go, v2 links a method call to a **struct** that has the method's name, and links a call into another package to a project function that only shares its name. On gin, v2 made 837 wrong caller → callee pairs next to 1,055 right ones, so 44% of its Go edges are wrong. The largest groups: `err.Error()` on the built-in `error` interface linked to gin's `struct_Error` (118 call sites, plus 13 calls to gin's own `c.Error`), `String()` calls linked to the `render.String` struct (166), and `errors.New`, `reflect.New` and `validator.New` linked to gin's own `func New` (48). Minimal reproduction:
+**Fixed part.** Calls from Go (and C) files no longer land on struct types: on gin, v2's false caller → callee pairs fell from 832 to 448 and precision rose from 56.0% to 70.3%. Guarded by `go_calls_never_land_on_a_struct_of_the_same_name` and `c_calls_never_land_on_a_struct_of_the_same_name` in `libeulix/tests/method_precision.rs`. **Still open:** look-alike functions, such as `router.GET(...)` on an `*Engine` linked to the package-level `func GET` in `ginS` (89 call sites) and `errors.New` linked to gin's `func New` (48); these need PRISM-5.
+
+**Symptom.** In Go, v2 links a method call to a **struct** that has the method's name, and links a call into another package to a project function that only shares its name. On gin, v2 made 832 wrong caller → callee pairs next to 1,060 right ones, so 44% of its Go edges were wrong. The largest groups: `err.Error()` on the built-in `error` interface linked to gin's `struct_Error` (118 call sites, plus 13 calls to gin's own `c.Error`), `String()` calls linked to the `render.String` struct (166), and `errors.New`, `reflect.New` and `validator.New` linked to gin's own `func New` (48). Minimal reproduction:
 
 ```go
 // render/json.go
@@ -220,7 +222,7 @@ func handle(c *Ctx) {
 
 **Workaround.** None in v2. v1 links `c.JSON` to the method, with its own name-collision false positives.
 
-**Fix direction.** Do not offer type nodes as call targets in languages without constructor calls (Go has none: `T(x)` is a conversion, `T{}` a literal). Then fix PRISM-5, so that the receiver and the package qualifier rule out look-alikes.
+**Fix direction.** Type nodes are no longer offered as call targets for Go and C. What remains is PRISM-5: pass the receiver and the package qualifier to the resolver, so that they rule out look-alikes.
 
 ---
 
@@ -228,7 +230,7 @@ func handle(c *Ctx) {
 
 **Severity:** Medium · **Status:** Open · **Verification:** Reproduced (2026-11-15, `5ecd16d`)
 
-**Symptom.** A method call on an array, string, regular expression or function links to any project function with that name. On axios, v2's 26 false edges were all of this kind: `list.forEach(...)` to `utils.forEach` (13 call sites), `regex.test(...)` to a `test` function in `adapters/fetch.js` (7), `str.trim()` to `utils.trim` (3). v1 links these less often. Minimal reproduction:
+**Symptom.** A method call on an array, string, regular expression or function links to any project function with that name. On axios, most of v2's 25 false caller → callee pairs are of this kind: `list.forEach(...)` to `utils.forEach` (13 call sites), `regex.test(...)` to a `test` function in `adapters/fetch.js` (7), `str.trim()` to `utils.trim` (3). v1 links these less often. Minimal reproduction:
 
 ```js
 // utils.js
@@ -279,65 +281,6 @@ The knowledge base has a `dependency_graph` field, but neither `libeulix` nor `e
 
 ---
 
-## PARSE-5: Rust items inside inline `mod` blocks are not extracted
-
-**Severity:** High · **Status:** Open · **Verification:** Reproduced (2026-11-15, `5ecd16d`)
-
-**Symptom.** Functions, structs and `impl` blocks written inside `mod name { ... }` never reach the knowledge base, so they have no node, no calls and no callers. This includes every `#[cfg(test)] mod tests` block. On ripgrep, 7,345 of the 15,066 call sites the reference found are inside functions eulix never extracted; `crates/printer/src/standard.rs` alone has 1,377. Minimal reproduction:
-
-```rust
-pub fn top() { inner::a(); }
-mod inner {
-    pub fn a() { b(); }   // not extracted
-    fn b() {}             // not extracted
-    pub struct S;         // not extracted
-    impl S { pub fn x(&self) {} }   // not extracted
-}
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn t() { super::top(); }   // not extracted
-}
-```
-
-The knowledge base has only `func_top`, and the call graph has no edges.
-
-**Cause.** `extract_functions` in `libeulix/src/grammar_files/rust.rs` loops over the direct children of the file's root and looks for `function_item`; a `mod_item`'s `declaration_list` is never entered. Structs, enums and `impl` blocks inside a module are missed the same way.
-
-**Fix direction.** Recurse into `mod_item` bodies (iteratively, as the rest of the parser walks the tree) and carry the module path into the ids so that `a::run` and `b::run` in one file stay distinct (see PARSE-8).
-
----
-
-## PARSE-6: C++ code in `.h` headers is parsed as C
-
-**Severity:** High · **Status:** Open · **Verification:** Reproduced (2026-11-15, `5ecd16d`)
-
-**Symptom.** A `.h` file is always parsed with the C grammar, even in a C++ project. Classes in it are not recognised, and methods defined inside the class body (the usual style for small methods, and the whole of a header-only library) get no node. In tinyxml2, `tinyxml2.h` produced no classes and no functions; 661 of the 2,167 call sites target methods defined there. Minimal reproduction:
-
-```cpp
-// box.h
-class Box {
-public:
-  int size() const { return n; }
-  int twice() const { return size() * 2; }
-private:
-  int n = 1;
-};
-// main.cpp
-#include "box.h"
-int run() { Box b; return b.twice(); }
-```
-
-`box.h` is recorded with `language: c`, one bogus function `func_Box` spanning the class, and no methods, so `run -> Box::twice` and `twice -> size` are both missing.
-
-**Cause.** `libeulix/src/grammar_files/language.rs` maps the `h` extension to `Language::C`; `.hpp`, `.hxx` and `.h++` go to C++.
-
-**Workaround.** None without renaming files. Headers named `.hpp` parse as C++.
-
-**Fix direction.** Decide per header: parse a `.h` file as C++ when the project has C++ sources and the header uses C++ syntax (`class`, `namespace`, `template`, `::`), or when it fails to parse as C but parses as C++.
-
----
-
 ## PARSE-7: Java methods inside anonymous classes are not extracted
 
 **Severity:** Medium · **Status:** Open · **Verification:** Reproduced (2026-11-15, `5ecd16d`)
@@ -383,9 +326,29 @@ The knowledge base lists `func_A::f::a.cpp` twice (lines 4 and 5); the call grap
 
 ---
 
+## PARSE-9: JavaScript functions that are not declared or bound to a name have no node
+
+**Severity:** Medium · **Status:** Open · **Verification:** Reproduced (2026-11-15)
+
+**Symptom.** A function declaration (`function f() {}`) and a function assigned to a variable (`const f = () => ...`, `const f = function g() {}`) get a node. A function expression anywhere else does not: a callback passed as an argument, a function in an `export default` expression, or an immediately invoked function. Inside another function, the calls such a function makes are credited to the enclosing function, which is close enough. At module top level there is no enclosing function, so the calls are lost. On axios, 554 of 2,076 call sites are outside any function eulix knows, 289 of them in `adapters/http.js`, whose adapter is `export default isHttpAdapterSupported && function httpAdapter(config) { ... }`. Minimal reproduction:
+
+```js
+function helper(x) { return x; }
+export default cond && function adapter(config) { return helper(config); }   // no node; edge lost
+const curried = (({a}) => (obj) => helper(obj))(Object.prototype);           // no node; edge lost
+[1].map(function cb(v) { return helper(v); });                               // no node; edge lost
+```
+
+**Cause.** Not traced in code. The JavaScript parser extracts `function_declaration` nodes and functions in a `variable_declarator`; other `function_expression` and `arrow_function` nodes are not visited as definitions.
+
+**Fix direction.** Give a named function expression a node under its own name, and an unnamed one at module top level a node named after its position (`<anonymous@12>`), so that the calls inside it have a caller.
+
+---
+
 ## Related Docs
 
 - [PRISM v1](../libeulix/PRISM-V1.md) and [PRISM v2](../libeulix/PRISM-V2.md): the algorithms.
 - [Research write-up](../libeulix/Research/PRISM-V2-Methodology.md): the formal description, written against an older commit.
 - [Fixed Issues](Fixed-Issues.md): what was fixed in method-call resolution.
 - [Call-graph accuracy harness](../../bench/callgraph/README.md): how the numbers in [Measured on real code](#measured-on-real-code) are produced.
+- [Call-Graph Accuracy](../libeulix/Call-Graph-Accuracy.md): the current measurements, by language and call kind.

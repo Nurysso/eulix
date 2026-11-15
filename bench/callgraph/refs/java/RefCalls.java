@@ -17,6 +17,7 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.stream.*;
 import javax.lang.model.element.*;
+import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
 import javax.tools.*;
 
@@ -25,6 +26,7 @@ public class RefCalls {
     static Path root;
     static Trees trees;
     static Elements elements;
+    static javax.lang.model.util.Types types;
     static final Map<String, List<ExecutableElement>> methodsByName = new HashMap<>();
     static final Map<ExecutableElement, List<ExecutableElement>> overriders = new HashMap<>();
     static final StringBuilder out = new StringBuilder();
@@ -45,6 +47,7 @@ public class RefCalls {
         JavacTask task = (JavacTask) jc.getTask(null, fm, diag, opts, null, fm.getJavaFileObjectsFromFiles(files));
         trees = Trees.instance(task);
         elements = task.getElements();
+        types = task.getTypes();
         List<CompilationUnitTree> units = new ArrayList<>();
         task.parse().forEach(units::add);
         task.analyze();
@@ -113,7 +116,30 @@ public class RefCalls {
         final CharSequence src;
         try { src = u.getSourceFile().getCharContent(true); } catch (IOException ex) { return; }
         new TreePathScanner<Void, Void>() {
+            /** The static type of the call's receiver, when it is a project class or interface. */
+            TypeElement projectReceiver(ExpressionTree sel) {
+                TypeMirror t = null;
+                if (sel instanceof MemberSelectTree ms) {
+                    TreePath p = new TreePath(new TreePath(getCurrentPath(), ms), ms.getExpression());
+                    t = trees.getTypeMirror(p);
+                } else {
+                    for (TreePath p = getCurrentPath(); p != null; p = p.getParentPath()) {
+                        if (p.getLeaf() instanceof ClassTree) {
+                            Element e = trees.getElement(p);
+                            if (e != null) t = e.asType();
+                            break;
+                        }
+                    }
+                }
+                if (t == null || !(types.asElement(t) instanceof TypeElement te)) return null;
+                return trees.getPath(te) != null ? te : null;
+            }
+
             void emit(Tree call, Tree nameTree, String name, boolean ctor) {
+                emit(call, nameTree, name, ctor, null);
+            }
+
+            void emit(Tree call, Tree nameTree, String name, boolean ctor, TypeElement recv) {
                 long start = sp.getStartPosition(u, call);
                 long namePos = nameTree instanceof MemberSelectTree ms ? sp.getEndPosition(u, ms) - ms.getIdentifier().length() : sp.getStartPosition(u, nameTree);
                 if (call instanceof NewClassTree && namePos >= 0) { // `new a.b.Name<T>(..)`: point at Name
@@ -124,14 +150,38 @@ public class RefCalls {
                 if (namePos < 0 || namePos + name.length() > src.length()
                         || !src.subSequence((int) namePos, (int) namePos + name.length()).toString().equals(name)) return;
                 Element e = trees.getElement(getCurrentPath());
-                String status, kind = ctor ? "constructor" : "method", dispatch = "static";
+                String status, kind = ctor ? "constructor" : "method", dispatch = "static", why = null;
                 List<Map<String, Object>> targets = new ArrayList<>();
                 if (!(e instanceof ExecutableElement ee) || e.asType().getKind() == javax.lang.model.type.TypeKind.ERROR) {
                     status = "unknown";
                 } else {
                     Map<String, Object> t0 = targetOf(ee);
-                    if (t0 == null) {
+                    if (t0 == null && recv != null && dispatched(ee)) {
+                        // A method declared outside the project (Object.hashCode)
+                        // called on a project type: it can only reach overrides in
+                        // subtypes of that type (class hierarchy analysis).
+                        for (ExecutableElement c : methodsByName.getOrDefault(ee.getSimpleName().toString(), List.of())) {
+                            if (c.getEnclosingElement() instanceof TypeElement owner && elements.overrides(c, ee, owner)
+                                    && types.isSubtype(types.erasure(owner.asType()), types.erasure(recv.asType()))) {
+                                Map<String, Object> t = targetOf(c);
+                                if (t != null) targets.add(t);
+                            }
+                        }
+                        if (targets.isEmpty()) {
+                            status = "external";
+                        } else {
+                            status = "project";
+                            dispatch = "virtual";
+                        }
+                    } else if (t0 == null) {
                         status = "external";
+                        // An outside method (Object.toString, List.get) that project
+                        // classes override: through an outside receiver type the call
+                        // may run project code or not.
+                        if (dispatched(ee) && !overridersOf(ee).isEmpty()) {
+                            status = "unknown";
+                            why = "outside method with project overrides";
+                        }
                     } else {
                         if (ee.getModifiers().contains(Modifier.STATIC)) kind = ctor ? "constructor" : "function";
                         targets.add(t0); // abstract / interface declarations count as a static target too
@@ -156,14 +206,16 @@ public class RefCalls {
                     out.append("{\"file\":").append(q((String) t.get("file"))).append(",\"line\":").append(t.get("line"))
                        .append(",\"name\":").append(q((String) t.get("name"))).append('}');
                 }
-                out.append("]}\n");
+                out.append(']');
+                if (why != null) out.append(",\"why\":").append(q(why));
+                out.append("}\n");
             }
 
             @Override public Void visitMethodInvocation(MethodInvocationTree node, Void v) {
                 ExpressionTree sel = node.getMethodSelect();
                 String name = sel instanceof MemberSelectTree ms ? ms.getIdentifier().toString()
                         : sel instanceof IdentifierTree id ? id.getName().toString() : "";
-                if (!name.equals("this") && !name.equals("super")) emit(node, sel, name, false);
+                if (!name.equals("this") && !name.equals("super")) emit(node, sel, name, false, projectReceiver(sel));
                 else emit(node, sel, name, true);
                 return super.visitMethodInvocation(node, v);
             }

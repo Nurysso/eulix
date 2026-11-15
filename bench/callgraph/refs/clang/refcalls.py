@@ -187,9 +187,16 @@ def visit_call(c):
         rec["status"] = "external"
         records.append(rec)
         return
-    if ref.get_definition() is None and ref.get_usr() not in defs_by_usr and loc_of(ref) == (f, line):
-        records.append(rec)  # implicit declaration (header missing): unknown
-        return
+    if ref.get_definition() is None and ref.get_usr() not in defs_by_usr:
+        decl_file, decl_line = loc_of(ref)
+        # Never defined, and declared only inside a source file: an implicit
+        # declaration at first use (its header is missing), so unknown.
+        # (A declaration outside the project, such as libc's, stays external.)
+        if decl_file is not None and (
+            (decl_file, decl_line) == (f, line) or Path(decl_file).suffix.lower() in TU_EXT
+        ):
+            records.append(rec)
+            return
     tg = targets_of(ref)
     if ref.kind == CK.CXX_METHOD and ref.is_virtual_method():
         usr = ref.get_usr()

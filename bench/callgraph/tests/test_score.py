@@ -46,9 +46,11 @@ class ScoreTest(unittest.TestCase):
         r = score(nodes(), edges, sites)
         s = r["per_call_site"]["summary"]
         self.assertEqual((s["TP"], s["FP"], s["FN"], s["TN"]), (1, 2, 2, 1))
-        # pairs: both Save calls from main are one (main, S.Save) pair -> TP, plus FP func_Save
+        # pairs: both Save calls from main are one (main, S.Save) pair -> TP; func_Save is
+        # a wrong pair; main -> func_helper is correct as a pair (line 12 calls it), even
+        # though v2 recorded it at the external `helper` call on line 15 -> that stays TN.
         p = r["summary"]
-        self.assertEqual((p["TP"], p["FP"], p["FN"], p["TN"]), (1, 2, 1, 1))
+        self.assertEqual((p["TP"], p["FP"], p["FN"], p["TN"]), (2, 1, 0, 2))
         self.assertEqual(r["buckets"]["wrong_target"], 1)
         self.assertEqual(r["buckets"]["FP_external"], 1)
         self.assertEqual(r["buckets"]["out_of_scope"], 1)
@@ -85,6 +87,38 @@ class ScoreTest(unittest.TestCase):
         r = score(nodes(), [("func_main::a.go", "method_S_Save::a.go", 11)], sites)
         self.assertEqual((r["per_call_site"]["summary"]["TP"], r["per_call_site"]["summary"]["FN"]), (1, 1))
         self.assertEqual((r["summary"]["TP"], r["summary"]["FN"]), (1, 0))  # v2 keeps one edge per pair
+
+    def test_pair_recorded_at_another_call_of_the_same_name_is_correct(self):
+        # main calls A.f (line 11) and B.f (line 14); v2 keeps one edge per pair, at
+        # the first line, and links B.f there. The pair (main, B.f) is still right.
+        ns = nodes() | {
+            "method_A_f::a.go": Node("method_A_f::a.go", "f", "method", F, 30, 31),
+            "method_B_f::a.go": Node("method_B_f::a.go", "f", "method", F, 32, 33),
+        }
+        sites = [site(11, "f", tline=30), site(14, "f", tline=32)]
+        r = score(ns, [("func_main::a.go", "method_B_f::a.go", 11)], sites)
+        p = r["summary"]
+        self.assertEqual((p["TP"], p["FP"], p["FN"]), (1, 0, 1))
+        self.assertEqual(r["eulix"]["pairs_correct_for_another_call_of_the_caller"], 1)
+        # per call site the same edge is still judged by its line
+        self.assertEqual(r["per_call_site"]["summary"]["FP"], 1)
+
+    def test_wrong_pair_counts_once_even_if_it_lands_on_two_groups(self):
+        sites = [site(11, "Save", tline=1), site(13, "Save", tline=1, kind="function")]
+        sites[1].targets = [{"file": F, "line": 4, "name": "Save"}]
+        edges = [("func_main::a.go", "func_helper::a.go", 11), ("func_main::a.go", "func_helper::a.go", 13)]
+        for e in sites:
+            e.name = "helper"
+        r = score(nodes(), edges, sites)
+        self.assertEqual(r["summary"]["FP"], 1)
+
+    def test_unnamed_target_is_not_mapped_to_the_function_on_its_line(self):
+        # `const isFunction = typeOfTest('function')`: the call runs the arrow
+        # that typeOfTest returns, which has no eulix node of its own.
+        s = Site(F, 11, "isFunction", "function", "project", [{"file": F, "line": 6, "name": ""}])
+        r = score(nodes(), [], [s])
+        self.assertEqual(r["buckets"].get("unmapped_callee"), 1)
+        self.assertEqual(r["summary"]["FN"], 0)
 
     def test_other_language_edges_dropped(self):
         ns = nodes() | {"func_x::doc.js": Node("func_x::doc.js", "x", "function", "doc.js", 1, 9)}

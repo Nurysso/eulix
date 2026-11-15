@@ -1,6 +1,6 @@
 # bench/callgraph
 
-Scores the call graph `eulix_parser` builds (PRISM v1 and v2) against call sites resolved by each language's own tooling, on one pinned corpus per language.
+Scores the call graph `eulix_parser` builds (PRISM v1 and v2) against call sites resolved by each language's own tooling, on one pinned corpus per language. The latest written-up results are in [Call-Graph Accuracy](../../docs/libeulix/Call-Graph-Accuracy.md).
 
 ```sh
 make bench-callgraph-micro                      # tiny fixtures, ~1 min, also checks the reference tools work
@@ -39,7 +39,9 @@ Every tool writes one JSON line per call site: `file`, `line` (of the callee nam
 
 ## How scoring works
 
-The unit is the **call site**, not the edge. Every site gets one bucket:
+### Call sites
+
+Every reference call site first gets a bucket, by the eulix edge whose line matches it (the per-call-site numbers):
 
 | Bucket | Reference says | eulix | Counts as |
 | --- | --- | --- | --- |
@@ -48,23 +50,36 @@ The unit is the **call site**, not the edge. Every site gets one bucket:
 | wrong_target | calls project function X | links it only to Y | FP + FN |
 | FP_external | calls stdlib / dependency / builtin | links it to a project function | FP |
 | TN | calls stdlib / dependency / builtin | no edge | TN |
-| unknown | could not resolve (function value, missing dependency) | – | not scored |
+| unknown | could not resolve (function value, missing dependency), or a call through a library interface or method that project types implement or override | – | not scored |
 | out_of_scope | call is not inside any eulix function (top-level code) | – | not scored |
-| unmapped_callee | target has no eulix node | – | not scored |
+| unmapped_callee | target has no eulix node (including unnamed functions) | – | not scored |
 
-A correct edge plus extra edges for the same call (ambiguous name lookup) is one TP plus one FP per extra target.
+### Caller → callee pairs (the headline numbers)
+
+PRISM v2 keeps one edge per caller → callee pair, at the line of the first call, so the headline numbers count pairs. Project calls are grouped by (caller, acceptable targets), external calls by (caller, name). An eulix pair is:
+
+- **correct** (TP for every group it satisfies) when its target is acceptable for *any* of the caller's project calls, whatever line it was recorded at. The single line v2 keeps may belong to another call of the same name: another overload, or `errors.New` before `gin.New` in the same function;
+- otherwise judged once, by the call its line points at: a project call there makes it a **wrong target**, an external call a **wrongly linked external** call (that external group is then not a TN), and anything else (an unknown call, a call the reference does not have) leaves it **unverifiable**.
+
+A project group no eulix pair satisfies is an FN; an external group no eulix pair was wrongly linked to is a TN.
 
 - **precision** TP / (TP + FP); **recall** TP / (TP + FN); **F1**.
-- **accuracy** (TP + TN) / all scored sites. TN means *external calls left unlinked*, which is the only meaningful negative for a call graph; counting every unlinked function pair instead would push accuracy to ~100%.
+- **accuracy** (TP + TN) / all scored. TN means *external calls left unlinked*, which is the only meaningful negative for a call graph; counting every unlinked function pair instead would push accuracy to ~100%.
 - **specificity** TN / (TN + FP).
-- **strict precision** also counts as FP the eulix edges the reference cannot confirm ("unverifiable": no reference call with that name at that line in that caller, or a call the reference left `unknown`).
-- **edge level**: the same precision and recall over unique caller → callee pairs.
+- **strict precision** also counts unverifiable pairs as FPs.
 
-An eulix node is matched by containment: the reference target's line must fall in a node's `line_start..line_end`, and the innermost node with the same name wins. A constructor call also accepts the class node and its `constructor` / `__init__` / same-name method. eulix reports one line per call, and a multi-line chain may be reported at the line where the expression starts, so an edge with no site on its exact line may match a same-name site up to 15 lines below it in the same caller (shown as "matched via a nearby line").
+### Matching
+
+An eulix node is matched by containment: the reference target's line must fall in a node's `line_start..line_end`, and the innermost node with the same name wins. A target whose name differs from its node's (a constructor, a C++ `A::f`) may still take the node that starts on its line; an unnamed target (an arrow returned by a factory) never does, since the enclosing function only shares its line. A constructor call also accepts the class node and its `constructor` / `__init__` / same-name method. eulix reports one line per call, and a multi-line chain may be reported at the line where the expression starts, so an edge with no site on its exact line may match a same-name site up to 15 lines below it in the same caller (shown as "matched via a nearby line").
+
+The scoring was cross-checked against an independent scorer that ignores lines entirely; they agree on every TP and FN. See [How The Benchmark Was Checked](../../docs/libeulix/Call-Graph-Accuracy.md#how-the-benchmark-was-checked).
 
 ## Limits of the references
 
-- They are static. A virtual call lists every override in the project (class hierarchy analysis), so an eulix edge to one implementor is a TP, and a site's recall needs only one of them.
+- They are static. A virtual call through a project type lists every override in the project (class hierarchy analysis), so an eulix edge to one implementor is a TP, and recall needs only one of them. A call through a *library* interface or method that project types implement or override (`err.Error()`, `list.get()`) may or may not run project code, so it is `unknown`.
+- Go loads `./...` plus `testdata/` and `_`/`.`-prefixed package directories, which `./...` skips.
+- Python follows jedi's `goto`, but prefers `infer` when `goto` lands in one of jedi's bundled third-party stubs (jedi ships stubs for flask itself).
+- TypeScript follows an overload signature to the implementation.
 - Rust trait calls resolve to the trait's declaration, not to the impls, so dynamic dispatch through a bound often lands on "unmapped_callee".
-- Java and TS/JS are compiled without dependencies: calls into missing libraries are `unknown`, not `external`.
-- C/C++ calls through function pointers are `unknown`; macro-expanded calls count at the macro's call site.
+- No corpus has its dependencies installed: calls into libraries the tool cannot see are `unknown`, not `external`.
+- C/C++ calls through function pointers, and to functions that are only implicitly declared, are `unknown`; macro-expanded calls count at the macro's call site.

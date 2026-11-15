@@ -5,7 +5,7 @@ PRISM v2 is the scope-aware call-graph builder in `libeulix`: it resolves each c
 > **Crate / path:** `libeulix/src/analyze/call_graph/prism_v2.rs` (plus `prism_v2/php.rs`, `prism_v2/receivers.rs`, `prism_v2/receivers/rust_paths.rs`)  
 > **Language:** Rust  
 > **Status:** the intended default; receiver-aware for Python, TypeScript and Rust, with dedicated rules for PHP  
-> **Last verified against:** `923a577`
+> **Last verified against:** `923a577`; the Go/C kind rule and the Rust `impl` and cross-crate rules against the uncommitted fixes of 2026-11-15
 
 ## Overview
 
@@ -70,7 +70,7 @@ v2 does exactly that for a function name. It checks the **same file**, then the 
 | 3. Same directory | Definitions in the caller's directory | In most languages a directory is a package. |
 | 4. Whole project | Every definition with the name, but only if there are no more than `max_ambiguous` (default 8) | The last resort, and the only one that can abstain. |
 
-When several candidates survive on one rung, `pick` prefers the better-fitting *kind* (a plain call prefers a function, then a class; a method call prefers a method, then a function). For PHP a plain call can still fall back to a method when not strict. For Python, TypeScript and Rust a bare `foo()` never resolves to a method, then the candidate whose path shares more leading directories with the caller, and finally the lowest index, which makes the result repeatable.
+When several candidates survive on one rung, `pick` prefers the better-fitting *kind* (a plain call prefers a function, then a class; a method call prefers a method, then a function). In Go and C a class is never a candidate for a call at all: neither language has constructor calls, and `T(x)` there is a conversion or a cast. For PHP a plain call can still fall back to a method when not strict. For Python, TypeScript and Rust a bare `foo()` never resolves to a method, then the candidate whose path shares more leading directories with the caller, and finally the lowest index, which makes the result repeatable.
 
 **Why this way.** Nearer scopes are right more often than far ones, and checking them first costs almost nothing, because the candidate lists are sorted so each rung is a binary search and not a scan. The cap is the key design choice: if a name is that common and nothing nearer settled it, any pick would be a coin toss.
 
@@ -88,7 +88,11 @@ If a name comes from an import that points *outside* the project (the standard l
 
 ### Receiver-aware resolution
 
-Python, TypeScript and Rust parsers keep the *receiver* of a call (the `x` in `x.foo()`) as a separate field. For those three languages, v2 uses that receiver together with the file's imports, including Rust `use` trees, relative Python imports and relative TypeScript modules, to decide where a call goes. Other languages use the older, name-based path. Methods in those languages are still indexed under a name derived from the node id, so I would not assume that method calls resolve as well there; I did not measure the current effect.
+Python, TypeScript and Rust parsers keep the *receiver* of a call (the `x` in `x.foo()`) as a separate field. For those three languages, v2 uses that receiver together with the file's imports, including Rust `use` trees, relative Python imports and relative TypeScript modules, to decide where a call goes. Other languages use the older, name-based path. Methods in those languages are still indexed under a name derived from the node id, so method calls do not resolve there: in the [measurements](Call-Graph-Accuracy.md), no Go or Java method call is linked.
+
+**Rust `impl` blocks in another file.** The Rust parser records an `impl` block whose type is declared in another file as an impl-only entry, `impl_{Type}::{path}` (see [Knowledge Base Schema](Knowledge-Base-Schema.md)). v2 resolves `{Type}` from that file, as it would a base class, and indexes the entry's methods under the type, so `self.x()` in either file and `Type::x()` find them. A blanket impl (`impl<T> Tr for T`) is keyed `<T>` and binds to nothing.
+
+**Rust types from other crates.** A type imported from another crate (`use grep_regex::RegexMatcher`) is looked up outside the caller's crate. Files under another crate's `tests/`, `benches/` or `examples/` are never candidates, because no other crate can import them. Without Cargo metadata the package name is unknown, so a package whose directory matches the imported crate name (`grep_regex` or `regex` → `crates/regex`) is preferred over other crates' homonyms.
 
 ### Two details that avoid wrong edges
 
@@ -130,7 +134,7 @@ Resolution cost is dominated by sorting the files, building the name index, and,
 | Multiple inheritance follows breadth-first order by index, not the language's own method-resolution order. | Base-class order is not kept. | None yet. |
 | "Same directory" means exactly the same directory. | A sibling package is only reachable by the whole-project rung, under its cap. | Raise `max_ambiguous`. |
 | Resolution across languages is not blocked, except for PHP. | Only PHP is kept apart. | [PRISM-4](../Known-Issues/Parser-And-PRISM.md#prism-4-calls-resolve-across-languages). |
-| Calls to methods in Go, Java, JavaScript, C and C++ get no edge. | These languages still use the older path, which indexes methods under an id-derived name no call is spelled as. I confirmed this on 2026-11-03. | Use [PRISM v1](PRISM-V1.md) for method-heavy code in those languages. See [PRISM-2](../Known-Issues/Parser-And-PRISM.md#prism-2-v2-never-links-calls-to-methods-in-go-java-javascript-c-and-c). |
+| Calls to methods in Go and Java get no edge (Java gets no edges at all), and C++ methods defined inside a class body get no caller. | These languages still use the older path, which indexes methods under an id-derived name no call is spelled as. Measured on 2026-11-15: 0% method recall on gin and gson; JavaScript finds 76% and C++ out-of-class methods 55% through name lookup. | Use [PRISM v1](PRISM-V1.md) for method-heavy Go or Java code. See [PRISM-2](../Known-Issues/Parser-And-PRISM.md#prism-2-v2-never-links-calls-to-methods-in-go-java-javascript-c-and-c) and [Call-Graph Accuracy](Call-Graph-Accuracy.md). |
 | Calls on a receiver of unknown type get no edge, even in Python, TypeScript and Rust. | PRISM has no type inference and no longer guesses by unique name. | [PRISM-3](../Known-Issues/Parser-And-PRISM.md#prism-3-calls-on-a-receiver-of-unknown-type-get-no-edge-in-v2). |
 | No call graph above 100,000 files via `analyze_and_build`. | Memory guard in the deprecated pipeline function. | Call `build_with` directly. |
 
@@ -139,6 +143,7 @@ Other known problems (cross-language edges, dropped receivers in Go and Java, Ja
 ## Related Docs
 
 - [PRISM v1](PRISM-V1.md): the simpler, faster version.
+- [Call-Graph Accuracy](Call-Graph-Accuracy.md): measured precision and recall of v1 and v2, per language and call kind.
 - [Research write-up](Research/PRISM-V2-Methodology.md): the formal description, for readers who want the maths.
 - [Public API](Public-API.md): the functions and options.
 - [Knowledge Base Schema](Knowledge-Base-Schema.md): the node and edge types.

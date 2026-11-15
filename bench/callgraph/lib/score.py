@@ -108,7 +108,11 @@ def map_target(t: dict, kind: str, spans: SpanIndex) -> set[str]:
     file, line, name = t["file"], t["line"], t.get("name", "")
     funcs = spans.containing(file, line)
     named = [n for n in funcs if short(n.name) == short(name)]
-    pick = named[0] if named else (funcs[0] if funcs and funcs[0].start == line else None)
+    # A target with another name than its node (a constructor, a C++ `A::f`)
+    # may still be the node that starts on that line. An unnamed target (an
+    # arrow returned by a factory) is not: the enclosing function only shares
+    # its line, so it stays unmapped.
+    pick = named[0] if named else (funcs[0] if name and funcs and funcs[0].start == line else None)
     out = {pick.id} if pick else set()
     if kind == "constructor":
         classes = spans.containing(file, line, kinds=("class",))
@@ -203,6 +207,7 @@ def score(nodes: dict[str, Node], edges: list[tuple[str, str, int]], sites: list
 
     unverifiable: list[dict] = []
     fuzzy = 0
+    edge_site: dict[tuple, Site | None] = {}  # (from, to, line) -> the reference call it matched
 
     def names_match(site: Site, target: str) -> bool:
         tname = node_name(nodes, target)
@@ -234,6 +239,7 @@ def score(nodes: dict[str, Node], edges: list[tuple[str, str, int]], sites: list
             site = pick(near, to)
             if site is not None:
                 fuzzy += 1
+        edge_site[(frm, to, line)] = site
         if site is None:
             unverifiable.append({"from": frm, "to": to, "line": line, "why": "no reference call with this name here"})
             continue
@@ -288,38 +294,68 @@ def score(nodes: dict[str, Node], edges: list[tuple[str, str, int]], sites: list
 
     # --- caller -> callee pairs (the headline numbers) ---------------------------
     # PRISM v2 keeps one edge per (caller, target), at the first call line, so a
-    # function calling `free` three times is one fact, not three. Group the sites
-    # the same way: project calls by (caller, expected targets), external calls by
-    # (caller, name). A group takes its best bucket.
-    groups: dict[tuple, list[Site]] = defaultdict(list)
+    # function calling `free` three times is one fact, not three. Reference calls
+    # are grouped the same way: project calls by (caller, acceptable targets),
+    # external calls by (caller, name).
+    #
+    # An eulix pair is correct when its target is acceptable for ANY of the
+    # caller's project calls, whatever line it was recorded at: the one line v2
+    # keeps may belong to another call of the same name (another overload, or
+    # `errors.New` before `gin.New`). Only a pair that is correct for none of
+    # them is judged by the call its line points at: a project call there makes
+    # it a wrong target, an external call a wrongly linked external one, and
+    # anything else leaves it unverifiable. Each eulix pair counts once.
+    pgroups: dict[tuple, list[Site]] = defaultdict(list)
+    xgroups: dict[tuple, list[Site]] = defaultdict(list)
     for s in sites:
         if s.bucket in ("TP", "FN", "wrong_target"):
-            groups[("p", s.caller, frozenset(s.expected))].append(s)
+            pgroups[(s.caller, frozenset(s.expected))].append(s)
         elif s.bucket in ("TN", "FP_external"):
-            groups[("x", s.caller, s.name)].append(s)
+            xgroups[(s.caller, s.name)].append(s)
+    accept: dict[tuple, list[tuple]] = defaultdict(list)  # (caller, target) -> groups it satisfies
+    for key in pgroups:
+        for t in key[1]:
+            accept[(key[0], t)].append(key)
+    pair_sites: dict[tuple, list] = defaultdict(list)
+    for (frm, to, _), site in edge_site.items():
+        pair_sites[(frm, to)].append(site)
+
     pair = Counter()
     pair_kind: dict[str, Counter] = defaultdict(Counter)
     pair_dispatch: dict[str, Counter] = defaultdict(Counter)
-    for (side, _, _), members in groups.items():
-        c = Counter()
-        hits = {t for m in members for t in m.hit}
-        if side == "p":
-            exp = members[0].expected
-            wrong = hits - exp
-            if hits & exp:
-                c["TP"] += 1
-            else:
-                c["FN"] += 1
-            c["FP"] += len(wrong)
-        else:
-            if hits:
-                c["FP"] += len(hits)
-            else:
-                c["TN"] += 1
-        pair.update(c)
-        pair_kind[members[0].kind].update(c)
-        pair_dispatch[members[0].dispatch].update(c)
-    pair["unverifiable"] = len({(u["from"], u["to"]) for u in unverifiable})
+    satisfied: set[tuple] = set()
+    wrong_external: set[tuple] = set()
+    unverifiable_pairs = 0
+    rescued = 0  # correct pairs whose recorded line points at another call
+    for (frm, to), hit_sites in pair_sites.items():
+        keys = accept.get((frm, to))
+        if keys:
+            satisfied.update(keys)
+            if not any(h is not None and to in h.expected for h in hit_sites):
+                rescued += 1
+            continue
+        proj = next((h for h in hit_sites if h is not None and h.bucket in ("TP", "FN", "wrong_target")), None)
+        ext = next((h for h in hit_sites if h is not None and h.bucket in ("TN", "FP_external")), None)
+        judged = proj or ext
+        if judged is None:
+            unverifiable_pairs += 1
+            continue
+        if proj is None:
+            wrong_external.add((frm, ext.name))
+        pair["FP"] += 1
+        pair_kind[judged.kind]["FP"] += 1
+        pair_dispatch[judged.dispatch]["FP"] += 1
+    for key, members in pgroups.items():
+        k = "TP" if key in satisfied else "FN"
+        pair[k] += 1
+        pair_kind[members[0].kind][k] += 1
+        pair_dispatch[members[0].dispatch][k] += 1
+    for key, members in xgroups.items():
+        if key not in wrong_external:
+            pair["TN"] += 1
+            pair_kind[members[0].kind]["TN"] += 1
+            pair_dispatch[members[0].dispatch]["TN"] += 1
+    pair["unverifiable"] = unverifiable_pairs
 
     # --- node coverage ----------------------------------------------------------------
     called = {t for _, t, _ in uniq}
@@ -362,6 +398,7 @@ def score(nodes: dict[str, Node], edges: list[tuple[str, str, int]], sites: list
             "colliding_ids": sum(1 for n in nodes.values() if n.more),
             "cross_language_edges": cross_lang,
             "fuzzy_line_matches": fuzzy,
+            "pairs_correct_for_another_call_of_the_caller": rescued,
             "extra_targets": extra_fp,
             "methods_with_caller": sum(n.id in called for n in meth),
             "expected_callees": len(expected_targets),

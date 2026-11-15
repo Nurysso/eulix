@@ -60,7 +60,7 @@ The call-graph builders return a `CallGraph` with `nodes` and `edges`. Nodes car
 
 **The problem.** A file name is the only hint about the language, but `.h` could be C or C++, and `.inc` could be PHP, C or assembler.
 
-**The approach.** A single table maps extensions and a few special file names to a `Language`. The lookup tries the exact extension first, then a lowercase version, then the file name. `.h` is treated as C. For `.inc`, `parse_source` goes one step further and accepts the file as PHP only if it contains a PHP opening tag.
+**The approach.** A single table maps extensions and a few special file names to a `Language`. The lookup tries the exact extension first, then a lowercase version, then the file name. `.h` maps to C. For two extensions `parse_source` then looks at the text: a `.h` file with C++-only syntax outside comments and strings (a class with a body or base list, a namespace, a template, an access specifier, the `::` scope operator) goes to the C++ parser, and an `.inc` file is accepted as PHP only if it contains a PHP opening tag.
 
 **Why this way.** Keeping one table as the single source of truth means the detector and `Language::extensions()` can never disagree.
 

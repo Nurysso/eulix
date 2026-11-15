@@ -109,15 +109,15 @@ Most entries were found with the benchmark in `eulix-lsp/bench/` (see [LSP Index
 
 ---
 
-## LSP-9: C structs and macros are not indexed
+## LSP-9: C macros are not indexed
 
-**Severity:** Medium · **Status:** Limitation · **Verification:** Reproduced
+**Severity:** Medium · **Status:** Partly fixed · **Verification:** Reproduced; the struct part fixed on 2026-11-15 and checked with a parser test, the kernel not re-run
 
 **Symptom.** On the Linux kernel, 11 of 20 opened files had an empty outline. They were headers with only macros, structs and prototypes; `pci_clp.h` has 16 structs and showed none. Go-to-definition found nothing on 49 of 60 call sites, many of them macros such as `blogic_err`.
 
-**Cause.** The parser extracts functions and classes, not C structs, enums or `#define` macros.
+**Cause.** Two things. The structs were hidden by a parser bug: the C and C++ parsers skipped everything inside `#if`/`#ifdef` blocks, and an include guard wraps every header. That is fixed (see [Fixed Issues](Fixed-Issues.md#parser-and-prism)), so structs, enums and functions in guarded headers and `#ifdef` blocks now reach the outline; I did not re-run the kernel, so whether all 16 structs of `pci_clp.h` now show is not confirmed. `#define` macros are still not extracted, and a prototype is a declaration, not a definition, so a header of only macros and prototypes still has an empty outline, and go-to-definition on a macro still finds nothing.
 
-**Fix direction.** Extract structs, enums and function-like macros in `libeulix` for C and C++. See also [PARSE-3](Parser-And-PRISM.md#parse-3-c-and-c-files-parse-only-partly).
+**Fix direction.** Extract function-like macros in `libeulix` for C and C++. See also [PARSE-3](Parser-And-PRISM.md#parse-3-c-and-c-files-parse-only-partly).
 
 ---
 

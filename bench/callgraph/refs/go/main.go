@@ -39,6 +39,7 @@ type site struct {
 	Status   string   `json:"status"`
 	Dispatch string   `json:"dispatch"`
 	Targets  []target `json:"targets"`
+	Why      string   `json:"why,omitempty"`
 }
 
 var root string
@@ -74,7 +75,32 @@ func main() {
 		Tests: true,
 		Env:   append(os.Environ(), "GOFLAGS=-mod=mod", "GOWORK=off"),
 	}
-	pkgs, err := packages.Load(cfg, "./...")
+	// `./...` skips testdata/ and directories starting with `_` or `.`; eulix
+	// parses those files too, so load each such directory as its own pattern.
+	patterns := []string{"./..."}
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() || p == root {
+			return nil
+		}
+		name := d.Name()
+		if name == ".git" || name == "node_modules" || name == "vendor" {
+			return filepath.SkipDir
+		}
+		rel, _ := filepath.Rel(root, p)
+		hidden := false
+		for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+			if part == "testdata" || strings.HasPrefix(part, "_") || strings.HasPrefix(part, ".") {
+				hidden = true
+			}
+		}
+		if hidden {
+			if gos, _ := filepath.Glob(filepath.Join(p, "*.go")); len(gos) > 0 {
+				patterns = append(patterns, "./"+filepath.ToSlash(rel))
+			}
+		}
+		return nil
+	})
+	pkgs, err := packages.Load(cfg, patterns...)
 	must(err)
 	nerr := 0
 	packages.Visit(pkgs, nil, func(p *packages.Package) { nerr += len(p.Errors) })
@@ -104,9 +130,13 @@ func main() {
 			}
 		}
 	}
-	implCache := map[*types.Func][]*types.Func{}
+	type implKey struct {
+		m     *types.Func
+		iface *types.Interface
+	}
+	implCache := map[implKey][]*types.Func{}
 	implementors := func(m *types.Func, iface *types.Interface) []*types.Func {
-		if r, ok := implCache[m]; ok {
+		if r, ok := implCache[implKey{m, iface}]; ok {
 			return r
 		}
 		var out []*types.Func
@@ -123,7 +153,7 @@ func main() {
 				out = append(out, f)
 			}
 		}
-		implCache[m] = out
+		implCache[implKey{m, iface}] = out
 		return out
 	}
 
@@ -152,11 +182,13 @@ func main() {
 					fun = x.X
 				}
 				var id *ast.Ident
+				var selExpr *ast.SelectorExpr
 				switch x := fun.(type) {
 				case *ast.Ident:
 					id = x
 				case *ast.SelectorExpr:
 					id = x.Sel
+					selExpr = x
 				default:
 					return true // func literal, call result, etc.
 				}
@@ -190,6 +222,11 @@ func main() {
 						if _, inProj := rel(fset.Position(o.Pos()).Filename); inProj {
 							// the interface method itself is a fair static target too
 							fns = append([]*types.Func{o}, implementors(o, recv.Type().Underlying().(*types.Interface))...)
+						} else if pi := projectInterface(info, selExpr, fset, rel); pi != nil {
+							// A method of an outside interface (http.Flusher.Flush) called
+							// through a project interface that embeds it: only types that
+							// implement the project interface can receive the call.
+							fns = implementors(o, pi)
 						}
 					} else {
 						fns = []*types.Func{o}
@@ -204,6 +241,12 @@ func main() {
 						s.Status = "project"
 					} else if _, inProj := rel(fset.Position(o.Pos()).Filename); inProj {
 						s.Status = "unknown" // project interface with no implementor
+					} else if recv := sig.Recv(); recv != nil && types.IsInterface(recv.Type()) &&
+						len(implementors(o, recv.Type().Underlying().(*types.Interface))) > 0 {
+						// An outside interface (error, io.Writer) that project types
+						// implement: the call may run project code or not.
+						s.Status = "unknown"
+						s.Why = "outside interface with project implementations"
 					} else {
 						s.Status = "external"
 					}
@@ -216,7 +259,29 @@ func main() {
 			})
 		}
 	}
-	_ = token.NoPos
+}
+
+// The receiver's static type, when it is an interface declared in the project.
+func projectInterface(info *types.Info, sel *ast.SelectorExpr, fset *token.FileSet, rel func(string) (string, bool)) *types.Interface {
+	if sel == nil {
+		return nil
+	}
+	selection := info.Selections[sel]
+	if selection == nil {
+		return nil
+	}
+	t := selection.Recv()
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok || !types.IsInterface(named) {
+		return nil
+	}
+	if _, inProj := rel(fset.Position(named.Obj().Pos()).Filename); !inProj {
+		return nil
+	}
+	return named.Underlying().(*types.Interface)
 }
 
 func must(err error) {

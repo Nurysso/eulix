@@ -60,16 +60,17 @@ KnowledgeBase
 
 ### Data In, Data Out
 
-**Ids.** Every function, method and class has an `id` that is unique within the project. The parsers build them from a kind prefix, the name and the file path:
+**Ids.** Every function, method and class has an `id`, meant to be unique within the project; overloads, and a definition repeated in both branches of an `#if`/`#else`, can share one ([PARSE-8](../Known-Issues/Parser-And-PRISM.md#parse-8-overloads-and-same-name-definitions-in-one-file-share-one-id)). The parsers build them from a kind prefix, the name and the file path:
 
 | Kind | Id format | Example |
 | --- | --- | --- |
 | Function | `func_{name}::{path}` | `func_helper::app/models.py` |
 | Method | `method_{Class}_{name}::{path}` | `method_Form_save::app/models.py` |
 | Type | `class_`, `struct_`, `interface_`, `trait_`, `enum_` or `union_`, then `{name}::{path}` | `class_Form::app/models.py` |
+| Rust `impl` block for a type declared elsewhere | `impl_{Type}::{path}`: a `Class` with the decorator `impl` and `lang_info.rust.item_kind` set to `impl`, whose methods keep `method_{Type}_{name}::{path}` ids. A blanket impl (`impl<T: Tr> Tr for T`) is `impl_<T>::{path}` | `impl_E::src/other.rs` |
 | Nested function | `{scope}.{inner}::{path}`, tagged `nested`. `{scope}` is the enclosing function's or method's id without the path, so a function nested in a method looks like `method_Form_save.helper::{path}`. On a name clash `@{line}` is added: `{scope}.{inner}@{line}::{path}` | `func_outer.helper::a.rs`, `func_outer.helper@12::a.rs` |
 
-Which type prefix is used depends on the language and the declaration (Go and C use `struct_`, JavaScript uses `class_`, TypeScript and Java interfaces use `interface_`, Rust traits use `trait_`). Ids are how the call graph refers to nodes, so treat them as opaque strings and do not parse them in your own code.
+Which type prefix is used depends on the language and the declaration (Go and C use `struct_`, JavaScript uses `class_`, TypeScript and Java interfaces use `interface_`, Rust traits use `trait_`). Ids are how the call graph refers to nodes, so treat them as opaque strings and do not parse them in your own code. An `impl_` entry is not a type of its own: PRISM v2 gives its methods to the type that `{Type}` resolves to from that file, and never links a call to the entry itself.
 
 **Edges.** A `CallGraphEdge` has `edge_type` set to `call` or `inheritance`, a `conditional` flag, and `call_site_line`. The type's source comment also mentions `uses`, but neither PRISM version emits it.
 

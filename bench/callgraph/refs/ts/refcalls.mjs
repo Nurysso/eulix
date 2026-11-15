@@ -119,6 +119,12 @@ function overriders(decl) {
 function resolve(node) {
   const sig = checker.getResolvedSignature(node);
   let d = sig?.declaration;
+  // An overload signature has no body: the call runs the implementation.
+  if (d && (ts.isFunctionDeclaration(d) || ts.isMethodDeclaration(d)) && !d.body && d.name) {
+    const sym = checker.getSymbolAtLocation(d.name);
+    const impl = sym?.declarations?.find((x) => x.body);
+    if (impl) d = impl;
+  }
   if (!d || ts.isJSDocSignature?.(d)) {
     let expr = node.expression;
     if (ts.isPropertyAccessExpression(expr)) expr = expr.name;

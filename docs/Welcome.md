@@ -64,7 +64,7 @@ eulix vizeulize                         # explore the call graph in a browser
 
 ## What to know before you rely on it
 
-- **The call graph is approximate.** It links calls by names and scopes, not by types. Treat edges as strong hints, not proof. See [PRISM v2](libeulix/PRISM-V2.md).
+- **The call graph is approximate.** It links calls by names and scopes, not by types. Treat edges as strong hints, not proof. See [PRISM v2](libeulix/PRISM-V2.md), and [Call-Graph Accuracy](libeulix/Call-Graph-Accuracy.md) for how often its edges are right in each language: function calls are reliable everywhere, method calls are often missed, and Java gets no edges from PRISM v2.
 - **Some languages are better covered than others.** Method calls resolve best in Python, TypeScript and Rust today. See [Known Issues](Known-Issues/Overview.md).
 - **The model is optional and replaceable.** Local models (Ollama, LM Studio, vLLM) and many hosted providers work. See [Llm](eulix-cli/Llm.md).
 - **Your code stays on your machine** unless you choose a hosted model, in which case the retrieved snippets are sent to that provider.
