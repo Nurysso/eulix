@@ -1314,3 +1314,62 @@ func TestSkeletonPointers_DanglingOnMergedRangePartialEviction(t *testing.T) {
 		t.Errorf("merged pointer claims evicted child B: %v\n--- parent ---\n%s", bad, out[0].Content)
 	}
 }
+
+func TestHydrateSourceCodeStaysInsideSourceRoot(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "repo")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(dir, "secret.py")
+	if err := os.WriteFile(outside, []byte("key = 'SYNTHETIC_SECRET'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link.py")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "inside.py"), []byte("def ok():\n    return 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cb := &ContextBuilder{sourceRoot: root, config: config.DefaultConfig(), debugLog: newDebugLog(t)}
+	for _, p := range []string{"../secret.py", "link.py"} {
+		chunk := Chunk{ID: p, File: p, ChunkType: "function", StartLine: 1, EndLine: 1}
+		got := cb.hydrateSourceCode([]Chunk{chunk}, 1000, 100)
+		if len(got) > 0 && strings.Contains(got[0].Content, "SYNTHETIC_SECRET") {
+			t.Errorf("%s returned content from outside the source root", p)
+		}
+	}
+
+	chunk := Chunk{ID: "func_ok::inside.py", File: "inside.py", ChunkType: "function", StartLine: 1, EndLine: 2}
+	got := cb.hydrateSourceCode([]Chunk{chunk}, 1000, 100)
+	if len(got) != 1 || !strings.Contains(got[0].Content, "return 1") {
+		t.Errorf("file inside the root was not hydrated: %+v", got)
+	}
+}
+
+// Previously TestIssueSourceEscape; it confirmed the bug where
+// hydrateSourceCode read a file outside the source root through "../" or a
+// symlink. Neither may leak content from outside the root.
+func TestHydrateSourceCodeRejectsPathsOutsideRoot(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "repo")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(dir, "secret.py")
+	if err := os.WriteFile(outside, []byte("key = 'SYNTHETIC_SECRET'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link.py")); err != nil {
+		t.Fatal(err)
+	}
+	cb := &ContextBuilder{sourceRoot: root, config: config.DefaultConfig()}
+	for _, p := range []string{"../secret.py", "link.py"} {
+		chunk := Chunk{ID: p, File: p, ChunkType: "function", StartLine: 1, EndLine: 1}
+		got := cb.hydrateSourceCode([]Chunk{chunk}, 1000, 100)
+		if len(got) > 0 && strings.Contains(got[0].Content, "SYNTHETIC_SECRET") {
+			t.Errorf("%s returned content from outside the root", p)
+		}
+	}
+}

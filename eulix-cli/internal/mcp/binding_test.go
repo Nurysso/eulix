@@ -209,3 +209,98 @@ func TestAnswersHideIgnoredFilesFromKBReports(t *testing.T) {
 		})
 	}
 }
+
+// Previously TestPRGap8LexicalSearchDoesNotFollowRootReplacedAfterBind (review
+// gap #8), which confirmed this bug: once bound, the root is pinned. If the
+// real folder later becomes a symlink to another repository, a search must not
+// read that repository while the router and indexes still belong to the first
+// one.
+func TestLexicalSearchDoesNotFollowRootReplacedAfterBind(t *testing.T) {
+	repoA := billing(t, map[string]string{"alpha.py": "ALPHA_ONLY_MARKER\n"})
+	repoB := billing(t, map[string]string{"beta.py": "BETA_ONLY_MARKER\n"})
+	s := newTestServer(t)
+	if _, err := s.SetRepoPath(repoA); err != nil {
+		t.Fatal(err)
+	}
+	active := s.GetActiveRepo()
+	moveAside(t, active)
+	if err := os.Symlink(repoB, active); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	got, err := lexicalSearch(context.Background(), active, "BETA_ONLY_MARKER", nil, DefaultStrategyConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "beta.py") {
+		t.Fatalf("search switched to another repository after the bind:\n%s", got)
+	}
+}
+
+// Previously TestPRGap4QueryDoesNotFollowSymlinkToExcludedFile (review gap #4),
+// which confirmed this bug: reading source for an answer must not follow a
+// symlink that the index lists under a visible name to a hidden or ignored
+// file.
+func TestQueryDoesNotFollowSymlinkToExcludedFile(t *testing.T) {
+	const query = "how does payment_total work"
+	secret := "def payment_total(items):\n    payment_key = '" + secretMarker + "'\n    return 1\n"
+
+	t.Run("control: a regular file is returned", func(t *testing.T) {
+		cs := connect(t, newTestServer(t))
+		got, _ := call(t, cs, "query", map[string]any{"query": query, "repo_path": billing(t, nil)})
+		if !strings.Contains(got, "def payment_total(items):") {
+			t.Fatalf("query did not render the source, so the leak checks below prove nothing:\n%s", got)
+		}
+	})
+
+	for _, tc := range []struct{ name, excluded string }{
+		{"hidden file", ".env"},
+		{"ignored file", "secrets.py"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := billing(t, map[string]string{tc.excluded: secret, ".euignore": "secrets.py\n"})
+			visible := filepath.Join(repo, "app", "billing.py")
+			if err := os.Remove(visible); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join("..", tc.excluded), visible); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			cs := connect(t, newTestServer(t))
+			got, _ := call(t, cs, "query", map[string]any{"query": query, "repo_path": repo})
+			if strings.Contains(got, secretMarker) {
+				t.Fatalf("query followed a symlink to %s:\n%s", tc.excluded, got)
+			}
+		})
+	}
+}
+
+// Previously TestPRGap5CallGraphHidesIgnoredFiles (review gap #5), which
+// confirmed this bug: a call graph built before a file was ignored must not
+// name that file or its functions.
+func TestCallGraphHidesIgnoredFiles(t *testing.T) {
+	repo := leakyProject(t)
+	writeTree(t, repo, map[string]string{".eulix/kb_call_graph.json": `{
+		"nodes":[
+			{"id":"func_payment_secret::secrets.py","node_type":"function","file":"secrets.py"},
+			{"id":"func_payment_total::app/billing.py","node_type":"function","file":"app/billing.py"}],
+		"edges":[
+			{"from":"func_payment_total::app/billing.py","to":"func_payment_secret::secrets.py","edge_type":"call"}]}`})
+	cs := connect(t, newTestServer(t))
+	if _, isErr := call(t, cs, "set_repo_path", map[string]any{"repo_path": repo}); isErr {
+		t.Fatal("bind failed")
+	}
+
+	got, _ := call(t, cs, "query", map[string]any{"query": "call graph of payment_total"})
+	if !strings.Contains(got, "app/billing.py") {
+		t.Fatalf("visible function missing from the call graph:\n%s", got)
+	}
+	if strings.Contains(got, "payment_secret") {
+		t.Errorf("call graph named a function from an ignored file:\n%s", got)
+	}
+
+	got, _ = call(t, cs, "query", map[string]any{"query": "who calls payment_secret"})
+	if strings.Contains(got, "secrets.py") {
+		t.Errorf("call graph named an ignored file:\n%s", got)
+	}
+}

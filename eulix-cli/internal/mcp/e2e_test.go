@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -263,18 +264,19 @@ func leakyProject(t *testing.T) string {
 	secret := func(name string) string {
 		return "def " + name + "():\n    payment_key = '" + secretMarker + "'\n"
 	}
-	repo := billing(t, map[string]string{
-		".env":                      "PAYMENT_KEY=" + secretMarker + "\n",
-		".config/payment.py":        secret("payment_hidden_dir"),
-		".euignore":                 "secrets.py\nconfig/**/secrets.py\n**/private/**\n",
-		"secrets.py":                secret("payment_secret"),
-		"config/secrets.py":         secret("payment_config"),
-		"config/eu/prod/secrets.py": secret("payment_config_eu"),
-		"a/private/x.py":            secret("payment_private"),
-		"svc/payments/.euignore":    "creds.py\n",
-		"svc/payments/creds.py":     secret("payment_creds"),
-		"node_modules/pay/index.py": secret("payment_vendored"),
-	},
+	repo := billing(
+		t, map[string]string{
+			".env":                      "PAYMENT_KEY=" + secretMarker + "\n",
+			".config/payment.py":        secret("payment_hidden_dir"),
+			".euignore":                 "secrets.py\nconfig/**/secrets.py\n**/private/**\n",
+			"secrets.py":                secret("payment_secret"),
+			"config/secrets.py":         secret("payment_config"),
+			"config/eu/prod/secrets.py": secret("payment_config_eu"),
+			"a/private/x.py":            secret("payment_private"),
+			"svc/payments/.euignore":    "creds.py\n",
+			"svc/payments/creds.py":     secret("payment_creds"),
+			"node_modules/pay/index.py": secret("payment_vendored"),
+		},
 		fxFunc{".env", "payment_env", 1, 1},
 		fxFunc{"secrets.py", "payment_secret", 1, 2},
 		fxFunc{"config/eu/prod/secrets.py", "payment_config_eu", 1, 2},
@@ -399,7 +401,8 @@ func TestE2EUsageQueryReadsOnlyInsideTheRepo(t *testing.T) {
 // range past the end of a file, inverted, or zero must not fail the query or
 // take the server down (the SDK does not recover handler panics).
 func TestE2EStaleLineRangesDoNotBreakQueries(t *testing.T) {
-	repo := billing(t, map[string]string{"app/short.py": "def payment_refund():\n    pass\n"},
+	repo := billing(
+		t, map[string]string{"app/short.py": "def payment_refund():\n    pass\n"},
 		fxFunc{"app/short.py", "payment_refund", 40, 90},
 		fxFunc{"app/short.py", "payment_void", 9, 2},
 		fxFunc{"app/short.py", "payment_zero", 0, 0},
@@ -616,5 +619,47 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Previously TestPRGap9FixturesWorkBehindSymlinkedTempDir (review gap #9),
+// which confirmed this bug: the active repository is now fully resolved, so
+// fixtures must be too. macOS temp folders sit behind a symlink; pointing
+// TMPDIR at one here shows the same failure on any Unix system.
+func TestFixturesWorkBehindSymlinkedTempDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not use TMPDIR")
+	}
+	base := t.TempDir()
+	realTmp := filepath.Join(base, "real")
+	if err := os.Mkdir(realTmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(realTmp, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv("TMPDIR", link)
+
+	t.Run("fixture", func(t *testing.T) {
+		repo := billing(t, nil)
+		s := newTestServer(t)
+		if _, err := s.SetRepoPath(repo); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.GetActiveRepo(); got != repo {
+			t.Fatalf("active repository = %q, fixture path = %q; tests comparing them fail on macOS", got, repo)
+		}
+	})
+}
+
+// Previously TestPRGap10URIPathEncodedExtendedLengthHost (review gap #10),
+// which confirmed this bug: the percent-encoded extended-length prefix can also
+// arrive in the host position, where url.Parse rejects it.
+func TestURIPathEncodedExtendedLengthHost(t *testing.T) {
+	const uri = "file://%3F/C%3A/repo"
+	want := filepath.FromSlash("//?/C:/repo")
+	if got := uriPath(uri, true); got != want {
+		t.Fatalf("uriPath(%q, windows=true) = %q, want %q", uri, got, want)
 	}
 }

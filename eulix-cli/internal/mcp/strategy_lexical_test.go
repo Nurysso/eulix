@@ -7,13 +7,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"eulix/internal/config"
 	"eulix/internal/utils"
@@ -218,6 +223,7 @@ func (emptyRetriever) OpenEnded(context.Context, string, bool) (string, error) {
 func (emptyRetriever) Anchored(context.Context, string, []string, bool) (string, error) {
 	return "", nil
 }
+
 func (emptyRetriever) MultiHop(context.Context, string, []string, []string, bool) (string, error) {
 	return "", nil
 }
@@ -413,5 +419,109 @@ func TestLexicalSearchStopsWhenCancelled(t *testing.T) {
 	cancel()
 	if _, err := lexicalSearch(ctx, root, "payment", nil, DefaultStrategyConfig()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("want context.Canceled, got %v", err)
+	}
+}
+
+// Previously TestPRGap1LexicalWalkDoesNotFollowSwappedSymlink (review gap #1),
+// which confirmed this bug: the walk learns a file's type when it lists the
+// folder and reads it later, so a file swapped for a symlink in between must
+// not be followed.
+func TestLexicalWalkDoesNotFollowSwappedSymlink(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.go")
+	writeTree(t, filepath.Dir(outside), map[string]string{"secret.go": "// marker " + secretMarker + "\n"})
+	for i := range 300 {
+		writeTree(t, root, map[string]string{fmt.Sprintf("a_%03d.go", i): "package filler\n"})
+	}
+	target := filepath.Join(root, "z_target.go")
+	writeTree(t, root, map[string]string{"z_target.go": "// marker SAFE\n"})
+	if err := os.Symlink(outside, target+".probe"); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_ = os.Remove(target + ".probe")
+
+	var stop atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tmp := target + ".tmp"
+		for !stop.Load() {
+			_ = os.Symlink(outside, tmp)
+			_ = os.Rename(tmp, target)
+			_ = os.WriteFile(tmp, []byte("// marker SAFE\n"), 0o600)
+			_ = os.Rename(tmp, target)
+		}
+	}()
+	defer func() { stop.Store(true); <-done }()
+
+	for i, deadline := 1, time.Now().Add(2*time.Second); time.Now().Before(deadline); i++ {
+		got, err := lexicalSearch(context.Background(), root, "marker", nil, DefaultStrategyConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(got, secretMarker) {
+			t.Fatalf("search %d returned a file from outside the repository:\n%s", i, got)
+		}
+	}
+}
+
+// Previously TestPRGap2LexicalSearchMemoryStaysBounded (review gap #2), which
+// confirmed this bug: only the top files are shown, so holding every match in
+// memory is a waste that can take the server down on a large repository.
+func TestLexicalSearchMemoryStaysBounded(t *testing.T) {
+	if testing.Short() {
+		t.Skip("writes about 150 MiB")
+	}
+	root := t.TempDir()
+	body := []byte(strings.Repeat("marker line of ordinary source code here\n", 12_000))
+	const files = 300
+	for i := range files {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("f%03d.go", i)), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	corpus := uint64(len(body) * files)
+
+	// HeapAlloc is process-wide and includes garbage not yet collected. With
+	// the default GOGC=100 the search's garbage can pile up to the size of
+	// whatever else is live (other tests' leftovers under -count=N) before a
+	// GC runs, which reads as growth. A low GOGC keeps that headroom to ~10%
+	// of the live heap, so the peak measures what the search itself holds.
+	// Not parallel, so changing the process-wide setting is safe here.
+	defer debug.SetGCPercent(debug.SetGCPercent(10))
+
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	baseline := m.HeapAlloc
+
+	var peak atomic.Uint64
+	stop := make(chan struct{})
+	sampled := make(chan struct{})
+	go func() {
+		defer close(sampled)
+		var s runtime.MemStats
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(time.Millisecond):
+			}
+			runtime.ReadMemStats(&s)
+			if s.HeapAlloc > peak.Load() {
+				peak.Store(s.HeapAlloc)
+			}
+		}
+	}()
+	_, err := lexicalSearch(context.Background(), root, "marker", nil, DefaultStrategyConfig())
+	close(stop)
+	<-sampled
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if grown := peak.Load() - min(baseline, peak.Load()); grown > corpus/3 {
+		t.Fatalf("heap grew %d MiB while searching a %d MiB repository; matches should not stay in memory",
+			grown>>20, corpus>>20)
 	}
 }
