@@ -1,6 +1,6 @@
 # Changelog
 
-## VizEulize 0.2.0
+## VizEulize 0.2.0 - 2026-11-16
 
 Changes since the first release, which shipped with Eulix v0.8.3.
 

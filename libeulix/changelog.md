@@ -1,6 +1,6 @@
 # Changelog
 
-## libeulix 0.9.0
+## libeulix 0.9.0 - 2026-11-16
 
 Changes since 0.8.2, the version that shipped with Eulix v0.8.3. This is a breaking release: `LanguageSpecificInfo` has a new `PhpInfo` variant, serialized maps are now `BTreeMap`/`BTreeSet`, `FunctionCall` has a new field, and some symbol IDs changed shape (see Changed).
 

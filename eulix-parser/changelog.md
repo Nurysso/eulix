@@ -1,6 +1,6 @@
 # Changelog
 
-## Eulix_parser v0.9.0 - Unreleased
+## Eulix_parser v0.9.0 - 2026-11-16
 
 Changes since v0.8.1, the version that shipped with Eulix v0.8.3. Built on libeulix 0.9.0, so it also gets the PHP parser, the iterative tree walks and the call-graph fixes listed in [libeulix/changelog.md](../libeulix/changelog.md).
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## Eulix_embed v0.4.2 - Unreleased
+## Eulix_embed v0.4.2 - 2026-11-16
 
 Changes since v0.4.1, the version that shipped with Eulix v0.8.3.
 

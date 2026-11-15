@@ -1,6 +1,6 @@
 # Changelog
 
-## Eulix v0.9.0 - Unreleased
+## Eulix v0.9.0 - 2026-11-16
 
 Changes since v0.8.3 (2026-10-14). Each component's changelog has the full list.
 
@@ -9,7 +9,7 @@ Changes since v0.8.3 (2026-10-14). Each component's changelog has the full list.
 | eulix CLI    | v0.8.3 → v0.9.0 | [eulix-cli/changelog.md](eulix-cli/changelog.md)       |
 | eulix_parser | 0.8.1 → 0.9.0   | [eulix-parser/changelog.md](eulix-parser/changelog.md) |
 | libeulix     | 0.8.2 → 0.9.0   | [libeulix/changelog.md](libeulix/changelog.md)         |
-| eulix-lsp    | 0.2.0 (unreleased, `make install lsp`) | [eulix-lsp/changelog.md](eulix-lsp/changelog.md) |
+| eulix-lsp    | 0.2.0 (not released with v0.9.0; still in testing, try it with `make install lsp`) | [eulix-lsp/changelog.md](eulix-lsp/changelog.md) |
 | eulix_embed  | 0.4.1 → 0.4.2   | [eulix-embed/changelog.md](eulix-embed/changelog.md)   |
 | VizEulize    | → 0.2.0 (installed by `install.sh`) | [vizEulize/changelog.md](vizEulize/changelog.md) |
 
@@ -17,11 +17,12 @@ libeulix is published on crates.io.
 
 ### Highlights
 
-- **PHP support** end to end: a PHP parser and PHP call resolution in libeulix, `php` in eulix_parser, comment stripping and signatures in retrieval, and references and call hierarchy in eulix-lsp.
+- **PHP support** end to end: a PHP parser and PHP call resolution in libeulix, `php` in eulix_parser, and comment stripping and signatures in retrieval. References and call hierarchy for PHP are in eulix-lsp, which is not part of this release.
 - **Incremental parsing:** eulix_parser reuses unchanged files from `.eulix/parse_cache/`, and the output matches a full parse byte for byte.
 - **EHNAS**, a new retrieval engine alongside etiya, with engine-specific configuration.
-- **More accurate call graphs:** receiver-aware method calls for Python, TypeScript and Rust, nested functions with scoped IDs, and a deterministic PRISM v1. C++ templates and inline members, decorated Python methods, TypeScript functions bound to variables and methods of generic Rust impls are no longer dropped.
+- **More accurate call graphs:** receiver-aware method calls for Python, TypeScript and Rust, nested functions with scoped IDs, and a deterministic PRISM v1. C++ templates and inline members, decorated Python methods, TypeScript functions bound to variables and methods of generic Rust impls are no longer dropped. Neither are items in Rust inline `mod` blocks (including `#[cfg(test)] mod tests`), Rust `impl` blocks in another file than their type, C/C++ code inside `#if`/`#ifdef` blocks and include guards, or C++ classes in `.h` headers and behind export macros. Go and C calls no longer resolve to struct types.
 - **Steadier parsing:** every grammar walks its syntax tree without recursion, every output comes out in the same order on every run, and files with invalid UTF-8 are parsed as partial instead of failing.
+- **Call-graph accuracy, measured:** a harness scores PRISM v1 and v2 against each language's own compiler or type checker (go/types, javac, jedi, rust-analyzer, the TypeScript checker, libclang) on one pinned project per language. PRISM v2 is 98–100% precise in C, TypeScript, Python and Rust; Go and Java method calls are still not linked. Results: [Call-Graph Accuracy](docs/libeulix/Call-Graph-Accuracy.md).
 - **Vector search fix:** embedding rows are matched to chunks by id. Before, every vector from the second file on was paired with the wrong chunk.
 - **Security:** MCP and retrieval no longer read hidden, `.euignore`d or out-of-repo files, symlink and `.eulix` escapes are closed, and eulix_embed blocks `trust_remote_code`.
 - **Windows:** a native build script, `.env` locked to its owner, and safer parser installs and file opening.
@@ -49,12 +50,15 @@ libeulix is published on crates.io.
 - Documentation rewritten from the current code, one folder per subsystem (libeulix, eulix-parser, eulix-embed, eulix-cli, vizEulize), plus Welcome, Installation, Architecture (spill to disk, incremental parsing) and Known-Issues pages. Known issues have IDs, severity, status and how each was verified, and fixed issues are recorded (#157).
 - PHP is in the README's language lists and support table (#83).
 - LSP architecture and benchmarking notes (#165).
+- [Call-Graph Accuracy](docs/libeulix/Call-Graph-Accuracy.md): precision, recall and coverage per language and call kind, before and after the parser fixes. New known issues PRISM-10, PRISM-11, PARSE-7 to PARSE-9 have reproductions; PARSE-5 and PARSE-6 are fixed.
 - Component READMEs corrected: command tables, config reference, function names, license, binary and file names (#157).
 
 ### Benchmarks and scripts
 
 - `make bench-compare A=... B=...` compares two versions with isolated builds and `HOME`, cached by commit. It measures accuracy, indexing and query time and memory, and parser quality (GPU with CPU fallback) on eulix, flask, gin, ripgrep, gson and Linux (`--large`), flags regressions over 10%, writes a Markdown report and exits 1. A v0.8.3 comparison is included (`f816dcd`).
 - Scripts used to find bugs are under `scripts/` (#157).
+- `make bench-callgraph` scores the call graph against language tooling on gin, gson, flask, ripgrep, class-validator, axios, cJSON and tinyxml2 (`make bench-callgraph-micro` for small per-language fixtures). The harness was audited against an independent scorer and Go's own `callgraph` tool before the results were published (`01b1695`, `cfbb39a`).
+- `scripts/parser_perf.sh` times the parser binary on one or more repositories (`645722c`).
 
 ## Eulix_embed v0.4.1 (2026-10-02)
 

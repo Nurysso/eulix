@@ -1,6 +1,6 @@
 # Changelog
 
-## Eulix CLI 0.9.0 - Unreleased
+## Eulix CLI 0.9.0 - 2026-11-16
 
 Changes since v0.8.3.
 
