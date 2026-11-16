@@ -133,6 +133,49 @@ class ScoreTest(unittest.TestCase):
         r = score(ns, [("func_A::go::a.cpp", "func_A::run::a.cpp", 8)], [s], lang="cpp")
         self.assertEqual(r["summary"]["TP"], 1)
 
+    def test_recall_all_counts_calls_the_front_end_cannot_see(self):
+        sites = [
+            site(11, "Save", tline=1),   # scored, found
+            site(30, "helper", tline=6),  # outside every eulix function
+            site(12, "Gone", tline=50),   # callee has no eulix node
+            site(31, "Println", status="external"),  # outside, but external: not a miss
+        ]
+        r = score(nodes(), [("func_main::a.go", "method_S_Save::a.go", 11)], sites)
+        p = r["summary"]
+        self.assertEqual((p["TP"], p["FN"], p["unseen"]), (1, 0, 2))
+        self.assertEqual(p["recall"], 1.0)
+        self.assertAlmostEqual(p["recall_all"], 1 / 3, places=3)
+        s = r["per_call_site"]["summary"]
+        self.assertEqual(s["unseen"], 2)
+        self.assertAlmostEqual(s["recall_all"], 1 / 3, places=3)
+
+    def test_unseen_calls_group_like_scored_ones(self):
+        # two calls to the same target from the same unseen place are one unseen pair
+        sites = [site(30, "helper", tline=6), site(31, "helper", tline=6)]
+        r = score(nodes(), [], sites)
+        self.assertEqual(r["summary"]["unseen"], 1)
+        self.assertEqual(r["per_call_site"]["summary"]["unseen"], 2)
+
+    def test_precision_counts_each_eulix_pair_once(self):
+        # One correct pair satisfies two reference groups (their acceptable targets
+        # overlap): recall sees two found groups, precision one correct edge.
+        a = site(11, "Save", tline=1)
+        b = site(12, "Save", tline=1)
+        b.targets.append({"file": F, "line": 4, "name": "Save"})
+        ext = site(14, "helper", status="external")
+        edges = [("func_main::a.go", "method_S_Save::a.go", 11), ("func_main::a.go", "func_helper::a.go", 14)]
+        p = score(nodes(), edges, [a, b, ext])["summary"]
+        self.assertEqual((p["TP"], p["TP_edges"], p["FP"]), (2, 1, 1))
+        self.assertEqual(p["precision"], 0.5)
+        self.assertEqual(p["recall"], 1.0)
+
+    def test_dispatch_split(self):
+        v = site(11, "Save", tline=1)
+        v.dispatch = "virtual"
+        r = score(nodes(), [("func_main::a.go", "method_S_Save::a.go", 11)], [v, site(12, "helper", tline=6, kind="function")])
+        self.assertEqual(r["by_dispatch"]["virtual"]["TP"], 1)
+        self.assertEqual(r["by_dispatch"]["static"]["FN"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

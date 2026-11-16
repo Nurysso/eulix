@@ -3,7 +3,7 @@
 Known problems in `libeulix` and `eulix-parser`: how files are parsed, and how PRISM links calls to definitions.
 
 > **Scope:** `libeulix`, `eulix-parser`  
-> **Last verified against:** `ad744e9` (2026-11-03); PRISM-10, PRISM-11, PARSE-7 and PARSE-8 against `5ecd16d` (2026-11-15)
+> **Last verified against:** `ad744e9` (2026-11-03); PRISM-10, PRISM-11, PARSE-7 and PARSE-8 against `5ecd16d` (2026-11-15); PRISM-2, PRISM-5 and PRISM-10 re-measured on 2026-11-15 with the uncommitted PRISM-5 fix on top of `c294935`; PRISM-12, PRISM-13 and the 2026-11-16 additions to PARSE-3 and PARSE-9 against `c294935` plus the uncommitted `prism-go-java-receivers` branch
 
 Entries marked *Reproduced* were checked on 2026-11-03 by building the parser from this commit and parsing a small multi-language project with `--prism 2` (and `--prism 1` for comparison). The test project had a Python class hierarchy, a Go type with methods, a Java class, a C++ struct, a JavaScript subclass, a Rust `impl` and a TypeScript class. Read [Overview](Overview.md) for the legend.
 
@@ -18,11 +18,11 @@ For orientation, here is what PRISM v2 resolved and did not:
 | `self.validate()` to a method of a parent class in another directory | Python | Edge to the parent's method. Fixed. |
 | `this.step()` and `new A().run()` | TypeScript | Edges. Fixed. |
 | `self.inner()` and `P::new()` | Rust | Edges. Fixed. |
-| `m.Save()`, and `m.load()` inside a method | Go | **No edge.** |
-| `baz()` inside a method, `new Foo()`, `f.bar()` | Java | **No edge.** |
+| `m.Save()`, and `m.load()` inside a method | Go | No edge on 2026-11-03. Fixed 2026-11-15 (PRISM-5). |
+| `baz()` inside a method, `new Foo()`, `f.bar()` | Java | No edge on 2026-11-03. Fixed 2026-11-15 (PRISM-5). |
 | `s.get()` | C++ | **No edge.** |
 | `this.hello()` to a parent's method | JavaScript | **No edge**, and no inheritance edge either. |
-| `helper()` in Go with the only `helper` defined in a Python file | Go | **Edge to the Python function.** |
+| `helper()` in Go with the only `helper` defined in a Python file | Go | Edge to the Python function on 2026-11-03. No edge since the PRISM-5 fix; other language pairs are still open (PRISM-4). |
 | `f.save()` where `f` has no visible type | Python | No edge (by design, PRISM-3). |
 
 PRISM v1, run on the same files, linked the Go, Java and C++ method calls, but also linked a TypeScript function to an unrelated Python function.
@@ -59,27 +59,30 @@ The earlier maintainer measurement on a 64,460-file Linux-kernel-sized checkout 
 | v1 | 2,093,881 | 2.79 s | 4,622.8 MB | More edges, more over-approximation. |
 | v2 | 1,510,341 | 1.34 s | 2,727.6 MB | About 28% fewer, better-qualified edges; about 41% less memory. |
 
-I did not repeat this measurement. **Guidance:** use v2 (the default) for precision and inheritance awareness. Use v1 only when you want the largest possible edge set and will filter it yourself. Be aware of PRISM-2 below, where v1 currently finds method calls that v2 misses.
+I did not repeat this measurement. **Guidance:** use v2 (the default) for precision and inheritance awareness. Use v1 only when you want the largest possible edge set and will filter it yourself. Be aware of PRISM-2 below: in C and C++, v1 currently finds method calls that v2 misses.
 
 ---
 
 ## PRISM-2: v2 never links calls to methods in Go, Java, JavaScript, C and C++
 
-**Severity:** High · **Status:** Partly fixed · **Verification:** Reproduced
+**Severity:** High · **Status:** Partly fixed (Go and Java fixed 2026-11-15; JavaScript, C and C++ open) · **Verification:** Reproduced
 
-**Symptom.** In those languages, a call to a method gets no edge, and the method's `called_by` list is empty. Examples from the test project: Go `m.Save()`, Java `baz()`, C++ `s.get()`, JavaScript `this.hello()`.
+**Symptom.** In JavaScript, C and C++, a call to a method gets no edge, and the method's `called_by` list is empty. Examples from the test project: C++ `s.get()`, JavaScript `this.hello()`. `this.hello()` and `c.greet()` (on `const c = new Child()`) get no edge from v1 either, so the workaround below does not help for JavaScript.
 
-Measured on 2026-11-15 (`5ecd16d`, see [Measured on real code](#measured-on-real-code)):
+**Go and Java are fixed.** Until 2026-11-15 the same was true there: v2 linked 0 of 1,340 method-call pairs in gin, and no Java call at all (every Java function is a method, static ones included, so gson had 0 of 1,088 pairs). Both parsers now pass the receiver ([PRISM-5](#prism-5-go-and-java-receivers-never-reach-the-resolver-java-new-calls-never-resolve)), and v2 indexes their methods by declared name and types the receiver from declarations (see [PRISM v2](../libeulix/PRISM-V2.md#go-and-java-receivers-typed-from-declarations)). Measured with the accuracy harness after the fix:
 
-- **Java gets no call edges at all**, not just no method edges. Every Java function is a method, static ones included, so v2 linked none of the 1,088 resolvable caller → callee pairs in gson; a static `util()` called from `run()` in the same class gets no edge either.
-- **Go:** v2 linked 0 of 1,340 method-call pairs in gin; plain function calls were found (98%). Before the fixes of 2026-11-15 many of those method calls were also linked to a struct of the same name; that part of PRISM-10 is fixed, while some still land on look-alike package functions.
-- **JavaScript:** `this.hello()` and `c.greet()` (on `const c = new Child()`) get no edge from v1 either, so the workaround below does not help for JavaScript.
+| Corpus | Method-call pairs linked | Method-call precision | All pairs: precision / recall |
+| --- | ---: | ---: | ---: |
+| gin (Go) | 526 of 1,340 (39.2%) | 100.0% | 100.0% / 66.3% |
+| gson (Java) | 738 of 767 (96.2%) | 100.0% | 100.0% / 97.3% |
 
-**Cause.** The parsers write method ids as `method_{Class}_{name}::{path}`. For languages without receiver-aware resolution, v2 still indexes a method under the name taken from its id, which is `{Class}_{name}` and which no call site is spelled as. The fix for this (commit `95f1288`) indexes methods by their declared name, but only for the languages that keep a separate receiver on each call: **Python, TypeScript and Rust**. PHP has always had its own rules. The other languages still use the older path, so their methods can never be found by name.
+What Go still misses is by design: receivers whose type no declaration states, mostly locals assigned from a call (`router := New()`, `c, _ := CreateTestContext(w)`), which is [PRISM-3](#prism-3-calls-on-a-receiver-of-unknown-type-get-no-edge-in-v2). Guarded by `libeulix/tests/go_java_receivers.rs`.
 
-**Workaround.** For method-heavy code in Go, Java, JavaScript, C or C++, use `--prism 1`. It links method calls by first-match name lookup (with the false positives described in [PRISM v1](../libeulix/PRISM-V1.md)).
+**Cause (JavaScript, C, C++).** The parsers write method ids as `method_{Class}_{name}::{path}`. For languages without receiver-aware resolution, v2 still indexes a method under the name taken from its id, which is `{Class}_{name}` and which no call site is spelled as. Methods are indexed by their declared name only for the languages that keep a separate receiver on each call: Python, TypeScript and Rust (commit `95f1288`), and now Go and Java. PHP has always had its own rules.
 
-**Fix direction.** Index these languages' methods by declared name as well, once their parsers pass the receiver (PRISM-5).
+**Workaround.** For method-heavy C or C++ code, use `--prism 1`. It links method calls by first-match name lookup (with the false positives described in [PRISM v1](../libeulix/PRISM-V1.md)).
+
+**Fix direction.** Have the JavaScript, C and C++ parsers pass the receiver, as Go and Java now do, then index their methods by declared name.
 
 ---
 
@@ -87,7 +90,7 @@ Measured on 2026-11-15 (`5ecd16d`, see [Measured on real code](#measured-on-real
 
 **Severity:** Medium · **Status:** By design · **Verification:** Reproduced
 
-**Symptom.** In Python, TypeScript and Rust, `f.save()` links nowhere when `f` is a parameter or a variable whose type PRISM cannot see. In the test project, `go(f): f.save()` and `run(): f = Form(); f.save()` both got no edge to `Form.save`. Calls on `self`, `this` and `Self`, and on a type named directly (`P::new()`), do resolve.
+**Symptom.** In Python, TypeScript, Rust, Go and Java, `f.save()` links nowhere when `f` is a parameter or a variable whose type PRISM cannot see. Go and Java state most types in the source, so there this means a local assigned from a call (`r := New()`, `var x = make()`), a range variable, a call chain (`a.b().c()`), or a name declared twice with two types in one function; a variable or field with a declared type does resolve. On gin, about three quarters of the 814 method-call pairs v2 misses are calls on a local assigned from a call. In the test project, `go(f): f.save()` and `run(): f = Form(); f.save()` both got no edge to `Form.save`. Calls on `self`, `this` and `Self`, and on a type named directly (`P::new()`), do resolve.
 
 **Cause.** PRISM has no type inference. A commit made for precision (`02f3674`) turned off guessing "the only method with this name" for unknown receivers, because it produced wrong edges.
 
@@ -99,7 +102,7 @@ Measured on 2026-11-15 (`5ecd16d`, see [Measured on real code](#measured-on-real
 
 **Severity:** High · **Status:** Open · **Verification:** Reproduced
 
-**Symptom.** v2 keeps PHP apart from everything else, but puts all other languages in one name space. In the test project, a Go function that calls `helper()` was linked to a Python function named `helper`, with no Go `helper` anywhere. v1 does the same, and in one case linked a TypeScript function to a Python one.
+**Symptom.** v2 keeps PHP apart from everything else, but puts all other languages in one name space. In the test project, a Go function that calls `helper()` was linked to a Python function named `helper`, with no Go `helper` anywhere. (Since the PRISM-5 fix of 2026-11-15, calls made *from* Go and Java files are looked up among declarations of their own language only, so that example no longer produces an edge. Calls from Python, TypeScript, Rust, JavaScript, C and C++ are unchanged.) v1 does the same, and in one case linked a TypeScript function to a Python one.
 
 An earlier measurement on the Eulix repository itself found 125 of 1,932 call edges (6.5%) crossing languages, none of which could be real because the repository has no foreign-function calls between its languages. For example, a Rust call to `max` linked to a Go function. I did not repeat that count.
 
@@ -113,17 +116,23 @@ An earlier measurement on the Eulix repository itself found 125 of 1,932 call ed
 
 ## PRISM-5: Go and Java receivers never reach the resolver; Java `new` calls never resolve
 
-**Severity:** Medium · **Status:** Open · **Verification:** Reproduced
+**Severity:** Medium · **Status:** Fixed (2026-11-15, not yet committed) · **Verification:** Reproduced, then re-measured with the accuracy harness
 
-**Symptom and cause.** Python, TypeScript and Rust parsers store the receiver of a call in its own field. Go and Java store it in `defined_in` instead (`m.Save()` is recorded as callee `Save` with `defined_in = "m"`), and v2 does not read `defined_in`, so the resolver never sees `m`. Java constructor calls are recorded as `new Foo`, and only the PHP path removes the `new `. JavaScript keeps the qualified text (`this.hello`) in the callee, which the older path cannot use.
+**What was wrong.** Python, TypeScript and Rust parsers store the receiver of a call in its own field. Go and Java stored it in `defined_in` instead (`m.Save()` was recorded as callee `Save` with `defined_in = "m"`), and v2 does not read `defined_in`, so the resolver never saw `m`. `eulix-parser`'s slim step then cleared `defined_in`, the imports of both languages, and every declared type (parameter types, local variables, struct fields), so nothing was left to say what `m` or `fmt` is. Java constructor calls were recorded as `new Foo`, and only the PHP path removed the `new `.
 
-**False edges in Go (added 2026-11-10).** The same gap also creates wrong edges. For `fmt.Println`, the Go parser stores only `Println` as the callee and puts `fmt` in `defined_in` (`libeulix/src/grammar_files/go.rs`). `eulix-parser`'s slim step then clears `defined_in` (`eulix-parser/src/parse/slim.rs`), and for Go it also clears the imports, so PRISM v1 and v2 resolve the call by its bare name. In a small module, `os.Exit(1)` links to a local `func Exit`, `sub.Helper()` links to a local `Helper` instead of the one in `sub/`, and `s.Close()` links to a top-level `func Close` instead of `(*Store).Close`. On cobra with `-p 2`, four `exec.Command(...)` calls in the tests link to `struct_Command`. v0.8.3 does the same, so this is not a regression. Reported in review, not re-run for this page.
+**False edges in Go (added 2026-11-10).** The same gap also created wrong edges, because calls were resolved by their bare name. In a small module, `os.Exit(1)` linked to a local `func Exit`, `sub.Helper()` linked to a local `Helper` instead of the one in `sub/`, and `s.Close()` linked to a top-level `func Close` instead of `(*Store).Close`. On gin this produced 448 wrong caller → callee pairs (see PRISM-10).
 
-**Workaround.** See PRISM-2.
+**The fix.**
 
-On gin the same bare-name lookup produced hundreds of wrong edges. The ones to struct types are fixed; the ones to look-alike package functions remain, tracked as PRISM-10.
+- The Go and Java parsers fill `receiver` and leave `defined_in` empty, as the other parsers do. A Java `new Foo<T>(...)` is recorded as callee `Foo`.
+- The slim step keeps, for Go and Java only: the imports, the name and declared type of every variable of a function, the name and type of every field, and the name and type of a Go method's receiver.
+- v2 resolves Go and Java through `prism_v2/receivers/typed.rs`: a Go import maps to one package directory through the module path in `go.mod`, a Java import to the file of its class; a receiver is typed from its declaration; an unknown receiver gets no edge. The rules are in [PRISM v2](../libeulix/PRISM-V2.md#go-and-java-receivers-typed-from-declarations).
 
-**Fix direction.** Have these parsers fill the receiver field, keep Go imports through slim, and extend receiver-aware resolution to them, then strip `new ` for Java. This is the prerequisite for fixing PRISM-2.
+Three parser bugs found on the way are fixed with it: Go struct fields were never extracted (the field list was read from a `body` field the grammar does not have), an alias in a grouped Go import (`import ( x "a/b" )`) was dropped, and a generic call `f[T](a, b)` was recorded under the name `f[T]`.
+
+**Result.** gin: precision 70.3% → 100.0%, recall 43.9% → 66.3%. gson: no edges → precision 100.0%, recall 97.3%. Details in [Call-Graph Accuracy](../libeulix/Call-Graph-Accuracy.md). Guarded by `libeulix/tests/go_java_receivers.rs`, the `slimming_keeps_what_*_receivers_need` tests in `eulix-parser/src/parse/method_calls_tests.rs`, and `go_calls_resolve_through_receivers_and_the_module_path` in `eulix-parser/src/parse/file.rs`.
+
+**Still open.** JavaScript keeps the qualified text (`this.hello`) in the callee, which the older path cannot use; that is the JavaScript part of PRISM-2. The `eulix-lsp` qualifier for Go and Java call sites is now read from `receiver`.
 
 ---
 
@@ -195,11 +204,15 @@ The earlier measurement on WordPress 7.2-alpha (1,885 files) reported that 99.86
 
 ## PRISM-10: Go calls link to same-named struct types and to look-alike functions
 
-**Severity:** High · **Status:** Partly fixed · **Verification:** Reproduced (2026-11-15, `5ecd16d`)
+**Severity:** High · **Status:** Fixed (2026-11-15; the second part not yet committed) · **Verification:** Reproduced (2026-11-15, `5ecd16d`), then re-measured
 
-**Fixed part.** Calls from Go (and C) files no longer land on struct types: on gin, v2's false caller → callee pairs fell from 832 to 448 and precision rose from 56.0% to 70.3%. Guarded by `go_calls_never_land_on_a_struct_of_the_same_name` and `c_calls_never_land_on_a_struct_of_the_same_name` in `libeulix/tests/method_precision.rs`. **Still open:** look-alike functions, such as `router.GET(...)` on an `*Engine` linked to the package-level `func GET` in `ginS` (89 call sites) and `errors.New` linked to gin's `func New` (48); these need PRISM-5.
+**Fixed, part 1.** Calls from Go (and C) files no longer land on struct types: on gin, v2's false caller → callee pairs fell from 832 to 448 and precision rose from 56.0% to 70.3%. Guarded by `go_calls_never_land_on_a_struct_of_the_same_name` and `c_calls_never_land_on_a_struct_of_the_same_name` in `libeulix/tests/method_precision.rs`.
 
-**Symptom.** In Go, v2 links a method call to a **struct** that has the method's name, and links a call into another package to a project function that only shares its name. On gin, v2 made 832 wrong caller → callee pairs next to 1,060 right ones, so 44% of its Go edges were wrong. The largest groups: `err.Error()` on the built-in `error` interface linked to gin's `struct_Error` (118 call sites, plus 13 calls to gin's own `c.Error`), `String()` calls linked to the `render.String` struct (166), and `errors.New`, `reflect.New` and `validator.New` linked to gin's own `func New` (48). Minimal reproduction:
+**Fixed, part 2.** The look-alike functions went with [PRISM-5](#prism-5-go-and-java-receivers-never-reach-the-resolver-java-new-calls-never-resolve): `router.GET(...)` no longer links to the package-level `func GET` in `ginS` (89 call sites), nor `errors.New` to gin's `func New` (48). A Go call now needs a receiver of known type, a package that maps to a project directory, or a function of the caller's own package. On gin the false pairs fell from 448 to 0, and precision is 100.0%. Guarded by `go_standard_library_call_gets_no_edge_even_with_a_local_homonym`, `go_package_call_resolves_inside_the_imported_directory` and `go_bare_call_never_reaches_a_method_or_another_package` in `libeulix/tests/go_java_receivers.rs`.
+
+The rest of this entry describes the problem as it was.
+
+**Symptom (before the fixes).** In Go, v2 linked a method call to a **struct** that has the method's name, and links a call into another package to a project function that only shares its name. On gin, v2 made 832 wrong caller → callee pairs next to 1,060 right ones, so 44% of its Go edges were wrong. The largest groups: `err.Error()` on the built-in `error` interface linked to gin's `struct_Error` (118 call sites, plus 13 calls to gin's own `c.Error`), `String()` calls linked to the `render.String` struct (166), and `errors.New`, `reflect.New` and `validator.New` linked to gin's own `func New` (48). Minimal reproduction:
 
 ```go
 // render/json.go
@@ -220,9 +233,7 @@ func handle(c *Ctx) {
 
 **Cause.** `bare_name` (`libeulix/src/analyze/call_graph/prism_v2.rs`) indexes struct ids by their bare name, so `struct_JSON::render/json.go` is a candidate for any call spelled `JSON`. Go methods are indexed as `Ctx_JSON` (PRISM-2) and Go receivers and imports never reach the resolver (PRISM-5), so for `c.JSON(...)` the struct is the only candidate left, and for `http.Dir(...)` the local `Dir` wins.
 
-**Workaround.** None in v2. v1 links `c.JSON` to the method, with its own name-collision false positives.
-
-**Fix direction.** Type nodes are no longer offered as call targets for Go and C. What remains is PRISM-5: pass the receiver and the package qualifier to the resolver, so that they rule out look-alikes.
+**Fix.** Type nodes are no longer offered as call targets for Go and C, and the receiver and the package qualifier now reach the resolver (PRISM-5), which rules out the look-alikes. In the reproduction above, `c.JSON(200)` now links to `Ctx.JSON` and `http.Dir("/tmp")` gets no edge.
 
 ---
 
@@ -242,6 +253,50 @@ export function run(list) { list.forEach(x => x); }   // v2: edge run -> utils.f
 **Cause.** Not traced. The call has a receiver (`list`) whose type PRISM cannot see; in Python, TypeScript and Rust such calls get no edge by design (PRISM-3), but on the JavaScript path the bare name `forEach` still resolves.
 
 **Fix direction.** Treat JavaScript like TypeScript: a call on a receiver that is not `this`, a class, or an imported module binding gets no edge.
+
+---
+
+## PRISM-12: TypeScript ignores declared types; `new` calls never link
+
+**Severity:** Medium · **Status:** Open · **Verification:** Reproduced (2026-11-16, `c294935` plus the uncommitted `prism-go-java-receivers` branch)
+
+**Symptom.** In TypeScript, a method call gets an edge only when the receiver's class is visible from the shape of the call: `this.m()`, `Cls.m()`, `new Cls().m()`, or an imported class. A receiver whose type is *written down* still gets no edge: a typed local, a local initialised with `new`, a typed parameter. The instance creation `new Cls()` gets no edge either, to the constructor or to the class. On the harness corpora v2 stays at 100% precision in TypeScript, but recall is 90.3% on class-validator, 82.3% on immer and 39.1% on class-transformer (v1: 87.0%). The class-transformer misses that were inspected are of exactly this kind: `const executor = new TransformOperationExecutor(...); executor.transform(...)`, `const classTransformer: ClassTransformer = new ClassTransformer(); classTransformer.plainToInstance(...)`, and calls on an exported instance (`defaultMetadataStorage.findExposeMetadata(...)`). Constructor-call recall is 0 of 16 pairs on class-validator. Minimal reproduction:
+
+```ts
+export class Store { save(): number { return 1; } }
+export function typedLocal()        { const s: Store = new Store(); return s.save(); }  // no edge
+export function newLocal()          { const s = new Store(); return s.save(); }         // no edge
+export function typedParam(s: Store) { return s.save(); }                                 // no edge
+export function direct()            { return new Store().save(); }                        // edge to Store.save
+// and no edge for any of the `new Store()` calls themselves
+```
+
+**Cause.** The TypeScript path classifies a receiver from syntax alone (PRISM-3). The parser does not pass variable and parameter types for TypeScript, and v2 does not read them. Go and Java do both since the PRISM-5 fix ([Go and Java: receivers typed from declarations](../libeulix/PRISM-V2.md#go-and-java-receivers-typed-from-declarations)). Why `new Cls()` itself gets no edge was not traced.
+
+**Fix direction.** Do for TypeScript what was done for Go and Java: have the parser keep declared types of parameters, locals and class fields (and the class named by a `new` initialiser), and let v2 type the receiver from them. Link `new Cls()` to the constructor, or to the class when it declares none. `any`, unions and inferred types stay unknown, so precision should not drop.
+
+---
+
+## PRISM-13: C++ member calls on library objects link to project methods of the same name
+
+**Severity:** High · **Status:** Open · **Verification:** Reproduced (2026-11-16, `c294935` plus the uncommitted `prism-go-java-receivers` branch)
+
+**Symptom.** In C++, a member call on a standard-library object (`s.size()` on a `std::string`, `v.empty()`, `it.begin()`) links to any project method of that name that is defined outside its class body. On yaml-cpp, v2 precision is 66.1% with 288 wrong caller → callee pairs: 149 call sites are library calls linked to project methods (`m_data.size()` to `Node::size`), and 123 of the 139 wrong-target sites are calls on one project type linked to another type's method of the same name (`node_data::size` expected, `Node::size` linked). tinyxml2 (90.0%) and pugixml (100.0%) are affected far less; why was not measured. Minimal reproduction:
+
+```cpp
+#include <string>
+struct Node { int size() const; bool empty() const; };
+int Node::size() const { return 0; }
+bool Node::empty() const { return true; }
+int count(const std::string& s) { return s.size(); }   // v2: edge count -> Node::size
+bool none(const std::string& s) { return s.empty(); }  // v2: edge none -> Node::empty
+```
+
+**Cause.** C++ is still name-based (PRISM-2): the parser does not pass the receiver, so `s.size()` reaches v2 as the bare name `size`. A method defined outside its class body (`int Node::size() const {...}`) is recorded as a function, `func_Node::size`, and is found by that bare name. This is the C++ form of [PRISM-11](#prism-11-javascript-calls-on-built-in-objects-link-to-project-functions-of-the-same-name).
+
+**Workaround.** None in v2. v1 makes the same mistake.
+
+**Fix direction.** Short term: when a C++ call has a receiver, do not let its bare name reach functions recorded from out-of-class definitions; this trades these false edges for missing ones, as in the other receiver-aware languages. Long term: pass the receiver and the declared types, as for Go and Java. C++ is harder than either: `auto`, templates, overloads and operator calls leave many receivers without a written type.
 
 ---
 
@@ -270,6 +325,22 @@ Only C, C++, Go, Java, JavaScript, PHP, Python, Rust and TypeScript are parsed. 
 **Severity:** Low · **Status:** By design · **Verification:** Carried over
 
 On real production C and C++ code, files almost always parse partially, because of preprocessor macros that cannot be expanded without a C preprocessor, which is out of scope. Macro-defined variables are skipped on purpose. On a Linux-kernel-sized checkout, the earlier run had zero failed files, with partial parses almost all in C. Partial files stay in the knowledge base and their symbols remain usable. The partial count is shown at the end of each run, and `--parse-report` lists the files.
+
+**Functions written as a macro call have no node.** A test case written as `TEST_XML(name, "<node/>") { ... }` is parsed as a call followed by a block, so the calls in its body have no caller and are lost. On pugixml, 14,321 of 20,568 call sites lie outside any function eulix knows: 11,967 in test files written this way, and 2,354 in `src/pugixml.cpp`, which were not traced (a plain macro prefix such as `PUGI_IMPL_FN int f()` and a namespace opened by a macro are both handled). Reproduced on 2026-11-16 with `#define TEST_XML(name, xml) void test_##name()` followed by `TEST_XML(a, "<x/>") { g(); }`: no node, no edge to `g`. A macro without a string argument, `TEST(one) { g(); }`, becomes a function named `TEST`.
+
+**Every `#ifdef` branch is in the graph.** The parser does not choose a configuration, so a call in each branch of an `#ifdef` / `#else` gets an edge. The graph is the union over all configurations, which is what code navigation usually wants, but a compiler building one configuration sees only one of the calls. A macro that expands to nothing in a normal build (`lua_assert(f(x))`) still yields an edge to `f`. Neither kind of edge can be confirmed by the accuracy harness, which compiles one configuration with libclang, so they count as unverifiable and lower strict precision only: on zlib, 60 unverifiable edges, mostly in the `DYNAMIC_CRC_TABLE` / `MAKECRCH` blocks of `crc32.c` (precision 97.6%, strict 80.9%); on lua, 369, mostly inside `lua_assert(...)` (precision 100.0%, strict 88.1%). Reproduced on 2026-11-16:
+
+```c
+int fast(void) { return 1; }
+int slow(void) { return 2; }
+int pick(void) {
+#ifdef USE_FAST
+    return fast();     // edge pick -> fast
+#else
+    return slow();     // edge pick -> slow as well
+#endif
+}
+```
 
 ---
 
@@ -339,9 +410,18 @@ const curried = (({a}) => (obj) => helper(obj))(Object.prototype);           // 
 [1].map(function cb(v) { return helper(v); });                               // no node; edge lost
 ```
 
-**Cause.** Not traced in code. The JavaScript parser extracts `function_declaration` nodes and functions in a `variable_declarator`; other `function_expression` and `arrow_function` nodes are not visited as definitions.
+**Functions assigned to a property have no node either.** `app.use = function use(fn) {...}` and `module.exports.run = function run() {...}` are both lost, and so are the calls inside them. Libraries written in this style are mostly invisible: in express 5.3.0 (`lib/`), 401 of the 461 call sites lie outside any function eulix knows, eulix has 18 nodes for 6 files, and only 3 caller → callee pairs could be scored. The harness dropped express for this reason (see `bench/callgraph/corpora.toml`). Reproduced on 2026-11-16:
 
-**Fix direction.** Give a named function expression a node under its own name, and an unnamed one at module top level a node named after its position (`<anonymous@12>`), so that the calls inside it have a caller.
+```js
+function helper(x) { return x; }
+const app = {};
+app.use = function use(fn) { return helper(fn); };            // no node; edge lost
+module.exports.run = function run() { return helper(1); };    // no node; edge lost
+```
+
+**Cause.** Not traced in code. The JavaScript parser extracts `function_declaration` nodes and functions in a `variable_declarator`; other `function_expression` and `arrow_function` nodes, including the right-hand side of an `assignment_expression`, are not visited as definitions.
+
+**Fix direction.** Give a function assigned to a property a node under the property name (`use`, `run`), owned by the object when it is a known class or prototype. Give any other named function expression a node under its own name, and an unnamed one at module top level a node named after its position (`<anonymous@12>`), so that the calls inside it have a caller.
 
 ---
 

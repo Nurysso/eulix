@@ -1,6 +1,6 @@
 # Corpora for the call-graph accuracy harness (bench/callgraph/cg_eval.py).
 #
-# One real corpus per language, pinned to a 40-hex commit (moving a pin
+# Three real corpora per language, pinned to a 40-hex commit (moving a pin
 # invalidates its cached reference call sites), plus a tiny "micro" fixture per
 # language under micro/ that runs in seconds and doubles as a smoke test for the
 # reference tools.
@@ -84,6 +84,153 @@ set = "real"
 source = "https://github.com/leethomason/tinyxml2"
 commit = "9148bdf719e997d1f474be6bcc7943881046dba1"
 tag = "11.0.0"
+
+# ---- real, added 2026-11-16: three projects per language -------------------
+# Chosen to be self-contained (few or no dependencies), so the reference tools
+# resolve most calls without a dependency install.
+
+[[corpus]]
+name = "chi"
+lang = "go"
+set = "real"
+source = "https://github.com/go-chi/chi"
+commit = "3a33ba578e0dd93444e0ff386cc26e665d92e31e"
+tag = "v5.5.0"
+
+[[corpus]]
+name = "cobra"
+lang = "go"
+set = "real"
+source = "https://github.com/spf13/cobra"
+commit = "88b30ab89da2d0d0abb153818746c5a2d30eccec"
+tag = "v1.10.2"
+
+[[corpus]]
+name = "jsoup"
+lang = "java"
+set = "real"
+source = "https://github.com/jhy/jsoup"
+commit = "5e3c2843106967cba8ac1b12e6f821518fb2f5d2"
+tag = "jsoup-1.24.1"
+subdir = "src/main/java"
+
+[[corpus]]
+name = "commons-cli"
+lang = "java"
+set = "real"
+source = "https://github.com/apache/commons-cli"
+commit = "d74613321325f6081fa0206c4ab608ab65d80e2e"
+tag = "rel/commons-cli-1.11.0"
+subdir = "src/main/java"
+
+[[corpus]]
+name = "click"
+lang = "python"
+set = "real"
+source = "https://github.com/pallets/click"
+commit = "cf19179e8e2fd54c601378cec9e0d21bb12b6fb1"
+tag = "8.5.1"
+subdir = "src"
+
+[[corpus]]
+name = "requests"
+lang = "python"
+set = "real"
+source = "https://github.com/psf/requests"
+commit = "6e83187b8feb273ed4c6cdab5efd8d54901dfab3"
+tag = "v2.34.2"
+subdir = "src"
+
+[[corpus]]
+name = "serde_json"
+lang = "rust"
+set = "real"
+source = "https://github.com/serde-rs/json"
+commit = "20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8"
+tag = "v1.0.154"
+
+[[corpus]]
+name = "fd"
+lang = "rust"
+set = "real"
+source = "https://github.com/sharkdp/fd"
+commit = "b2a287b3993768e0ec52f0852916917f23fb2a38"
+tag = "v10.5.2"
+
+[[corpus]]
+name = "class-transformer"
+lang = "ts"
+set = "real"
+source = "https://github.com/typestack/class-transformer"
+commit = "9c9012f1bfe720d5f0d5252e93b331aaf5fe9e4e"
+tag = "v0.5.1"
+subdir = "src"
+
+[[corpus]]
+name = "immer"
+lang = "ts"
+set = "real"
+source = "https://github.com/immerjs/immer"
+commit = "16589b9c437a28433ceaf4072d5ab125287cd46a"
+tag = "v11.2.10"
+subdir = "src"
+
+# express 5.3.0 was tried and dropped (2026-11-16): it defines its functions as
+# `app.use = function use(...)`, which eulix does not extract, so 401 of its 461
+# call sites lie outside any eulix function and only 3 pairs could be scored.
+[[corpus]]
+name = "markdown-it"
+lang = "js"
+set = "real"
+source = "https://github.com/markdown-it/markdown-it"
+commit = "d372f0d8a68bef0b0acaa68868ce8ae8ba85b384"
+tag = "14.3.3"
+subdir = "lib"
+# 14.x is the last JavaScript release; 15.0 rewrote the library in TypeScript (src/*.ts).
+
+[[corpus]]
+name = "mocha"
+lang = "js"
+set = "real"
+source = "https://github.com/mochajs/mocha"
+commit = "51a0cc5530d8e29272406384723e8871245821f1"
+tag = "v12.0.3"
+subdir = "lib"
+
+[[corpus]]
+name = "zlib"
+lang = "c"
+set = "real"
+source = "https://github.com/madler/zlib"
+commit = "99623ef7097352da7993ba614161fd6a311e046e"
+tag = "v1.4"
+exclude = ["contrib"]
+
+[[corpus]]
+name = "lua"
+lang = "c"
+set = "real"
+source = "https://github.com/lua/lua"
+commit = "7579fc9d7ed90240487251dfb69168f8e64e9294"
+tag = "v5.5.1"
+
+[[corpus]]
+name = "pugixml"
+lang = "cpp"
+set = "real"
+source = "https://github.com/zeux/pugixml"
+commit = "c8033ce9d039e7f9d134877c363397b3cfe20816"
+tag = "v1.16"
+
+[[corpus]]
+name = "yaml-cpp"
+lang = "cpp"
+set = "real"
+source = "https://github.com/jbeder/yaml-cpp"
+commit = "56e3bb550c91fd7005566f19c079cb7a503223cf"
+tag = "yaml-cpp-0.9.0"
+exclude = ["test"]
+ref_args = ["-Iinclude"]
 
 # ---- micro ------------------------------------------------------------------
 

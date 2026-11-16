@@ -74,6 +74,12 @@ pub struct CallGraphOptions {
     /// search. Turn off if your TS code uses path aliases (`@app/...`) that
     /// the module index cannot resolve.
     pub strict_imports: bool,
+    /// Go modules in the project: (directory of the `go.mod`, relative to the
+    /// project root and empty for the root itself; module path). An import
+    /// path inside a module maps to exactly one directory, and every other
+    /// import of a file in that module is external. A Go file outside every
+    /// listed module falls back to matching import paths by directory suffix.
+    pub go_modules: Vec<(String, String)>,
 }
 
 impl Default for CallGraphOptions {
@@ -81,6 +87,7 @@ impl Default for CallGraphOptions {
         Self {
             max_ambiguous: 8,
             strict_imports: true,
+            go_modules: Vec::new(),
         }
     }
 }
@@ -183,6 +190,9 @@ struct FileImports<'a> {
     /// PHP `include`/`require` targets, sorted. Direct includes while the
     /// files are read, then replaced by the transitive closure.
     includes: Vec<u32>,
+    /// Java on-demand and static imports. Boxed: one pointer per file for
+    /// every other language.
+    java: Option<Box<receivers::JavaImports<'a>>>,
 }
 
 /// Everything a single parallel chunk extracts from its slice of files.
@@ -391,6 +401,7 @@ fn build_file_imports<'a>(
     index: &'a ModuleIndex<'a>,
     includes: &IncludeIndex,
     path: &str,
+    go: &receivers::GoPackages<'a>,
 ) -> FileImports<'a> {
     let mut out = FileImports::default();
     if fd.language == "php" {
@@ -398,7 +409,7 @@ fn build_file_imports<'a>(
         return out;
     }
     if receivers::enabled(&fd.language) {
-        return receivers::build_imports(fd, index, path);
+        return receivers::build_imports(fd, index, path, go);
     }
     for imp in &fd.imports {
         let target = resolve_module(&imp.module, index);
@@ -500,6 +511,8 @@ struct Resolver<'a> {
     children: Map<u32, Vec<u32>>,
     max_ambiguous: usize,
     strict_imports: bool,
+    /// Declared types of Go and Java, for receivers.
+    typed: receivers::Typed<'a>,
 }
 
 impl<'a> Resolver<'a> {
@@ -804,6 +817,10 @@ impl<'a> Resolver<'a> {
         // `Base<T>` / `Base[]` / `Base(args)` -> `Base`. Generic args and
         // array suffixes are irrelevant to *which class* the base refers to.
         let base = base.split(['<', '[', '(']).next().unwrap_or(base).trim();
+        // Go and Java name a base in the package or through an import.
+        if matches!(self.languages[file as usize], "go" | "java") {
+            return self.typed_base(base, file);
+        }
         if receivers::enabled(self.languages[file as usize]) {
             if let Some(local) = self.lookup_in_files(base, &[file], file, Want::Class) {
                 return Some(local);
@@ -871,6 +888,12 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
     let threads = rayon::current_num_threads().max(1);
     let chunk = (files.len() / (threads * 8)).clamp(16, 2048);
     let module_index = build_module_index(&paths);
+    let file_ids: Vec<u32> = (0..files.len() as u32).collect();
+    let go_packages = receivers::GoPackages {
+        ids: &file_ids,
+        paths: &paths,
+        modules: &opts.go_modules,
+    };
     let include_index = if files.iter().any(|f| f.1.language == "php") {
         IncludeIndex::new(&paths)
     } else {
@@ -891,8 +914,13 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
             };
             for (j, &(path, fd)) in slice.iter().enumerate() {
                 let f = (ci * chunk + j) as u32;
-                ex.imports
-                    .push(build_file_imports(fd, &module_index, &include_index, path));
+                ex.imports.push(build_file_imports(
+                    fd,
+                    &module_index,
+                    &include_index,
+                    path,
+                    &go_packages,
+                ));
                 let php = fd.language == "php";
                 for func in &fd.functions {
                     let nested = func.tags.iter().any(|t| t.as_str() == NESTED_TAG);
@@ -900,6 +928,10 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                         id: &func.id,
                         name: if php {
                             php_name(&func.name, &func.lang_info)
+                        } else if fd.language == "go" && func.id.starts_with("method_") {
+                            // A Go method the parser keeps apart from its
+                            // type, declared `{name}` like any other method.
+                            Cow::Borrowed(&func.name)
                         } else {
                             Cow::Borrowed(bare_name(&func.id))
                         },
@@ -1057,6 +1089,8 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
             Some((owner, n.name.as_ref(), i as u32))
         })
         .collect();
+    let (typed, go_methods) = receivers::Typed::build(&files, &nodes, &node_map, &file_dir);
+    methods.extend(go_methods);
     methods.sort_unstable();
     let mut legacy_methods: Vec<_> = if languages
         .iter()
@@ -1100,6 +1134,7 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
         children: Map::new(),
         max_ambiguous: opts.max_ambiguous,
         strict_imports: opts.strict_imports,
+        typed,
     };
 
     // Rust `impl` blocks in another file than their type (`impl_{Type}`
@@ -1185,6 +1220,8 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
             for (j, &(_, fd)) in slice.iter().enumerate() {
                 let f = (ci * chunk + j) as u32;
                 let php = r.php[f as usize];
+                // Go and Java type their receivers from declarations.
+                let (go, java) = (fd.language == "go", fd.language == "java");
                 for func in &fd.functions {
                     let Some(&from) = r.node_map.get(func.id.as_str()) else {
                         continue;
@@ -1200,6 +1237,8 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                                 None,
                                 php_namespace(&func.lang_info),
                             )
+                        } else if go {
+                            r.go_call(call, f, func)
                         } else if receivers::enabled(&fd.language) {
                             r.receiver_call(call, f, None, false, &func.id)
                         } else {
@@ -1245,6 +1284,10 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                             let to = if php {
                                 let ns = php_namespace(&m.lang_info);
                                 r.resolve_php_call(&call.callee, f, Some(cidx), ns)
+                            } else if go {
+                                r.go_call(call, f, m)
+                            } else if java {
+                                r.java_call(call, f, cidx, m)
                             } else if receivers::enabled(&fd.language) {
                                 r.receiver_call(call, f, Some(cidx), has_self, &m.id)
                             } else {

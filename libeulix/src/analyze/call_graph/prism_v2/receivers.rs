@@ -5,10 +5,15 @@
 //! Keep the legacy resolver for the other languages.
 use super::*;
 mod rust_paths;
+mod typed;
 use crate::struc::kb_struct::FunctionCall;
+pub(super) use typed::{GoPackages, JavaImports, Typed};
 
+/// Languages whose parser keeps the receiver of a call apart from the callee.
+/// Their methods are indexed under the declared name. Go and Java resolve
+/// through `typed`; the others through `receiver_call`.
 pub(super) fn enabled(language: &str) -> bool {
-    matches!(language, "python" | "typescript" | "rust")
+    matches!(language, "python" | "typescript" | "rust" | "go" | "java")
 }
 
 fn alias(s: &str) -> (&str, &str) {
@@ -182,7 +187,13 @@ pub(super) fn build_imports<'a>(
     fd: &'a FileData,
     index: &'a ModuleIndex<'a>,
     path: &str,
+    go: &GoPackages<'a>,
 ) -> FileImports<'a> {
+    match fd.language.as_str() {
+        "go" => return typed::go_imports(fd, index, path, go),
+        "java" => return typed::java_imports(fd, index),
+        _ => {}
+    }
     let mut out = FileImports::default();
     // Declarations shadow prelude crate names regardless of source order.
     if fd.language == "rust" {

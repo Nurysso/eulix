@@ -285,7 +285,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         // instead of rayon's global pool sized to every core.
         kb = engine
             .pool()
-            .install(|| analyze_and_build(kb, args.verbose, args.prism));
+            .install(|| analyze_and_build(kb, args.verbose, args.prism, Path::new(&args.root)));
         let rss_after_analyze = max_rss_mb();
 
         if args.verbose {
