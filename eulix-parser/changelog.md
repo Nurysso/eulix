@@ -1,6 +1,6 @@
 # Changelog
 
-## Eulix_parser v0.9.0 - 2026-11-16
+## Eulix_parser v0.9.0 - 2026-11-17
 
 Changes since v0.8.1, the version that shipped with Eulix v0.8.3. Built on libeulix 0.9.0, so it also gets the PHP parser, the iterative tree walks and the call-graph fixes listed in [libeulix/changelog.md](../libeulix/changelog.md).
 
@@ -12,6 +12,7 @@ Changes since v0.8.1, the version that shipped with Eulix v0.8.3. Built on libeu
   - The cache key is the format number, the parser version, the git SHA, and the size and mtime of the running binary, so any rebuild invalidates it, uncommitted grammar edits included.
   - A bad index, a key mismatch or a record that fails its CRC falls back to parsing that file; the cache never fails a run. The index is written to a temp file and renamed, and only generations up to the one this run loaded are deleted, so a concurrent run's files survive.
 - **PHP** (#83): `php` in `--languages` and in `all` (`.php`, `.phtml`, `.inc`). A `.inc` file is collected only when it holds PHP code, since C, C++ and assembler projects use the extension too. Slimming keeps the imports, namespace, `extends` class, traits and `static` flag that PRISM v2 needs until the call graph is built. A PHP file's `{main}` holds its top-level code and is not counted in `total_functions`.
+- **Go and Java method calls in PRISM v2** (#167). The parser reads the module path from every `go.mod` above a parsed Go file and passes it to PRISM v2 (`CallGraphOptions::go_modules`), so Go imports map to package directories. Slimming keeps the names and declared types of Go and Java variables and fields, and the name and type of a Go method's receiver, until the call graph is built.
 - A determinism test: a 300-file Python/Rust/JS fixture plus a Go fixture, parsed with `-t 1` and `-t 8`, with every JSON output compared byte for byte (#149).
 
 ### Changed

@@ -1,6 +1,6 @@
 # Changelog
 
-## Eulix v0.9.0 - 2026-11-16
+## Eulix v0.9.0 - 2026-11-17
 
 Changes since v0.8.3 (2026-10-14). Each component's changelog has the full list.
 
@@ -19,17 +19,17 @@ libeulix is published on crates.io.
 
 - **PHP support** end to end: a PHP parser and PHP call resolution in libeulix, `php` in eulix_parser, and comment stripping and signatures in retrieval. References and call hierarchy for PHP are in eulix-lsp, which is not part of this release.
 - **Incremental parsing:** eulix_parser reuses unchanged files from `.eulix/parse_cache/`, and the output matches a full parse byte for byte.
-- **EHNAS**, a new retrieval engine alongside etiya, with engine-specific configuration.
-- **More accurate call graphs:** receiver-aware method calls for Python, TypeScript and Rust, nested functions with scoped IDs, and a deterministic PRISM v1. C++ templates and inline members, decorated Python methods, TypeScript functions bound to variables and methods of generic Rust impls are no longer dropped. Neither are items in Rust inline `mod` blocks (including `#[cfg(test)] mod tests`), Rust `impl` blocks in another file than their type, C/C++ code inside `#if`/`#ifdef` blocks and include guards, or C++ classes in `.h` headers and behind export macros. Go and C calls no longer resolve to struct types.
+- **EHNAS**, a new retrieval engine alongside etiya, with engine-specific configuration. It needs no embeddings, so with `engine = "ehnas"` `eulix analyze` skips the embedding stage.
+- **More accurate call graphs:** receiver-aware method calls for Python, TypeScript and Rust, Go and Java receivers typed from their declarations, nested functions with scoped IDs, and a deterministic PRISM v1. C++ templates and inline members, decorated Python methods, TypeScript functions bound to variables and methods of generic Rust impls are no longer dropped. Neither are items in Rust inline `mod` blocks (including `#[cfg(test)] mod tests`), Rust `impl` blocks in another file than their type, C/C++ code inside `#if`/`#ifdef` blocks and include guards, or C++ classes in `.h` headers and behind export macros. Go and C calls no longer resolve to struct types.
 - **Steadier parsing:** every grammar walks its syntax tree without recursion, every output comes out in the same order on every run, and files with invalid UTF-8 are parsed as partial instead of failing.
-- **Call-graph accuracy, measured:** a harness scores PRISM v1 and v2 against each language's own compiler or type checker (go/types, javac, jedi, rust-analyzer, the TypeScript checker, libclang) on one pinned project per language. PRISM v2 is 98–100% precise in C, TypeScript, Python and Rust; Go and Java method calls are still not linked. Results: [Call-Graph Accuracy](docs/libeulix/Call-Graph-Accuracy.md).
+- **Call-graph accuracy, measured:** a harness scores PRISM v1 and v2 against each language's own compiler or type checker (go/types, javac, jedi, rust-analyzer, the TypeScript checker, libclang) on one pinned project per language. PRISM v2 is 98–100% precise in C, Java, TypeScript, Python, Go and Rust. Typing Go and Java receivers takes gin from 70.3% to 100% precision and from 43.9% to 66.3% recall, and gson's recall from 0% to 97.3% (#167). Results: [Call-Graph Accuracy](docs/libeulix/Call-Graph-Accuracy.md).
 - **Vector search fix:** embedding rows are matched to chunks by id. Before, every vector from the second file on was paired with the wrong chunk.
 - **Security:** MCP and retrieval no longer read hidden, `.euignore`d or out-of-repo files, symlink and `.eulix` escapes are closed, and eulix_embed blocks `trust_remote_code`.
 - **Windows:** a native build script, `.env` locked to its owner, and safer parser installs and file opening.
 
 ### Upgrade notes
 
-- libeulix 0.9.0 changes its Rust API: a new `PhpInfo` variant, `BTreeMap`/`BTreeSet` in serialized types and a new `FunctionCall` field. `analyze_and_build` is deprecated.
+- libeulix 0.9.0 changes its Rust API: a new `PhpInfo` variant, `BTreeMap`/`BTreeSet` in serialized types, a new `receiver` field on `FunctionCall` and a new `go_modules` field on `CallGraphOptions`. `analyze_and_build` is deprecated.
 - Symbol IDs changed: they use the path relative to the project root, TypeScript interface IDs include the file path, and nested functions get scoped IDs. The first `eulix analyze` after upgrading runs a full analysis.
 - `eulix_parser --resume`/`-u` is gone; the parse cache replaces it.
 - A repository's `.env` is no longer exported into the process environment; only the provider key is read from it.
@@ -42,7 +42,15 @@ libeulix is published on crates.io.
 - Native Windows build with `build.ps1` (#161).
 - Build and release workflow fixes; builds ignore `__init__.py` files (#138, #143).
 - The installers download the latest tag (`9830743`) and use the right checksum file name (#163).
-- CI: lint runs on `dev` and on libeulix-only changes (#122). A new `Test.yaml` runs every project's tests (Go and Rust on Linux, Windows and macOS), and `Lint.yaml` stays lint-only (`f9006ea`). A docs workflow checks the docs weekly (#163).
+- `install.sh` installs on macOS (Apple Silicon, also from a Rosetta shell) and runs on the bash 3.2 that macOS ships. It hashes with `shasum` when `sha256sum` is missing, and stops on Intel Macs and Linux on ARM, which have no release build, with a link to the build-from-source steps.
+- Installer fixes, in both scripts unless noted:
+  - Upgrading over an earlier install failed the parser integrity check: the old parser was still unpacked, so the new binary never extracted its own. The installers now delete the old parser, the `eulix_embed` scripts and `.initialized` before the first launch, so the Python packages are also reinstalled for the variant you pick.
+  - An incompatible venv couldn't be recreated, because current `uv` refuses to overwrite an existing one.
+  - v0.8.3 and older publish `checksum.txt`, so installing them failed on the missing `checksums.txt`; the installers try both names.
+  - On macOS, and with the `amd` variant on Windows, v0.8.3 and older can't install their Python packages (`onnxruntime-rocm` is Linux-only), so the installers install `onnxruntime` instead.
+  - `install.sh`: when the GitHub API was unreachable, the warning text ended up inside the release tag and broke every download URL. Warnings now go to stderr. `EULIX_GPU=amd|nvidia` skips the variant question (also in `install.ps1`), and `curl … | bash` reads the answer from the terminal.
+  - `install.ps1`: errors no longer call `exit`, which closed the PowerShell window under `irm … | iex`. The banner is plain ASCII, so a copy saved without its BOM still parses in Windows PowerShell 5.1. The first launch is judged by its exit code instead of uv's stderr output, downloads skip the slow 5.1 progress bar, a running `eulix.exe` is moved aside instead of failing the install, and the PATH hint no longer suggests `setx`, which truncates `PATH`.
+- CI: lint runs on `dev` and on libeulix-only changes (#122). A new `Test.yaml` runs every project's tests (Go and Rust on Linux, Windows and macOS), and `Lint.yaml` stays lint-only (`f9006ea`). A docs workflow checks the docs weekly (#163). `make test-rust` runs the libeulix and eulix-lsp tests too, matching CI (#156).
 - `.gitattributes` keeps LF line endings in the working tree on every OS (#164).
 
 ### Docs
@@ -50,14 +58,16 @@ libeulix is published on crates.io.
 - Documentation rewritten from the current code, one folder per subsystem (libeulix, eulix-parser, eulix-embed, eulix-cli, vizEulize), plus Welcome, Installation, Architecture (spill to disk, incremental parsing) and Known-Issues pages. Known issues have IDs, severity, status and how each was verified, and fixed issues are recorded (#157).
 - PHP is in the README's language lists and support table (#83).
 - LSP architecture and benchmarking notes (#165).
-- [Call-Graph Accuracy](docs/libeulix/Call-Graph-Accuracy.md): precision, recall and coverage per language and call kind, before and after the parser fixes. New known issues PRISM-10, PRISM-11, PARSE-7 to PARSE-9 have reproductions; PARSE-5 and PARSE-6 are fixed.
+- [Call-Graph Accuracy](docs/libeulix/Call-Graph-Accuracy.md): precision, recall and coverage per language and call kind, before and after the parser fixes. New known issues PRISM-10 to PRISM-13 and PARSE-7 to PARSE-9 have reproductions; PRISM-5, PARSE-5 and PARSE-6 are fixed.
+- [Call-Graph Scoring](docs/Architecture/Call-Graph-Scoring.md) explains how the harness scores each edge, with a worked example (#167).
+- The README has a demo recording, the PRISM accuracy chart and a per-language accuracy table. New known issues RET-13, MCP-6 and CLI-11 (#168).
 - Component READMEs corrected: command tables, config reference, function names, license, binary and file names (#157).
 
 ### Benchmarks and scripts
 
 - `make bench-compare A=... B=...` compares two versions with isolated builds and `HOME`, cached by commit. It measures accuracy, indexing and query time and memory, and parser quality (GPU with CPU fallback) on eulix, flask, gin, ripgrep, gson and Linux (`--large`), flags regressions over 10%, writes a Markdown report and exits 1. A v0.8.3 comparison is included (`f816dcd`).
 - Scripts used to find bugs are under `scripts/` (#157).
-- `make bench-callgraph` scores the call graph against language tooling on gin, gson, flask, ripgrep, class-validator, axios, cJSON and tinyxml2 (`make bench-callgraph-micro` for small per-language fixtures). The harness was audited against an independent scorer and Go's own `callgraph` tool before the results were published (`01b1695`, `cfbb39a`).
+- `make bench-callgraph` scores the call graph against language tooling on gin, gson, flask, ripgrep, class-validator, axios, cJSON and tinyxml2 (`make bench-callgraph-micro` for small per-language fixtures). The harness was audited against an independent scorer and Go's own `callgraph` tool before the results were published (`01b1695`, `cfbb39a`). The corpus list was extended in `bench/callgraph/corpora.toml`, and `--runs N` builds each graph N times, reports the mean and checks that the runs agree (#167).
 - `scripts/parser_perf.sh` times the parser binary on one or more repositories (`645722c`).
 
 ## Eulix_embed v0.4.1 (2026-10-02)

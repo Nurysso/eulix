@@ -8,6 +8,11 @@
     downloads the release binary and vizeulize.html UI, verifies their checksums,
     installs them, sets up a Python venv via uv, and triggers first-run
     self-extraction of the embedded parser + eulix_embed.
+
+    Set $env:EULIX_GPU to 'amd' or 'nvidia' to skip the backend prompt.
+
+    Keep this file ASCII-only: Windows PowerShell 5.1 reads a saved .ps1
+    without a BOM as ANSI, and multi-byte characters can break parsing.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -18,11 +23,13 @@ try {
         [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 } catch { }
 
-# Colours / logging helpers
+# Colours / logging helpers.
+# Die throws instead of calling exit: under `irm ... | iex` the script runs in
+# the user's own session, and exit would close their PowerShell window.
 function Info    { param([string]$Msg) Write-Host "[INFO]  " -ForegroundColor Cyan   -NoNewline; Write-Host $Msg }
 function Success { param([string]$Msg) Write-Host "[OK]    " -ForegroundColor Green  -NoNewline; Write-Host $Msg }
 function Warn    { param([string]$Msg) Write-Host "[WARN]  " -ForegroundColor Yellow -NoNewline; Write-Host $Msg }
-function Die     { param([string]$Msg) Write-Host "[ERROR] " -ForegroundColor Red    -NoNewline; Write-Host $Msg; exit 1 }
+function Die     { param([string]$Msg) Write-Host "[ERROR] " -ForegroundColor Red    -NoNewline; Write-Host $Msg; throw 'Eulix installation aborted.' }
 
 # Paths
 $InstallDir        = Join-Path $env:LOCALAPPDATA 'Eulix\bin'
@@ -32,6 +39,7 @@ $EulixVenv         = Join-Path $EulixDir '.venv'
 $EulixParserPath   = Join-Path $EulixBinDir 'eulix_parser.exe'
 $EulixEmbedPath    = Join-Path $EulixDir 'eulix_embed'
 $vizeulizeHtmlPath = Join-Path $EulixBinDir 'vizeulize.html'
+$FirstRunLog       = Join-Path $EulixDir 'first_run.log'
 
 $Repo   = 'Nurysso/eulix'
 $DocUrl = "https://github.com/$Repo/blob/main/docs/Installation.md"
@@ -86,13 +94,13 @@ function Check-OS {
     Info "Detecting operating system..."
 
     if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) {
-        Write-Host "This script is for Windows only." -ForegroundColor Red
-        Write-Host "For Linux/macOS, use install.sh instead:"
-        Write-Host "  $DocUrl"
-        exit 1
+        Die "This script is for Windows only. On Linux or macOS use install.sh instead: $DocUrl"
     }
 
+    # A 32-bit PowerShell on 64-bit Windows reports x86 here; the real
+    # architecture is then in PROCESSOR_ARCHITEW6432.
     $arch = $env:PROCESSOR_ARCHITECTURE
+    if ($env:PROCESSOR_ARCHITEW6432) { $arch = $env:PROCESSOR_ARCHITEW6432 }
     if ($arch -ne 'AMD64') {
         Die "Unsupported architecture: $arch. This script supports 64-bit (AMD64) Windows only."
     }
@@ -107,6 +115,15 @@ function Check-OS {
 
 # Ask user which GPU/backend variant to download
 function Choose-GpuVariant {
+    if ($env:EULIX_GPU) {
+        if ($env:EULIX_GPU -notin @('amd', 'nvidia')) {
+            Die "EULIX_GPU must be 'amd' or 'nvidia', got '$($env:EULIX_GPU)'."
+        }
+        $script:GpuVariant = $env:EULIX_GPU.ToLower()
+        Success "Selected variant (EULIX_GPU): $GpuVariant"
+        return
+    }
+
     Info "Select the ONNX backend variant to install:"
     Write-Host "  1) amd     - CPU / AMD (onnx-amd)"
     Write-Host "  2) nvidia  - NVIDIA GPU (onnx-nvidia)"
@@ -178,6 +195,8 @@ function Setup-Venv {
     if (Test-Path $EulixVenv) {
         $found = if ($existingVer) { $existingVer } else { 'none' }
         Warn "Existing venv at $EulixVenv is missing or incompatible (found: $found) - recreating."
+        # uv refuses to overwrite an existing venv without --clear, which older uv lacks.
+        Remove-Item -Recurse -Force $EulixVenv
     }
 
     uv venv --python 3.11 "$EulixVenv"
@@ -197,7 +216,7 @@ function Get-Checksum {
     $escaped = [regex]::Escape($TargetFilename)
     # Matches lines ending in '/filename' or '\filename' or ' filename'
     $match = Select-String -Path $ChecksumFile `
-                           -Pattern "(?:^|[\/\s\\])$escaped$" |
+                           -Pattern "(?:^|[\/\s\\*])$escaped$" |
              Select-Object -First 1
     if ($match) {
         return ($match.Line -split '\s+')[0].Trim()
@@ -205,96 +224,180 @@ function Get-Checksum {
     return $null
 }
 
+# Compare a downloaded file against its checksums.txt entry; die on mismatch.
+function Confirm-Checksum {
+    param([string]$Path, [string]$Name, [string]$ChecksumFile)
+
+    $expected = Get-Checksum -TargetFilename $Name -ChecksumFile $ChecksumFile
+    if (-not $expected) {
+        Die "Missing checksum entry for $Name."
+    }
+    $actual = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLower()
+    if ($expected.ToLower() -ne $actual) {
+        Die "Checksum mismatch for $Name! Expected $expected, got $actual."
+    }
+    Success "$Name checksum verified."
+}
+
 # Download the release binary and vizeulize.html, verify checksums, install them
 function Download-Binary {
+    # Windows PowerShell 5.1 redraws the progress bar per chunk, which makes
+    # large downloads many times slower. Scoped to this function.
+    $ProgressPreference = 'SilentlyContinue'
+
     $script:AssetName = "eulix-windows-amd64-onnx-$GpuVariant.exe"
     $htmlAssetName    = 'vizeulize.html'
 
-    $assetUrl     = "$ReleaseBase/$AssetName"
-    $htmlUrl      = "$ReleaseBase/$htmlAssetName"
-    $checksumUrl  = "$ReleaseBase/checksums.txt"
+    $assetUrl = "$ReleaseBase/$AssetName"
+    $htmlUrl  = "$ReleaseBase/$htmlAssetName"
 
-    $tmpBin       = Join-Path $env:TEMP $AssetName
-    $tmpHtml      = Join-Path $env:TEMP $htmlAssetName
-    $tmpChecksum  = Join-Path $env:TEMP 'eulix_checksums.txt'
+    $tmpDir      = Join-Path $env:TEMP ("eulix-install-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    $tmpBin      = Join-Path $tmpDir $AssetName
+    $tmpHtml     = Join-Path $tmpDir $htmlAssetName
+    $tmpChecksum = Join-Path $tmpDir 'checksums.txt'
 
-    Info "Downloading $AssetName ($ReleaseTag)..."
     try {
-        Invoke-WebRequest -Uri $assetUrl -OutFile $tmpBin -UseBasicParsing
-    } catch {
-        Die "Failed to download $assetUrl`: $_"
-    }
-
-    Info "Downloading $htmlAssetName ($ReleaseTag)..."
-    try {
-        Invoke-WebRequest -Uri $htmlUrl -OutFile $tmpHtml -UseBasicParsing
-    } catch {
-        Die "Failed to download $htmlUrl`: $_"
-    }
-
-    Info "Downloading checksums.txt for verification..."
-    try {
-        Invoke-WebRequest -Uri $checksumUrl -OutFile $tmpChecksum -UseBasicParsing
-    } catch {
-        Die "Failed to download $checksumUrl`: $_"
-    }
-
-    Info "Verifying checksums..."
-
-    # Verify binary checksum
-    $expectedBin = Get-Checksum -TargetFilename $AssetName -ChecksumFile $tmpChecksum
-    if (-not $expectedBin) {
-        Remove-Item -Force $tmpBin, $tmpHtml, $tmpChecksum -ErrorAction SilentlyContinue
-        Die "Missing checksum entry for $AssetName."
-    } else {
-        $actualBin = (Get-FileHash -Path $tmpBin -Algorithm SHA256).Hash.ToLower()
-        if ($expectedBin.ToLower() -ne $actualBin) {
-            Remove-Item -Force $tmpBin, $tmpHtml, $tmpChecksum -ErrorAction SilentlyContinue
-            Die "Checksum mismatch for $AssetName! Expected $expectedBin, got $actualBin."
+        Info "Downloading $AssetName ($ReleaseTag)..."
+        try {
+            Invoke-WebRequest -Uri $assetUrl -OutFile $tmpBin -UseBasicParsing
+        } catch {
+            Die "Failed to download $assetUrl`: $_"
         }
-        Success "Binary checksum verified."
-    }
 
-    # Verify vizeulize.html checksum (matches 'vizeulize/vizeulize.html' in checksums.txt)
-    $expectedHtml = Get-Checksum -TargetFilename $htmlAssetName -ChecksumFile $tmpChecksum
-    if (-not $expectedHtml) {
-        Remove-Item -Force $tmpBin, $tmpHtml, $tmpChecksum -ErrorAction SilentlyContinue
-        Die "Missing checksum entry for $htmlAssetName."
-    } else {
-        $actualHtml = (Get-FileHash -Path $tmpHtml -Algorithm SHA256).Hash.ToLower()
-        if ($expectedHtml.ToLower() -ne $actualHtml) {
-            Remove-Item -Force $tmpBin, $tmpHtml, $tmpChecksum -ErrorAction SilentlyContinue
-            Die "Checksum mismatch for $htmlAssetName! Expected $expectedHtml, got $actualHtml."
+        Info "Downloading $htmlAssetName ($ReleaseTag)..."
+        try {
+            Invoke-WebRequest -Uri $htmlUrl -OutFile $tmpHtml -UseBasicParsing
+        } catch {
+            Die "Failed to download $htmlUrl`: $_"
         }
-        Success "vizeulize.html checksum verified."
+
+        # Releases up to v0.8.3 named the file checksum.txt.
+        Info "Downloading checksums for verification..."
+        try {
+            Invoke-WebRequest -Uri "$ReleaseBase/checksums.txt" -OutFile $tmpChecksum -UseBasicParsing
+        } catch {
+            try {
+                Invoke-WebRequest -Uri "$ReleaseBase/checksum.txt" -OutFile $tmpChecksum -UseBasicParsing
+            } catch {
+                Die "Failed to download checksums.txt (or checksum.txt) from $ReleaseBase`: $_"
+            }
+        }
+
+        Info "Verifying checksums..."
+        Confirm-Checksum -Path $tmpBin  -Name $AssetName     -ChecksumFile $tmpChecksum
+        Confirm-Checksum -Path $tmpHtml -Name $htmlAssetName -ChecksumFile $tmpChecksum
+
+        # Install CLI binary. A running eulix.exe (an MCP server, say) cannot be
+        # overwritten or deleted, but it can be renamed out of the way.
+        New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+        Get-ChildItem -Path $InstallDir -Filter 'eulix.exe.old-*' -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        $destPath = Join-Path $InstallDir 'eulix.exe'
+        if (Test-Path $destPath) {
+            try {
+                Remove-Item -Force $destPath
+            } catch {
+                Rename-Item -Force -Path $destPath -NewName "eulix.exe.old-$([DateTime]::Now.Ticks)"
+            }
+        }
+        Move-Item -Force -Path $tmpBin -Destination $destPath
+        Success "Installed binary -> $destPath"
+
+        # Install vizeulize.html into %USERPROFILE%\.Eulix\bin\
+        New-Item -ItemType Directory -Force -Path $EulixBinDir | Out-Null
+        Move-Item -Force -Path $tmpHtml -Destination $vizeulizeHtmlPath
+        Success "Installed UI webapp -> $vizeulizeHtmlPath"
+    } finally {
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    }
+}
+
+# eulix unpacks its parser and eulix_embed scripts only when they are missing,
+# then checks the parser's hash. On an upgrade the old files are still there,
+# so the new binary would fail that check; and an existing .initialized marker
+# would skip installing the Python packages for the variant just chosen.
+# Remove all three so the first launch below sets them up fresh.
+function Reset-ExtractedAssets {
+    $removed = $false
+
+    foreach ($p in @($EulixEmbedPath, (Join-Path $EulixDir '.initialized'))) {
+        if (Test-Path $p) {
+            Remove-Item -Recurse -Force $p
+            $removed = $true
+        }
     }
 
-    Remove-Item -Force $tmpChecksum -ErrorAction SilentlyContinue
+    if (Test-Path $EulixBinDir) {
+        foreach ($f in @(Get-ChildItem -Path $EulixBinDir -Filter 'eulix_parser.exe*' -Force)) {
+            $removed = $true
+            try {
+                Remove-Item -Force $f.FullName
+            } catch {
+                # Still running (e.g. under the MCP server): move it aside. eulix
+                # deletes these .old-* files on a later run.
+                if ($f.Name -eq 'eulix_parser.exe') {
+                    Rename-Item -Force -Path $f.FullName -NewName "eulix_parser.exe.old-$([DateTime]::Now.Ticks)"
+                }
+            }
+        }
+    }
 
-    # Install CLI binary
-    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    $destPath = Join-Path $InstallDir 'eulix.exe'
-    Move-Item -Force -Path $tmpBin -Destination $destPath
-    Success "Installed binary -> $destPath"
-
-    # Install vizeulize.html into %USERPROFILE%\.Eulix\bin\
-    New-Item -ItemType Directory -Force -Path $EulixBinDir | Out-Null
-    Move-Item -Force -Path $tmpHtml -Destination $vizeulizeHtmlPath
-    Success "Installed UI webapp -> $vizeulizeHtmlPath"
+    if ($removed) {
+        Info "Removed files unpacked by a previous install; this version unpacks its own."
+    }
 }
 
 # Trigger first-run self-extraction (unpacks embedded parser + eulix_embed)
 function Run-FirstLaunchSetup {
-    Info "Running first-launch setup (self-extracts parser + eulix_embed, installs deps)..."
+    Info "Running first-launch setup (self-extracts parser + eulix_embed, installs Python packages)..."
+    Info "Downloading the Python packages can take a few minutes."
     $exePath = Join-Path $InstallDir 'eulix.exe'
-    $logPath = Join-Path $env:TEMP 'eulix_first_run.log'
+    New-Item -ItemType Directory -Force -Path $EulixDir | Out-Null
 
-    try {
-        & $exePath --help *> $logPath
+    # With 'Stop', Windows PowerShell 5.1 turns the first stderr line of a
+    # redirected native command into a terminating error, and uv reports its
+    # progress on stderr. Use the exit code instead.
+    $ErrorActionPreference = 'Continue'
+    & $exePath --help *> $FirstRunLog
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+
+    if ($code -eq 0) {
         Success "First-launch setup complete."
-    } catch {
-        Warn "First-run setup exited with an error - check $logPath for details."
+        return $true
     }
+    Warn "First-run setup exited with code $code - check $FirstRunLog for details."
+    return $false
+}
+
+# Releases up to v0.8.3 list onnxruntime-rocm in onnx-amd.txt, and it has no
+# Windows build, so the first launch cannot install the embedding packages for
+# the amd variant. Install the plain onnxruntime wheel (CPU) instead.
+function Ensure-AmdEmbedDeps {
+    if ($GpuVariant -ne 'amd') { return $false }
+
+    $venvPython = Join-Path $EulixVenv 'Scripts\python.exe'
+    $ErrorActionPreference = 'Continue'
+    & $venvPython -c 'import onnxruntime, tokenizers' *> $null
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($code -eq 0) { return $true }
+
+    $baseReq = Join-Path $EulixEmbedPath 'requiremenents\requirements.base.txt'
+    if (-not (Test-Path $baseReq)) {
+        Warn "Cannot find $baseReq; skipping the onnxruntime fallback."
+        return $false
+    }
+
+    Warn "The embedding packages are not installed; installing onnxruntime (CPU) instead of onnxruntime-rocm."
+    uv pip install --python "$EulixVenv" -r "$baseReq" onnxruntime tokenizers
+    if ($LASTEXITCODE -eq 0) {
+        Success "Embedding packages installed."
+        return $true
+    }
+    Warn "Package install failed. Retry with: uv pip install --python `"$EulixVenv`" -r `"$baseReq`" onnxruntime tokenizers"
+    return $false
 }
 
 # PATH setup (persist to user PATH via Environment API, plus current session)
@@ -309,12 +412,14 @@ function Ensure-Path {
             $env:Path = "$env:Path;$InstallDir"
             Success "Added $InstallDir to your user PATH. Restart your terminal to pick it up in new sessions."
         } else {
+            # Not `setx PATH`: it truncates at 1024 characters and would copy the
+            # machine PATH into the user PATH.
             Write-Host ""
-            Write-Host "  Add this manually via System Properties > Environment Variables, or run:" -ForegroundColor Yellow
-            Write-Host "    setx PATH `"$env:Path;$InstallDir`""
+            Write-Host "  Add it later via System Properties > Environment Variables, or run:" -ForegroundColor Yellow
+            Write-Host "    [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';$InstallDir', 'User')"
             Write-Host ""
         }
-    } else {
+    } elseif ($env:Path -notlike "*$InstallDir*") {
         $env:Path = "$env:Path;$InstallDir"
     }
 }
@@ -336,9 +441,9 @@ function Main {
     $bar        = '=' * $bannerText.Length
 
     Write-Host ""
-    Write-Host "╔$bar╗"          -ForegroundColor Cyan
-    Write-Host "║$bannerText║"   -ForegroundColor Cyan
-    Write-Host "╚$bar╝"          -ForegroundColor Cyan
+    Write-Host "+$bar+"          -ForegroundColor Cyan
+    Write-Host "|$bannerText|"   -ForegroundColor Cyan
+    Write-Host "+$bar+"          -ForegroundColor Cyan
     Write-Host ""
 
     Check-OS
@@ -346,7 +451,12 @@ function Main {
     Install-Uv
     Setup-Venv
     Download-Binary
-    Run-FirstLaunchSetup
+    Reset-ExtractedAssets
+    $firstRunOk = Run-FirstLaunchSetup
+    $depsOk     = Ensure-AmdEmbedDeps
+    if (-not $firstRunOk -and -not $depsOk) {
+        Warn "Retry the Python package install with: eulix getEmbedDeps"
+    }
     Ensure-Path
 
     Write-Host ""

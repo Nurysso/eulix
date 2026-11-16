@@ -1,6 +1,6 @@
 # Changelog
 
-## Eulix_embed v0.4.2 - 2026-11-16
+## Eulix_embed v0.4.2 - 2026-11-17
 
 Changes since v0.4.1, the version that shipped with Eulix v0.8.3.
 
@@ -16,6 +16,7 @@ Changes since v0.4.1, the version that shipped with Eulix v0.8.3.
 - **Memory:** `generate_vectors_streaming` buffered every vector before the first yield, so peak RAM grew with the corpus. It yields per batch again, in both the ONNX and the Torch pipeline (#143).
 - **Torch on CPU:** the Torch backend didn't start on CPU-only Torch builds ("Torch not compiled with CUDA enabled"). The CUDA memory fraction is now set only when CUDA is available (#119).
 - **Query protocol:** the ONNX embedder printed "Using ONNX-RUNTIME" to stdout, where `query` writes its JSON and binary responses, so they couldn't be parsed. The banner goes to stderr now (#119).
+- **ONNX on macOS and Windows:** `onnx-amd.txt` asked for `onnxruntime-rocm`, which is only built for Linux x86-64, so the `amd` variant couldn't install its packages on macOS (the only macOS build) or Windows. It now asks for `onnxruntime-rocm` on Linux and for plain `onnxruntime` everywhere else.
 
 ### Security
 

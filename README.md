@@ -425,7 +425,7 @@ Three steps from install to your agent's first query.
 
 ### 1. Install
 
-**Linux**
+**Linux and macOS** (Apple Silicon)
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/Nurysso/eulix/main/install.sh)
@@ -437,9 +437,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Nurysso/eulix/main/install.s
 irm https://raw.githubusercontent.com/Nurysso/eulix/main/install.ps1 | iex
 ```
 
-**macOS:** [build from source](docs/Installation.md#build-on-macos).
+**Intel Mac or Linux on ARM:** [build from source](docs/Installation.md#build-from-source).
 
-The installer asks for your GPU variant (`nvidia` for CUDA, `amd` for AMD GPUs and CPU-only machines) and verifies the Eulix binary against the release checksums.
+The installer asks for your GPU variant (`nvidia` for CUDA, `amd` for AMD GPUs and CPU-only machines; macOS has one build and is not asked) and verifies the Eulix binary against the release checksums.
 
 ### 2. Index your repository
 

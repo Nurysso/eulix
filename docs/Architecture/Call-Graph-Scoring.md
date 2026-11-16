@@ -80,14 +80,14 @@ Each tool in `refs/` reads the snapshot and writes one JSON line per call site:
 
 | Language | Tool | `project` targets | `unknown` |
 | --- | --- | --- | --- |
-| Go | `refs/go/main.go`, go/types through `golang.org/x/tools/go/packages` | The `*types.Func` a call names. A call on a project interface lists the interface method itself plus every project type that implements it. Conversions to a project type are skipped. | Function values; a project interface with no implementor; a method of an outside interface (`error`, `io.Writer`) that project types implement |
+| Go | `refs/go/main.go`, go/types through `golang.org/x/tools/go/packages` | The `*types.Func` a call names. A call on a project interface lists the interface method itself plus every project type that implements it. Conversions to a project type are skipped. | Function values; a project interface with no implementer; a method of an outside interface (`error`, `io.Writer`) that project types implement |
 | Java | `refs/java/RefCalls.java`, javac attribution (`JavacTask`) with no classpath | The method javac attributes, plus every project override unless it is static, private, final or a constructor | Calls into missing dependencies (javac keeps attributing after errors) |
 | Python | `refs/python/refcalls.py`, jedi 0.19.2 `goto` (then `infer`) | The definition jedi reaches under the root. Calling a class is a `constructor` aimed at the class and its `__init__`. | Nothing found, or a variable that holds a callable |
 | Rust | `refs/rust/refcalls.py`, `rust-analyzer lsif` | The `fn` a name token resolves to, when the token is followed by `(` or `::<…>(` | No definition. A call through a trait bound resolves to the trait's declaration only. |
-| TypeScript, JavaScript | `refs/ts/refcalls.mjs`, the TypeScript 5.9.3 checker (`allowJs` for JS) | The resolved signature's declaration, plus every project method of that name in subclasses and implementors | Callback parameters and other values with no function body |
+| TypeScript, JavaScript | `refs/ts/refcalls.mjs`, the TypeScript 5.9.3 checker (`allowJs` for JS) | The resolved signature's declaration, plus every project method of that name in subclasses and implementers | Callback parameters and other values with no function body |
 | C, C++ | `refs/clang/refcalls.py`, libclang | The declaration clang resolved, plus every project override of a virtual method | Calls through function pointers; implicit constructor calls are skipped |
 
-Listing every override or implementor is **class hierarchy analysis** (CHA). The harness treats any one of them as a correct answer, because PRISM picks one target per call.
+Listing every override or implementer is **class hierarchy analysis** (CHA). The harness treats any one of them as a correct answer, because PRISM picks one target per call.
 
 ### Caching
 

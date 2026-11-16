@@ -28,5 +28,11 @@ Changes since 0.1.2 (never released). Now requires libeulix 0.9.0 (#150).
 - Call-site indexing was quadratic per file and is linear now (#165).
 - Open buffers are matched by path instead of a rebuilt URI, which broke on `+` and drive colons (#165).
 - `did_close` and watched-file handling read files with `from_utf8_lossy` (#165).
+- Go and Java call sites take their qualifier from `FunctionCall::receiver`, where libeulix 0.9.0 now stores it, so ranking still sees `fmt` in `fmt.Println()` (#167).
+
+### Tests
+
+- Tests build URIs from the system temp directory instead of `/workspace/...`, which has no drive letter on Windows and made 16 tests panic there (`b37015f`).
+- `make test-rust` runs the eulix-lsp and libeulix tests, as CI does (#156).
 
 _Changes before 0.2.0 were not tracked._

@@ -1,6 +1,6 @@
 # Changelog
 
-## Eulix CLI 0.9.0 - 2026-11-16
+## Eulix CLI 0.9.0 - 2026-11-17
 
 Changes since v0.8.3.
 
@@ -19,6 +19,7 @@ Changes since v0.8.3.
 - `eulix setup` locks `.env` to the owner before writing secrets (a protected DACL on Windows, `0600` elsewhere) and aborts if it can't. Values godotenv would misread are quoted, values it couldn't read back are refused, and line breaks are rejected (#161, #164).
 - Under `eulix mcp`, logs stay off stdout (#157).
 - Logs are opened inside `.eulix` through `os.Root`. A symlinked or hostile `.eulix` directory is refused before the router, context builder, analyze or viewer use it, a `history.db` that isn't a regular file is refused, and the subsystem debug log is written to the project's `.eulix` (#163).
+- With `engine = "ehnas"`, `eulix analyze` skips the embedding stage, since EHNAS doesn't read `embeddings.bin` or `vectors.bin`. The completion marker records the retrieval engine, so changing the embedding model no longer re-analyzes an EHNAS project (`5ecd16d`).
 - Change detection hashes size and mtime, matching the parser's FileWalker (#147).
 - `kb.json` is streamed through a buffer instead of being mmapped, which takes peak memory from 212 MB to 33 MB on a 178 MB file. `MAP_POPULATE` is dropped, and the chunk slice is sized from `kb.json` metadata instead of a fixed 320k (`f9006ea`).
 - Better memory alignment across the CLI (`42300d8`), and a simpler `KBStruct` (#157).

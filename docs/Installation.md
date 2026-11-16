@@ -2,15 +2,15 @@
 
 This guide shows how to install Eulix with the install script, and how to build it from source.
 
-> **Platforms:** Linux (x86-64) and Windows 11 (64-bit) have release builds. The release also publishes a macOS (Apple Silicon, `darwin-arm64`) binary, but `install.sh` refuses to run on macOS, so download it from the release page or build from source.
-> **Last verified against:** `ad744e9`. I read the install scripts, `build.sh` and the `Makefile`; I did not run the installers.
+> **Platforms:** Linux (x86-64), macOS (Apple Silicon, `darwin-arm64`) and Windows 11 (64-bit) have release builds. `install.sh` installs on Linux and macOS, `install.ps1` on Windows. Intel Macs and Linux on ARM have no release build; build from source there.
+> **Last verified against:** `ad744e9`. I read `build.sh` and the `Makefile`. The install scripts were re-checked on 2026-11-17: `install.sh` under bash 3.2 (the macOS system bash) with Linux and macOS simulated, and `install.ps1` under PowerShell 7 on Linux, both against the real v0.8.3 release. Neither was run on a real Mac or Windows machine.
 
 ## Which way should I install?
 
-| You want to...                | Use                                            |
-| ----------------------------- | ---------------------------------------------- |
-| Just use Eulix                | [The install script](#install-with-the-script) |
-| Use macOS, or change the code | [Build from source](#build-from-source)        |
+| You want to...                                         | Use                                            |
+| ------------------------------------------------------ | ---------------------------------------------- |
+| Just use Eulix                                         | [The install script](#install-with-the-script) |
+| Use an Intel Mac or Linux on ARM, or change the code   | [Build from source](#build-from-source)        |
 
 ## What you are installing
 
@@ -22,15 +22,15 @@ For the install script, you need only the following. The script installs the res
 
 | Need                                                          | Why                                                                                                                                             |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Linux with `bash` and `curl`, or Windows with PowerShell 5.1+ | To run the script.                                                                                                                              |
+| Linux or macOS with `bash` and `curl`, or Windows with PowerShell 5.1+ | To run the script.                                                                                                                     |
 | Network access                                                | To download the release, `uv`, Python 3.11 and the embedding model's Python packages. The model itself is downloaded the first time it is used. |
 | About a few GB of disk                                        | Python packages and the model.                                                                                                                  |
 
-**GPU:** the script asks you to pick a variant. Choose `nvidia` for NVIDIA GPUs (CUDA). Choose `amd` for AMD GPUs or for machines with no NVIDIA GPU, including CPU-only ones. The choice decides which ONNX packages are installed. If you have an AMD GPU and get strange search results, read [EMB-1](Known-Issues/Embeddings.md#emb-1-onnx-on-rocm-produces-wrong-embeddings).
+**GPU:** on Linux and Windows the script asks you to pick a variant (set `EULIX_GPU=amd` or `EULIX_GPU=nvidia` to skip the question). Choose `nvidia` for NVIDIA GPUs (CUDA). Choose `amd` for AMD GPUs or for machines with no NVIDIA GPU, including CPU-only ones. The choice decides which ONNX packages are installed. On macOS there is one build and no question: it installs `onnxruntime`, which runs on the CPU or through CoreML. If you have an AMD GPU and get strange search results, read [EMB-1](Known-Issues/Embeddings.md#emb-1-onnx-on-rocm-produces-wrong-embeddings).
 
 ## Install with the script
 
-### Linux
+### Linux and macOS
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/Nurysso/eulix/main/install.sh)
@@ -47,15 +47,18 @@ irm https://raw.githubusercontent.com/Nurysso/eulix/main/install.ps1 | iex
 ### What the script does
 
 1. Finds the latest release on GitHub, or the one you name in `EULIX_VERSION` (for example `EULIX_VERSION=v0.8.3`).
-2. Asks which GPU variant you want.
-3. Installs `uv` if it is missing, and creates a Python 3.11 virtual environment at `~/.Eulix/.venv`.
-4. Downloads the `eulix` binary for your system and `vizeulize.html`, and **checks both against the release's `checksums.txt`**. It stops on a mismatch.
-5. Installs them: `eulix` into `~/.local/bin` on Linux or `%LOCALAPPDATA%\Eulix\bin` on Windows, and the web page into `~/.Eulix/bin/`.
-6. Runs `eulix --help` once, which unpacks the parser and embedding scripts into `~/.Eulix/` and installs their Python packages.
+2. Checks your system: Linux x86-64, macOS on Apple Silicon (also from a Rosetta shell), or 64-bit Windows. Anything else stops with a link to [Build from source](#build-from-source).
+3. Asks which GPU variant you want (Linux and Windows only; `EULIX_GPU` skips the question).
+4. Installs `uv` if it is missing, and creates a Python 3.11 virtual environment at `~/.Eulix/.venv`. An existing environment with another Python version is deleted and created again.
+5. Downloads the `eulix` binary for your system and `vizeulize.html`, and **checks both against the release's `checksums.txt`** (`checksum.txt` in v0.8.3 and older). It stops on a mismatch.
+6. Installs them: `eulix` into `~/.local/bin` on Linux and macOS or `%LOCALAPPDATA%\Eulix\bin` on Windows, and the web page into `~/.Eulix/bin/`.
+7. Deletes the parser, the embedding scripts and the `.initialized` marker that an earlier install unpacked, so the new `eulix` unpacks its own copies. Without this, an upgrade fails the parser's integrity check.
+8. Runs `eulix --help` once, which unpacks the parser and embedding scripts into `~/.Eulix/` and installs their Python packages. The output goes to `~/.Eulix/first_run.log`.
+9. For v0.8.3 and older on macOS, and with the `amd` variant on Windows, the packages from step 8 cannot install: those releases ask for `onnxruntime-rocm`, which is built for Linux only. The script then installs `onnxruntime` instead.
 
 ### After the script: PATH
 
-If the install folder is not on your `PATH`, the script says so. On Linux add this to `~/.bashrc` or `~/.zshrc`:
+If the install folder is not on your `PATH`, the script says so. On Linux and macOS add this to `~/.bashrc` or `~/.zshrc` (zsh is the default shell on macOS):
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -110,7 +113,7 @@ cd eulix
 | File              | For                                   |
 | ----------------- | ------------------------------------- |
 | `onnx-nvidia.txt` | NVIDIA GPUs (CUDA).                   |
-| `onnx-amd.txt`    | AMD GPUs, CPU-only machines and Macs. |
+| `onnx-amd.txt`    | AMD GPUs, CPU-only machines and Macs. Installs `onnxruntime-rocm` on Linux and plain `onnxruntime` (CPU, plus CoreML on macOS) elsewhere. |
 
 > choosing onnx file installs specific version of ONNXRUNTIME you can switch
 > between nvidia and amd or even pytorch if you want
@@ -264,7 +267,7 @@ The file names matter: the Go build picks `eulix_parser_linux`, `eulix_parser_da
 
 ## Update
 
-Run the install script again; it installs the latest release over the old one. Then re-run `eulix analyze` in your projects, because a new version may change the index files ([Binary Format](eulix-embed/Binary-Format.md) requires an exact version match).
+Run the install script again; it installs the latest release over the old one, replaces the parser and scripts the old version unpacked, and reinstalls the Python packages for the variant you pick. Then re-run `eulix analyze` in your projects, because a new version may change the index files ([Binary Format](eulix-embed/Binary-Format.md) requires an exact version match).
 
 ## Uninstall
 

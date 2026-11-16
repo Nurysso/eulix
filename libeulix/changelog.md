@@ -1,8 +1,8 @@
 # Changelog
 
-## libeulix 0.9.0 - 2026-11-16
+## libeulix 0.9.0 - 2026-11-17
 
-Changes since 0.8.2, the version that shipped with Eulix v0.8.3. This is a breaking release: `LanguageSpecificInfo` has a new `PhpInfo` variant, serialized maps are now `BTreeMap`/`BTreeSet`, `FunctionCall` has a new field, and some symbol IDs changed shape (see Changed).
+Changes since 0.8.2, the version that shipped with Eulix v0.8.3. This is a breaking release: `LanguageSpecificInfo` has a new `PhpInfo` variant, serialized maps are now `BTreeMap`/`BTreeSet`, `FunctionCall` has a new `receiver` field, `CallGraphOptions` has a new `go_modules` field, and some symbol IDs changed shape (see Changed).
 
 ### Added
 
@@ -28,6 +28,12 @@ Changes since 0.8.2, the version that shipped with Eulix v0.8.3. This is a break
   - Crate-local Rust paths resolve before the lexical fallback. Only `std`, `core`, `alloc`, `proc_macro` and the primitive types count as external roots, so calls into a sibling workspace crate keep the name lookup.
   - Local definitions win over imports. A method on an unknown receiver is no longer guessed by unique name in these languages.
   - JavaScript keeps the legacy name and method indexes, so it can't see the new short method names.
+- **Go and Java receivers typed from declarations** in PRISM v2 (#167, PRISM-5), in a new `prism_v2::receivers::typed` module. Before, v2 linked no method call in either language.
+  - The Go and Java parsers pass the receiver of every call in `FunctionCall::receiver`, and keep the declared types of variables and fields.
+  - A receiver has a known type when it is the method's own object (`s` in `func (s *Store)`, `this`, `super`), a parameter or local with a declared type, a local whose initializer spells the type out (`m := &Store{}`, `new Foo(...)`, a cast), a field of a known type, or a package or class named directly. Anything else gets no edge (PRISM-3).
+  - Go import paths map to package directories through the project's modules, passed in `CallGraphOptions::go_modules`. Imports from outside the module are external, so `fmt.Println` never links to a project `Println`.
+  - Java `import a.b.C`, `import a.b.*` and `import static` are followed. `new Foo(...)` links to the declared constructor, or to the class when it has none.
+  - On gin, precision goes from 70.3% to 100% and recall from 43.9% to 66.3%. On gson, recall goes from 0% to 97.3%.
 - **Nested functions** (#146) in Rust, Python, TypeScript and JavaScript are extracted with scoped IDs such as `func_outer.inner::file.rs`, with an `@line` suffix for duplicates. The outer function's walk, metrics and analysis stop at the nested boundary, and nested functions stay out of the global name indexes.
 - A shared iterative syntax-tree walker in the grammar utilities, with a heap-backed context stack (#133).
 - `FileWalker::with_threads`, defaulting to the available parallelism (#147).

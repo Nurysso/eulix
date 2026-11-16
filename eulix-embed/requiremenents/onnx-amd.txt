@@ -1,3 +1,4 @@
 -r requirements.base.txt
-onnxruntime-rocm
+onnxruntime-rocm; sys_platform == "linux"
+onnxruntime; sys_platform != "linux"
 tokenizers
