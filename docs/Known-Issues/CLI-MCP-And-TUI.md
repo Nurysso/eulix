@@ -195,6 +195,34 @@ The serious routes are closed: see [Fixed Issues](Fixed-Issues.md). The `.eulix`
 
 ---
 
+## CLI-11: "Where are X run" is answered with where X is defined
+
+**Severity:** Medium · **Status:** Open · **Verification:** Reproduced with `eulix query` (2026-11-16, `07907ad`, on Flask 3.1.3); MCP not checked
+
+**Symptom.** `eulix query "Where are before_request and after_request hooks run during a request?"` prints only `Function 'before_request' defined at: src/flask/sansio/scaffold.py:460`. The question asks where the hooks run (`preprocess_request` and `process_response`, reached from `full_dispatch_request` in `app.py`), and `after_request` is dropped.
+
+**Cause.** Not traced. The router appears to treat a question that starts with "Where" and contains a symbol as a location question, and answers it from the index without retrieval (the factual-answer path in [CLI-4](#cli-4-eulix-query-prints-a-prompt-and-never-calls-the-model)).
+
+**Workaround.** Ask without "where": "How does Flask run before_request and after_request hooks during a request?" retrieves `app.py:904-951` (`full_dispatch_request` and `finalize_request`) along with the hook registration code.
+
+**Fix direction.** Classify a "where" question as a location lookup only when it asks where something is defined or declared, not where it is run, called or used.
+
+---
+
+## MCP-6: Project memory adds unrelated "Key symbols" to later queries
+
+**Severity:** Medium · **Status:** Open · **Verification:** Reproduced (2026-11-16, `07907ad`, on Flask 3.1.3)
+
+**Symptom.** What a query returns depends on the queries asked before it in the same server session. On Flask, after one query returned the `Flask` class summary, the next query naming `full_dispatch_request` was sent as `… Key symbols: full_dispatch_request, root_path, host_matching, static_folder, static_host, static_url_path, subdomain_matching, import_name, url_map`. The eight extra names are constructor parameters from the class docstring and unrelated to the question, and most of the reply was unrelated tests.
+
+**Cause.** `projectMemory.Observe` (`internal/mcp/strategy_memory.go`) splits a trusted result on blank lines and treats every symbol in a block as related to every other, keeping up to `maxRelated` (8) per symbol. A class summary is one block that lists all of the class's methods and documents every parameter, so each of its methods becomes related to the first eight names in the docstring. `expand` then adds those names as anchors whenever one of the methods is asked about. The result that taught the memory had cleared the 0.55 quality bar even though it was a poor answer ([RET-13](Retrieval-And-Query.md#ret-13-a-question-naming-a-python-method-gets-the-class-not-the-method)).
+
+**Workaround.** Switch the active repository away and back (`set_repo_path`) or restart the MCP server; both clear the memory.
+
+**Fix direction.** Don't learn co-occurrence from class summaries or other large blocks, or cap the symbols taken per block, and rank remembered neighbours below the query's own anchors.
+
+---
+
 ## Related Docs
 
 - [Cli](../eulix-cli/Cli.md), [Chat Screen](../eulix-cli/tui/Chat-Screen.md), [MCP Overview](../eulix-cli/mcp/Overview.md), [Llm](../eulix-cli/Llm.md).

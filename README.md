@@ -9,6 +9,11 @@
 
 Eulix is a **local-first retrieval engine** that gives AI coding agents ranked, token-budgeted context from a structural index of your repo, served over MCP from your own machine.
 
+It runs on two engines of its own: **[PRISM](#-prism-v2-precise-call-graphs-from-syntax-alone)** turns your code into a call graph, and **[EHNAS](#-ehnas-zero-embeddings-zero-gpu-zero-network)** answers your agent from that graph with no model in the loop.
+
+[![PRISM v2](https://img.shields.io/badge/PRISM_v2-98.6%25_precise_call_graphs-A78BFA?style=for-the-badge&labelColor=1A2030)](#-prism-v2-precise-call-graphs-from-syntax-alone)
+[![EHNAS](https://img.shields.io/badge/EHNAS-retrieval_with_no_embeddings-5EEAD4?style=for-the-badge&labelColor=1A2030)](#-ehnas-zero-embeddings-zero-gpu-zero-network)
+
 [![Version](https://img.shields.io/badge/version-v0.9.0-A78BFA?style=for-the-badge&labelColor=1A2030)](changelog.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-5EEAD4?style=for-the-badge&labelColor=1A2030)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio_server-A78BFA?style=for-the-badge&labelColor=1A2030)](docs/eulix-cli/mcp/Overview.md)
@@ -23,22 +28,29 @@ Eulix is a **local-first retrieval engine** that gives AI coding agents ranked, 
 
 </div>
 
-<!-- <p align="center"> -->
-
-    <a href="https://github.com/user-attachments/assets/<full-video-id>">
-      <img src=".github/readme/demo.webp" alt="Claude Code asks Eulix one question and gets ranked context back in one call" width="100%">
-    </a>
-    <br><sub>▶ Click for the full 90-second walkthrough</sub>
-
+<p align="center">
+<a href="https://github.com/user-attachments/assets/5c6cedc8-4ff4-4626-a90c-2eaaa2c7f3fd">
+<picture>
+<source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/2e492176-e9ac-4353-84c5-5a4c8a55f1b6">
+<img src="https://github.com/user-attachments/assets/98debce1-92e1-4114-8bb2-0a45189cf65c" alt="Claude Code asks Eulix how Flask stores its session cookie over MCP and answers from the ranked context" width="100%">
+</picture>
+</a>
+<br><sub>▶ Click for the full 2-minute walkthrough</sub>
 </p>
 
 <br>
 
-|      ⚡ < 20 ms      |    🪶 < 90 MB     |                   🐧 53.9 s                    |          🔁 < 10 s           |
-| :------------------: | :---------------: | :--------------------------------------------: | :--------------------------: |
-| per warm query (p50) | MCP server memory | to parse the Linux kernel, call graph included | to re-parse it incrementally |
+|      🎯 98.6%       |      ⚡ < 20 ms      |    🪶 < 90 MB     |                   🐧 53.9 s                    |          🔁 < 10 s           |
+| :-----------------: | :------------------: | :---------------: | :--------------------------------------------: | :--------------------------: |
+| of PRISM's call edges are right | per warm query (p50) | MCP server memory | to parse the Linux kernel, call graph included | to re-parse it incrementally |
 
-<sub>Query figures: EHNAS engine with v0.9.0 on five open-source repos (eulix, flask, gin, ripgrep, gson), Ryzen 5 5600X. Kernel figures: 37.3M lines on 12 threads. Details in [Benchmarks](#-benchmarks).</sub>
+<sub>Call-graph figure: PRISM v2 on eight open-source projects, one per language, checked against each language's own compiler tooling. Query figures: EHNAS engine with v0.9.0 on five open-source repos (eulix, flask, gin, ripgrep, gson), Ryzen 5 5600X. Kernel figures: 37.3M lines on 12 threads. Details in [Benchmarks](#-benchmarks).</sub>
+
+## ⭐ Two engines at the core
+
+**PRISM v2 reads your code.** It parses nine languages with Tree-sitter and resolves calls from the syntax tree alone, with no build step and no type checker. On eight open-source projects checked against each language's own compiler tooling, 98.6% of the call edges it draws are right. It gets through the whole Linux kernel, 37.3M lines, in 53.9 seconds. [How PRISM works ↓](#-prism-v2-precise-call-graphs-from-syntax-alone)
+
+**EHNAS answers your agent.** It searches the symbol index and PRISM's call graph with exact matches, Monte Carlo walks and cross-language twin search, then packs the reply to your token budget. No embedding model runs at any point, so the MCP server fits in 81–89 MB and a warm query takes under 20 ms at the median. [How EHNAS works ↓](#-ehnas-zero-embeddings-zero-gpu-zero-network)
 
 ---
 
@@ -188,18 +200,19 @@ max_tokens = 8192                 # replies are sized to fit this budget
 
 ## ✨ Core features
 
-### ⚡ PRISM v2: fast, multi-language call graphs
+### ⭐ PRISM v2: precise call graphs from syntax alone
 
 Every navigation question eventually turns into this one: when the code says `validate()`, which `validate` does it mean? A compiler answers with full type information, which needs a working build. PRISM v2 answers from syntax alone, and that is how it covers nine languages and the entire Linux kernel in under a minute.
 
-`libeulix` parses each file with Tree-sitter and approximates the call graph straight from the syntax tree. It needs only your source: no build step and no type checker. Each call resolves outward from where it is made, checking the same file, then its imports, then the same directory, then the whole project. In Python, TypeScript and Rust, method calls are receiver-aware, so `self.save()` starts at the enclosing class and walks up through its parents. When a name is too common to guess, PRISM leaves the edge out, because a missing edge misleads retrieval less than a wrong one.
+`libeulix` parses each file with Tree-sitter and approximates the call graph straight from the syntax tree. It needs only your source: no build step and no type checker. Each call resolves outward from where it is made, checking the same file, then its imports, then the same directory, then the whole project. Method calls are receiver-aware in Python, TypeScript, Rust, Go and Java: `self.save()` starts at the enclosing class and walks up through its parents, and in Go and Java a receiver's type is read from its declaration. When a name is too common to guess, PRISM leaves the edge out, because a missing edge misleads retrieval less than a wrong one.
 
+- **Precise:** 98.6% of the call edges it draws are right, checked against each language's own compiler tooling on eight open-source projects ([results](#call-graph-accuracy-prism-v2)). PRISM v1 got 54.6% on the same code.
 - **Fast:** the Linux kernel (37.3M lines) parses, call graph included, in 53.9 s.
 - **Incremental:** re-runs reuse every unchanged file from a parse cache, so the whole kernel re-parses in under 10 s, with output identical to a full parse.
 - **Deterministic:** every grammar walks its syntax tree without recursion, and every output comes out in the same order on every run.
 - **Languages:** C · C++ · Go · Java · JavaScript · PHP · Python · Rust · TypeScript
 
-### 🪶 EHNAS: zero embeddings, zero GPU, zero network
+### ⭐ EHNAS: zero embeddings, zero GPU, zero network
 
 > [!TIP]
 > **EHNAS needs zero embeddings, zero GPU and zero network.** Set `engine = "ehnas"` and `eulix analyze` skips the embedding stage entirely ([see Quick start](#-quick-start)).
@@ -244,7 +257,33 @@ It also stays inside the repository you point it at. MCP and retrieval skip hidd
 
 ## 📊 Benchmarks
 
-> Local engineering runs. Results vary with hardware, repository, configuration and query shape. Method: [Benchmarking](docs/Architecture/Benchmarking.md). Raw v0.9.0 numbers: [benchmark report](bench/results/v0.8.3-vs-f9006ea.md).
+> Local engineering runs. Results vary with hardware, repository, configuration and query shape. Method: [Benchmarking](docs/Architecture/Benchmarking.md) and [Call-Graph Scoring](docs/Architecture/Call-Graph-Scoring.md). Raw v0.9.0 numbers: [benchmark report](bench/results/v0.8.3-vs-f9006ea.md) and [call-graph accuracy](docs/libeulix/Call-Graph-Accuracy.md).
+
+### Call-graph accuracy (PRISM v2)
+
+<p align="center">
+  <img src=".github/readme/bench_callgraph.svg" alt="Bar chart: 98.6% of the call edges PRISM v2 draws are correct (87 of 6,355 wrong), against 54.6% for PRISM v1 (5,060 of 11,153 wrong), at similar recall, on eight open-source projects checked against each language's own compiler tooling.">
+</p>
+
+Every edge PRISM draws was checked against the call sites that each language's own tooling resolves: go/types for Go, javac for Java, jedi for Python, rust-analyzer for Rust, the TypeScript checker for TypeScript and JavaScript, and libclang for C and C++. Across the eight projects, v2 drew 6,355 edges and got 87 wrong. The calls it misses are mostly method calls whose receiver type isn't written in the source; PRISM leaves those out rather than guess.
+
+<details>
+<summary>View raw benchmark data: call graphs</summary>
+
+| Language   | Project                | Precision | Recall |
+| :--------- | :--------------------- | --------: | -----: |
+| C          | cJSON 1.7.19           |    100.0% |  99.8% |
+| Java       | gson 2.15.0            |    100.0% |  97.3% |
+| TypeScript | class-validator 0.15.1 |    100.0% |  90.3% |
+| JavaScript | axios 1.21.1           |     91.5% |  82.8% |
+| Python     | flask 3.1.3            |     98.2% |  74.0% |
+| Go         | gin 1.12.0             |    100.0% |  66.3% |
+| C++        | tinyxml2 11.0.0        |     90.0% |  56.0% |
+| Rust       | ripgrep 15.2.0         |     98.8% |  34.3% |
+
+PRISM v2 at `62fdddf`. PHP isn't measured: there is no PHP toolchain in the reference set. Per-call-kind results, the v1 comparison and what each language misses are in [Call-Graph Accuracy](docs/libeulix/Call-Graph-Accuracy.md). Reproduce with `make bench-callgraph`.
+
+</details>
 
 ### Parsing the Linux kernel
 
@@ -475,6 +514,20 @@ Hard real-world queries, benchmarks and language support drive the roadmap. Read
 ## License
 
 [Apache 2.0](LICENSE) for every component. Eulix builds on [Tree-sitter](https://tree-sitter.github.io/), [ONNX Runtime](https://onnxruntime.ai/), [PyTorch](https://pytorch.org/), the [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk) and [tower-lsp](https://github.com/ebkalderon/tower-lsp).
+
+## 🙏 Thank you, Gabriel
+
+A big part of this release is the work of [Gabriel Maia](https://github.com/gabrielmaialva33). In five weeks he sent 36 pull requests, and they reach almost every part of Eulix:
+
+- **PHP, end to end.** The PHP parser in libeulix, PHP call resolution in PRISM v2, PHP-aware retrieval and PHP in the language server. PHP is on the language list because of him.
+- **Method calls in PRISM v2.** Before his fix, v2 linked no method calls at all. He made it keep each call's receiver and follow `self`, `this` and `Self` through a class and its parents, and he made it stop guessing at methods it can't see. That second change is why PRISM leaves an edge out rather than draw a wrong one.
+- **A parser that holds up.** Every grammar now walks its syntax tree without recursion, PRISM v1 is deterministic, files with invalid UTF-8 are kept as partial parses instead of dropped, and the analysis runs on the thread pool you ask for.
+- **EHNAS and the MCP server.** Stable ordering before candidates are cut, a working call layer, twin diversity and novelty weighting; repository roots pinned to their real paths, and the symlink and stale-index gaps closed.
+- **eulix-lsp.** Renames that reach every call site, correct symbol names and ranges, bounded scans and buffers, and a build and test run against libeulix 0.9.0.
+
+What I value most is how he worked: small pull requests that each fix one thing, say plainly what was wrong, and most of the time come with the test that proves it. Gabriel, thank you for the time and care you put into this project. It is a better tool because of you.
+
+— Nurysso
 
 ---
 

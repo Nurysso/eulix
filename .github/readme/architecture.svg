@@ -16,7 +16,7 @@
 <text x="62.3" y="208" class="sans ink2" font-size="11.5" text-anchor="middle">Rust</text>
 <line class="grid" x1="41" y1="228" x2="215" y2="228" stroke-width="1"/>
 <text x="41" y="252" class="sans ink2" font-size="13">Tree-sitter parsing</text>
-<text x="41" y="274" class="sans ink2" font-size="13">PRISM v2 call graph</text>
+<text x="41" y="274" class="sans ink2" font-size="13"><tspan class="accent" font-weight="600">PRISM v2</tspan> call graph</text>
 <text x="41" y="296" class="sans ink2" font-size="13">Incremental cache</text>
 <text x="128" y="344" class="mono ink2" font-size="12" text-anchor="middle">.eulix/kb*.json</text>
 <line class="flow" x1="235" y1="234" x2="263" y2="234" stroke-width="1.5"/><path class="head" d="M269,234L261,229.5L261,238.5Z"/>
@@ -38,7 +38,7 @@
 <text x="552.6" y="208" class="sans ink2" font-size="11.5" text-anchor="middle">Go</text>
 <line class="grid" x1="537" y1="228" x2="711" y2="228" stroke-width="1"/>
 <text x="537" y="252" class="sans ink2" font-size="13">Query router</text>
-<text x="537" y="274" class="sans ink2" font-size="13">ETIYA · EHNAS</text>
+<text x="537" y="274" class="sans ink2" font-size="13"><tspan class="accent" font-weight="600">EHNAS</tspan> · ETIYA engines</text>
 <text x="537" y="296" class="sans ink2" font-size="13">Budgeted MMR</text>
 <text x="624" y="344" class="mono ink2" font-size="12" text-anchor="middle">reads .eulix/</text>
 <line class="flow" x1="731" y1="234" x2="759" y2="234" stroke-width="1.5"/><path class="head" d="M765,234L757,229.5L757,238.5Z"/>
