@@ -80,6 +80,7 @@ The input is source text plus a path (the path decides the language). The output
 | --- | --- | --- | --- |
 | `CallGraphOptions::max_ambiguous` | argument to `prism_v2::build_with` | `8` | A name shared by more than this many definitions gets no edge when nothing nearer settles it. Raise it for more edges, lower it for fewer wrong ones. |
 | `CallGraphOptions::strict_imports` | argument to `prism_v2::build_with` | `true` | Stops names imported from outside the project from linking to a project function of the same name. Turn it off if your TypeScript uses path aliases such as `@app/...`. |
+| `CallGraphOptions::go_modules` | argument to `prism_v2::build_with` | empty | The project's Go modules, as (directory of the `go.mod`, module path). Maps a Go import to one package directory and makes every other import external. `eulix_parser` fills it from the `go.mod` files above Go sources. |
 | `prism` | argument to `analyze_and_build` | none (you choose) | `1` selects PRISM v1, `2` selects PRISM v2. |
 | Cargo features | `Cargo.toml` | `num_cpus` on | `num_cpus`, `secure`, `simd`, `system` and `dev` are declared. `simd` forwards to the file walker's `ignore` dependency and `dev` forwards to `serde_json`; I found no `#[cfg(feature = ...)]` in the library source itself. |
 

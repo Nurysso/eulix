@@ -148,18 +148,25 @@ def lang_group(path: str) -> str:
 
 
 def metrics(c: Counter) -> dict:
+    """TP and FN count reference calls (or call groups); FP and TP_edges count eulix
+    edges (or pairs). Precision is judged on eulix's side: TP_edges / (TP_edges + FP),
+    with TP_edges = TP when the counter has none (per call site, where they agree).
+    `unseen` are project calls the front-end cannot see (outside every eulix function,
+    or aimed at a callee with no node); recall_all counts them as misses."""
     tp, fp, fn, tn = c["TP"], c["FP"], c["FN"], c["TN"]
-    unv = c["unverifiable"]
+    tp_e = c.get("TP_edges", tp)
+    unv, unseen = c["unverifiable"], c["unseen"]
     div = lambda a, b: round(a / b, 4) if b else None
-    p, r = div(tp, tp + fp), div(tp, tp + fn)
+    p, r = div(tp_e, tp_e + fp), div(tp, tp + fn)
     return {
-        "TP": tp, "FP": fp, "FN": fn, "TN": tn,
+        "TP": tp, "FP": fp, "FN": fn, "TN": tn, "TP_edges": tp_e, "unseen": unseen,
         "precision": p,
         "recall": r,
+        "recall_all": div(tp, tp + fn + unseen),
         "f1": div(2 * p * r, p + r) if p and r else (0.0 if p is not None and r is not None else None),
         "accuracy": div(tp + tn, tp + fp + fn + tn),
         "specificity": div(tn, tn + fp),
-        "strict_precision": div(tp, tp + fp + unv),
+        "strict_precision": div(tp_e, tp_e + fp + unv),
         "unverifiable_edges": unv,
     }
 
@@ -255,6 +262,10 @@ def score(nodes: dict[str, Node], edges: list[tuple[str, str, int]], sites: list
     for s in sites:
         b = s.bucket
         hit = s.hit
+        if b in ("out_of_scope", "unmapped_callee") and s.status == "project":
+            total["unseen"] += 1
+            by_kind[s.kind]["unseen"] += 1
+            by_dispatch[s.dispatch]["unseen"] += 1
         if b in ("out_of_scope", "unmapped_callee") or s.status == "unknown":
             if hit:
                 for to in hit:
@@ -327,10 +338,20 @@ def score(nodes: dict[str, Node], edges: list[tuple[str, str, int]], sites: list
     wrong_external: set[tuple] = set()
     unverifiable_pairs = 0
     rescued = 0  # correct pairs whose recorded line points at another call
+    def first_member(key):
+        m = pgroups[key][0]
+        return (m.file, m.line, m.col)
+
     for (frm, to), hit_sites in pair_sites.items():
         keys = accept.get((frm, to))
         if keys:
             satisfied.update(keys)
+            # One correct eulix pair counts once for precision, under the kind and
+            # dispatch of the first call it satisfies.
+            judged = pgroups[min(keys, key=first_member)][0]
+            pair["TP_edges"] += 1
+            pair_kind[judged.kind]["TP_edges"] += 1
+            pair_dispatch[judged.dispatch]["TP_edges"] += 1
             if not any(h is not None and to in h.expected for h in hit_sites):
                 rescued += 1
             continue
@@ -356,6 +377,19 @@ def score(nodes: dict[str, Node], edges: list[tuple[str, str, int]], sites: list
             pair_kind[members[0].kind]["TN"] += 1
             pair_dispatch[members[0].dispatch]["TN"] += 1
     pair["unverifiable"] = unverifiable_pairs
+
+    # Project calls the front-end cannot see, grouped like the scored ones: by caller
+    # (or by file, for a call outside every eulix function) and reference targets.
+    unseen: dict[tuple, Site] = {}
+    for s in sites:
+        if s.status == "project" and s.bucket in ("out_of_scope", "unmapped_callee"):
+            key = (s.caller or f"<outside>:{s.file}",
+                   frozenset((t["file"], t["line"]) for t in s.targets))
+            unseen.setdefault(key, s)
+    for s in unseen.values():
+        pair["unseen"] += 1
+        pair_kind[s.kind]["unseen"] += 1
+        pair_dispatch[s.dispatch]["unseen"] += 1
 
     # --- node coverage ----------------------------------------------------------------
     called = {t for _, t, _ in uniq}

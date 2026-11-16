@@ -44,6 +44,54 @@ fn write_go_fixture(root: &Path) {
     fs::write(root.join("orphans.go"), format!("package p\n\n{methods}")).unwrap();
 }
 
+// Go and Java calls that resolve through typed receivers, imports and the
+// module path: many files per package, so that chunks split inside one.
+fn write_typed_receiver_fixture(root: &Path) {
+    fs::write(root.join("go.mod"), "module example.com/demo\n").unwrap();
+    for i in 0..60 {
+        let dir = root.join(format!("gopkg{}", i % 5));
+        fs::create_dir_all(&dir).unwrap();
+        let go = format!(
+            "package gopkg{k}\n\nimport (\n\t\"fmt\"\n\n\tnext \"example.com/demo/gopkg{j}\"\n)\n\n\
+             type Store{i} struct {{\n\tBase\n\tpeer *Base\n}}\n\n\
+             func (s *Store{i}) Save() {{\n\ts.load()\n\ts.Shared()\n\ts.peer.Shared()\n\tnext.Helper()\n\tfmt.Println()\n}}\n\
+             func (s *Store{i}) load() {{ Helper() }}\n\n\
+             func use{i}(m *Store{i}) {{\n\tm.Save()\n\tlocal := &Store{i}{{}}\n\tlocal.load()\n\tunknown := pick{i}()\n\tunknown.Save()\n}}\n\
+             func pick{i}() *Store{i} {{ return nil }}\n",
+            k = i % 5,
+            j = (i + 1) % 5,
+        );
+        fs::write(dir.join(format!("s{i}.go")), go).unwrap();
+        if i < 5 {
+            fs::write(
+                dir.join("base.go"),
+                format!("package gopkg{i}\n\ntype Base struct{{}}\n\nfunc (b *Base) Shared() {{}}\nfunc Helper() {{}}\n"),
+            )
+            .unwrap();
+        }
+        let jdir = root.join(format!("java/com/demo/p{}", i % 5));
+        fs::create_dir_all(&jdir).unwrap();
+        let java = format!(
+            "package com.demo.p{k};\n\nimport com.demo.p{j}.Tool{n};\nimport java.util.List;\n\n\
+             public class Svc{i} extends Tool{i} {{\n  private Tool{n} tool;\n\
+             \n  void run(Tool{n} other, List<String> names) {{\n    tool.use();\n    other.use();\n    this.own();\n    use();\n    new Tool{n}().use();\n    Tool{n}.make();\n    names.size();\n  }}\n\
+             \n  void own() {{}}\n}}\n",
+            k = i % 5,
+            j = (i + 1) % 5,
+            n = (i + 1) % 60,
+        );
+        fs::write(jdir.join(format!("Svc{i}.java")), java).unwrap();
+        fs::write(
+            jdir.join(format!("Tool{i}.java")),
+            format!(
+                "package com.demo.p{k};\n\npublic class Tool{i} {{\n  public Tool{i}() {{}}\n  public void use() {{}}\n  public static void make() {{}}\n}}\n",
+                k = i % 5
+            ),
+        )
+        .unwrap();
+    }
+}
+
 fn run_parser(root: &Path, out: &Path, threads: &str) -> String {
     fs::create_dir_all(out).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_eulix_parser"))
@@ -79,6 +127,7 @@ fn output_is_identical_across_thread_counts() {
     let root = tmp.path().join("proj");
     write_fixture(&root);
     write_go_fixture(&root);
+    write_typed_receiver_fixture(&root);
     let (one, eight) = (tmp.path().join("t1"), tmp.path().join("t8"));
     run_parser(&root, &one, "1");
     run_parser(&root, &eight, "8");
@@ -91,6 +140,7 @@ fn incremental_run_matches_a_fresh_full_parse() {
     let root = tmp.path().join("proj");
     write_fixture(&root);
     write_go_fixture(&root);
+    write_typed_receiver_fixture(&root);
     fs::write(
         root.join("app.php"),
         "<?php\nrequire_once __DIR__ . '/lib.php';\nfunction main() { return helper(); }\n",
@@ -122,9 +172,10 @@ fn incremental_run_matches_a_fresh_full_parse() {
     )
     .unwrap();
 
-    // 363 files: one added, two modified, the rest unchanged.
+    // 548 files (185 of them the typed-receiver fixture): one added, two
+    // modified, the rest unchanged.
     let stdout = run_parser(&root, &inc, "4");
-    assert!(stdout.contains("Reused 360 cached files"), "{stdout}");
+    assert!(stdout.contains("Reused 545 cached files"), "{stdout}");
     run_parser(&root, &full, "4");
     assert_same_outputs(&inc, &full);
 }

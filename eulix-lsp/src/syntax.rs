@@ -10,14 +10,14 @@
 //!
 //! Two facts about libeulix 0.8.1 shape this adapter:
 //!
-//! 1. `parse_source` leaves `FunctionCall::defined_in` as `None` for almost
-//!    every language (Go puts a qualifier like `"fmt"` in it, Java an `object`
-//!    reference). Only the batch `prism_v1::resolve_call_locations` turns it
-//!    into a file path, and that needs a whole `KnowledgeBase` and walks
-//!    every function, so it's unusable at keystroke frequency. We treat call
-//!    sites as unresolved and let [`crate::index`] resolve them
-//!    incrementally. The qualifier is carried across as `CallSite::qualifier`
-//!    because it's genuinely useful for ranking.
+//! 1. `parse_source` leaves `FunctionCall::defined_in` as `None`. Only the
+//!    batch `prism_v1::resolve_call_locations` turns it into a file path,
+//!    and that needs a whole `KnowledgeBase` and walks every function, so
+//!    it's unusable at keystroke frequency. We treat call sites as
+//!    unresolved and let [`crate::index`] resolve them incrementally. For Go
+//!    and Java the receiver (`"fmt"`, an `object` reference) is carried
+//!    across as `CallSite::qualifier` because it's genuinely useful for
+//!    ranking; libeulix stores it in `FunctionCall::receiver`.
 //! 2. `FileData::syntax` (`SyntaxHealth`) reports only counts plus a single
 //!    `first_error_line`. There's no per-error span, so syntax diagnostics
 //!    are line-granular. See [`crate::diagnostics`].
@@ -293,11 +293,22 @@ fn convert_file_data(fd: FileData, path: &Path) -> ParsedFile {
     } else {
         fd.language.clone()
     };
+    // Go and Java call sites carry their receiver as a qualifier. The other
+    // languages never had one here, and keep it that way.
+    let qualified = matches!(language.as_str(), "go" | "java");
     ParsedFile {
         language,
         loc: fd.loc,
-        functions: fd.functions.iter().map(convert_function).collect(),
-        classes: fd.classes.iter().map(convert_class).collect(),
+        functions: fd
+            .functions
+            .iter()
+            .map(|f| convert_function(f, qualified))
+            .collect(),
+        classes: fd
+            .classes
+            .iter()
+            .map(|c| convert_class(c, qualified))
+            .collect(),
         globals: fd
             .global_vars
             .iter()
@@ -342,7 +353,7 @@ fn convert_file_data(fd: FileData, path: &Path) -> ParsedFile {
     }
 }
 
-fn convert_function(f: &libeulix::struc::kb_struct::Function) -> Func {
+fn convert_function(f: &libeulix::struc::kb_struct::Function, qualified: bool) -> Func {
     let r = f.lang_info.rust.as_deref();
     let g = f.lang_info.go.as_deref();
     let j = f.lang_info.java.as_deref();
@@ -375,9 +386,7 @@ fn convert_function(f: &libeulix::struc::kb_struct::Function) -> Func {
             .iter()
             .map(|c| CallSite {
                 callee: c.callee.clone(),
-                // Verified: libeulix fills this with a receiver/qualifier for
-                // Go and Java and leaves it None elsewhere. It's never a path.
-                qualifier: c.defined_in.clone().filter(|q| !q.is_empty()),
+                qualifier: c.receiver.clone().filter(|q| qualified && !q.is_empty()),
                 line: c.line,
                 is_conditional: c.is_conditional,
                 context: c.context.clone(),
@@ -413,7 +422,7 @@ fn convert_function(f: &libeulix::struc::kb_struct::Function) -> Func {
     }
 }
 
-fn convert_class(c: &libeulix::struc::kb_struct::Class) -> Klass {
+fn convert_class(c: &libeulix::struc::kb_struct::Class, qualified: bool) -> Klass {
     let r = c.lang_info.rust.as_deref();
     let j = c.lang_info.java.as_deref();
     let cpp = c.lang_info.cpp.as_deref();
@@ -464,7 +473,7 @@ fn convert_class(c: &libeulix::struc::kb_struct::Class) -> Klass {
             .methods
             .iter()
             .map(|m| {
-                let mut f = convert_function(m);
+                let mut f = convert_function(m, qualified);
                 f.container = Some(c.name.clone());
                 f
             })
@@ -509,6 +518,41 @@ mod tests {
         let names: Vec<_> = parsed.functions.iter().map(|f| f.name.as_str()).collect();
         assert!(names.contains(&"add"), "got {names:?}");
         assert!(names.contains(&"helper"), "got {names:?}");
+    }
+
+    // The Go and Java parsers keep a call's receiver in `receiver`. It must
+    // still reach `CallSite::qualifier`, and only for those two languages.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn go_and_java_call_sites_keep_their_qualifier() {
+        let qualifiers = |file: &str, src: &str| -> Vec<(String, Option<String>)> {
+            let parsed = parse(Path::new(file), src).expect("parses");
+            parsed
+                .functions
+                .iter()
+                .chain(parsed.classes.iter().flat_map(|c| &c.methods))
+                .flat_map(|f| &f.calls)
+                .map(|c| (c.callee.clone(), c.qualifier.clone()))
+                .collect()
+        };
+        assert_eq!(
+            qualifiers(
+                "main.go",
+                "package main\nfunc run() {\n\tfmt.Println()\n\thelper()\n}\n"
+            ),
+            [
+                ("Println".to_string(), Some("fmt".to_string())),
+                ("helper".to_string(), None)
+            ]
+        );
+        assert_eq!(
+            qualifiers("App.java", "class App { void run(Foo f) { f.bar(); } }"),
+            [("bar".to_string(), Some("f".to_string()))]
+        );
+        assert_eq!(
+            qualifiers("app.py", "def run(x):\n    x.save()\n"),
+            [("save".to_string(), None)]
+        );
     }
 
     #[test]

@@ -106,6 +106,43 @@ pub(super) fn c_top_level_items<'t>(root: Node<'t>) -> Vec<Node<'t>> {
 }
 
 #[allow(clippy::expect_used)] // patterns are compile-time literals; failure = programmer bug at first use
+/// Records one declaration of `name` in a function's variable table.
+///
+/// The table has one entry per name, while a body can declare a name more
+/// than once (in sibling blocks, in a closure, by shadowing a parameter). A
+/// name whose declarations do not agree on one type has no type the table can
+/// state, so its type is dropped and stays dropped; PRISM v2 types Go and
+/// Java receivers from this table and must not pick one of them.
+pub fn declare_variable(
+    variables: &mut std::collections::BTreeMap<String, Variable>,
+    name: String,
+    var_type: Option<String>,
+    scope: &str,
+    line: Option<usize>,
+) {
+    use std::collections::btree_map::Entry;
+    match variables.entry(name) {
+        Entry::Occupied(mut seen) => {
+            // Once dropped, any later type differs from `None` as well.
+            if seen.get().var_type != var_type {
+                seen.get_mut().var_type = None;
+            }
+        }
+        Entry::Vacant(slot) => {
+            let name = slot.key().clone();
+            slot.insert(Variable {
+                name,
+                var_type,
+                scope: scope.to_string(),
+                defined_at: line,
+                transformations: vec![],
+                used_in: vec![],
+                returned: false,
+            });
+        }
+    }
+}
+
 pub fn static_regex(pattern: &str) -> Regex {
     Regex::new(pattern).expect("static regex pattern must be valid")
 }

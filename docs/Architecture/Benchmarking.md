@@ -11,7 +11,7 @@ This page explains the benchmark that compares two eulix versions: what it measu
 
 `make bench-compare A=v0.8.3 B=HEAD` builds both versions, measures them on the same frozen code, and prints what changed. Results are saved under `~/.Eulix/bench`, keyed by commit, so a version that has been measured once is never measured again. Only the side that has no saved result is built and run.
 
-The accuracy of the call graph itself (PRISM v1 and v2 against each language's own compiler or type checker) is measured by a separate harness, `bench/callgraph/` (`make bench-callgraph`); see its [README](../../bench/callgraph/README.md) and the results in [Call-Graph Accuracy](../libeulix/Call-Graph-Accuracy.md).
+The accuracy of the call graph itself (PRISM v1 and v2 against each language's own compiler or type checker) is measured by a separate harness, `bench/callgraph/` (`make bench-callgraph`); see its [README](../../bench/callgraph/README.md), how it scores in [Call-Graph Benchmark Scoring](Call-Graph-Scoring.md), and the results in [Call-Graph Accuracy](../libeulix/Call-Graph-Accuracy.md).
 
 It measures four things:
 

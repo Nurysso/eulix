@@ -3,9 +3,9 @@
 How often the call graph that `libeulix` builds is right, measured against each language's own compiler or type checker on one real project per language.
 
 > **Crate / path:** `libeulix/src/analyze/call_graph/` (PRISM v1 and v2), measured with [`bench/callgraph`](../../bench/callgraph/README.md)  
-> **Measured:** 2026-11-15, `eulix_parser` 0.9.0. "Baseline" is commit `01b1695`; "current" is `01b1695` plus the parser fixes listed in [What Changed](#what-changed-baseline--current) (not yet committed when this was written)  
+> **Measured:** 2026-11-15, `eulix_parser` 0.9.0. "Baseline" is commit `01b1695`; "current" is `c294935` (which has the parser fixes listed in [What Changed](#what-changed-baseline--current)) plus the Go and Java receiver fix, [PRISM-5](../Known-Issues/Parser-And-PRISM.md#prism-5-go-and-java-receivers-never-reach-the-resolver-java-new-calls-never-resolve), not yet committed when this was written  
 > **Benchmark checked:** yes, see [How The Benchmark Was Checked](#how-the-benchmark-was-checked); the numbers below are from the corrected harness  
-> **Raw results:** `~/.Eulix/bench/callgraph/reports/2026-11-15-baseline-01b1695/` and `.../2026-11-15-fixes/` on the machine that ran them; regenerate with `make bench-callgraph`
+> **Raw results:** `~/.Eulix/bench/callgraph/reports/2026-11-15-baseline-01b1695/` and `.../2026-11-15-fixes/` (before the PRISM-5 fix) on the machine that ran them; regenerate the current numbers with `make bench-callgraph`
 
 ## Overview
 
@@ -16,19 +16,21 @@ PRISM links each call to the function it probably means, from names, scopes and 
 | Language | Precision | Recall | What to expect |
 | --- | ---: | ---: | --- |
 | C | 100% | 99.8% | Effectively exact for plain function calls. |
+| Java | 100% | 97.3% | Close to exact: nearly every receiver has a declared type. |
 | TypeScript | 100% | 90.3% | Exact for functions; half of the method calls are missed. |
 | JavaScript | 91.5% | 82.8% | Functions are close to exact; some method calls on built-ins are linked wrongly. |
 | Python | 98.2% | 74.0% | Function calls exact; calls on objects of unknown type are missed. |
+| Go | 100% | 66.3% | Function calls exact; 39% of method calls, because a local assigned from a call has no declared type. |
 | C++ | 90.0% | 56.0% | About half of all calls; overloads are confused. |
-| Go | 70.3% | 43.9% | Function calls are good; **no method call is linked**, and 30% of edges are wrong. |
 | Rust | 98.8% | 34.3% | Edges are almost always right, but most method calls are missed. |
-| Java | – | 0.0% | **No edges at all.** Use PRISM v1 for Java. |
 
-**A v2 edge to a plain function is right 95–100% of the time in every language**, and v2 finds 80–100% of function calls everywhere except C++ (57%). Method calls are the weak part: in Go and Java v2 links none of them, and elsewhere it finds 25–76% of them. [PRISM v1](PRISM-V1.md) finds more method calls in Go, Java and Rust, but about 40–70% of its method edges there are wrong.
+**A v2 edge to a plain function is right 99–100% of the time in every language**, and v2 finds 80–100% of function calls everywhere except C++ (57%). Method calls are the weak part: v2 finds 96% of them in Java, and 25–76% elsewhere. [PRISM v1](PRISM-V1.md) finds more method calls in Go and Rust, but 53% and 71% of its method edges there are wrong.
+
+Before the Go and Java receiver fix (PRISM-5), v2 linked no method call in either language: gin stood at 70.3% precision and 43.9% recall, and gson had no edges at all. See [The Go And Java Receiver Fix](#the-go-and-java-receiver-fix-prism-5).
 
 ## How It Is Measured
 
-The [harness README](../../bench/callgraph/README.md) has the full rules. In brief:
+The [harness README](../../bench/callgraph/README.md) has the rules, and [Call-Graph Benchmark Scoring](../Architecture/Call-Graph-Scoring.md) explains each step with a worked example. In brief:
 
 - **One fact per caller → callee pair.** v2 keeps one edge per pair (at the first call line), so a function calling `free` three times counts once. Per-call-site numbers are given separately in [Coverage And Edges](#coverage-and-edges).
 - **TP:** the reference resolves a call into the project and eulix links the same caller to that callee, whichever of the caller's calls the edge's single line points at. **FN:** eulix has no such edge. **FP:** an eulix pair that is right for none of the caller's calls, judged by the call at its line: a project call there makes it a wrong target, a standard-library or dependency call a wrongly linked external one. **TN:** a call to the standard library or a dependency that eulix correctly leaves unlinked.
@@ -57,10 +59,10 @@ Current parser, both PRISM versions, caller → callee pairs:
 
 | Corpus | Language | PRISM | TP | FP | FN | TN | Precision | Recall | F1 | Accuracy | Specificity | Strict P |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| gin | Go | v2 | 1060 | 448 | 1357 | 3106 | 70.3% | 43.9% | 54.0% | 69.8% | 87.4% | 70.3% |
-| gin | Go | v1 | 1900 | 1168 | 517 | 2491 | 61.9% | 78.6% | 69.3% | 72.3% | 68.1% | 59.6% |
-| gson | Java | v2 | 0 | 0 | 1088 | 755 | – | 0.0% | – | 41.0% | 100.0% | – |
-| gson | Java | v1 | 637 | 359 | 451 | 561 | 64.0% | 58.6% | 61.1% | 59.7% | 61.0% | 48.1% |
+| gin | Go | v2 | 1603 | 0 | 814 | 3194 | 100.0% | 66.3% | 79.8% | 85.5% | 100.0% | 100.0% |
+| gin | Go | v1 | 1915 | 1168 | 502 | 2491 | 62.1% | 79.2% | 69.6% | 72.5% | 68.1% | 59.8% |
+| gson | Java | v2 | 1059 | 0 | 29 | 755 | 100.0% | 97.3% | 98.7% | 98.4% | 100.0% | 98.3% |
+| gson | Java | v1 | 678 | 360 | 410 | 561 | 65.3% | 62.3% | 63.8% | 61.7% | 60.9% | 47.3% |
 | flask | Python | v2 | 165 | 3 | 58 | 487 | 98.2% | 74.0% | 84.4% | 91.4% | 99.4% | 94.8% |
 | flask | Python | v1 | 167 | 99 | 56 | 416 | 62.8% | 74.9% | 68.3% | 79.0% | 80.8% | 50.8% |
 | ripgrep | Rust | v2 | 1645 | 20 | 3153 | 3349 | 98.8% | 34.3% | 50.9% | 61.2% | 99.4% | 95.5% |
@@ -82,8 +84,8 @@ PRISM v2, precision / recall, with the number of reference pairs in brackets. Th
 
 | Corpus | Language | Function calls | Method calls | Constructor calls | v1 method calls |
 | --- | --- | ---: | ---: | ---: | ---: |
-| gin | Go | 94.8% / 98.4% (1077) | 0.0% / 0.0% (1340) | – | 47.3% / 63.4% (1340) |
-| gson | Java | – / 0.0% (200) | – / 0.0% (767) | – / 0.0% (121) | 59.9% / 66.0% (767) |
+| gin | Go | 100.0% / 100.0% (1077) | 100.0% / 39.2% (1340) | – | 47.3% / 63.4% (1340) |
+| gson | Java | 100.0% / 100.0% (200) | 100.0% / 96.2% (767) | 100.0% / 100.0% (121) | 59.9% / 66.0% (767) |
 | flask | Python | 100.0% / 100.0% (46) | 97.2% / 67.3% (153) | 100.0% / 66.7% (24) | 58.8% / 83.0% (153) |
 | ripgrep | Rust | 99.2% / 80.5% (781) | 98.6% / 25.3% (4017) | – | 29.3% / 33.0% (4017) |
 | class-validator | TypeScript | 100.0% / 100.0% (343) | 100.0% / 47.7% (44) | – / 0.0% (16) | 66.1% / 93.2% (44) |
@@ -104,7 +106,7 @@ Fixes made on 2026-11-15 (details and guarding tests in [Fixed Issues](../Known-
 5. C and C++ look inside `#if`/`#ifdef` blocks (include guards) and `extern "C" { ... }`.
 6. Go and C calls never land on a struct type (part of PRISM-10).
 
-PRISM v2, caller → callee pairs, both parsers scored by the same corrected harness:
+PRISM v2, caller → callee pairs, both parsers scored by the same corrected harness. This table stops before the Go and Java receiver fix, which has its own section below; the gin and gson rows here are therefore not the current numbers:
 
 | Corpus | Language | Correct pairs | Wrong pairs | Missed pairs | Precision | Recall | F1 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -119,9 +121,37 @@ PRISM v2, caller → callee pairs, both parsers scored by the same corrected har
 
 **Read the ripgrep and tinyxml2 rows carefully.** Both found many more correct edges (+70% and +22%), yet recall fell. Before the fixes, thousands of calls sat inside functions eulix did not know about, so they were not scored at all. Now they are visible, and v2 cannot yet resolve most of them, so the denominator grew faster than the hits. The baseline percentages were measuring a smaller, easier slice of each project. The new tinyxml2 FPs are of the same kind: calls inside header methods that were invisible before, now linked to the wrong overload.
 
+## The Go And Java Receiver Fix (PRISM-5)
+
+Made on 2026-11-15, after the fixes above. The Go and Java parsers now pass the receiver of every call, the parser keeps the imports and the declared types of variables and fields until the call graph is built, and v2 resolves both languages through receivers typed from declarations (rules in [PRISM v2](PRISM-V2.md#go-and-java-receivers-typed-from-declarations)). A receiver with no declared type still gets no edge.
+
+PRISM v2, caller → callee pairs, before → after:
+
+| Corpus | Measure | Before | After |
+| --- | --- | ---: | ---: |
+| gin (Go) | Precision | 70.3% | **100.0%** |
+| gin (Go) | Recall | 43.9% | **66.3%** |
+| gin (Go) | F1 | 54.0% | **79.8%** |
+| gin (Go) | Correct / wrong / missed pairs | 1060 / 448 / 1357 | **1603 / 0 / 814** |
+| gin (Go) | Method calls, precision / recall | 0.0% / 0.0% | **100.0% / 39.2%** |
+| gin (Go) | Function calls, precision / recall | 94.8% / 98.4% | **100.0% / 100.0%** |
+| gson (Java) | Precision | – | **100.0%** |
+| gson (Java) | Recall | 0.0% | **97.3%** |
+| gson (Java) | F1 | – | **98.7%** |
+| gson (Java) | Correct / wrong / missed pairs | 0 / 0 / 1088 | **1059 / 0 / 29** |
+| gson (Java) | Method calls, precision / recall | – / 0.0% | **100.0% / 96.2%** |
+| gson (Java) | Static-method calls, precision / recall | – / 0.0% | **100.0% / 100.0%** |
+| gson (Java) | Constructor calls, precision / recall | – / 0.0% | **100.0% / 100.0%** |
+
+- **The other six corpora did not move.** For flask, ripgrep, class-validator, axios, cJSON and tinyxml2, the parser output (all eight JSON files, PRISM v1 and v2) is byte-identical before and after, and so is every per-call-site verdict.
+- **Every gin and gson edge v2 now makes is confirmed by the reference**, except 18 gson edges at an anonymous class (`new TypeAdapter<T>() { ... }`), which v2 links to the constructor or interface being extended and the reference names differently. They are counted as unverifiable: strict precision on gson is 98.3%.
+- **What Go still misses.** Of the 814 method-call pairs v2 does not link on gin, about three quarters (624, by the nearest declaration of the receiver) are calls on a local assigned from a call, such as `router := New()` or `c, _ := CreateTestContext(w)`, most of them in tests. 46 are call chains (`engine().Run()`), 45 go through a field or package variable whose type is an interface or is not recorded (`c.Writer.Write`, `json.API.Marshal`), and the rest are names declared with two types in one function, or package-level variables. All of these are receivers without a declared type ([PRISM-3](../Known-Issues/Parser-And-PRISM.md#prism-3-calls-on-a-receiver-of-unknown-type-get-no-edge-in-v2)).
+- **What Java still misses.** 29 pairs: calls on a call result (`getAsSingleElement().getAsFloat()`, `delegate().read(in)`), and calls made inside an anonymous class to a method it inherits.
+- **v1 moved slightly** because the parser output changed: gin 1900 → 1915 correct pairs (a generic call `getTyped[string](c, key)` is now recorded as `getTyped`), gson 637 → 678 (a constructor call is recorded as `Foo`, not `new Foo`).
+
 ## Coverage And Edges
 
-What the scores leave out, and how big the graph is. An arrow shows a change from the baseline.
+What the scores leave out, and how big the graph is. An arrow shows a change from the baseline; on the gin and gson rows of the second table it shows the change made by the Go and Java receiver fix.
 
 | Corpus | Call sites | Project / external / unknown | Outside any eulix function | Callee has no eulix node | Shared ids (PARSE-8) |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -136,8 +166,8 @@ What the scores leave out, and how big the graph is. An arrow shows a change fro
 
 | Corpus | eulix nodes | v2 edges | v1 edges | Methods with a v2 caller | v2 per call site: P / R | Parser time, v2 (s) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| gin | 1495 | 1508 | 4684 | 0 / 471 | 70.2% / 30.3% | 0.12 |
-| gson | 821 | 0 | 1883 | 0 / 708 | – / 0.0% | 0.05 |
+| gin | 1495 | 1508 → **1603** | 4684 → 4699 | 0 → **176** / 471 | 70.2% / 30.3% → **100.0% / 45.9%** | 0.12 |
+| gson | 821 | 0 → **1077** | 1883 → 2036 | 0 → **383** / 708 | – / 0.0% → **100.0% / 74.7%** | 0.05 |
 | flask | 399 | 174 | 371 | 70 / 281 | 98.2% / 67.3% | 0.05 |
 | ripgrep | 2686 → 3151 | 1722 | 7994 | 367 / 2060 | 98.8% / 22.3% | 0.15 |
 | class-validator | 284 | 364 | 432 | 16 / 30 | 100.0% / 86.5% | 0.02 |
@@ -149,7 +179,7 @@ What the scores leave out, and how big the graph is. An arrow shows a change fro
 - **Unknown** calls are not scored. Most are dynamic: function values, untyped parameters, `current_app`-style proxies, or calls into dependencies that are not installed (`click` in flask; jest in class-validator). cJSON's 784 are the unity test macros, whose headers were removed from the corpus. gin's 101 and gson's 216 extra are calls through a library interface or method that project types implement (`err.Error()`, `list.get()`), which may or may not run project code.
 - **Callee has no eulix node** includes axios's 178 calls to unnamed functions, mostly helpers that a factory returns (`const isFunction = typeOfTest('function')`): the call runs an arrow inside the factory, which has no node of its own.
 - **Per call site** counts every call separately. Because v2 keeps one edge per caller → callee pair, its per-site recall is lower by design (cJSON: a test function calling `cJSON_Delete` five times has one edge).
-- **Methods with a v2 caller** is the PRISM-2 symptom: Go, Java and the methods defined inside C++ class bodies get no incoming edge at all. (C++ out-of-class definitions are `func_` nodes and do get callers, which is why tinyxml2's method calls score 55.3% recall here.)
+- **Methods with a v2 caller** is the PRISM-2 symptom: the methods defined inside C++ class bodies get no incoming edge at all, and until the receiver fix neither did any Go or Java method. (C++ out-of-class definitions are `func_` nodes and do get callers, which is why tinyxml2's method calls score 55.3% recall here.)
 - **Speed:** the whole parse plus call graph takes 0.02–0.15 s per project with 12 threads; the fixes added about 0.04 s on ripgrep, for 465 more nodes. No cross-language edges were produced on any corpus.
 
 ## Where The Errors Come From
@@ -158,8 +188,8 @@ The largest groups of PRISM v2 errors on each corpus, current parser. Counts are
 
 | Corpus | Main false positives | Main misses | Issue |
 | --- | --- | --- | --- |
-| gin (Go) | `router.GET(...)` on an `*Engine` linked to the package-level `func GET` in `ginS` (89); `c.Bind` → `func Bind` (56); `router.Use` → `func Use` (51); `errors.New` → gin's `func New` (48) | every method call (1,526 sites: `String`, `Render`, `GET`, `Set`, ...) | [PRISM-2](../Known-Issues/Parser-And-PRISM.md#prism-2-v2-never-links-calls-to-methods-in-go-java-javascript-c-and-c), [PRISM-5](../Known-Issues/Parser-And-PRISM.md#prism-5-go-and-java-receivers-never-reach-the-resolver-java-new-calls-never-resolve), [PRISM-10](../Known-Issues/Parser-And-PRISM.md#prism-10-go-calls-link-to-same-named-struct-types-and-to-look-alike-functions) |
-| gson (Java) | none (no edges) | everything, including static calls and `new` (`peek`, `write`, `read`, `new JsonIOException`) | PRISM-2, PRISM-5 |
+| gin (Go) | none (before the receiver fix: `router.GET(...)` → the package-level `func GET` in `ginS` (89), `c.Bind` → `func Bind` (56), `router.Use` → `func Use` (51), `errors.New` → gin's `func New` (48)) | method calls on a local assigned from a call (`router := New(); router.GET(...)`, `c, _ := CreateTestContext(w); c.Set(...)`), call chains (`engine().Run()`), interface fields (`c.Writer.Write`) | [PRISM-3](../Known-Issues/Parser-And-PRISM.md#prism-3-calls-on-a-receiver-of-unknown-type-get-no-edge-in-v2) |
+| gson (Java) | none | methods on a call result (`getAsSingleElement().getAsFloat()`, `delegate().read(in)`), calls inside anonymous classes to inherited methods | PRISM-3, [PARSE-7](../Known-Issues/Parser-And-PRISM.md#parse-7-java-methods-inside-anonymous-classes-are-not-extracted) |
 | flask (Python) | `current_app.make_response(...)` linked to the module function of the same name; stdlib `json.dumps`/`json.loads` linked to flask's own (3 in all) | calls on objects of unknown type (`self.serializer.tag(...)`, `super().__init__(...)`), raising project exceptions (`NoAppException`) | [PRISM-3](../Known-Issues/Parser-And-PRISM.md#prism-3-calls-on-a-receiver-of-unknown-type-get-no-edge-in-v2) |
 | ripgrep (Rust) | same-name functions in `#[cfg]` variants and tests (`empty`, `from_iter`) | method calls on locals of unknown type (`builder.build()`, `.path()`, `.line_number()`): 4,362 sites | PRISM-3 |
 | class-validator (TS) | none | `new ValidationMetadata(...)`, methods on a call result (`getMetadataStorage().addValidationMetadata(...)`) | PRISM-3 |
@@ -167,7 +197,7 @@ The largest groups of PRISM v2 errors on each corpus, current parser. Counts are
 | cJSON (C) | none | 2 pairs | – |
 | tinyxml2 (C++) | wrong overload or class: `attr->Value()` → `XMLNode::Value` (11), `Write(const char*)` vs `Write(const char*, size_t)` (9) | method calls through pointers of unknown type (`doc.FirstChildElement()`, `->Parse()`) | PRISM-2, [PARSE-8](../Known-Issues/Parser-And-PRISM.md#parse-8-overloads-and-same-name-definitions-in-one-file-share-one-id) |
 
-The pattern is the same everywhere: **PRISM v2 is precise because it declines to guess the type of a receiver, and its recall is limited by exactly that.** The biggest single gain left is passing Go and Java receivers through to the resolver (PRISM-5), which would bring their method calls onto the same path as Python, TypeScript and Rust.
+The pattern is the same everywhere: **PRISM v2 is precise because it declines to guess the type of a receiver, and its recall is limited by exactly that.** Go and Java show both halves. Passing their receivers through to the resolver (PRISM-5) removed every wrong edge on gin and gson. Java, where almost every receiver has a declared type, went to 97% recall; Go, where locals are usually declared with `:=` from a call, stops at 66%.
 
 ## Micro Fixtures
 
@@ -175,8 +205,8 @@ Each language also has a fixture of a few lines under `bench/callgraph/micro/`, 
 
 | Fixture | v1 precision / recall | v2 precision / recall | v2 found / missed |
 | --- | ---: | ---: | ---: |
-| Go | 100% / 100% | 100% / 25.0% | 1 / 3 |
-| Java | 100% / 66.7% | – / 0.0% | 0 / 6 |
+| Go | 100% / 100% | 100% / 100% | 4 / 0 |
+| Java | 100% / 66.7% | 100% / 83.3% | 5 / 1 (the miss is `twice()` calling `area()`: both are declared on one source line of the fixture, so the harness cannot tell the callers apart) |
 | Python | 100% / 75.0% | 100% / 75.0% | 3 / 1 |
 | Rust | 100% / 100% | 100% / 71.4% | 5 / 2 |
 | TypeScript | 100% / 80.0% | 100% / 40.0% | 2 / 3 |
@@ -188,11 +218,12 @@ Each language also has a fixture of a few lines under `bench/callgraph/micro/`, 
 
 | You need | Use |
 | --- | --- |
-| Edges you can trust in Python, TypeScript, Rust, C | v2. Precision is 98–100%. |
-| Method calls in Go or Java | v1, and filter: it finds 63–66% of method calls, but 40–53% of its method edges there are wrong. |
+| Edges you can trust in Python, TypeScript, Rust, C, Go, Java | v2. Precision is 98–100%. |
+| Java | v2: 97% of all calls at 100% precision. |
+| More method calls in Go than v2's 39% | v1, and filter: it finds 63% of method calls, but 53% of its method edges are wrong. |
 | JavaScript | v2: more correct edges than v1 (270 vs 198), at slightly lower precision. |
 | C++ | v2: twice v1's correct edges (350 vs 163) at higher precision. |
-| A complete list of callers of something | Neither alone. Combine the graph with a text search; v2 recall is 34–100% depending on language, and 0% for Java. |
+| A complete list of callers of something | Neither alone. Combine the graph with a text search; v2 recall is 34–100% depending on language. |
 
 ## How The Benchmark Was Checked
 
@@ -221,7 +252,7 @@ What the audit fixed:
 - **The references are static too.** A virtual call lists every override in the project, so a v2 edge to any one of them is a TP; Rust calls through a trait bound resolve only to the trait's declaration. Dynamic calls (`getattr`, callbacks, function pointers) are "unknown" and not scored.
 - **No dependencies are installed** for any corpus, so calls into libraries the reference cannot see come out "unknown" rather than "external"; TNs are a lower bound.
 - **Line matching:** eulix records one line per edge. When the edge's line has no same-name call, a same-name call up to 15 lines below it in the same caller is used (the start of a multi-line builder chain); checked by hand on ripgrep, where v1 relies on it most.
-- **One project per language** is a sample, not a population. The numbers describe these projects; the patterns (functions good, methods weak, Go and Java worst) held on every fixture as well.
+- **One project per language** is a sample, not a population. The numbers describe these projects; the pattern (functions good, methods limited by receivers of unknown type) held on every fixture as well.
 
 ## Reproducing
 
@@ -238,5 +269,6 @@ The report (`report.md`), `results.json`, and one `<corpus>-v<N>-sites.jsonl` pe
 
 - [PRISM v2](PRISM-V2.md) and [PRISM v1](PRISM-V1.md): the algorithms being measured.
 - [Harness README](../../bench/callgraph/README.md): scoring rules and reference tools.
+- [Call-Graph Benchmark Scoring](../Architecture/Call-Graph-Scoring.md): how each number is computed, step by step.
 - [Parser And PRISM Issues](../Known-Issues/Parser-And-PRISM.md): the open problems behind the misses.
 - [Fixed Issues](../Known-Issues/Fixed-Issues.md#parser-and-prism): what changed between baseline and current.

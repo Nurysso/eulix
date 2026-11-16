@@ -290,8 +290,62 @@ mod tests {
         )
         .unwrap();
 
-        let kb = analyze_and_build(kb, false, 2);
+        let kb = analyze_and_build(kb, false, 2, repo.path());
         (kb, stats)
+    }
+
+    // PRISM-5 end to end: parse, slim, read `go.mod`, build the graph.
+    #[test]
+    fn go_calls_resolve_through_receivers_and_the_module_path() {
+        let repo = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        fs::create_dir_all(repo.path().join("sub")).unwrap();
+        fs::write(
+            repo.path().join("go.mod"),
+            "module example.com/demo\n\ngo 1.22\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.path().join("main.go"),
+            "package main\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/demo/sub\"\n)\n\ntype Store struct{}\n\nfunc (s *Store) Save() { s.load() }\nfunc (s *Store) load() {}\n\nfunc Println() {}\nfunc Helper() {}\n\nfunc run(m *Store) {\n\tm.Save()\n\tsub.Helper()\n\tfmt.Println()\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.path().join("sub/sub.go"),
+            "package sub\n\nfunc Helper() {}\n",
+        )
+        .unwrap();
+
+        let engine = Engine::with_threads(2).unwrap();
+        let root_str = repo.path().to_string_lossy().to_string();
+        let (kb, _stats, _spill) = parse_directory(
+            &root_str,
+            "all",
+            None,
+            false,
+            "0.8.1",
+            "test",
+            out.path(),
+            &engine,
+        )
+        .unwrap();
+        let kb = analyze_and_build(kb, false, 2, repo.path());
+        let mut calls: Vec<(&str, &str)> = kb
+            .call_graph
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == "call")
+            .map(|e| (e.from.as_str(), e.to.as_str()))
+            .collect();
+        calls.sort_unstable();
+        assert_eq!(
+            calls,
+            [
+                ("func_run::main.go", "func_Helper::sub/sub.go"),
+                ("func_run::main.go", "method_Store_Save::main.go"),
+                ("method_Store_Save::main.go", "method_Store_load::main.go"),
+            ]
+        );
     }
 
     #[test]
@@ -322,7 +376,7 @@ mod tests {
         let fd_b = kb.structure.get("src/b.py").expect("src/b.py in structure");
         assert_eq!(fd_b.functions[0].id, "func_target::src/b.py");
 
-        let kb = analyze_and_build(kb, false, 2);
+        let kb = analyze_and_build(kb, false, 2, repo.path());
         assert!(
             kb.call_graph.edges.iter().any(|e| {
                 e.edge_type == "call"
@@ -360,7 +414,7 @@ mod tests {
         )
         .unwrap();
 
-        let kb = analyze_and_build(kb, false, 2);
+        let kb = analyze_and_build(kb, false, 2, repo.path());
         let edges: Vec<(&str, &str)> = kb
             .call_graph
             .edges
