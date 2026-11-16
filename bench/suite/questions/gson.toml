@@ -1,0 +1,44 @@
+# Latency-only questions for the gson (Java) corpus: no `expect`, so they time
+# query speed without grading. Phrased "How does/is/are ..." so they reach
+# retrieval instead of a direct-answer class.
+schema = 1
+
+[[q]]
+id = "gson-01"
+text = "How does Gson serialize an object to JSON"
+
+[[q]]
+id = "gson-02"
+text = "How does JsonReader tokenize the input stream"
+
+[[q]]
+id = "gson-03"
+text = "How does JsonWriter handle indentation and string escaping"
+
+[[q]]
+id = "gson-04"
+text = "How does ReflectiveTypeAdapterFactory bind fields to JSON names"
+
+[[q]]
+id = "gson-05"
+text = "How is a TypeToken used to capture a generic type"
+
+[[q]]
+id = "gson-06"
+text = "How does the Excluder skip fields without the Expose annotation"
+
+[[q]]
+id = "gson-07"
+text = "How does MapTypeAdapterFactory serialize map keys"
+
+[[q]]
+id = "gson-08"
+text = "How does DefaultDateTypeAdapter parse dates"
+
+[[q]]
+id = "gson-09"
+text = "How does ConstructorConstructor create instances without a default constructor"
+
+[[q]]
+id = "gson-10"
+text = "How does LinkedTreeMap keep insertion order"

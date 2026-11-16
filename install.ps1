@@ -34,7 +34,7 @@ $EulixEmbedPath    = Join-Path $EulixDir 'eulix_embed'
 $vizeulizeHtmlPath = Join-Path $EulixBinDir 'vizeulize.html'
 
 $Repo   = 'Nurysso/eulix'
-$DocUrl = "https://github.com/$Repo/blob/main/docs/install.md"
+$DocUrl = "https://github.com/$Repo/blob/main/docs/Installation.md"
 
 # Resolved at runtime inside Main()
 $ReleaseTag  = ''
@@ -187,7 +187,7 @@ function Setup-Venv {
     Success "Virtual environment created at $EulixVenv."
 }
 
-# Helper to look up a checksum resiliently against directory prefixes in checksum.txt
+# Helper to look up a checksum resiliently against directory prefixes in checksums.txt
 function Get-Checksum {
     param(
         [string]$TargetFilename,
@@ -212,11 +212,11 @@ function Download-Binary {
 
     $assetUrl     = "$ReleaseBase/$AssetName"
     $htmlUrl      = "$ReleaseBase/$htmlAssetName"
-    $checksumUrl  = "$ReleaseBase/checksum.txt"
+    $checksumUrl  = "$ReleaseBase/checksums.txt"
 
     $tmpBin       = Join-Path $env:TEMP $AssetName
     $tmpHtml      = Join-Path $env:TEMP $htmlAssetName
-    $tmpChecksum  = Join-Path $env:TEMP 'eulix_checksum.txt'
+    $tmpChecksum  = Join-Path $env:TEMP 'eulix_checksums.txt'
 
     Info "Downloading $AssetName ($ReleaseTag)..."
     try {
@@ -232,7 +232,7 @@ function Download-Binary {
         Die "Failed to download $htmlUrl`: $_"
     }
 
-    Info "Downloading checksum.txt for verification..."
+    Info "Downloading checksums.txt for verification..."
     try {
         Invoke-WebRequest -Uri $checksumUrl -OutFile $tmpChecksum -UseBasicParsing
     } catch {
@@ -255,7 +255,7 @@ function Download-Binary {
         Success "Binary checksum verified."
     }
 
-    # Verify vizeulize.html checksum (matches 'vizeulize/vizeulize.html' in checksum.txt)
+    # Verify vizeulize.html checksum (matches 'vizeulize/vizeulize.html' in checksums.txt)
     $expectedHtml = Get-Checksum -TargetFilename $htmlAssetName -ChecksumFile $tmpChecksum
     if (-not $expectedHtml) {
         Remove-Item -Force $tmpBin, $tmpHtml, $tmpChecksum -ErrorAction SilentlyContinue

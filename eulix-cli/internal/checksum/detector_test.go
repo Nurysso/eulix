@@ -68,3 +68,10 @@ func TestScanMatchesCurrentParserAllFilter(t *testing.T) {
 		t.Fatalf("untracked files trigger repeated analysis: added=%d deleted=%d modified=%d ratio=%f", added, deleted, modified, ratio)
 	}
 }
+
+func TestMetaHashMatchesRust(t *testing.T) {
+	// Reference from libeulix FileWalker's meta_hash for the same inputs.
+	if got := MetaHash(1234, 1700000000123456789); got != "94137708975312f2" {
+		t.Fatalf("MetaHash = %s, want 94137708975312f2", got)
+	}
+}

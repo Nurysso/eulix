@@ -50,14 +50,14 @@ def parse_args() -> argparse.ArgumentParser:
         default="onnx",
         choices=["torch", "onnx"],
         metavar="ENGINE",
-        help="Inference engine: torch or onnx  [default: torch]",
+        help="Inference engine: torch or onnx  [default: onnx]",
     )
     ep.add_argument(
         "-d",
         "--device",
         default=None,
         metavar="DEVICE",
-        help="cuda / mps / cpu             [default: auto]",
+        help="cuda / rocm / mps / cpu             [default: auto]",
     )
     ep.add_argument(
         "-b",
@@ -95,7 +95,7 @@ def parse_args() -> argparse.ArgumentParser:
         default="onnx",
         choices=["torch", "onnx"],
         metavar="ENGINE",
-        help="Inference engine: torch or onnx  [default: torch]",
+        help="Inference engine: torch or onnx  [default: onnx]",
     )
     qp.add_argument(
         "-f",
@@ -110,7 +110,7 @@ def parse_args() -> argparse.ArgumentParser:
         "--model",
         default="BAAI/bge-base-en-v1.5",
         metavar="NAME",
-        help="HuggingFace model name  [default: all-MiniLM-L6-v2]",
+        help="HuggingFace model name  [default: BAAI/bge-base-en-v1.5]",
     )
     sp.add_argument(
         "-e",
@@ -118,14 +118,14 @@ def parse_args() -> argparse.ArgumentParser:
         default="onnx",
         choices=["torch", "onnx"],
         metavar="ENGINE",
-        help="Inference engine: torch or onnx  [default: torch]",
+        help="Inference engine: torch or onnx  [default: onnx]",
     )
     sp.add_argument(
         "-d",
         "--device",
         default=None,
         metavar="DEVICE",
-        help="cuda / mps / cpu  [default: auto]",
+        help="cuda / rocm / mps / cpu  [default: auto]",
     )
     sp.add_argument(
         "-b",

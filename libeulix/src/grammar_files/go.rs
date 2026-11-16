@@ -1,12 +1,12 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, walk};
+use super::utils::{declare_variable, extract_todos, walk};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use tree_sitter::{Node, Parser};
 
@@ -159,9 +159,14 @@ impl GoParser {
                                         .trim_matches('"')
                                         .to_string();
 
+                                    // `alias "a/b"`, `_ "a/b"`, `. "a/b"`
+                                    let alias = item
+                                        .child_by_field_name("name")
+                                        .map(|n| self.get_node_text(&n));
+
                                     imports.push(Import {
                                         module: path.clone(),
-                                        items: vec![],
+                                        items: alias.into_iter().collect(),
                                         import_type: self.classify_import(&path),
                                     });
                                 }
@@ -361,7 +366,7 @@ impl GoParser {
             }
         };
         let calls = self.extract_function_calls_detailed(&body);
-        let variables = self.extract_variables(&body, &params);
+        let variables = self.extract_variables(&body, &params, &self.extract_named_results(node));
         let control_flow = self.build_control_flow(&body);
         let exceptions = self.extract_exception_info(&body);
         let complexity = self.calculate_complexity(&body);
@@ -625,6 +630,35 @@ impl GoParser {
         params
     }
 
+    /// `(n int, err error)` after the parameters: results that have names.
+    fn extract_named_results(&self, node: &Node) -> Vec<Parameter> {
+        let Some(result) = node
+            .child_by_field_name("result")
+            .filter(|r| r.kind() == "parameter_list")
+        else {
+            return Vec::new();
+        };
+        let mut results = Vec::new();
+        let mut cursor = result.walk();
+        for child in result.children(&mut cursor) {
+            if child.kind() != "parameter_declaration" {
+                continue;
+            }
+            let type_annotation = child
+                .child_by_field_name("type")
+                .map(|t| self.get_node_text(&t))
+                .unwrap_or_default();
+            for name in self.identifier_children(&child) {
+                results.push(Parameter {
+                    name: self.get_node_text(&name),
+                    type_annotation: type_annotation.clone(),
+                    default_value: None,
+                });
+            }
+        }
+        results
+    }
+
     fn extract_return_type(&self, node: &Node) -> String {
         if let Some(result) = node.child_by_field_name("result") {
             self.get_node_text(&result)
@@ -709,9 +743,17 @@ impl GoParser {
             if func_node.kind() == "func_literal" {
                 return;
             }
-            let full = self.get_node_text(&func_node);
-            // Use the last segment so "fmt.Println" → "Println", but keep
-            // the full name too for qualified calls in `defined_in`.
+            // `f[T](x)` and `pkg.F[K, V](x)` call `f` and `pkg.F`: the type
+            // arguments are not part of the name.
+            let named = match func_node.kind() {
+                "index_expression" => func_node.child_by_field_name("operand"),
+                "type_instantiation_expression" => func_node.child_by_field_name("type"),
+                _ => None,
+            }
+            .unwrap_or(func_node);
+            let full = self.get_node_text(&named);
+            // Use the last segment so "fmt.Println" → "Println"; what stands
+            // before it ("fmt", "m", "c.engine") is the call's receiver.
             let callee = full
                 .split('.')
                 .next_back()
@@ -738,8 +780,9 @@ impl GoParser {
                 };
 
                 calls.push(FunctionCall {
+                    receiver: qualifier,
                     callee,
-                    defined_in: qualifier,
+                    defined_in: None,
                     line: call_node.start_position().row + 1,
                     args: self.extract_call_arguments(call_node),
                     is_conditional: matches!(context, "if" | "loop" | "switch" | "select"),
@@ -764,8 +807,13 @@ impl GoParser {
         args
     }
 
-    fn extract_variables(&self, node: &Node, params: &[Parameter]) -> Vec<Variable> {
-        let mut variables: HashMap<String, Variable> = HashMap::new();
+    fn extract_variables(
+        &self,
+        node: &Node,
+        params: &[Parameter],
+        results: &[Parameter],
+    ) -> Vec<Variable> {
+        let mut variables: BTreeMap<String, Variable> = BTreeMap::new();
 
         for param in params {
             variables.insert(
@@ -785,6 +833,16 @@ impl GoParser {
                 },
             );
         }
+        // Named results are variables of the body too.
+        for result in results.iter().filter(|r| r.name != "_") {
+            declare_variable(
+                &mut variables,
+                result.name.clone(),
+                Some(result.type_annotation.clone()),
+                "local",
+                None,
+            );
+        }
 
         self.track_variable_usage(node, &mut variables);
         variables.into_values().collect()
@@ -800,27 +858,94 @@ impl GoParser {
             .collect()
     }
 
-    fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
+    /// The type an initializer spells out: `T{...}`, `&T{...}`, `new(T)`.
+    /// Anything else (a call, an arithmetic expression) has a type only the
+    /// type checker knows.
+    fn literal_type(&self, value: &Node) -> Option<String> {
+        match value.kind() {
+            "composite_literal" => value
+                .child_by_field_name("type")
+                .map(|t| self.get_node_text(&t)),
+            "unary_expression" => {
+                let operand = value.child_by_field_name("operand")?;
+                let address = value
+                    .child_by_field_name("operator")
+                    .is_some_and(|op| op.kind() == "&");
+                (address && operand.kind() == "composite_literal")
+                    .then(|| self.literal_type(&operand))
+                    .flatten()
+                    .map(|t| format!("*{t}"))
+            }
+            "call_expression" => {
+                let function = value.child_by_field_name("function")?;
+                if function.kind() != "identifier" || self.get_node_text(&function) != "new" {
+                    return None;
+                }
+                let args = value.child_by_field_name("arguments")?;
+                let mut cursor = args.walk();
+                let mut named = args.named_children(&mut cursor);
+                let ty = named.next()?;
+                named
+                    .next()
+                    .is_none()
+                    .then(|| format!("*{}", self.get_node_text(&ty)))
+            }
+            _ => None,
+        }
+    }
+
+    /// One literal type per declared name, when the two sides of a
+    /// declaration pair up (`a, b := T{}, f()`); otherwise all unknown.
+    fn initializer_types(&self, names: usize, values: Option<Node>) -> Vec<Option<String>> {
+        let Some(values) = values else {
+            return vec![None; names];
+        };
+        let exprs: Vec<Node> = if values.kind() == "expression_list" {
+            let mut cursor = values.walk();
+            values.named_children(&mut cursor).collect()
+        } else {
+            vec![values]
+        };
+        if exprs.len() != names {
+            return vec![None; names];
+        }
+        exprs.iter().map(|e| self.literal_type(e)).collect()
+    }
+
+    /// Declares the names on the left of `:=` in a range clause, a type
+    /// switch or a `select` case. Their types come from the right-hand side
+    /// and are not visible in the syntax.
+    fn declare_untyped(&self, left: &Node, variables: &mut BTreeMap<String, Variable>) {
+        let line = left.start_position().row + 1;
+        let names = if left.kind() == "identifier" {
+            vec![*left]
+        } else {
+            self.identifier_children(left)
+        };
+        for name_node in names {
+            let name = self.get_node_text(&name_node);
+            if name != "_" {
+                declare_variable(variables, name, None, "local", Some(line));
+            }
+        }
+    }
+
+    fn track_variable_usage(&self, node: &Node, variables: &mut BTreeMap<String, Variable>) {
         walk(*node, (), |node, _| {
             let node = &node;
             match node.kind() {
                 "short_var_declaration" => {
                     if let Some(left) = node.child_by_field_name("left") {
                         let line = node.start_position().row + 1;
-                        for name_node in self.identifier_children(&left) {
-                            let var_name = self.get_node_text(&name_node);
+                        let names = self.identifier_children(&left);
+                        let types =
+                            self.initializer_types(names.len(), node.child_by_field_name("right"));
+                        for (name_node, var_type) in names.iter().zip(types) {
+                            let var_name = self.get_node_text(name_node);
                             if var_name == "_" {
                                 continue;
                             }
-                            variables.entry(var_name.clone()).or_insert(Variable {
-                                name: var_name,
-                                var_type: None,
-                                scope: "local".to_string(),
-                                defined_at: Some(line),
-                                transformations: vec![],
-                                used_in: vec![],
-                                returned: false,
-                            });
+                            declare_variable(variables, var_name, var_type, "local", Some(line));
                         }
                     }
                 }
@@ -830,29 +955,75 @@ impl GoParser {
                     } else {
                         "local"
                     };
+                    let mut specs = Vec::new();
                     let mut decl_cursor = node.walk();
-                    for spec in node.children(&mut decl_cursor) {
-                        if spec.kind() == "var_spec" || spec.kind() == "const_spec" {
-                            let line = spec.start_position().row + 1;
-                            let var_type = spec
-                                .child_by_field_name("type")
-                                .map(|t| self.get_node_text(&t));
-
-                            for var_name in self.collect_spec_names(&spec) {
-                                if var_name == "_" {
-                                    continue;
-                                }
-                                variables.entry(var_name.clone()).or_insert(Variable {
-                                    name: var_name,
-                                    var_type: var_type.clone(),
-                                    scope: scope.to_string(),
-                                    defined_at: Some(line),
-                                    transformations: vec![],
-                                    used_in: vec![],
-                                    returned: false,
-                                });
+                    for child in node.children(&mut decl_cursor) {
+                        match child.kind() {
+                            "var_spec" | "const_spec" => specs.push(child),
+                            // `var ( a = 1; b T )`
+                            "var_spec_list" => {
+                                let mut list_cursor = child.walk();
+                                specs.extend(
+                                    child
+                                        .children(&mut list_cursor)
+                                        .filter(|s| s.kind() == "var_spec"),
+                                );
                             }
+                            _ => {}
                         }
+                    }
+                    for spec in specs {
+                        let line = spec.start_position().row + 1;
+                        let declared = spec
+                            .child_by_field_name("type")
+                            .map(|t| self.get_node_text(&t));
+                        let names = self.collect_spec_names(&spec);
+                        let types = match declared {
+                            Some(t) => vec![Some(t); names.len()],
+                            None => self
+                                .initializer_types(names.len(), spec.child_by_field_name("value")),
+                        };
+                        for (var_name, var_type) in names.into_iter().zip(types) {
+                            if var_name == "_" {
+                                continue;
+                            }
+                            declare_variable(variables, var_name, var_type, scope, Some(line));
+                        }
+                    }
+                }
+                // `for k, v := range xs`
+                "range_clause" => {
+                    let mut cursor = node.walk();
+                    let declares = node.children(&mut cursor).any(|c| c.kind() == ":=");
+                    if let Some(left) = node.child_by_field_name("left").filter(|_| declares) {
+                        self.declare_untyped(&left, variables);
+                    }
+                }
+                // `switch v := x.(type)`
+                "type_switch_statement" => {
+                    if let Some(alias) = node.child_by_field_name("alias") {
+                        self.declare_untyped(&alias, variables);
+                    }
+                }
+                // `case v := <-ch:`
+                "receive_statement" => {
+                    let mut cursor = node.walk();
+                    let declares = node.children(&mut cursor).any(|c| c.kind() == ":=");
+                    if let Some(left) = node.child_by_field_name("left").filter(|_| declares) {
+                        self.declare_untyped(&left, variables);
+                    }
+                }
+                // A closure's parameters and named results are in scope for
+                // the calls in its body, which belong to this function.
+                "func_literal" => {
+                    let line = node.start_position().row + 1;
+                    let declared = self
+                        .extract_parameters(node)
+                        .into_iter()
+                        .chain(self.extract_named_results(node));
+                    for p in declared.filter(|p| p.name != "_") {
+                        let var_type = Some(p.type_annotation).filter(|t| !t.is_empty());
+                        declare_variable(variables, p.name, var_type, "local", Some(line));
                     }
                 }
                 "return_statement" => {
@@ -1053,7 +1224,7 @@ impl GoParser {
         }
 
         // Second pass: find methods for structs
-        let mut methods_map: HashMap<String, Vec<Function>> = HashMap::new();
+        let mut methods_map: BTreeMap<String, Vec<Function>> = BTreeMap::new();
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {
@@ -1101,11 +1272,18 @@ impl GoParser {
         let has_embedded = attributes
             .iter()
             .any(|a| a.name.is_empty() || a.name == "_");
+        // An embedded type lends its methods to the struct, which is what a
+        // base class does for method lookup.
+        let bases = attributes
+            .iter()
+            .filter(|a| a.name.is_empty() && !a.type_annotation.is_empty())
+            .map(|a| a.type_annotation.clone())
+            .collect();
 
         Some(Class {
             id: self.make_struct_id(&name),
             name: name.clone(),
-            bases: vec![],
+            bases,
             docstring,
             line_start,
             line_end,
@@ -1129,37 +1307,47 @@ impl GoParser {
     fn extract_struct_fields(&self, struct_node: &Node) -> Vec<Attribute> {
         let mut fields = Vec::new();
 
-        if let Some(body) = struct_node.child_by_field_name("body") {
+        // The field list is an unnamed child of `struct_type`.
+        let mut struct_cursor = struct_node.walk();
+        let body = struct_node
+            .children(&mut struct_cursor)
+            .find(|c| c.kind() == "field_declaration_list");
+        if let Some(body) = body {
             let mut cursor = body.walk();
             for child in body.children(&mut cursor) {
-                if child.kind() == "field_declaration" {
-                    if let Some(name_node) = child.child_by_field_name("name") {
-                        // Normal named field
-                        let name = self.get_node_text(&name_node);
-                        let type_annotation = child
-                            .child_by_field_name("type")
-                            .map(|t| self.get_node_text(&t))
-                            .unwrap_or_default();
-                        let tag = child
-                            .child_by_field_name("tag")
-                            .map(|t| self.get_node_text(&t));
-                        fields.push(Attribute {
-                            name,
-                            type_annotation,
-                            value: tag,
-                        });
-                    } else if let Some(type_node) = child.child_by_field_name("type") {
-                        // Embedded type: struct { io.Reader } — no name node
-                        let type_text = self
-                            .get_node_text(&type_node)
-                            .trim_start_matches('*')
-                            .to_string();
+                if child.kind() != "field_declaration" {
+                    continue;
+                }
+                let type_text = child
+                    .child_by_field_name("type")
+                    .map(|t| self.get_node_text(&t))
+                    .unwrap_or_default();
+                let mut name_cursor = child.walk();
+                let names: Vec<String> = child
+                    .children_by_field_name("name", &mut name_cursor)
+                    .map(|n| self.get_node_text(&n))
+                    .collect();
+                if names.is_empty() {
+                    // Embedded type: struct { io.Reader } — no name node
+                    if !type_text.is_empty() {
                         fields.push(Attribute {
                             name: String::new(), // signals embedded to has_embedded check
-                            type_annotation: type_text,
+                            type_annotation: type_text.trim_start_matches('*').to_string(),
                             value: None,
                         });
                     }
+                    continue;
+                }
+                let tag = child
+                    .child_by_field_name("tag")
+                    .map(|t| self.get_node_text(&t));
+                // `a, b int` declares two fields of one type.
+                for name in names {
+                    fields.push(Attribute {
+                        name,
+                        type_annotation: type_text.clone(),
+                        value: tag.clone(),
+                    });
                 }
             }
         }
@@ -1264,20 +1452,37 @@ impl GoParser {
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
 
-        let methods = if let Some(type_node) = node.child_by_field_name("type") {
-            if type_node.kind() == "interface_type" {
-                self.extract_interface_methods(&type_node)
-            } else {
-                vec![]
+        let interface = node
+            .child_by_field_name("type")
+            .filter(|t| t.kind() == "interface_type");
+        let methods = interface
+            .as_ref()
+            .map(|t| self.extract_interface_methods(t))
+            .unwrap_or_default();
+        // An embedded interface (`io.Reader` inside `ReadWriter`); a union
+        // (`~int | ~string`) is a constraint, not an embedding.
+        let mut bases = Vec::new();
+        if let Some(interface) = &interface {
+            let mut cursor = interface.walk();
+            for elem in interface.children(&mut cursor) {
+                if elem.kind() != "type_elem" || elem.named_child_count() != 1 {
+                    continue;
+                }
+                if let Some(ty) = elem.named_child(0).filter(|t| {
+                    matches!(
+                        t.kind(),
+                        "type_identifier" | "qualified_type" | "generic_type"
+                    )
+                }) {
+                    bases.push(self.get_node_text(&ty));
+                }
             }
-        } else {
-            vec![]
-        };
+        }
 
         Some(Class {
             id: self.make_interface_id(&name),
             name: name.clone(),
-            bases: vec![],
+            bases,
             docstring,
             line_start,
             line_end,
@@ -1738,6 +1943,126 @@ mod tests {
             .iter()
             .find(|f| f.name == name)
             .unwrap_or_else(|| panic!("function `{}` not found", name))
+    }
+
+    fn var_type<'a>(f: &'a Function, name: &str) -> Option<&'a str> {
+        #[allow(clippy::panic)]
+        f.variables
+            .iter()
+            .find(|v| v.name == name)
+            .unwrap_or_else(|| panic!("variable `{}` not found", name))
+            .var_type
+            .as_deref()
+    }
+
+    // PRISM-5: the receiver has its own field; `defined_in` is a file path
+    // that only the call-graph pass fills.
+    #[test]
+    fn call_receiver_is_stored_apart_from_the_callee() {
+        let fd = parse(
+            "package p\nfunc run(m *Store) {\n\tm.Save()\n\tfmt.Println(1)\n\tc.engine.Reset()\n\thelper()\n}\n",
+        );
+        let calls: Vec<(&str, Option<&str>, Option<&str>)> = find_fn(&fd, "run")
+            .calls
+            .iter()
+            .map(|c| {
+                (
+                    c.callee.as_str(),
+                    c.receiver.as_deref(),
+                    c.defined_in.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                ("Save", Some("m"), None),
+                ("Println", Some("fmt"), None),
+                ("Reset", Some("c.engine"), None),
+                ("helper", None, None),
+            ]
+        );
+    }
+
+    // The field list is not a `body` field of `struct_type`; read as one,
+    // every struct came out without fields.
+    #[test]
+    fn struct_fields_are_extracted() {
+        let fd = parse(
+            "package p\ntype Ctx struct {\n\tengine *Engine `json:\"e\"`\n\ta, b int\n\tBase\n}\n",
+        );
+        let fields: Vec<(&str, &str)> = fd.classes[0]
+            .attributes
+            .iter()
+            .map(|a| (a.name.as_str(), a.type_annotation.as_str()))
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                ("engine", "*Engine"),
+                ("a", "int"),
+                ("b", "int"),
+                ("", "Base")
+            ]
+        );
+    }
+
+    // `f[T](x)` calls `f`; the type arguments are not part of its name.
+    #[test]
+    fn generic_call_is_recorded_under_the_function_name() {
+        // With one argument the grammar reads `f[T](x)` as a conversion to
+        // the generic type `f[T]`, which is not recorded as a call.
+        let fd = parse(
+            "package p\nfunc run() {\n\tgetTyped[string](c, k)\n\tconv.Make[int, string](c, k)\n\tone[string](k)\n}\n",
+        );
+        let calls: Vec<(&str, Option<&str>)> = find_fn(&fd, "run")
+            .calls
+            .iter()
+            .map(|c| (c.callee.as_str(), c.receiver.as_deref()))
+            .collect();
+        assert_eq!(calls, [("getTyped", None), ("Make", Some("conv"))]);
+    }
+
+    #[test]
+    fn embedded_types_are_bases() {
+        let fd = parse(
+            "package p\ntype Engine struct {\n\tGroup\n\t*sync.Mutex\n\tname string\n}\ntype RW interface {\n\tReader\n\tio.Writer\n\tClose() error\n}\n",
+        );
+        let bases = |name: &str| &fd.classes.iter().find(|c| c.name == name).unwrap().bases;
+        assert_eq!(bases("Engine"), &["Group", "sync.Mutex"]);
+        assert_eq!(bases("RW"), &["Reader", "io.Writer"]);
+    }
+
+    #[test]
+    fn local_takes_the_type_its_initializer_spells_out() {
+        let fd = parse(
+            "package p\nfunc run() {\n\ta := Store{}\n\tb := &Store{}\n\tc := new(db.Store)\n\td, e := Store{}, load()\n\tvar f = &Store{}\n\tg := []Store{}\n}\n",
+        );
+        let f = find_fn(&fd, "run");
+        assert_eq!(var_type(f, "a"), Some("Store"));
+        assert_eq!(var_type(f, "b"), Some("*Store"));
+        assert_eq!(var_type(f, "c"), Some("*db.Store"));
+        assert_eq!(var_type(f, "d"), Some("Store"));
+        assert_eq!(var_type(f, "e"), None);
+        assert_eq!(var_type(f, "f"), Some("*Store"));
+        assert_eq!(var_type(f, "g"), Some("[]Store"));
+    }
+
+    // Every way a name can be declared in a body is recorded, so that a
+    // name with two types is seen as such.
+    #[test]
+    fn every_declaration_form_is_tracked_and_a_second_type_drops_the_type() {
+        let fd = parse(
+            "package p\nfunc run(m *Store, keep *Store, items []Other) (out *Store, err error) {\n\tfor _, m := range items {\n\t\t_ = m\n\t}\n\tgo func(keep *Store, extra Other) {}(nil, Other{})\n\tswitch v := x.(type) {\n\tdefault:\n\t\t_ = v\n\t}\n\tselect {\n\tcase got := <-ch:\n\t\t_ = got\n\t}\n\treturn\n}\n",
+        );
+        let f = find_fn(&fd, "run");
+        assert_eq!(var_type(f, "m"), None, "param, then a range variable");
+        assert_eq!(var_type(f, "keep"), Some("*Store"), "same type twice");
+        assert_eq!(var_type(f, "extra"), Some("Other"));
+        assert_eq!(var_type(f, "out"), Some("*Store"));
+        assert_eq!(var_type(f, "err"), Some("error"));
+        assert_eq!(var_type(f, "v"), None);
+        assert_eq!(var_type(f, "got"), None);
     }
 
     // Calls inside a goroutine/defer body must be found,

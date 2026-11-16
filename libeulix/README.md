@@ -1,78 +1,31 @@
 # libeulix
 
-> Multi-language static analysis for Rust. Parses C, C++, Go, Java,
-> JavaScript, PHP, Python, Rust, and TypeScript into a structured knowledge
-> base with a project-wide resolved call graph.
+> The analysis engine inside Eulix: parses nine languages into a structured knowledge base with a project-wide call graph.
 
-`libeulix` is the analysis engine behind the [Eulix](../README.md) toolchain.
-It takes source text and turns it into structured code data: files, symbols,
-relationships, call graphs, project metrics, entry points, dependencies.
-It's designed for large, mixed-language repositories where re-parsing from
-scratch for every query is too expensive.
+| Language | Version | Status | Docs |
+| :-- | :-- | :-- | :-- |
+| Rust | 0.9.0 | Stable, on [crates.io](https://crates.io/crates/libeulix) | [docs/libeulix](../docs/libeulix/Overview.md) |
 
-> **Parse once. Navigate many times.**
+`libeulix` turns source text into structured code data: files, symbols, relationships, call graphs, project metrics, entry points and dependencies. It is built on Tree-sitter for large, mixed-language repositories, where re-parsing from scratch for every query is too expensive. Parse once, then navigate many times.
 
-Built with Rust + Tree-sitter.
-
----
-
-## What it does
-
-```text
-    source text
-        ⮟
-Tree-sitter syntax parsing
-        |
-        ├── functions / methods
-        ├── classes / structs / traits / interfaces
-        ├── imports / dependencies
-        ├── docstrings / parameters
-        ├── source line ranges
-        ⮟
-    FileData  (one per file)
-        |
-        |  merge many FileData
-        ⮟
-    relationship analysis  (PRISM)
-        |
-        ├── resolved call graph
-        ├── reverse call graph
-        ├── inheritance / type relationships
-        ├── entry points
-        ├── indices
-        ├── patterns
-        ├── metrics
-        ⮟
-    KnowledgeBase   (structured, serializable)
-```
-
-Tree-sitter is the syntax foundation; `libeulix` adds the repository-level
-relationship extraction on top. The result is a value you can query directly,
-serialize to JSON, or feed into a retrieval / navigation layer without
-reparsing the repository.
-
-`libeulix` is not just an implementation detail of the Eulix CLI. Its output
-is useful as a standalone structured representation of a repository.
-
----
+It powers [`eulix-parser`](../eulix-parser/) and [`eulix-lsp`](../eulix-lsp/), and works just as well as a standalone library: its output is a useful structured representation of a repository on its own.
 
 ## Install
 
-```shell
+```bash
 cargo add libeulix
 ```
 
+To use the copy in this repository instead of the crates.io release:
+
 ```toml
-# if using in eulix and want latest version and not from cargo
 [dependencies]
-libeulix = { path = "../libeulix", version = "0.8.1" }
+libeulix = { path = "../libeulix", version = "0.9.0" }
 ```
 
-Rust stable is required. The tree-sitter grammar crates need a C/C++ compiler at build time.
+Requires Rust stable. The Tree-sitter grammar crates need a C/C++ compiler at build time.
 
----
-
-## Quick start
+## Usage
 
 ### Parse a single file
 
@@ -102,8 +55,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Parse many files and build a call graph
 
 ```rust
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use libeulix::grammar_files;
 use libeulix::analyze::call_graph::prism_v2;
 use libeulix::struc::kb_struct::FileData;
@@ -114,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "src/main.rs".into(),
     ];
 
-    let mut structure: HashMap<String, FileData> = HashMap::new();
+    let mut structure: BTreeMap<String, FileData> = BTreeMap::new();
     for path in &files {
         let src = std::fs::read_to_string(path)?;
         let (rel, fd) = grammar_files::parse_source(path, &src)?;
@@ -129,113 +82,119 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Full analysis (all passes)
+### Run the analysis passes
+
+`analyze_and_build` still works, but it is **deprecated since 0.9.0** and will be removed in 1.0.0. Call the passes directly instead:
 
 ```rust
-use libeulix::analyze::pipeline::analyze_and_build;
-use libeulix::struc::kb_struct::{KnowledgeBase, Metadata};
-# use std::collections::HashMap;
+use libeulix::analyze::call_graph::prism_v2;
+use libeulix::analyze::{dependencies, entry_points, patterns};
 
-# fn build_kb() -> KnowledgeBase { todo!() }
-let kb = build_kb();
-let kb = analyze_and_build(kb, verbose =false, prism =2);
-
-// kb.call_graph, kb.entry_points, kb.patterns, kb.external_dependencies
-// are now populated.
+// `kb` is a KnowledgeBase whose `structure` is already filled in.
+kb.call_graph = prism_v2::build_call_graph_v2(&kb.structure);
+prism_v2::populate_called_by_from_graph(&mut kb);
+kb.patterns = patterns::detect_patterns(&kb);
+kb.entry_points = entry_points::find_entry_points(&kb);
+kb.external_dependencies = dependencies::analyze_external_deps(&kb);
 ```
 
----
+## How it works
+
+```text
+source text
+    │
+    ▼
+Tree-sitter syntax parsing
+    ├── functions / methods
+    ├── classes / structs / traits / interfaces
+    ├── imports / dependencies
+    ├── docstrings / parameters
+    └── source line ranges
+    │
+    ▼
+FileData (one per file)
+    │  merge many FileData
+    ▼
+relationship analysis (PRISM)
+    ├── resolved call graph
+    ├── reverse call graph
+    ├── inheritance / type relationships
+    ├── entry points
+    ├── indices
+    ├── patterns
+    └── metrics
+    │
+    ▼
+KnowledgeBase (structured, serializable)
+```
+
+Tree-sitter is the syntax foundation; `libeulix` adds repository-level relationship extraction on top. The result is a value you can query directly, serialize to JSON, or feed into a retrieval or navigation layer without reparsing the repository.
 
 ## API overview
 
-Everything is a free function on a module. There is no engine singleton and
-no global state — the crate is designed to be embeddable.
+Everything is a free function on a module. There is no engine singleton and no global state: the crate is designed to be embedded.
 
-| Module                                                         | Purpose                                           |
-| -------------------------------------------------------------- | ------------------------------------------------- |
-| `grammar_files::parse_source(path, src)`                       | Parse one in-memory source file into a `FileData` |
-| `grammar_files::parse_file(path)`                              | Read from disk and parse                          |
-| `grammar_files::language::Language::detect(path)`              | Map a path to a language                          |
-| `analyze::pipeline::analyze_and_build(kb, verbose, prism)`     | Run every analysis pass over a `KnowledgeBase`    |
-| `analyze::call_graph::prism_v1::build(&structure)`             | Fast, name-based call graph                       |
-| `analyze::call_graph::prism_v2::build_with(&structure, &opts)` | Scope-aware call graph                            |
-| `analyze::indices::generate(&kb)`                              | Fast lookup indices                               |
-| `analyze::summary::generate(&kb)`                              | Project summary                                   |
-| `analyze::metrics::generate(&kb, top_k)`                       | Complexity / importance metrics                   |
-| `analyze::entry_points::find(&kb)`                             | Entry points (main, routes, CLI commands)         |
-| `analyze::dependencies::analyze(&kb)`                          | External dependency extraction                    |
-| `analyze::patterns::detect(&kb)`                               | Architectural pattern detection                   |
-| `struc::kb_struct::*`                                          | The `FileData` / `KnowledgeBase` schema           |
+| Function | Purpose |
+| :-- | :-- |
+| `grammar_files::parse_source(path, src)` | Parse one in-memory source file into a `FileData` |
+| `grammar_files::language::Language::detect(path)` | Map a path to a language |
+| `analyze::call_graph::prism_v1::build_call_graph(&structure)` | Fast, name-based call graph (run `resolve_call_locations` first) |
+| `analyze::call_graph::prism_v2::build_with(&structure, &opts)` | Scope-aware call graph |
+| `analyze::entry_points::find_entry_points(&kb)` | Entry points (`main`, routes, CLI commands) |
+| `analyze::dependencies::analyze_external_deps(&kb)` | External dependency extraction |
+| `analyze::patterns::detect_patterns(&kb)` | Naming, layout and architecture hints |
+| `analyze::indices::generate_indices_view(&kb)` | Fast lookup indices |
+| `analyze::metrics::generate_metrics(&kb, k)` | Top-`k` functions by complexity |
+| `analyze::summary::generate_summary(&kb)` | Project summary |
+| `analyze::pipeline::analyze_and_build(kb, verbose, prism)` | Runs the call graph, patterns, entry points and dependencies. Deprecated. |
+| `struc::kb_struct::*` | The `FileData` / `KnowledgeBase` schema |
 
-The two top-level types are:
+`structure`, the argument to the call-graph builders, is a `BTreeMap<String, FileData>`. The two top-level types are:
 
-- **`FileData`** — one file's parsed content: functions, classes, methods,
-  imports, docstrings, per-function calls with line numbers.
-- **`KnowledgeBase`** — a map of relative path → `FileData`, plus metadata
-  and everything the analysis passes derive from it.
+- **`FileData`**: one file's parsed content: functions, classes, methods, imports, docstrings, and per-function calls with line numbers.
+- **`KnowledgeBase`**: a map of relative path to `FileData`, plus metadata and everything the analysis passes derive from it.
 
-Both are `Serialize` / `Deserialize`, so they round-trip through JSON.
-
----
+Both are `Serialize` / `Deserialize`, so they round-trip through JSON. Full API: [Public API](../docs/libeulix/Public-API.md).
 
 ## Supported languages
 
-| Language         | Extensions                            | Status         |
-| ---------------- | ------------------------------------- | -------------- |
-| C                | `.c`, `.h`                            | Stable         |
-| C++              | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | Stable         |
-| Go               | `.go`                                 | Stable         |
-| Python           | `.py`, `.pyw`, `.pyi`                 | Stable         |
-| Rust             | `.rs`                                 | Stable         |
-| TypeScript / TSX | `.ts`, `.tsx`, `.mts`, `.cts`         | Stable         |
-| JavaScript / JSX | `.js`, `.mjs`, `.cjs`, `.jsx`         | Needs testing  |
-| Java             | `.java`                               | Needs testing  |
-| PHP              | `.php`, `.phtml`, `.inc`              | Needs testing  |
-| Ruby             | `.rb`                                 | In development |
+| Language | Extensions | Status |
+| :-- | :-- | :-- |
+| C | `.c`, `.h` | Stable |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx`, and `.h` files that use C++ syntax | Stable |
+| Go | `.go` | Stable |
+| Python | `.py`, `.pyw`, `.pyi` | Stable |
+| Rust | `.rs` | Stable |
+| TypeScript | `.ts`, `.mts`, `.cts` | Stable |
+| JavaScript | `.js`, `.mjs`, `.cjs` | Needs testing |
+| Java | `.java` | Needs testing |
+| PHP | `.php`, `.phtml`, `.inc` | Needs testing |
 
-Language support is not just syntax support. Some language features make
-relationship analysis substantially harder than parsing alone — dynamic
-dispatch, reflection, generated code, macros, runtime metaprogramming. The
-parser extracts what's there; PRISM resolves what can reasonably be resolved.
+`.jsx` and `.tsx` files are detected as languages but currently rejected by `parse_source`. Ruby is not supported.
 
----
+Language support is more than syntax support. Some features make relationship analysis much harder than parsing: dynamic dispatch, reflection, generated code, macros and runtime metaprogramming. The parser extracts what is there; PRISM resolves what can reasonably be resolved.
 
 ## PRISM
 
-`libeulix` includes the **PRISM** relationship engine for large-scale
-approximate call-graph resolution.
+PRISM is the relationship engine for large-scale, approximate call-graph resolution. It exists to recover useful code relationships without making whole-program analysis prohibitively expensive. Depending on the version, it uses symbol metadata, scope information, class information, inheritance relationships and language-aware heuristics to connect call sites to their likely definitions.
 
-PRISM exists for one reason:
-
-> **Recover useful code relationships without making whole-program analysis
-> prohibitively expensive.**
-
-Depending on the selected version, PRISM uses symbol metadata, scope
-information, class information, inheritance relationships, and
-language-aware heuristics to connect call sites to likely definitions.
-
-This is **retrieval-oriented analysis**, not a formal compiler or proof
-system. That distinction matters. PRISM is designed to give useful
-structural context at repository scale, while accepting that dynamic
-dispatch, reflection, generated code, and similar features make perfect
-resolution impossible.
+This is retrieval-oriented analysis, not a compiler or a proof system. PRISM gives useful structural context at repository scale and accepts that dynamic dispatch, reflection and generated code make perfect resolution impossible. Treat its edges as navigation evidence, not proof of runtime behaviour.
 
 ### PRISM v1
 
-The simpler, high-throughput relationship path. Useful when you want fast
-symbol-based resolution and broad call-graph coverage at lower cost.
+The simpler, high-throughput path: fast symbol-based resolution with broad call-graph coverage at low cost.
 
 ```rust
 use libeulix::analyze::call_graph::prism_v1;
-let cg = prism_v1::build(&structure);
+// Rewrites each call's callee to the id of the first definition with that
+// name. Without it, bare call names don't resolve.
+prism_v1::resolve_call_locations(&mut kb);
+let cg = prism_v1::build_call_graph(&kb.structure);
 ```
 
 ### PRISM v2
 
-The more scope-aware relationship path. It keeps more information about
-modules, classes, methods, inheritance, shadowing, and receiver context,
-which lets common ambiguous relationships be resolved more accurately than a
-plain global-name lookup.
+The scope-aware path. It keeps more information about modules, classes, methods, inheritance, shadowing and receiver context, so common ambiguous calls resolve more accurately than with a global name lookup. See [PRISM v2](../docs/libeulix/PRISM-V2.md).
 
 ```rust
 use libeulix::analyze::call_graph::{prism_v2, prism_v2::CallGraphOptions};
@@ -247,39 +206,18 @@ let opts = CallGraphOptions {
 let cg = prism_v2::build_with(&structure, &opts);
 ```
 
-Call graph edges are labelled (`call` / `inheritance`) and carry a call-site
-line and a conditional flag.
-
-Because PRISM is approximate, graph consumers should treat relationships as
-**navigation evidence**, not absolute proof of runtime behaviour.
-
----
+Call-graph edges are labelled (`call` or `inheritance`) and carry a call-site line and a conditional flag.
 
 ## Design goals
 
-### 1. Parse large repositories quickly
+1. **Parse large repositories quickly.** A 30M+ line repository should run on consumer hardware, not only on a workstation.
+2. **Keep the output useful.** Other tools consume it, so stable identifiers and useful relationships matter as much as raw throughput.
+3. **Prefer cheap approximations when they are good enough.** For code navigation, a fast and useful relationship beats an expensive attempt at perfect resolution.
+4. **Stay embeddable.** No global state, no required runtime, no required tokio. Every public function takes its input by reference and returns owned data. Parallelism is opt-in through the caller's own rayon pool.
 
-A 30M+ LOC repository should be something the engine can process on consumer
-hardware, not a theoretical upper bound that only runs on a threadripper.
+## Research
 
-### 2. Keep the output useful
-
-The output is consumed by other tools. Stable identifiers and useful source
-relationships matter as much as raw parse throughput.
-
-### 3. Prefer cheap approximations when they are good enough
-
-Not every downstream task needs compiler-grade whole-program reasoning. For
-code navigation, a fast and useful relationship is often better than an
-expensive attempt at perfect resolution.
-
-### 4. Keep the library embeddable
-
-No global state, no required runtime, no required tokio. Every public
-function takes its input by reference and returns owned data. Parallelism is
-opt-in via the caller's own rayon pool.
-
----
+PRISM is also the subject of ongoing research into one question: how much useful structural information can be recovered from a large repository without paying for full program analysis? The work covers identity-based resolution, scope-aware relationships, class and inheritance information, and language-aware heuristics. It does not compete with a compiler's type system; it aims to make repository-scale navigation better. See [PRISM v2 methodology](../docs/libeulix/Research/PRISM-V2-Methodology.md).
 
 ## Development
 
@@ -289,37 +227,17 @@ cargo fmt --check
 cargo clippy
 ```
 
----
+## Related components
 
-## Research
+| Component | Language | Role |
+| :-- | :-- | :-- |
+| [libeulix](../libeulix/) | Rust | Analysis engine: parsing, PRISM call graphs, indexes |
+| [eulix-parser](../eulix-parser/) | Rust | CLI that runs libeulix over a repository and writes `.eulix/` |
+| [eulix-embed](../eulix-embed/) | Python | Embedding pipeline for the ETIYA engine |
+| [eulix-cli](../eulix-cli/) | Go | The `eulix` binary: retrieval engines, MCP server, chat |
+| [eulix-lsp](../eulix-lsp/) | Rust | Language server built on libeulix (beta) |
+| [vizEulize](../vizEulize/) | HTML/JS | Call-graph explorer in your browser |
 
-The PRISM engine is also the subject of ongoing research on the question:
+## License
 
-> **How much useful structural information can we recover from a large
-> repository without paying the cost of full program analysis?**
-
-The work explores identity-based resolution, scope-aware relationships,
-class and inheritance information, and language-aware heuristics. It is not
-trying to compete with a compiler's type system; it is trying to make
-repository-scale code navigation better.
-
----
-
-## Related projects
-
-| Project                          | Purpose                                                                        |
-| -------------------------------- | ------------------------------------------------------------------------------ |
-| [eulix-parser](../eulix-parser/) | CLI producing JSON knowledge-base artifacts from a repository                  |
-| [eulix-lsp](../eulix-lsp/)       | Language server built on `libeulix`                                            |
-| [eulix-cli](../eulix-cli/)       | Main CLI, query routing, retrieval, context building, LLM integration          |
-| [eulix-embed](../eulix-embed/)   | Local embedding generation and embedding storage that uses knowledge_base.json |
-
----
-
-<div align="center">
-
-**libeulix**
-
-_The analysis engine inside Eulix._
-
-</div>
+Apache 2.0, like every Eulix component. See [LICENSE](../LICENSE).

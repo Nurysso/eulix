@@ -50,7 +50,7 @@ fn func_symbol(rope: &Rope, f: &Func, container: Option<&str>) -> DocumentSymbol
         },
         tags: None,
         deprecated: None,
-        range: full_line_range(rope, f.line_start.min(f.line_end.max(f.line_start))),
+        range: declaration_range(rope, f.line_start, f.line_end),
         selection_range: name_range,
         children: None,
     }
@@ -86,7 +86,7 @@ fn class_symbol(rope: &Rope, c: &Klass) -> DocumentSymbol {
         kind: class_symbol_kind(&c.kind),
         tags: None,
         deprecated: None,
-        range: full_line_range(rope, c.line_start),
+        range: declaration_range(rope, c.line_start, c.line_end),
         selection_range: position::find_name_on_line(rope, c.line_start, &c.name)
             .unwrap_or_else(|| full_line_range(rope, c.line_start)),
         children: if children.is_empty() {
@@ -95,6 +95,13 @@ fn class_symbol(rope: &Rope, c: &Klass) -> DocumentSymbol {
             Some(children)
         },
     }
+}
+
+fn declaration_range(rope: &Rope, start_line: usize, end_line: usize) -> Range {
+    Range::new(
+        full_line_range(rope, start_line).start,
+        full_line_range(rope, end_line.max(start_line)).end,
+    )
 }
 
 fn class_symbol_kind(kind: &str) -> SymbolKind {
@@ -252,15 +259,10 @@ pub fn completion_item(def: &Def) -> CompletionItem {
 }
 
 #[allow(deprecated)]
-pub fn workspace_symbol(name: &str, def: &Def) -> SymbolInformation {
+pub fn workspace_symbol(_query: &str, def: &Def) -> SymbolInformation {
     SymbolInformation {
-        // Completion style: show what the user typed, and let the client
-        // filter on the real name via the location it jumps to.
-        name: if !name.is_empty() && def.name.starts_with(name) {
-            name.to_string()
-        } else {
-            def.name.clone()
-        },
+        // The query filters candidates; it never renames the result.
+        name: def.name.clone(),
         kind: match def.kind {
             DefKind::Function => SymbolKind::FUNCTION,
             DefKind::Method => SymbolKind::METHOD,
@@ -317,7 +319,6 @@ pub const MOD_DECLARATION: u32 = 1 << 0;
 pub const MOD_DEFINITION: u32 = 1 << 1;
 pub const MOD_READONLY: u32 = 1 << 2;
 pub const MOD_STATIC: u32 = 1 << 3;
-pub const MOD_DEPRECATED: u32 = 1 << 4;
 pub const MOD_ABSTRACT: u32 = 1 << 5;
 pub const MOD_ASYNC: u32 = 1 << 6;
 
@@ -363,9 +364,6 @@ pub fn semantic_tokens(rope: &Rope, parsed: &ParsedFile) -> Vec<Token> {
         }
         if f.is_async {
             m |= MOD_ASYNC;
-        }
-        if f.is_test {
-            m |= MOD_DEPRECATED;
         }
         push(rope, &mut tokens, f.line_start, &f.name, 0, m);
 
@@ -479,6 +477,58 @@ mod tests {
             line_end: end,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn document_symbol_ranges_include_bodies_and_contain_children() {
+        let source =
+            "class Box:\n    def method(self):\n        return 1\n\ndef run():\n    return 2";
+        let r = rope(source);
+        let parsed = crate::syntax::parse(std::path::Path::new("app.py"), source).unwrap();
+        let syms = document_symbols(&r, &parsed);
+        let class = syms.iter().find(|s| s.name == "Box").unwrap();
+        assert_eq!(
+            class.range,
+            Range::new(Position::new(0, 0), Position::new(2, 16))
+        );
+        let method = &class.children.as_ref().unwrap()[0];
+        assert_eq!(
+            method.range,
+            Range::new(Position::new(1, 0), Position::new(2, 16))
+        );
+        assert!(class.range.start <= method.range.start && method.range.end <= class.range.end);
+        let run = syms.iter().find(|s| s.name == "run").unwrap();
+        assert_eq!(
+            run.range,
+            Range::new(Position::new(4, 0), Position::new(5, 12))
+        );
+        assert!(
+            run.range.start <= run.selection_range.start
+                && run.selection_range.end <= run.range.end
+        );
+    }
+
+    #[test]
+    fn rust_test_functions_do_not_have_deprecated_semantic_tokens() {
+        let source = "#[test]\nfn sample_test() {}\n";
+        let parsed = crate::syntax::parse(std::path::Path::new("sample.rs"), source).unwrap();
+        let f = parsed
+            .functions
+            .iter()
+            .find(|f| f.name == "sample_test")
+            .unwrap();
+        assert!(
+            f.is_test,
+            "fixture must exercise the test-function modifier"
+        );
+        let tokens = semantic_tokens(&rope(source), &parsed);
+        let token = tokens.iter().find(|t| t.ty == 0).unwrap();
+        let deprecated = TOKEN_MODIFIERS
+            .iter()
+            .position(|m| *m == "deprecated")
+            .unwrap();
+        assert_eq!(token.modifiers & (1 << deprecated), 0);
+        assert_ne!(token.modifiers & MOD_DECLARATION, 0);
     }
 
     #[test]

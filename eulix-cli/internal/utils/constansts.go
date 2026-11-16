@@ -6,7 +6,7 @@ package utils
 
 const (
 	AppName             = "eulix"
-	AppVersion          = "v0.8.4"
+	AppVersion          = "v0.9.0"
 	BinaryVersion       = uint32(5)
 	ChecksumFileName    = "checksum.json.zst"
 	ConfigPath          = "eulix.toml"

@@ -1,0 +1,291 @@
+# Corpora for the call-graph accuracy harness (bench/callgraph/cg_eval.py).
+#
+# Three real corpora per language, pinned to a 40-hex commit (moving a pin
+# invalidates its cached reference call sites), plus a tiny "micro" fixture per
+# language under micro/ that runs in seconds and doubles as a smoke test for the
+# reference tools.
+#
+# lang     go | java | python | rust | ts | js | c | cpp   (picks the reference tool)
+# set      real | micro
+# source   git URL, or "micro" (path = directory under bench/callgraph/)
+# subdir   analyse only this directory of the checkout (both eulix and the reference)
+# exclude  paths deleted from the snapshot before anything runs
+# ref_args extra arguments for the reference tool (clang: compiler flags)
+# PHP has no corpus: there is no PHP toolchain in the reference set (see README).
+schema = 1
+
+# ---- real -------------------------------------------------------------------
+
+[[corpus]]
+name = "gin"
+lang = "go"
+set = "real"
+source = "https://github.com/gin-gonic/gin"
+commit = "73726dc606796a025971fe451f0aa6f1b9b847f6"
+tag = "v1.12.0"
+
+[[corpus]]
+name = "gson"
+lang = "java"
+set = "real"
+source = "https://github.com/google/gson"
+commit = "fcd416909db2bea96eb916bcfb2d0a83cb9b86c3"
+tag = "gson-parent-2.15.0"
+subdir = "gson/src/main/java"
+
+[[corpus]]
+name = "flask"
+lang = "python"
+set = "real"
+source = "https://github.com/pallets/flask"
+commit = "22d924701a6ae2e4cd01e9a15bbaf3946094af65"
+tag = "3.1.3"
+subdir = "src"
+
+[[corpus]]
+name = "ripgrep"
+lang = "rust"
+set = "real"
+source = "https://github.com/BurntSushi/ripgrep"
+commit = "e89fff89ac9af12e8d4ce9d5fd07beb408ca730f"
+tag = "15.2.0"
+
+[[corpus]]
+name = "class-validator"
+lang = "ts"
+set = "real"
+source = "https://github.com/typestack/class-validator"
+commit = "2e1a5c27dbd65b80e27fe96b49bd6e6641fa3603"
+tag = "v0.15.1"
+subdir = "src"
+
+[[corpus]]
+name = "axios"
+lang = "js"
+set = "real"
+source = "https://github.com/axios/axios"
+commit = "335e2f8464f58a3ab485486b8d6964fea3e3f30a"
+tag = "v1.21.1"
+subdir = "lib"
+
+[[corpus]]
+name = "cjson"
+lang = "c"
+set = "real"
+source = "https://github.com/DaveGamble/cJSON"
+commit = "c859b25da02955fef659d658b8f324b5cde87be3"
+tag = "v1.7.19"
+exclude = ["tests/unity", "fuzzing"]
+
+[[corpus]]
+name = "tinyxml2"
+lang = "cpp"
+set = "real"
+source = "https://github.com/leethomason/tinyxml2"
+commit = "9148bdf719e997d1f474be6bcc7943881046dba1"
+tag = "11.0.0"
+
+# ---- real, added 2026-11-16: three projects per language -------------------
+# Chosen to be self-contained (few or no dependencies), so the reference tools
+# resolve most calls without a dependency install.
+
+[[corpus]]
+name = "chi"
+lang = "go"
+set = "real"
+source = "https://github.com/go-chi/chi"
+commit = "3a33ba578e0dd93444e0ff386cc26e665d92e31e"
+tag = "v5.5.0"
+
+[[corpus]]
+name = "cobra"
+lang = "go"
+set = "real"
+source = "https://github.com/spf13/cobra"
+commit = "88b30ab89da2d0d0abb153818746c5a2d30eccec"
+tag = "v1.10.2"
+
+[[corpus]]
+name = "jsoup"
+lang = "java"
+set = "real"
+source = "https://github.com/jhy/jsoup"
+commit = "5e3c2843106967cba8ac1b12e6f821518fb2f5d2"
+tag = "jsoup-1.24.1"
+subdir = "src/main/java"
+
+[[corpus]]
+name = "commons-cli"
+lang = "java"
+set = "real"
+source = "https://github.com/apache/commons-cli"
+commit = "d74613321325f6081fa0206c4ab608ab65d80e2e"
+tag = "rel/commons-cli-1.11.0"
+subdir = "src/main/java"
+
+[[corpus]]
+name = "click"
+lang = "python"
+set = "real"
+source = "https://github.com/pallets/click"
+commit = "cf19179e8e2fd54c601378cec9e0d21bb12b6fb1"
+tag = "8.5.1"
+subdir = "src"
+
+[[corpus]]
+name = "requests"
+lang = "python"
+set = "real"
+source = "https://github.com/psf/requests"
+commit = "6e83187b8feb273ed4c6cdab5efd8d54901dfab3"
+tag = "v2.34.2"
+subdir = "src"
+
+[[corpus]]
+name = "serde_json"
+lang = "rust"
+set = "real"
+source = "https://github.com/serde-rs/json"
+commit = "20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8"
+tag = "v1.0.154"
+
+[[corpus]]
+name = "fd"
+lang = "rust"
+set = "real"
+source = "https://github.com/sharkdp/fd"
+commit = "b2a287b3993768e0ec52f0852916917f23fb2a38"
+tag = "v10.5.2"
+
+[[corpus]]
+name = "class-transformer"
+lang = "ts"
+set = "real"
+source = "https://github.com/typestack/class-transformer"
+commit = "9c9012f1bfe720d5f0d5252e93b331aaf5fe9e4e"
+tag = "v0.5.1"
+subdir = "src"
+
+[[corpus]]
+name = "immer"
+lang = "ts"
+set = "real"
+source = "https://github.com/immerjs/immer"
+commit = "16589b9c437a28433ceaf4072d5ab125287cd46a"
+tag = "v11.2.10"
+subdir = "src"
+
+# express 5.3.0 was tried and dropped (2026-11-16): it defines its functions as
+# `app.use = function use(...)`, which eulix does not extract, so 401 of its 461
+# call sites lie outside any eulix function and only 3 pairs could be scored.
+[[corpus]]
+name = "markdown-it"
+lang = "js"
+set = "real"
+source = "https://github.com/markdown-it/markdown-it"
+commit = "d372f0d8a68bef0b0acaa68868ce8ae8ba85b384"
+tag = "14.3.3"
+subdir = "lib"
+# 14.x is the last JavaScript release; 15.0 rewrote the library in TypeScript (src/*.ts).
+
+[[corpus]]
+name = "mocha"
+lang = "js"
+set = "real"
+source = "https://github.com/mochajs/mocha"
+commit = "51a0cc5530d8e29272406384723e8871245821f1"
+tag = "v12.0.3"
+subdir = "lib"
+
+[[corpus]]
+name = "zlib"
+lang = "c"
+set = "real"
+source = "https://github.com/madler/zlib"
+commit = "99623ef7097352da7993ba614161fd6a311e046e"
+tag = "v1.4"
+exclude = ["contrib"]
+
+[[corpus]]
+name = "lua"
+lang = "c"
+set = "real"
+source = "https://github.com/lua/lua"
+commit = "7579fc9d7ed90240487251dfb69168f8e64e9294"
+tag = "v5.5.1"
+
+[[corpus]]
+name = "pugixml"
+lang = "cpp"
+set = "real"
+source = "https://github.com/zeux/pugixml"
+commit = "c8033ce9d039e7f9d134877c363397b3cfe20816"
+tag = "v1.16"
+
+[[corpus]]
+name = "yaml-cpp"
+lang = "cpp"
+set = "real"
+source = "https://github.com/jbeder/yaml-cpp"
+commit = "56e3bb550c91fd7005566f19c079cb7a503223cf"
+tag = "yaml-cpp-0.9.0"
+exclude = ["test"]
+ref_args = ["-Iinclude"]
+
+# ---- micro ------------------------------------------------------------------
+
+[[corpus]]
+name = "micro-go"
+lang = "go"
+set = "micro"
+source = "micro"
+path = "micro/go"
+
+[[corpus]]
+name = "micro-java"
+lang = "java"
+set = "micro"
+source = "micro"
+path = "micro/java"
+
+[[corpus]]
+name = "micro-python"
+lang = "python"
+set = "micro"
+source = "micro"
+path = "micro/python"
+
+[[corpus]]
+name = "micro-rust"
+lang = "rust"
+set = "micro"
+source = "micro"
+path = "micro/rust"
+
+[[corpus]]
+name = "micro-ts"
+lang = "ts"
+set = "micro"
+source = "micro"
+path = "micro/ts"
+
+[[corpus]]
+name = "micro-js"
+lang = "js"
+set = "micro"
+source = "micro"
+path = "micro/js"
+
+[[corpus]]
+name = "micro-c"
+lang = "c"
+set = "micro"
+source = "micro"
+path = "micro/c"
+
+[[corpus]]
+name = "micro-cpp"
+lang = "cpp"
+set = "micro"
+source = "micro"
+path = "micro/cpp"

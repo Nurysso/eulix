@@ -23,6 +23,9 @@ type DebugLogger struct {
 	buf    *bytes.Buffer // currently used for test
 	mu     sync.Mutex
 	closed bool
+	// stopFlush ends the StartAutoFlush goroutine; Close closes it.
+	// nil until StartAutoFlush runs, so the goroutine starts at most once.
+	stopFlush chan struct{}
 }
 
 func IsDebugLevel3() bool {
@@ -36,13 +39,7 @@ func NewDebugLogger(eulixDir ...string) *DebugLogger {
 		return &DebugLogger{buf: &bytes.Buffer{}}
 	}
 
-	logPath := filepath.Join(eulixDir[0], "debug", "context_debug.log")
-
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return &DebugLogger{buf: &bytes.Buffer{}} // silent fallback (in-memory)
-	}
-
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	f, err := OpenEulixFile(eulixDir[0], filepath.Join("debug", "context_debug.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC)
 	if err != nil {
 		return &DebugLogger{buf: &bytes.Buffer{}} // silent fallback (in-memory)
 	}
@@ -105,15 +102,16 @@ func (d *DebugLogger) Lines() []string {
 //
 // Format: [HH:MM:SS] <formatted message>
 func (d *DebugLogger) Log(format string, args ...interface{}) {
-	if d == nil || d.closed {
-		return
-	}
-	if d.writer == nil && d.buf == nil {
+	if d == nil {
 		return
 	}
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	if d.closed || (d.writer == nil && d.buf == nil) {
+		return
+	}
 
 	now := time.Now()
 	msg := fmt.Sprintf(
@@ -143,25 +141,35 @@ func (d *DebugLogger) Log(format string, args ...interface{}) {
 
 // Flush forces all buffered logs to disk.
 func (d *DebugLogger) Flush() {
-	if d.file == nil || d.closed {
+	if d == nil || d.file == nil {
 		return
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if d.closed {
+		return
+	}
 	if d.writer != nil {
 		_ = d.writer.Flush()
 	}
 }
 
-// Close flushes and closes the logger.
+// Close flushes and closes the logger and stops its auto-flush goroutine.
+// It is safe to call more than once.
 func (d *DebugLogger) Close() {
-	if d.file == nil || d.closed {
+	if d == nil || d.file == nil {
 		return
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if d.closed {
+		return
+	}
+	if d.stopFlush != nil {
+		close(d.stopFlush)
+	}
 	if d.writer != nil {
 		_ = d.writer.Flush()
 	}
@@ -169,16 +177,33 @@ func (d *DebugLogger) Close() {
 	d.closed = true
 }
 
-// StartAutoFlush starts a goroutine that periodically flushes logs to disk.
+// StartAutoFlush starts a goroutine that periodically flushes logs to disk
+// until Close. It starts at most one goroutine per logger, however often it
+// is called, and none after Close: the router and every context builder it
+// creates share one logger, and each used to start its own goroutine that
+// never stopped (RET-9).
 func (d *DebugLogger) StartAutoFlush(interval time.Duration) {
-	if d.file == nil {
+	if d == nil || d.file == nil {
 		return
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed || d.stopFlush != nil {
+		return
+	}
+	stop := make(chan struct{})
+	d.stopFlush = stop
+
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		for range ticker.C {
-			d.Flush()
+		for {
+			select {
+			case <-ticker.C:
+				d.Flush()
+			case <-stop:
+				return
+			}
 		}
 	}()
 }

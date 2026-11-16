@@ -428,11 +428,11 @@ mod tests {
     use crate::grammar_files::php::fixtures::{CART_PAGE, HELPERS, MODELS, SERVICE};
     use crate::grammar_files::php::parse_source;
     use crate::struc::kb_struct::CallGraph;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::path::Path;
 
     fn graph(files: &[(&str, &str)]) -> CallGraph {
-        let structure: HashMap<String, FileData> = files
+        let structure: BTreeMap<String, FileData> = files
             .iter()
             .map(|(path, src)| {
                 let fd = parse_source(Path::new(path), src)
@@ -1135,7 +1135,7 @@ function bill(array $users, array $invoices) {
 
     #[test]
     fn php_and_python_never_resolve_to_each_other() {
-        let structure: HashMap<String, FileData> = [
+        let structure: BTreeMap<String, FileData> = [
             ("app/main.py", "def main():\n    helper()\n    render()\n"),
             ("app/util.py", "def render():\n    pass\n"),
             ("app/helpers.php", "<?php\nfunction helper() {}\n"),

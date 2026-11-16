@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="308" viewBox="0 0 800 308" role="img" aria-labelledby="title desc">
+<title id="title">Parsing the Linux kernel</title>
+<desc id="desc">Horizontal bar chart. A full parse of the Linux kernel takes 53.9 seconds. An incremental re-parse takes under 10 seconds, over 5.3 times faster.</desc>
+<style>.sans{font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif}.mono{font-family:ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace}.num{font-variant-numeric:tabular-nums}.bg{fill:#f6f8fa;stroke:#d1d9e0}.node{fill:#ffffff;stroke:#d1d9e0}.chip{fill:#f6f8fa;stroke:#d1d9e0}.grid{stroke:#e1e6eb}.axis{stroke:#afb8c1}.ink{fill:#1f2328}.ink2{fill:#59636e}.accent{fill:#6250d6}.trace{fill:none;stroke:#6250d6}.context{fill:#818b98}.flow{fill:none;stroke:#59636e}.head{fill:#59636e}@media (prefers-color-scheme:dark){.bg{fill:#161b22;stroke:#3d444d}.node{fill:#0d1117;stroke:#3d444d}.chip{fill:#161b22;stroke:#3d444d}.grid{stroke:#262c36}.axis{stroke:#545d68}.ink{fill:#f0f6fc}.ink2{fill:#9198a1}.accent{fill:#9085e9}.trace{fill:none;stroke:#9085e9}.context{fill:#656c76}.flow{fill:none;stroke:#9198a1}.head{fill:#9198a1}}</style>
+<rect class="bg" x="0.5" y="0.5" width="799" height="307" rx="12"/>
+<text x="28" y="44" class="sans ink" font-size="18" font-weight="600">Parsing the Linux kernel</text>
+<text x="28" y="68" class="sans ink2" font-size="13">37.3M lines · 64,460 source files · 12 threads · PRISM v2 · seconds, lower is better</text>
+<line class="axis" x1="224" y1="98" x2="224" y2="214" stroke-width="1"/>
+<text x="224" y="234" class="sans ink2 num" font-size="12" text-anchor="middle">0</text>
+<line class="grid" x1="302.7" y1="98" x2="302.7" y2="214" stroke-width="1"/>
+<text x="302.7" y="234" class="sans ink2 num" font-size="12" text-anchor="middle">10</text>
+<line class="grid" x1="381.3" y1="98" x2="381.3" y2="214" stroke-width="1"/>
+<text x="381.3" y="234" class="sans ink2 num" font-size="12" text-anchor="middle">20</text>
+<line class="grid" x1="460" y1="98" x2="460" y2="214" stroke-width="1"/>
+<text x="460" y="234" class="sans ink2 num" font-size="12" text-anchor="middle">30</text>
+<line class="grid" x1="538.7" y1="98" x2="538.7" y2="214" stroke-width="1"/>
+<text x="538.7" y="234" class="sans ink2 num" font-size="12" text-anchor="middle">40</text>
+<line class="grid" x1="617.3" y1="98" x2="617.3" y2="214" stroke-width="1"/>
+<text x="617.3" y="234" class="sans ink2 num" font-size="12" text-anchor="middle">50</text>
+<line class="grid" x1="696" y1="98" x2="696" y2="214" stroke-width="1"/>
+<text x="696" y="234" class="sans ink2 num" font-size="12" text-anchor="middle">60 s</text>
+<text x="210" y="125" class="sans ink" font-size="14" font-weight="600" text-anchor="end">Full parse</text>
+<text x="210" y="142" class="sans ink2" font-size="12" text-anchor="end">every file, cold</text>
+<path class="context" d="M224,115H644A4,4 0 0 1 648,119V135A4,4 0 0 1 644,139H224Z"/>
+<text x="658" y="132" class="sans ink" font-size="14" font-weight="600">53.9 s</text>
+<text x="210" y="183" class="sans ink" font-size="14" font-weight="600" text-anchor="end">Incremental re-parse</text>
+<text x="210" y="200" class="sans ink2" font-size="12" text-anchor="end">unchanged files reused</text>
+<path class="accent" d="M224,173H298.7A4,4 0 0 1 302.7,177V193A4,4 0 0 1 298.7,197H224Z"/>
+<text x="312.7" y="190" class="sans ink" font-size="14" font-weight="600">&lt; 10 s</text>
+<text x="367" y="190" class="sans ink2" font-size="13">over 5.3× faster</text>
+<text x="28" y="266" class="sans ink2" font-size="12">Incremental runs reuse unchanged files from .eulix/parse_cache/ and still rebuild the call graph from scratch, so the output</text>
+<text x="28" y="283" class="sans ink2" font-size="12">matches a full parse byte for byte. Most of the time left is spent rewriting the JSON output.</text>
+</svg>

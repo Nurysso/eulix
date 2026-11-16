@@ -1,0 +1,88 @@
+name: Docs
+
+# Health check of docs/ (the site itself is built in a separate repo):
+# - dead links: relative links, #anchors and external URLs (lychee)
+# - spelling (codespell)
+# Runs on PRs/pushes that touch docs/, and weekly to catch external links that rot.
+# If the scheduled run fails, a single "Docs check failed" issue is opened (or commented on
+# if it is already open), because failures of scheduled runs are otherwise easy to miss.
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**", ".github/workflows/Docs.yaml"]
+  pull_request:
+    paths: ["docs/**", ".github/workflows/Docs.yaml"]
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  links:
+    name: Dead links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          fail: true
+          args: >-
+            --no-progress
+            --include-fragments
+            --root-dir ${{ github.workspace }}/docs
+            --max-retries 3
+            --accept 200,202,206,429
+            --exclude-path docs/_build
+            'docs/**/*.md'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Upload report
+        # act has no artifact server, so skip the upload when running locally.
+        if: failure() && !env.ACT
+        uses: actions/upload-artifact@v4
+        with:
+          name: link-report
+          path: lychee/out.md
+
+  spelling:
+    name: Spelling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: codespell
+        working-directory: docs
+        run: uvx codespell
+
+  report:
+    name: Open issue on failure
+    needs: [links, spelling]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TITLE: "Docs check failed"
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Open or update issue
+        run: |
+          body="The weekly docs check failed: $RUN_URL
+
+          Results: links: ${{ needs.links.result }}, spelling: ${{ needs.spelling.result }}.
+          The link report is attached to the run as \`link-report\`."
+          existing=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi

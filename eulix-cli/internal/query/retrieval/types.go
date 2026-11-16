@@ -65,9 +65,16 @@ type ContextBuilder struct {
 	kbIdx            *utils.Indices
 	lastTrace        *DebugTrace
 	llmClient        *llm.Client
+	twins            *twinIndex
+	callLayer        *walkLayer
+	lexLayer         *walkLayer
+	symLayer         *walkLayer
 	mu               sync.Mutex
 	symbolIndex      map[string][]int
 	vectorMap        map[string]int
+	chunkIdx         map[string]int
+	chunkFiles       map[string]struct{} // lowercased File of every chunk
+	engine           Engine
 	sourceRoot       string
 	hasCallGraph     bool
 	hasEmbeddings    bool
@@ -142,6 +149,7 @@ type ChunkTrace struct {
 // DebugTrace is the full diagnostic for one BuildContext call.
 // Access it with cb.GetLastTrace() — no callsite changes required.
 type DebugTrace struct {
+	Engine          string
 	Query           string
 	Intent          QueryIntent
 	Budget          BudgetAllocation
@@ -242,12 +250,6 @@ type fnParts struct {
 	docstring string
 	lineStart int
 	lineEnd   int
-	calls     []callPart // only Callee + Line used
-}
-
-type callPart struct {
-	callee string
-	line   int
 }
 
 type classParts struct {
@@ -262,4 +264,24 @@ type methodPart struct {
 	name      string
 	lineStart int
 	lineEnd   int
+}
+
+// SelectorMode is the final token-budget selection strategy.
+type SelectorMode int
+
+const (
+	SelectorGreedy SelectorMode = iota
+	SelectorQueryMMR
+	SelectorStructuralMMR
+)
+
+func (m SelectorMode) MmmrSelector() string {
+	switch m {
+	case SelectorQueryMMR:
+		return "mmr"
+	case SelectorStructuralMMR:
+		return "structural_mmr"
+	default:
+		return "greedy"
+	}
 }

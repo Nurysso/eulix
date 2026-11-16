@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	pathpkg "path" // the walk callback's parameter is named path
 	"path/filepath"
 	"sort"
 	"strings"
@@ -44,10 +45,28 @@ var skipDirs = map[string]bool{
 	"__pycache__": true, "venv": true, "coverage": true,
 }
 
+// lexExcluded reports whether rel (repo-relative, slash-separated) matches a
+// pattern: a glob against the path or the file name, or "dir/" as a prefix.
+func lexExcluded(rel string, patterns []string) bool {
+	for _, p := range patterns {
+		if strings.HasSuffix(p, "/") && strings.HasPrefix(rel+"/", p) {
+			return true
+		}
+		if ok, _ := pathpkg.Match(p, rel); ok {
+			return true
+		}
+		if ok, _ := pathpkg.Match(p, pathpkg.Base(rel)); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // fileHit is one file that matched during the walk, with its raw score.
 type fileHit struct {
-	rel, abs string
-	score    float64
+	rel   string
+	data  []byte
+	score float64
 }
 
 // window is an inclusive line range rendered from a file.
@@ -86,10 +105,18 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		return "", nil
 	}
 
+	// root is pinned at bind time. If it has since become a symlink, WalkDir does
+	// not enter it, so a search cannot drift to another repository.
+	rootHandle, err := os.OpenRoot(root)
+	if err != nil {
+		return "", nil
+	}
+	defer func() { _ = rootHandle.Close() }()
+
 	ignored := checksum.IgnoreMatcher(root)
 	var hits []fileHit
 	scanned := 0
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil // unreadable entry: skip
 		}
@@ -97,8 +124,10 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 			return cerr
 		}
 		name := d.Name()
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			if path != root && (skipDirs[name] || isHidden(name, d) || ignored(path)) {
+			if path != root && (skipDirs[name] || isHidden(name, d) || ignored(path) || lexExcluded(rel, cfg.LexicalExclude)) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -108,7 +137,7 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		}
 		// Hidden files (.env, .npmrc, ...) often hold credentials, and files in
 		// .euignore were left out on purpose: the fallback reads neither.
-		if isHidden(name, d) || ignored(path) {
+		if isHidden(name, d) || ignored(path) || lexExcluded(rel, cfg.LexicalExclude) {
 			return nil
 		}
 		info, err := d.Info()
@@ -118,14 +147,13 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		if scanned++; scanned > maxLexScanFiles {
 			return filepath.SkipAll
 		}
-		data, err := os.ReadFile(path)
+		// The type above came from the folder listing and may be out of date.
+		data, err := checksum.ReadRegularNoSymlinks(rootHandle, rel)
 		if err != nil || isBinary(data) {
 			return nil
 		}
 
 		lower := strings.ToLower(string(data))
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
 		relLower := strings.ToLower(rel)
 
 		var score float64
@@ -140,7 +168,12 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 			}
 		}
 		if score > 0 {
-			hits = append(hits, fileHit{rel: rel, abs: path, score: score})
+			hits = append(hits, fileHit{rel: rel, data: data, score: score})
+			// Only the top files are shown, so don't hold every match's bytes.
+			if len(hits) >= 2*cfg.LexicalMaxFiles {
+				sortHits(hits)
+				hits = hits[:cfg.LexicalMaxFiles]
+			}
 		}
 		return nil
 	})
@@ -151,12 +184,7 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		return "", nil
 	}
 
-	sort.Slice(hits, func(a, b int) bool {
-		if hits[a].score != hits[b].score {
-			return hits[a].score > hits[b].score
-		}
-		return hits[a].rel < hits[b].rel
-	})
+	sortHits(hits)
 	if len(hits) > cfg.LexicalMaxFiles {
 		hits = hits[:cfg.LexicalMaxFiles]
 	}
@@ -164,11 +192,7 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 	var b strings.Builder
 outer:
 	for _, h := range hits {
-		data, err := os.ReadFile(h.abs)
-		if err != nil {
-			continue
-		}
-		lines := strings.Split(string(data), "\n")
+		lines := strings.Split(string(h.data), "\n")
 		for _, w := range bestWindows(lines, weights, 3, 3) {
 			if b.Len() >= cfg.LexicalMaxBytes {
 				break outer
@@ -184,10 +208,20 @@ outer:
 	return b.String(), nil
 }
 
+// sortHits orders hits best first, with the path as a stable tie-break.
+func sortHits(hits []fileHit) {
+	sort.Slice(hits, func(a, b int) bool {
+		if hits[a].score != hits[b].score {
+			return hits[a].score > hits[b].score
+		}
+		return hits[a].rel < hits[b].rel
+	})
+}
+
 // isHidden covers both conventions: dot-prefixed names (Unix, and common
 // on Windows for .env/.npmrc) and the NTFS hidden attribute.
 func isHidden(name string, d fs.DirEntry) bool {
-	return strings.HasPrefix(name, ".") || hiddenByAttr(d)
+	return strings.HasPrefix(name, ".") || checksum.HiddenByAttr(d)
 }
 
 // bestWindows picks up to maxWin non-overlapping windows around the

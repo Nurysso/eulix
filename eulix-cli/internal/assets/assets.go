@@ -86,6 +86,52 @@ type InitializedEulixGlobal struct {
 	InstalledAt time.Time `json:"installed_at"`
 }
 
+// installBinary puts content at dest through a temp file, so a crash never
+// leaves half a binary. Windows refuses to overwrite a running executable but
+// allows renaming it, so a parser still in use by another eulix process is moved
+// aside; that process keeps running, and a later install removes the leftover.
+func installBinary(dest string, content []byte) error {
+	dir, name := filepath.Split(dest)
+	// ReadDir, not Glob: dir may contain []*? which Glob would read as a pattern.
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), name+".old-") {
+				_ = os.Remove(filepath.Join(dir, e.Name())) // fails while that old parser still runs; retried next time
+			}
+		}
+	}
+
+	tmp, err := os.CreateTemp(dir, name+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o755); err != nil {
+		return err
+	}
+
+	err = os.Rename(tmp.Name(), dest)
+	if err == nil {
+		return nil
+	}
+	aside := fmt.Sprintf("%s.old-%d", dest, time.Now().UnixNano())
+	if moveErr := os.Rename(dest, aside); moveErr != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), dest); err != nil {
+		_ = os.Rename(aside, dest) // keep the working parser in place
+		return err
+	}
+	return nil
+}
+
 func writeHiddenFile(path string, data []byte, perm os.FileMode) error {
 	if err := os.WriteFile(path, data, perm); err != nil {
 		return err
@@ -136,10 +182,10 @@ func Hashes() ([]FileHash, error) {
 
 	var fileHashes []FileHash
 	for _, zf := range zr.File {
-		if zf.FileInfo().IsDir() {
+		if zipEntryIsDir(zf) {
 			continue
 		}
-		relName := zf.Name
+		relName := zipName(zf)
 		if strip != "" {
 			relName = strings.TrimPrefix(relName, strip+"/")
 		}
@@ -303,7 +349,7 @@ func extractParser(dir string) error {
 		return nil // already extracted, skip
 	}
 
-	if err := os.WriteFile(destPath, content, 0o755); err != nil {
+	if err := installBinary(destPath, content); err != nil {
 		return fmt.Errorf("write extracted parser binary %q: %w", destPath, err)
 	}
 	return nil
@@ -326,7 +372,7 @@ func extractEmbedZip(dir string) error {
 	strip := commonTopLevelDir(zr.File)
 
 	for _, zf := range zr.File {
-		relName := zf.Name
+		relName := zipName(zf)
 		if strip != "" {
 			relName = strings.TrimPrefix(relName, strip+"/")
 			if relName == "" {
@@ -341,7 +387,7 @@ func extractEmbedZip(dir string) error {
 			return fmt.Errorf("refusing to extract entry outside target dir: %q", zf.Name)
 		}
 
-		if zf.FileInfo().IsDir() {
+		if zipEntryIsDir(zf) {
 			if err := os.MkdirAll(destPath, 0o755); err != nil {
 				return fmt.Errorf("create dir %q: %w", destPath, err)
 			}
@@ -373,12 +419,22 @@ func extractEmbedZip(dir string) error {
 	return nil
 }
 
+// zipName returns the entry name with "/" separators. Windows PowerShell 5.1's
+// Compress-Archive writes "\", which the zip spec forbids but readers see.
+func zipName(zf *zip.File) string {
+	return strings.ReplaceAll(zf.Name, `\`, "/")
+}
+
+func zipEntryIsDir(zf *zip.File) bool {
+	return zf.FileInfo().IsDir() || strings.HasSuffix(zipName(zf), "/")
+}
+
 // commonTopLevelDir returns the single shared top-level directory name that
 // every entry in files is nested under, or "" if there isn't exactly one
 func commonTopLevelDir(files []*zip.File) string {
 	top := ""
 	for _, zf := range files {
-		clean := path.Clean(zf.Name)
+		clean := path.Clean(zipName(zf))
 		parts := strings.SplitN(clean, "/", 2)
 
 		if len(parts) < 2 {
@@ -387,7 +443,7 @@ func commonTopLevelDir(files []*zip.File) string {
 			// "eulix_embed") or a genuine file sitting at the archive root.
 			// Only the former is compatible with a single common wrapper; a
 			// root-level file means there is no common wrapper to strip.
-			if !zf.FileInfo().IsDir() {
+			if !zipEntryIsDir(zf) {
 				return ""
 			}
 			if top == "" {

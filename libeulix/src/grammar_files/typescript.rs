@@ -1,12 +1,12 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex, walk};
+use super::utils::{extract_todos, static_regex, walk, Nested, JS_NESTED_KINDS as NESTED_KINDS};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
@@ -84,6 +84,7 @@ static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
 pub struct TypeScriptParser {
     source_code: String,
     file_path: String,
+    nested: Nested,
 }
 
 impl TypeScriptParser {
@@ -91,6 +92,7 @@ impl TypeScriptParser {
         Self {
             source_code,
             file_path,
+            nested: Nested::default(),
         }
     }
 
@@ -105,13 +107,16 @@ impl TypeScriptParser {
             .ok_or_else(|| "Failed to parse TypeScript file".to_string())?;
 
         let root = tree.root_node();
+        let mut functions = self.extract_functions(&root);
+        let classes = self.extract_classes(&root);
+        functions.extend(self.nested.take());
 
         Ok(FileData {
             language: "typescript".to_string(),
             loc: self.count_lines(),
             imports: self.extract_imports(&root),
-            functions: self.extract_functions(&root),
-            classes: self.extract_classes(&root),
+            functions,
+            classes,
             global_vars: self.extract_global_vars(&root),
             todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
@@ -157,10 +162,52 @@ impl TypeScriptParser {
 
             if target.kind() == "import_statement" {
                 self.parse_import_statement(&target, &mut imports);
+            } else if target.kind() == "export_statement" {
+                self.parse_reexport(&target, &mut imports);
             }
         }
 
         imports
+    }
+
+    fn parse_reexport(&self, node: &Node, imports: &mut Vec<Import>) {
+        let Some(source) = node.child_by_field_name("source") else {
+            return;
+        };
+        let mut cursor = node.walk();
+        // Namespace exports (`export * as ns`) are not wildcard reexports.
+        if node
+            .children(&mut cursor)
+            .any(|n| n.kind() == "namespace_export" || n.kind() == "type")
+        {
+            return;
+        }
+        let clause = node
+            .children(&mut node.walk())
+            .find(|n| n.kind() == "export_clause");
+        let items = clause
+            .map(|clause| {
+                clause
+                    .named_children(&mut clause.walk())
+                    .filter(|n| n.kind() == "export_specifier")
+                    .filter(|n| !self.get_node_text(n).starts_with("type "))
+                    .map(|n| self.get_node_text(&n))
+                    .collect()
+            })
+            .unwrap_or_default();
+        imports.push(Import {
+            module: self
+                .get_node_text(&source)
+                .trim_matches(['\'', '"'])
+                .to_string(),
+            items,
+            import_type: if clause.is_some() {
+                "reexport_named"
+            } else {
+                "reexport_all"
+            }
+            .to_string(),
+        });
     }
 
     fn parse_import_statement(&self, node: &Node, imports: &mut Vec<Import>) {
@@ -311,10 +358,16 @@ impl TypeScriptParser {
         let line_end = node.end_position().row + 1;
         let docstring = self.extract_docstring(node);
         let signature = self.build_signature(name, &params, &return_type, is_async);
-        let id = self.make_function_id(name, struct_context);
+        let id = self
+            .nested
+            .id(|| self.make_function_id(name, struct_context));
 
         let (calls, variables, control_flow, complexity) =
             if let Some(body) = node.child_by_field_name("body") {
+                self.nested
+                    .collect(body, NESTED_KINDS, &id, &self.source_code, |n| {
+                        self.parse_function(&n, "")
+                    });
                 (
                     self.extract_function_calls_detailed(&body),
                     self.extract_variables(&body, &params),
@@ -705,6 +758,9 @@ impl TypeScriptParser {
         context: &str,
     ) {
         walk(*node, context, |node, context| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             let child_context = match node.kind() {
@@ -728,11 +784,18 @@ impl TypeScriptParser {
                         .to_string();
 
                     if !name.is_empty() {
-                        let key = format!("{}:{}", name, node.start_position().row);
+                        let receiver = if func_node.kind() == "member_expression" {
+                            func_node.child_by_field_name("object")
+                        } else {
+                            None
+                        }
+                        .map(|n| self.get_node_text(&n));
+                        let key = format!("{:?}:{}:{}", receiver, name, node.start_position().row);
                         if !seen.contains(&key) {
                             seen.insert(key);
                             let args = self.extract_call_arguments(node);
                             calls.push(FunctionCall {
+                                receiver,
                                 callee: name,
                                 defined_in: None,
                                 line: node.start_position().row + 1,
@@ -764,7 +827,7 @@ impl TypeScriptParser {
     }
 
     fn extract_variables(&self, node: &Node, params: &[Parameter]) -> Vec<Variable> {
-        let mut variables: HashMap<String, Variable> = HashMap::new();
+        let mut variables: BTreeMap<String, Variable> = BTreeMap::new();
 
         for param in params {
             variables.insert(
@@ -789,8 +852,11 @@ impl TypeScriptParser {
         variables.into_values().collect()
     }
 
-    fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
+    fn track_variable_usage(&self, node: &Node, variables: &mut BTreeMap<String, Variable>) {
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             match node.kind() {
@@ -851,6 +917,9 @@ impl TypeScriptParser {
 
     fn extract_control_structures(&self, node: &Node, cf: &mut ControlFlow) {
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             match node.kind() {
@@ -986,6 +1055,9 @@ impl TypeScriptParser {
 
     fn find_call_names(&self, node: &Node, calls: &mut Vec<String>, seen: &mut HashSet<String>) {
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             if node.kind() == "call_expression" {
@@ -1004,6 +1076,9 @@ impl TypeScriptParser {
     fn find_return_value(&self, node: &Node) -> Option<String> {
         let mut result = None;
         walk(*node, (), |child, _| {
+            if NESTED_KINDS.contains(&child.kind()) {
+                return None;
+            }
             if result.is_some() {
                 return None;
             }
@@ -1030,6 +1105,9 @@ impl TypeScriptParser {
     fn calculate_complexity(&self, node: &Node) -> usize {
         let mut complexity = 1;
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
             match node.kind() {
                 "if_statement" | "for_statement" | "for_in_statement" | "for_of_statement"
@@ -1165,7 +1243,7 @@ mod tests {
 
     use super::*;
     use crate::analyze::call_graph::prism_v2::build_call_graph_v2;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::path::Path;
 
     // ---------- helpers ----------
@@ -1201,7 +1279,7 @@ mod tests {
         assert_eq!(fd_b.classes[0].id, "interface_Options::src/b.ts");
         assert_eq!(fd_b.classes[1].id, "interface_ExtendedOptions::src/b.ts");
 
-        let mut structure = HashMap::new();
+        let mut structure = BTreeMap::new();
         structure.insert("src/a.ts".to_string(), fd_a);
         structure.insert("src/b.ts".to_string(), fd_b);
 

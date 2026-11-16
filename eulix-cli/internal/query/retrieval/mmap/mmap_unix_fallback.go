@@ -8,7 +8,7 @@
 /*
 Generic unix fallback for platforms other
 	than Linux and macOS (freebsd, openbsd, netbsd, etc.). We don't
-	define Linux-specific constants (MAP_POPULATE, MADV_HUGEPAGE) here;
+	define Linux-specific constants (MADV_HUGEPAGE) here;
 	instead we use conservative MAP_SHARED + MADV_SEQUENTIAL, which
 	works on all unix variants. Build-tested behaviour is best-effort;
 	if mmap is restricted by the platform, the decodeJSONFile fallback
@@ -24,8 +24,8 @@ import (
 )
 
 // mmapPlatform generic unix. MAP_SHARED is the most portable
-// choice, on Linux and macOS have OS-specific files that pick
-// MAP_POPULATE / MAP_PRIVATE respectively.
+// choice. Linux and macOS have their own files: MAP_SHARED with
+// MADV_HUGEPAGE on Linux, MAP_PRIVATE on macOS.
 func mmapPlatform(f *os.File, size int) ([]byte, error) {
 	return unix.Mmap(
 		int(f.Fd()),

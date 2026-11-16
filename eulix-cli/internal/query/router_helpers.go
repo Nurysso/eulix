@@ -19,6 +19,7 @@ import (
 	"strings"
 	"unicode"
 
+	"eulix/internal/checksum"
 	"eulix/internal/query/classifier"
 	"eulix/internal/query/retrieval"
 	"eulix/internal/query/retrieval/mmap"
@@ -50,8 +51,12 @@ func (r *Router) SetCurrentChecksum(checksum string) {
 	r.currentChecksum = checksum
 }
 
+// Close releases the context builder and the debug log file. An open log
+// handle also stops the .eulix directory from being removed on Windows.
 func (r *Router) Close() error {
-	return r.CloseContextBuilder()
+	err := r.CloseContextBuilder()
+	r.debug.Close()
+	return err
 }
 
 // CloseContextBuilder closes the active ContextBuilder and frees its resources.
@@ -91,6 +96,10 @@ func (r *Router) ensureContextBuilder() error {
 	if _, err := os.Stat(sourceRoot); os.IsNotExist(err) {
 		return fmt.Errorf("source root does not exist: %s", sourceRoot)
 	}
+	// This runs again after an idle release, and a pull may have added a link since.
+	if err := utils.CheckEulixDir(r.eulixDir); err != nil {
+		return err
+	}
 	//if r.config.Project.DebugConfig {
 	// fmt.Printf("[INFO] Initializing context builder with source root: %s\n", sourceRoot)
 	//}
@@ -113,22 +122,35 @@ func (r *Router) ensureContextBuilder() error {
 
 // bareID strips the node-type prefix and file path that eulix-parser emits.
 func bareID(id string) string {
-	if i := strings.Index(id, "::"); i != -1 {
-		id = id[:i]
-	}
+	id = retrieval.IDWithoutFile(id)
 	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(id, prefix) {
 			s := strings.TrimPrefix(id, prefix)
 			if prefix == "method_" {
 				if i := strings.Index(s, "_"); i != -1 {
+					if rest := s[i+1:]; strings.Contains(rest, ".") {
+						return nestedName(rest)
+					}
 					return s[:i] + "." + s[i+1:]
 				}
+			}
+			if prefix == "func_" {
+				return nestedName(s)
 			}
 			return s
 		}
 	}
 	return id
+}
+
+// nestedName reduces a nested function's scoped name ("outer.inner@12") to "inner".
+func nestedName(s string) string {
+	s = s[strings.LastIndex(s, ".")+1:]
+	if i := strings.Index(s, "@"); i != -1 {
+		s = s[:i]
+	}
+	return s
 }
 
 // hasSourceCode checks whether any context chunk contains an actual code fence.
@@ -183,8 +205,7 @@ func formatFileData(path string, fd *utils.FileData) string {
 	if len(fd.Functions) > 0 {
 		fmt.Fprintf(&b, "\nFunctions (%d):\n", len(fd.Functions))
 		for _, fn := range fd.Functions {
-			fmt.Fprintf(&b, "  • %s  (lines %d–%d, complexity %d, importance %.2f)\n",
-				fn.Name, fn.LineStart, fn.LineEnd, fn.Complexity, fn.ImportanceScore)
+			fmt.Fprintf(&b, "  • %s  (lines %d–%d)\n", fn.Name, fn.LineStart, fn.LineEnd)
 		}
 	}
 
@@ -203,21 +224,14 @@ func formatFileData(path string, fd *utils.FileData) string {
 		}
 	}
 
-	if len(fd.SecurityNotes) > 0 {
-		fmt.Fprintf(&b, "\nSecurity notes (%d):\n", len(fd.SecurityNotes))
-		for _, sn := range fd.SecurityNotes {
-			fmt.Fprintf(&b, "  [%s] line %d: %s\n", sn.NoteType, sn.Line, sn.Description)
-		}
-	}
-
 	return b.String()
 }
 
 // Helper to handle the metric formatting
-func formatFunctionMetrics(fn utils.KBFunction, path string) string {
+func formatFunctionMetrics(fn utils.FunctionMetric) string {
 	return fmt.Sprintf(
 		"Metrics for %s (%s, lines %d–%d)\n  Cyclomatic complexity : %d\n  LOC                   : %d\n  Importance            : %.2f\n",
-		fn.Name, path, fn.LineStart, fn.LineEnd,
+		fn.Name, fn.File, fn.LineStart, fn.LineEnd,
 		fn.Complexity, fn.LineEnd-fn.LineStart+1, fn.ImportanceScore,
 	)
 }
@@ -379,6 +393,49 @@ func (r *Router) fuzzySearch(entity string) []string {
 	return out
 }
 
+// filterServableIndex removes stale locations and caller IDs before any
+// handler can observe them. The fuzzy index is derived from the remaining
+// function and type names, so filtering once here covers every consumer.
+func filterServableIndex(index *utils.Indices, projectPath string) {
+	if index == nil {
+		return
+	}
+	servable := checksum.ServableMatcher(projectPath)
+	filterLocations := func(entries map[string][]string) {
+		for name, locations := range entries {
+			kept := locations[:0]
+			for _, location := range locations {
+				file, _, err := parseLocation(location)
+				if err == nil && servable(file) {
+					kept = append(kept, location)
+				}
+			}
+			if len(kept) == 0 {
+				delete(entries, name)
+			} else {
+				entries[name] = kept
+			}
+		}
+	}
+
+	filterLocations(index.FunctionsByName)
+	filterLocations(index.TypesByName)
+	for callee, callers := range index.FunctionsCalling {
+		kept := callers[:0]
+		for _, caller := range callers {
+			// C++ names contain "::" too, so the file follows the last one.
+			if i := strings.LastIndex(caller, "::"); i >= 0 && servable(caller[i+2:]) {
+				kept = append(kept, caller)
+			}
+		}
+		if len(kept) == 0 {
+			delete(index.FunctionsCalling, callee)
+		} else {
+			index.FunctionsCalling[callee] = kept
+		}
+	}
+}
+
 func fuzzyScore(pattern, target string) int {
 	if pattern == target {
 		return 1000
@@ -449,11 +506,11 @@ func parseLocation(loc string) (string, int, error) {
 }
 
 // extractSignature opens the file at the given 1-based line number,
-// detects the language, and reads the full function signature.
-func extractSignature(filePath string, startLine int) (string, error) {
-	data, err := os.ReadFile(filePath)
+// detects the language, and reads the full function signature. The file is
+// read through root without following symlinks.
+func extractSignature(root *os.Root, filePath string, startLine int) (string, error) {
+	data, err := checksum.ReadRegularNoSymlinks(root, filePath)
 	if err != nil {
-		// try relative to project root via env or cwd
 		return "", fmt.Errorf("open %s: %w", filePath, err)
 	}
 
@@ -834,10 +891,7 @@ func BuildCallGraphIndex(ref *utils.CallGraphRef) *retrieval.CallGraphIdx {
 // callGraphShortName extracts the bare symbol name from a prefixed/namespaced key.
 // "func_generate_vectors_streaming::eulix-embed/pipeline/onnx_pipeline.py" → "generate_vectors_streaming"
 func callGraphShortName(key string) string {
-	// Strip file path suffix separated by ::
-	if idx := strings.Index(key, "::"); idx != -1 {
-		key = key[:idx]
-	}
+	key = retrieval.IDWithoutFile(key)
 
 	// Strip known type prefixes
 	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
@@ -849,8 +903,12 @@ func callGraphShortName(key string) string {
 		// For methods: "method_ClassName_methodName" → strip "ClassName_" too.
 		if prefix == "method_" {
 			if idx := strings.Index(after, "_"); idx != -1 {
-				return after[idx+1:] // "Analyzer_build_call_graph" → "build_call_graph"
+				return nestedName(after[idx+1:]) // "Analyzer_build_call_graph" → "build_call_graph"
 			}
+		}
+		if prefix == "func_" {
+			// "Foo::bar" → "bar", as "Router.handle" → "handle".
+			return nestedName(after[strings.LastIndex(after, ":")+1:])
 		}
 		return after
 	}
@@ -1203,6 +1261,12 @@ func (r *Router) ensureKB() error {
 	}
 	if kb.Metadata == nil {
 		return fmt.Errorf("kb.json has no metadata")
+	}
+	servable := checksum.ServableMatcher(r.config.Project.Path)
+	for path := range kb.Structure {
+		if !servable(path) {
+			delete(kb.Structure, path)
+		}
 	}
 	r.kb = &kb
 	return nil

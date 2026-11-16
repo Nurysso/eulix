@@ -8,27 +8,40 @@ use rustc_hash::FxHashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::cache::{self, Cached, ParseCache};
+#[cfg(not(target_os = "windows"))]
 use crate::os_io;
 use crate::parse::slim::{slim, strip_emitted};
-use crate::spill::{ParsedFileResult, Spill};
+use crate::spill::Spill;
 use crate::views::FileDataSimpleView;
 
 use libeulix::grammar_files;
 use libeulix::grammar_files::language::Language;
 use libeulix::grammar_files::php;
+use libeulix::struc::kb_struct::FileData;
 use libeulix::utils::file_walker::FileWalker;
+use xxhash_rust::xxh3::xxh3_128;
 
+/// The `bool` is true when the file came from the cache instead of a parse.
 pub fn parse_file(
     file_path: &Path,
     root: &Path,
     spill: &Spill,
-) -> Result<ParsedFileResult, Box<dyn std::error::Error>> {
-    // ) -> Result<(String, FileData, SpillLoc, Vec<(String, String)>), Box<dyn std::error::Error>> {
-    let relative_path = file_path
-        .strip_prefix(root)
-        .unwrap_or(file_path)
-        .to_string_lossy()
-        .to_string();
+    slim_spill: &Spill,
+    cache: &ParseCache,
+) -> Result<(String, FileData, Cached, bool), Box<dyn std::error::Error>> {
+    let relative_path = rel_path(file_path, root);
+
+    // Stat before reading: an edit in between leaves a newer mtime, which
+    // the next run catches.
+    let (size, mtime) =
+        std::fs::metadata(file_path).map_or((0, 0), |m| (m.len(), cache::mtime(&m)));
+    let cached = cache.lookup(&relative_path);
+    if let Some(c) = cached.filter(|c| cache.fresh(c, size, mtime)) {
+        if let Some((fd, c)) = cache.reuse(&relative_path, c, size, mtime, spill, slim_spill) {
+            return Ok((relative_path, fd, c, true));
+        }
+    }
 
     // Open once, for the OS-level read hints. Read the bytes through this
     // handle so the fadvise / sequential-scan flags actually apply.
@@ -37,6 +50,13 @@ pub fn parse_file(
     {
         let mut reader = std::io::BufReader::new(&file);
         reader.read_to_end(&mut bytes)?;
+    }
+
+    let hash = xxh3_128(&bytes);
+    if let Some(c) = cached.filter(|c| c.hash == hash) {
+        if let Some((fd, c)) = cache.reuse(&relative_path, c, size, mtime, spill, slim_spill) {
+            return Ok((relative_path, fd, c, true));
+        }
     }
 
     // Older code often has Latin-1 comments or strings. Replacing the
@@ -75,7 +95,13 @@ pub fn parse_file(
         .filter(|i| {
             !matches!(
                 i.import_type.as_str(),
-                "internal" | "cgo" | "include" | "include_dynamic"
+                "internal"
+                    | "cgo"
+                    | "include"
+                    | "include_dynamic"
+                    | "reexport_all"
+                    | "reexport_named"
+                    | "rust_module"
             )
         })
         .map(|i| {
@@ -95,7 +121,16 @@ pub fn parse_file(
     slim(&mut result);
     strip_emitted(&mut result);
 
-    Ok((relative_path, result, loc, raw_imports))
+    let cached = Cached {
+        size,
+        mtime,
+        hash,
+        syntax: result.syntax,
+        raw_imports,
+        emit: loc,
+        slim: slim_spill.append(&relative_path, &serde_json::to_vec(&result)?)?,
+    };
+    Ok((relative_path, result, cached, false))
 }
 
 pub fn collect_source_files_and_hash(
@@ -104,6 +139,7 @@ pub fn collect_source_files_and_hash(
     euignore_path: Option<&Path>,
     verbose: bool,
     write_dir: &Path,
+    threads: usize,
 ) -> Result<(Vec<PathBuf>, String), Box<dyn std::error::Error>> {
     // Turn the comma-separated CLI value into Language enums.
     // `all` is just a shortcut; otherwise we parse each token and ignore
@@ -160,7 +196,8 @@ pub fn collect_source_files_and_hash(
         FileWalker::new(root.to_path_buf()).with_euignore(ignore_path.to_path_buf())
     } else {
         FileWalker::new(root.to_path_buf())
-    };
+    }
+    .with_threads(threads);
 
     // Walk the tree, keep files whose extension matches, and compute the
     // project hash while we're at it.
@@ -213,11 +250,14 @@ pub fn open_source_file(path: &Path) -> std::io::Result<std::fs::File> {
 
 pub fn rel_path(file: &Path, root: &Path) -> String {
     // Relative path as a String. If the file isn't under root, fall back
-    // to the original path instead of failing.
-    file.strip_prefix(root)
-        .unwrap_or(file)
-        .to_string_lossy()
-        .into_owned()
+    // to the original path instead of failing. Always `/`-separated so
+    // keys and sort order match across platforms.
+    let rel = file.strip_prefix(root).unwrap_or(file).to_string_lossy();
+    if std::path::MAIN_SEPARATOR == '\\' {
+        rel.replace('\\', "/")
+    } else {
+        rel.into_owned()
+    }
 }
 
 pub fn language_label(file: &Path) -> String {
@@ -246,13 +286,66 @@ mod tests {
             "0.8.1",
             "test",
             out.path(),
-            false,
             &engine,
         )
         .unwrap();
 
-        let kb = analyze_and_build(kb, false, 2);
+        let kb = analyze_and_build(kb, false, 2, repo.path());
         (kb, stats)
+    }
+
+    // PRISM-5 end to end: parse, slim, read `go.mod`, build the graph.
+    #[test]
+    fn go_calls_resolve_through_receivers_and_the_module_path() {
+        let repo = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        fs::create_dir_all(repo.path().join("sub")).unwrap();
+        fs::write(
+            repo.path().join("go.mod"),
+            "module example.com/demo\n\ngo 1.22\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.path().join("main.go"),
+            "package main\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/demo/sub\"\n)\n\ntype Store struct{}\n\nfunc (s *Store) Save() { s.load() }\nfunc (s *Store) load() {}\n\nfunc Println() {}\nfunc Helper() {}\n\nfunc run(m *Store) {\n\tm.Save()\n\tsub.Helper()\n\tfmt.Println()\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.path().join("sub/sub.go"),
+            "package sub\n\nfunc Helper() {}\n",
+        )
+        .unwrap();
+
+        let engine = Engine::with_threads(2).unwrap();
+        let root_str = repo.path().to_string_lossy().to_string();
+        let (kb, _stats, _spill) = parse_directory(
+            &root_str,
+            "all",
+            None,
+            false,
+            "0.8.1",
+            "test",
+            out.path(),
+            &engine,
+        )
+        .unwrap();
+        let kb = analyze_and_build(kb, false, 2, repo.path());
+        let mut calls: Vec<(&str, &str)> = kb
+            .call_graph
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == "call")
+            .map(|e| (e.from.as_str(), e.to.as_str()))
+            .collect();
+        calls.sort_unstable();
+        assert_eq!(
+            calls,
+            [
+                ("func_run::main.go", "func_Helper::sub/sub.go"),
+                ("func_run::main.go", "method_Store_Save::main.go"),
+                ("method_Store_Save::main.go", "method_Store_load::main.go"),
+            ]
+        );
     }
 
     #[test]
@@ -274,7 +367,6 @@ mod tests {
             "0.8.1",
             "test",
             out.path(),
-            false,
             &engine,
         )
         .unwrap();
@@ -284,7 +376,7 @@ mod tests {
         let fd_b = kb.structure.get("src/b.py").expect("src/b.py in structure");
         assert_eq!(fd_b.functions[0].id, "func_target::src/b.py");
 
-        let kb = analyze_and_build(kb, false, 2);
+        let kb = analyze_and_build(kb, false, 2, repo.path());
         assert!(
             kb.call_graph.edges.iter().any(|e| {
                 e.edge_type == "call"
@@ -318,12 +410,11 @@ mod tests {
             "0.8.1",
             "test",
             out.path(),
-            false,
             &engine,
         )
         .unwrap();
 
-        let kb = analyze_and_build(kb, false, 2);
+        let kb = analyze_and_build(kb, false, 2, repo.path());
         let edges: Vec<(&str, &str)> = kb
             .call_graph
             .edges

@@ -29,20 +29,24 @@
 //! producing ~773k nodes and ~1.5M edges. That is the target profile.
 
 use crate::struc::kb_struct::{
-    CallGraph, CallGraphEdge, CallGraphNode, CallerInfo, FileData, KnowledgeBase, Parameter,
+    CallGraph, CallGraphEdge, CallGraphNode, CallerInfo, FileData, Import, KnowledgeBase, Parameter,
 };
 use rayon::prelude::*;
 use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 mod php;
+mod receivers;
 use crate::grammar_files::php::FALLBACK_TAG;
+use crate::grammar_files::rust::IMPL_PREFIX;
+use crate::grammar_files::utils::NESTED_TAG;
 use php::{include_closures, php_name, php_namespace, IncludeIndex, PhpHierarchy};
 
 type Map<K, V> = HashMap<K, V>;
+type ModuleIndex<'a> = Map<Cow<'a, str>, Vec<u32>>;
 
 const ENTRY_TAG: &str = "entry-point";
 /// Prefixes the parser adds to synthesized IDs (`func_foo`, `method_Bar.baz`).
@@ -70,6 +74,12 @@ pub struct CallGraphOptions {
     /// search. Turn off if your TS code uses path aliases (`@app/...`) that
     /// the module index cannot resolve.
     pub strict_imports: bool,
+    /// Go modules in the project: (directory of the `go.mod`, relative to the
+    /// project root and empty for the root itself; module path). An import
+    /// path inside a module maps to exactly one directory, and every other
+    /// import of a file in that module is external. A Go file outside every
+    /// listed module falls back to matching import paths by directory suffix.
+    pub go_modules: Vec<(String, String)>,
 }
 
 impl Default for CallGraphOptions {
@@ -77,6 +87,7 @@ impl Default for CallGraphOptions {
         Self {
             max_ambiguous: 8,
             strict_imports: true,
+            go_modules: Vec::new(),
         }
     }
 }
@@ -106,6 +117,8 @@ pub enum Want {
 #[derive(Clone, Copy)]
 enum Seek {
     Shape(Want),
+    /// A lexical call may name a function or constructor, never a method.
+    LexicalCall,
     Only(Kind),
 }
 
@@ -131,6 +144,8 @@ struct Node<'a> {
     /// PHP `static` method.
     php_static: bool,
     owner: Option<&'a str>,
+    /// Declared in another function's body, see `NESTED_TAG`.
+    nested: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -159,9 +174,25 @@ struct FileImports<'a> {
     names: Map<&'a str, Target<'a>>,
     /// `import * as ns from "x"` or `import x.y` — `ns.foo()` / `x.y.foo()`.
     namespaces: Map<&'a str, Target<'a>>,
+    /// Local imported name -> original symbol name (receiver-aware languages).
+    symbols: Map<&'a str, &'a str>,
+    /// Relative imports stay internal even when their source is unavailable.
+    internal_names: HashSet<&'a str>,
+    /// Rust binding -> crate-local module path; None is explicitly external.
+    rust_paths: Map<&'a str, Option<String>>,
+    /// Unknown-root Rust type imports bind in another crate, not this one:
+    /// binding -> (type name, crate root as written in the `use`).
+    rust_foreign_types: Map<&'a str, (&'a str, &'a str)>,
+    /// Namespace binding -> original module path (for dotted Python receivers).
+    namespace_modules: Map<&'a str, Cow<'a, str>>,
+    /// TypeScript reexports, distinct from imports visible in this file.
+    reexports: Vec<(&'a Import, Target<'a>)>,
     /// PHP `include`/`require` targets, sorted. Direct includes while the
     /// files are read, then replaced by the transitive closure.
     includes: Vec<u32>,
+    /// Java on-demand and static imports. Boxed: one pointer per file for
+    /// every other language.
+    java: Option<Box<receivers::JavaImports<'a>>>,
 }
 
 /// Everything a single parallel chunk extracts from its slice of files.
@@ -235,7 +266,10 @@ fn split_callee(c: &str) -> (Option<&str>, &str) {
 fn first_self_param(params: &[Parameter]) -> bool {
     params
         .first()
-        .map(|p| SELF_NAMES.contains(&p.name.as_str()))
+        .map(|p| {
+            SELF_NAMES.contains(&p.name.as_str())
+                || matches!(p.name.as_str(), "&self" | "&mut self")
+        })
         .unwrap_or(false)
 }
 
@@ -286,10 +320,10 @@ fn common_dir_prefix(a: &str, b: &str) -> usize {
 // The suffix trick is what makes the index polyglot: every language's module
 // syntax is expressible as some suffix of a path, so we can look up "retr"
 // and match `pkg/retr/x.go` without knowing we're in Go.
-fn add_suffixes<'a>(map: &mut Map<&'a str, Vec<u32>>, s: &'a str, file: u32) {
+fn add_suffixes<'a>(map: &mut ModuleIndex<'a>, s: &'a str, file: u32) {
     let mut cur = s;
     while !cur.is_empty() {
-        let v = map.entry(cur).or_default();
+        let v = map.entry(Cow::Borrowed(cur)).or_default();
         if v.last() != Some(&file) {
             v.push(file);
         }
@@ -300,8 +334,8 @@ fn add_suffixes<'a>(map: &mut Map<&'a str, Vec<u32>>, s: &'a str, file: u32) {
     }
 }
 
-fn build_module_index<'a>(files: &[&'a str]) -> Map<&'a str, Vec<u32>> {
-    let mut map: Map<&'a str, Vec<u32>> = Map::with_capacity(files.len() * 3);
+fn build_module_index<'a>(files: &[&'a str]) -> ModuleIndex<'a> {
+    let mut map: ModuleIndex<'a> = Map::with_capacity(files.len() * 3);
     for (i, &path) in files.iter().enumerate() {
         let cleaned = clean_path(path);
         // File "stem": drop the extension, but only if the last `.` is not
@@ -310,6 +344,16 @@ fn build_module_index<'a>(files: &[&'a str]) -> Map<&'a str, Vec<u32>> {
             Some(d) if !cleaned[d..].contains('/') => &cleaned[..d],
             _ => cleaned,
         };
+        // Explicit relative imports use an exact key, never a suffix that
+        // could name an unrelated directory elsewhere in the project.
+        map.entry(Cow::Owned(format!("./{stem}")))
+            .or_default()
+            .push(i as u32);
+        if cleaned.ends_with(".rs") {
+            map.entry(Cow::Owned(format!("./{cleaned}")))
+                .or_default()
+                .push(i as u32);
+        }
         add_suffixes(&mut map, stem, i as u32);
         if let Some(slash) = stem.rfind('/') {
             add_suffixes(&mut map, &stem[..slash], i as u32);
@@ -318,7 +362,7 @@ fn build_module_index<'a>(files: &[&'a str]) -> Map<&'a str, Vec<u32>> {
     map
 }
 
-fn resolve_module<'a>(module: &str, index: &'a Map<&'a str, Vec<u32>>) -> Target<'a> {
+fn resolve_module<'a>(module: &str, index: &'a ModuleIndex<'a>) -> Target<'a> {
     let mut m = module.trim().trim_start_matches(['.', '/']);
     // Peel common alias prefixes until none match.
     for p in ["@/", "~/", "crate::", "self::", "super::"] {
@@ -354,14 +398,18 @@ fn resolve_module<'a>(module: &str, index: &'a Map<&'a str, Vec<u32>>) -> Target
 
 fn build_file_imports<'a>(
     fd: &'a FileData,
-    index: &'a Map<&'a str, Vec<u32>>,
+    index: &'a ModuleIndex<'a>,
     includes: &IncludeIndex,
     path: &str,
+    go: &receivers::GoPackages<'a>,
 ) -> FileImports<'a> {
     let mut out = FileImports::default();
     if fd.language == "php" {
         out.includes = php::includes_of(fd, includes, path);
         return out;
+    }
+    if receivers::enabled(&fd.language) {
+        return receivers::build_imports(fd, index, path, go);
     }
     for imp in &fd.imports {
         let target = resolve_module(&imp.module, index);
@@ -435,6 +483,7 @@ fn rank_seek(seek: Seek, k: Kind, strict: bool) -> Option<u8> {
     match seek {
         Seek::Shape(want) => rank(want, k, strict),
         Seek::Only(only) => (k == only).then_some(0),
+        Seek::LexicalCall => rank(Want::Call, k, true),
     }
 }
 
@@ -443,24 +492,38 @@ struct Resolver<'a> {
     node_map: &'a Map<&'a str, u32>,
     /// bare name -> node indices, ascending (=> also ascending by file).
     by_name: &'a Map<&'a str, Vec<u32>>,
+    legacy_names: &'a Map<&'a str, Vec<u32>>,
     files: &'a [&'a str],
     /// file idx -> dir id; non-decreasing because files are sorted by (dir, path)
     file_dir: &'a [u32],
     imports: &'a [FileImports<'a>],
     /// file idx -> written in PHP
     php: &'a [bool],
+    languages: &'a [&'a str],
+    module_index: &'a ModuleIndex<'a>,
     /// `extends` and traits of PHP classes, for PHP's lookup order.
     php_hierarchy: PhpHierarchy,
     /// (class idx, method name, method idx), sorted — enables binary search
     /// for "does this class define this method".
     methods: &'a [(u32, &'a str, u32)],
+    legacy_methods: &'a [(u32, &'a str, u32)],
     parents: Map<u32, Vec<u32>>,
     children: Map<u32, Vec<u32>>,
     max_ambiguous: usize,
     strict_imports: bool,
+    /// Declared types of Go and Java, for receivers.
+    typed: receivers::Typed<'a>,
 }
 
 impl<'a> Resolver<'a> {
+    fn names_for(&self, file: u32) -> &Map<&'a str, Vec<u32>> {
+        if !receivers::enabled(self.languages[file as usize]) && !self.php[file as usize] {
+            self.legacy_names
+        } else {
+            self.by_name
+        }
+    }
+
     /// Best candidate + how many were eligible to be picked.
     ///
     /// `closeness` is off in tiers where the candidate set is already
@@ -483,6 +546,14 @@ impl<'a> Resolver<'a> {
             if self.php[n.file as usize] != self.php[file as usize] {
                 continue;
             }
+            // Go and C have no constructor calls (`T(x)` is a conversion or
+            // a cast, `T{}` a literal), so a type is never what a call runs.
+            if n.kind == Kind::Class
+                && !matches!(want, Seek::Shape(Want::Class) | Seek::Only(Kind::Class))
+                && matches!(self.languages[file as usize], "go" | "c")
+            {
+                continue;
+            }
             let Some(r) = rank_seek(want, n.kind, strict) else {
                 continue;
             };
@@ -502,6 +573,15 @@ impl<'a> Resolver<'a> {
         (best.map(|k| k.3), eligible)
     }
 
+    /// A function declared in `caller`'s body: only `caller` can call it.
+    fn nested_in(&self, caller: &str, callee: &str) -> Option<u32> {
+        let (scope, file) = caller.split_once("::")?;
+        let &i = self
+            .node_map
+            .get(format!("{scope}.{callee}::{file}").as_str())?;
+        self.nodes[i as usize].nested.then_some(i)
+    }
+
     /// Restrict a name lookup to files belonging to a resolved import.
     /// `fs` is sorted, so the inner filter is a binary search per candidate.
     fn lookup_in_files(
@@ -511,7 +591,7 @@ impl<'a> Resolver<'a> {
         file: u32,
         want: impl Into<Seek>,
     ) -> Option<u32> {
-        let cands = self.by_name.get(name)?;
+        let cands = self.names_for(file).get(name)?;
         let it = cands
             .iter()
             .copied()
@@ -529,7 +609,7 @@ impl<'a> Resolver<'a> {
     /// list with `partition_point` instead of filtering the whole thing.
     fn lookup(&self, name: &str, file: u32, want: impl Into<Seek>) -> Option<u32> {
         let want = want.into();
-        let cands = self.by_name.get(name)?.as_slice();
+        let cands = self.names_for(file).get(name)?.as_slice();
 
         // Tier 1: same file.
         let lo = cands.partition_point(|&c| self.nodes[c as usize].file < file);
@@ -545,7 +625,12 @@ impl<'a> Resolver<'a> {
             Some(Some(fs)) if let Some(x) = self.lookup_in_files(name, fs, file, want) => {
                 return Some(x);
             }
-            Some(None) if self.strict_imports => return None,
+            Some(None)
+                if self.strict_imports
+                    && !self.imports[file as usize].internal_names.contains(name) =>
+            {
+                return None
+            }
             _ => {}
         }
 
@@ -599,10 +684,12 @@ impl<'a> Resolver<'a> {
     /// Binary search for `class.name` in the sorted methods vector.
     #[inline]
     fn own_method(&self, class: u32, name: &str) -> Option<u32> {
-        let i = self
-            .methods
-            .partition_point(|&(c, n, _)| (c, n) < (class, name));
-        match self.methods.get(i) {
+        Self::own_method_in(self.methods, class, name)
+    }
+
+    fn own_method_in(methods: &[(u32, &str, u32)], class: u32, name: &str) -> Option<u32> {
+        let i = methods.partition_point(|&(c, n, _)| (c, n) < (class, name));
+        match methods.get(i) {
             Some(&(c, n, m)) if c == class && n == name => Some(m),
             _ => None,
         }
@@ -612,6 +699,16 @@ impl<'a> Resolver<'a> {
     /// class that defines `name`. `visited` also acts as a cycle guard;
     /// `MAX_CHAIN` bounds adversarial/deep hierarchies.
     fn walk(&self, start: u32, name: &str, adj: &Map<u32, Vec<u32>>) -> Option<u32> {
+        self.walk_methods(start, name, adj, self.methods)
+    }
+
+    fn walk_methods(
+        &self,
+        start: u32,
+        name: &str,
+        adj: &Map<u32, Vec<u32>>,
+        methods: &[(u32, &str, u32)],
+    ) -> Option<u32> {
         let mut queue: VecDeque<u32> = adj.get(&start)?.iter().copied().collect();
         let mut visited: Vec<u32> = vec![start];
         while let Some(c) = queue.pop_front() {
@@ -622,7 +719,7 @@ impl<'a> Resolver<'a> {
             if visited.len() > MAX_CHAIN {
                 break;
             }
-            if let Some(m) = self.own_method(c, name) {
+            if let Some(m) = Self::own_method_in(methods, c, name) {
                 return Some(m);
             }
             if let Some(next) = adj.get(&c) {
@@ -637,10 +734,16 @@ impl<'a> Resolver<'a> {
     /// Ancestors first because inherited methods are the common case;
     /// descendants second so an override in a subclass can also be found
     /// when the call site is on the base (e.g. Python's `super().foo()`).
-    fn method_in_hierarchy(&self, class: u32, name: &str) -> Option<u32> {
-        self.own_method(class, name)
-            .or_else(|| self.walk(class, name, &self.parents))
-            .or_else(|| self.walk(class, name, &self.children))
+    fn method_in_hierarchy(&self, class: u32, name: &str, file: u32) -> Option<u32> {
+        let methods =
+            if !receivers::enabled(self.languages[file as usize]) && !self.php[file as usize] {
+                self.legacy_methods
+            } else {
+                self.methods
+            };
+        Self::own_method_in(methods, class, name)
+            .or_else(|| self.walk_methods(class, name, &self.parents, methods))
+            .or_else(|| self.walk_methods(class, name, &self.children, methods))
     }
 
     fn resolve_call(
@@ -667,7 +770,7 @@ impl<'a> Resolver<'a> {
             // If the enclosing method has a self param, try the class chain
             // first — `foo()` inside a method could be a sibling method.
             if has_self {
-                if let Some(m) = class.and_then(|c| self.method_in_hierarchy(c, name)) {
+                if let Some(m) = class.and_then(|c| self.method_in_hierarchy(c, name, file)) {
                     return Some(m);
                 }
             }
@@ -676,7 +779,7 @@ impl<'a> Resolver<'a> {
 
         // `self.foo()` / `this.bar()` / `cls.baz()`
         if is_self_qualifier(q) {
-            if let Some(m) = class.and_then(|c| self.method_in_hierarchy(c, name)) {
+            if let Some(m) = class.and_then(|c| self.method_in_hierarchy(c, name, file)) {
                 return Some(m);
             }
             return self.lookup(name, file, Want::MethodCall);
@@ -700,7 +803,7 @@ impl<'a> Resolver<'a> {
         // a class first, then search that class's method hierarchy.
         let q_last = q.rsplit(sep).next().unwrap_or(q);
         if let Some(cls) = self.lookup(q_last, file, Want::Class) {
-            if let Some(m) = self.method_in_hierarchy(cls, name) {
+            if let Some(m) = self.method_in_hierarchy(cls, name, file) {
                 return Some(m);
             }
         }
@@ -714,6 +817,18 @@ impl<'a> Resolver<'a> {
         // `Base<T>` / `Base[]` / `Base(args)` -> `Base`. Generic args and
         // array suffixes are irrelevant to *which class* the base refers to.
         let base = base.split(['<', '[', '(']).next().unwrap_or(base).trim();
+        // Go and Java name a base in the package or through an import.
+        if matches!(self.languages[file as usize], "go" | "java") {
+            return self.typed_base(base, file);
+        }
+        if receivers::enabled(self.languages[file as usize]) {
+            if let Some(local) = self.lookup_in_files(base, &[file], file, Want::Class) {
+                return Some(local);
+            }
+        }
+        if let Some(result) = self.imported_symbol(base, file, Want::Class.into()) {
+            return result;
+        }
         let (qual, name) = split_callee(base);
         if let Some(q) = qual {
             let root = q.split(sep).next().unwrap_or(q);
@@ -732,11 +847,11 @@ impl<'a> Resolver<'a> {
 // short name common enough in real codebases (`__init__`, `run`,
 // `handle`) that a class-aware, scope-aware resolver earns its extra
 // cost for callers who need accuracy over raw speed.
-pub fn build_call_graph_v2(structure: &HashMap<String, FileData>) -> CallGraph {
+pub fn build_call_graph_v2(structure: &BTreeMap<String, FileData>) -> CallGraph {
     build_with(structure, &CallGraphOptions::default())
 }
 
-pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions) -> CallGraph {
+pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOptions) -> CallGraph {
     if structure.is_empty() {
         return CallGraph {
             nodes: Vec::new(),
@@ -773,6 +888,12 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
     let threads = rayon::current_num_threads().max(1);
     let chunk = (files.len() / (threads * 8)).clamp(16, 2048);
     let module_index = build_module_index(&paths);
+    let file_ids: Vec<u32> = (0..files.len() as u32).collect();
+    let go_packages = receivers::GoPackages {
+        ids: &file_ids,
+        paths: &paths,
+        modules: &opts.go_modules,
+    };
     let include_index = if files.iter().any(|f| f.1.language == "php") {
         IncludeIndex::new(&paths)
     } else {
@@ -793,18 +914,28 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
             };
             for (j, &(path, fd)) in slice.iter().enumerate() {
                 let f = (ci * chunk + j) as u32;
-                ex.imports
-                    .push(build_file_imports(fd, &module_index, &include_index, path));
+                ex.imports.push(build_file_imports(
+                    fd,
+                    &module_index,
+                    &include_index,
+                    path,
+                    &go_packages,
+                ));
                 let php = fd.language == "php";
                 for func in &fd.functions {
+                    let nested = func.tags.iter().any(|t| t.as_str() == NESTED_TAG);
                     ex.nodes.push(Node {
                         id: &func.id,
                         name: if php {
                             php_name(&func.name, &func.lang_info)
+                        } else if fd.language == "go" && func.id.starts_with("method_") {
+                            // A Go method the parser keeps apart from its
+                            // type, declared `{name}` like any other method.
+                            Cow::Borrowed(&func.name)
                         } else {
                             Cow::Borrowed(bare_name(&func.id))
                         },
-                        kind: if func.id.starts_with("method_") {
+                        kind: if func.id.starts_with("method_") && !nested {
                             Kind::Method
                         } else {
                             Kind::Function
@@ -814,13 +945,20 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                         fallback: func.tags.iter().any(|t| t.as_str() == FALLBACK_TAG),
                         php_static: false,
                         owner: None,
+                        nested,
                     });
                 }
                 for class in &fd.classes {
                     ex.nodes.push(Node {
                         id: &class.id,
-                        name: if php {
+                        name: if class.id.starts_with(IMPL_PREFIX) {
+                            // An impl-only entry is not a type: it must never
+                            // answer a lookup for the type's name.
+                            Cow::Borrowed(&class.id)
+                        } else if php {
                             php_name(&class.name, &class.lang_info)
+                        } else if receivers::enabled(&fd.language) {
+                            Cow::Borrowed(&class.name)
                         } else {
                             Cow::Borrowed(bare_name(&class.id))
                         },
@@ -830,6 +968,7 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                         fallback: false,
                         php_static: false,
                         owner: None,
+                        nested: false,
                     });
                     for base in &class.bases {
                         ex.bases.push(BaseRef {
@@ -865,6 +1004,8 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                             // `{Class}_{name}`, which no call site spells.
                             name: if php {
                                 Cow::Owned(m.name.to_ascii_lowercase())
+                            } else if receivers::enabled(&fd.language) {
+                                Cow::Borrowed(&m.name)
                             } else {
                                 Cow::Borrowed(bare_name(&m.id))
                             },
@@ -874,6 +1015,7 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                             fallback: false,
                             php_static: m.lang_info.php.as_ref().is_some_and(|p| p.is_static),
                             owner: Some(&class.id),
+                            nested: false,
                         });
                     }
                 }
@@ -917,9 +1059,26 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
     }
 
     let php: Vec<bool> = files.iter().map(|f| f.1.language == "php").collect();
+    let languages: Vec<&str> = files.iter().map(|f| f.1.language.as_str()).collect();
     let mut by_name: Map<&str, Vec<u32>> = Map::with_capacity(nodes.len());
-    for (i, n) in nodes.iter().enumerate() {
+    for (i, n) in nodes.iter().enumerate().filter(|(_, n)| !n.nested) {
         by_name.entry(n.name.as_ref()).or_default().push(i as u32);
+    }
+    // Legacy callers keep the base's keys even for
+    // declarations whose receiver-aware language now indexes short names.
+    let mut legacy_names: Map<&str, Vec<u32>> = Map::new();
+    if languages
+        .iter()
+        .any(|l| !receivers::enabled(l) && *l != "php")
+    {
+        for (i, n) in nodes.iter().enumerate().filter(|(_, n)| !n.nested) {
+            let name = if php[n.file as usize] {
+                n.name.as_ref()
+            } else {
+                bare_name(n.id)
+            };
+            legacy_names.entry(name).or_default().push(i as u32);
+        }
     }
     // Class-method index, sorted for binary search by (class, name).
     let mut methods: Vec<(u32, &str, u32)> = nodes
@@ -930,23 +1089,84 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
             Some((owner, n.name.as_ref(), i as u32))
         })
         .collect();
+    let (typed, go_methods) = receivers::Typed::build(&files, &nodes, &node_map, &file_dir);
+    methods.extend(go_methods);
     methods.sort_unstable();
+    let mut legacy_methods: Vec<_> = if languages
+        .iter()
+        .any(|l| !receivers::enabled(l) && *l != "php")
+    {
+        methods
+            .iter()
+            .map(|&(class, _, method)| {
+                let n = &nodes[method as usize];
+                (
+                    class,
+                    if php[n.file as usize] {
+                        n.name.as_ref()
+                    } else {
+                        bare_name(n.id)
+                    },
+                    method,
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    legacy_methods.sort_unstable();
 
     let mut r = Resolver {
         nodes: &nodes,
         node_map: &node_map,
         by_name: &by_name,
+        legacy_names: &legacy_names,
         files: &paths,
         file_dir: &file_dir,
         imports: &imports,
         php: &php,
+        languages: &languages,
+        module_index: &module_index,
         php_hierarchy: PhpHierarchy::default(),
         methods: &methods,
+        legacy_methods: &legacy_methods,
         parents: Map::new(),
         children: Map::new(),
         max_ambiguous: opts.max_ambiguous,
         strict_imports: opts.strict_imports,
+        typed,
     };
+
+    // Rust `impl` blocks in another file than their type (`impl_{Type}`
+    // entries): resolve the type from that file and give it the methods.
+    let impl_owner: Map<u32, u32> = nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.kind == Kind::Class && n.id.starts_with(IMPL_PREFIX))
+        .filter_map(|(i, n)| {
+            let name = n.id.strip_prefix(IMPL_PREFIX)?.rsplit_once("::")?.0;
+            let ty = r.resolve_base(name, n.file)?;
+            (ty as usize != i && nodes[ty as usize].kind == Kind::Class).then_some((i as u32, ty))
+        })
+        .collect();
+    fn rebind<'s>(v: &[(u32, &'s str, u32)], owner: &Map<u32, u32>) -> Vec<(u32, &'s str, u32)> {
+        let mut v: Vec<_> = v
+            .iter()
+            .map(|&(c, name, m)| (owner.get(&c).copied().unwrap_or(c), name, m))
+            .collect();
+        v.sort_unstable();
+        v
+    }
+    let rebound = (!impl_owner.is_empty()).then(|| {
+        (
+            rebind(&methods, &impl_owner),
+            rebind(&legacy_methods, &impl_owner),
+        )
+    });
+    if let Some((m, l)) = &rebound {
+        r.methods = m;
+        r.legacy_methods = l;
+    }
 
     // 3. Inheritance edges, then the class hierarchy used by method lookup.
     //
@@ -1000,12 +1220,14 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
             for (j, &(_, fd)) in slice.iter().enumerate() {
                 let f = (ci * chunk + j) as u32;
                 let php = r.php[f as usize];
+                // Go and Java type their receivers from declarations.
+                let (go, java) = (fd.language == "go", fd.language == "java");
                 for func in &fd.functions {
                     let Some(&from) = r.node_map.get(func.id.as_str()) else {
                         continue;
                     };
                     for call in &func.calls {
-                        if !php && is_param(&func.params, &call.callee) {
+                        if !php && call.receiver.is_none() && is_param(&func.params, &call.callee) {
                             continue;
                         }
                         let to = if php {
@@ -1015,8 +1237,13 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                                 None,
                                 php_namespace(&func.lang_info),
                             )
+                        } else if go {
+                            r.go_call(call, f, func)
+                        } else if receivers::enabled(&fd.language) {
+                            r.receiver_call(call, f, None, false, &func.id)
                         } else {
-                            r.resolve_call(&call.callee, f, None, false)
+                            r.nested_in(&func.id, &call.callee)
+                                .or_else(|| r.resolve_call(&call.callee, f, None, false))
                         };
                         if let Some(to) = to {
                             buf.push(RawEdge {
@@ -1033,22 +1260,40 @@ pub fn build_with(structure: &HashMap<String, FileData>, opts: &CallGraphOptions
                     let Some(&cidx) = r.node_map.get(class.id.as_str()) else {
                         continue;
                     };
+                    // `self` inside an impl-only entry is the type it extends.
+                    let cidx = impl_owner.get(&cidx).copied().unwrap_or(cidx);
                     for m in &class.methods {
                         let Some(&from) = r.node_map.get(m.id.as_str()) else {
                             continue;
                         };
-                        // `has_self` enables the "is this a sibling method?"
-                        // shortcut in `resolve_call`.
-                        let has_self = first_self_param(&m.params);
+                        // Python omits self/cls from params. Keep static methods
+                        // separate; Rust stores the receiver's borrow spelling.
+                        let has_self = first_self_param(&m.params)
+                            || (fd.language == "python"
+                                && !m
+                                    .lang_info
+                                    .python
+                                    .as_ref()
+                                    .is_some_and(|p| p.is_staticmethod))
+                            || fd.language == "typescript";
                         for call in &m.calls {
-                            if !php && is_param(&m.params, &call.callee) {
+                            if !php && call.receiver.is_none() && is_param(&m.params, &call.callee)
+                            {
                                 continue;
                             }
                             let to = if php {
                                 let ns = php_namespace(&m.lang_info);
                                 r.resolve_php_call(&call.callee, f, Some(cidx), ns)
+                            } else if go {
+                                r.go_call(call, f, m)
+                            } else if java {
+                                r.java_call(call, f, cidx, m)
+                            } else if receivers::enabled(&fd.language) {
+                                r.receiver_call(call, f, Some(cidx), has_self, &m.id)
                             } else {
-                                r.resolve_call(&call.callee, f, Some(cidx), has_self)
+                                r.nested_in(&m.id, &call.callee).or_else(|| {
+                                    r.resolve_call(&call.callee, f, Some(cidx), has_self)
+                                })
                             };
                             if let Some(to) = to {
                                 buf.push(RawEdge {
@@ -1221,7 +1466,7 @@ mod tests {
 
         for (file, src) in cases {
             let (_, fd) = parse_source(Path::new(file), src).unwrap();
-            let mut structure = HashMap::new();
+            let mut structure = BTreeMap::new();
             structure.insert(file.to_string(), fd);
             let cg = build_call_graph_v2(&structure);
 

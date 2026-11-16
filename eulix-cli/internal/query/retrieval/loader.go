@@ -21,9 +21,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
+	"eulix/internal/checksum"
 	"eulix/internal/query/retrieval/mmap"
 	"eulix/internal/utils"
 )
@@ -35,8 +37,33 @@ const (
 	ivfNClusters       = 256
 	ivfKMeansIter      = 5
 	dfThresholdDefault = 0.30
-	PreAllocate        = 320_000
+
+	// maxChunkPrealloc caps the chunk slice reserved up front (~46 MB at
+	// 320k chunks), so a corrupt metadata block can't reserve gigabytes.
+	// Larger corpora still load: append grows the slice past it.
+	maxChunkPrealloc = 320_000
+	// minChunkPrealloc is used when kb.json has no usable metadata totals.
+	minChunkPrealloc = 1_024
 )
+
+// chunkCapacity sizes cb.chunks from kb.json's own totals. Each function,
+// class and class method becomes one chunk (addChunksFromFile), so their sum
+// is an upper bound; files the servable filter drops only make it looser.
+// The old fixed 320k reservation cost ~46 MB per builder however small the
+// repository was.
+func chunkCapacity(meta *utils.Metadata) int {
+	if meta == nil {
+		return minChunkPrealloc
+	}
+	n := meta.TotalFunctions + meta.TotalClasses + meta.TotalMethods
+	switch {
+	case n <= 0:
+		return minChunkPrealloc
+	case n > maxChunkPrealloc:
+		return maxChunkPrealloc
+	}
+	return n
+}
 
 // logFileLoad wraps a file load with timing + RSS delta logging.
 func (cb *ContextBuilder) logFileLoad(name string) func(error) {
@@ -123,13 +150,11 @@ func (cb *ContextBuilder) loadChunks() error {
 	return nil
 }
 
-// streamKBChunks opens kb.json with mmap + sequential-read hints
-// and walks the JSON token-by-token, building chunks as each
-// FileData is decoded. The full utils.KnowledgeBaseRef struct is
-// never materialised FileData is decoded, passed to
-// addChunksFromFile, and goes out of scope at the end of each
-// iteration. The mmap cleanup (defer cleanup) releases the
-// underlying pages as soon as this function returns.
+// streamKBChunks opens kb.json with a buffered reader and walks the
+// JSON token-by-token, building chunks as each FileData is decoded.
+// The full utils.KnowledgeBaseRef struct is never materialised:
+// FileData is decoded, passed to addChunksFromFile, and goes out of
+// scope at the end of each iteration. cleanup closes the file.
 //
 // Why a hybrid (encoding/json + sonic)?
 //
@@ -139,13 +164,16 @@ func (cb *ContextBuilder) loadChunks() error {
 //     JIT-speed field access (3-5× faster than encoding/json on
 //     large structs).
 //
-// Why mmap + json.NewDecoder (and not os.ReadFile + Unmarshal)?
+// Why a buffered reader + json.NewDecoder (and not os.ReadFile,
+// or mmap)?
 //
 //   - For a 4 GB file, os.ReadFile allocates 4 GB of heap for the
-//     raw bytes. mmap keeps the raw bytes in the page cache, so
-//     the only heap cost is the parsed chunks.
-//   - json.NewDecoder reads from the mmap'd io.Reader one FileData
-//     at a time, so the FileData structs are GC'd as we go.
+//     raw bytes. json.NewDecoder reads one FileData at a time, so
+//     only the parsed chunks stay on the heap.
+//   - json.NewDecoder copies every byte into its own buffer, so a
+//     mapping saves no copy, and every mapped page it passes stays
+//     resident until unmap. On a 178 MB kb.json, mmap peaked at
+//     212 MB and the buffered read at 31 MB (see OpenForSequentialRead).
 func (cb *ContextBuilder) streamKBChunks() error {
 	path := filepath.Join(cb.eulixDir, "kb.json")
 
@@ -160,18 +188,28 @@ func (cb *ContextBuilder) streamKBChunks() error {
 	// token walk and sonic only for the inner FileData decode.
 	dec := json.NewDecoder(r)
 
-	if err := jsonSkipToKey(dec, "structure"); err != nil {
+	// The parser writes "metadata" before "structure"; its totals size the
+	// chunk slice. If it is missing or unreadable, start small and let
+	// append grow.
+	var meta *utils.Metadata
+	if err := jsonSkipToKey(dec, "structure", func(key string, raw json.RawMessage) {
+		if key != "metadata" {
+			return
+		}
+		var m utils.Metadata
+		if json.Unmarshal(raw, &m) == nil {
+			meta = &m
+		}
+	}); err != nil {
 		return fmt.Errorf("finding 'structure' key: %w", err)
 	}
 	if _, err := dec.Token(); err != nil {
 		return fmt.Errorf("reading structure opening brace: %w", err)
 	}
 
-	// Pre-allocate. a reasonable upper bound for RAG
-	// based on corpora. If corpora are larger, raise this value
-	// to avoid slice growth copies. addChunksFromFile may further
-	// grow the slice if the source has more chunks than expected.
-	cb.chunks = make([]Chunk, 0, PreAllocate)
+	cb.chunks = make([]Chunk, 0, chunkCapacity(meta))
+	cb.debugLog.Log("[LOAD] chunk slice preallocated for %d chunks", cap(cb.chunks))
+	servable := checksum.ServableMatcher(cb.sourceRoot)
 
 	for dec.More() {
 		tok, err := dec.Token()
@@ -186,6 +224,10 @@ func (cb *ContextBuilder) streamKBChunks() error {
 		var raw json.RawMessage
 		if err := dec.Decode(&raw); err != nil {
 			return fmt.Errorf("reading FileData for %s: %w", filePath, err)
+		}
+		if !servable(filePath) {
+			cb.debugLog.Log("[LOAD] skipping %s: hidden, .euignore'd or outside the source root", filePath)
+			continue
 		}
 
 		// Decode the FileData with sonic for JIT-speed field
@@ -205,8 +247,13 @@ func (cb *ContextBuilder) streamKBChunks() error {
 }
 
 // buildDerivedIndices populates the boilerplate detector, symbol
-// index, and inverted index from cb.chunks in a single pass.
+// index, chunk file set, and inverted index from cb.chunks in a single pass.
 func (cb *ContextBuilder) buildDerivedIndices() {
+	// EHNAS uses slice indices for graph neighbours and seed tie-breaks.
+	// Canonicalize before building them so artifact order is not a signal.
+	if cb.Engine() == EngineEHNAS {
+		sort.SliceStable(cb.chunks, func(i, j int) bool { return compareEhnasChunks(cb.chunks[i], cb.chunks[j]) < 0 })
+	}
 	// Boilerplate detector (over the full corpus)
 	cb.buildBoilerplate()
 	cb.debugLog.Log(
@@ -223,7 +270,9 @@ func (cb *ContextBuilder) buildDerivedIndices() {
 	cb.detectNoisePatterns()
 
 	cb.symbolIndex = make(map[string][]int, len(cb.chunks)*2)
+	cb.chunkFiles = make(map[string]struct{})
 	for i, c := range cb.chunks {
+		cb.chunkFiles[strings.ToLower(c.File)] = struct{}{}
 		for _, sym := range c.Symbols {
 			if cb.isBoilerplateSymbol(sym) {
 				continue
@@ -231,8 +280,12 @@ func (cb *ContextBuilder) buildDerivedIndices() {
 			cb.symbolIndex[sym] = append(cb.symbolIndex[sym], i)
 		}
 	}
-	// Inverted index (large corpora only)
-	if len(cb.chunks) > invIdxThreshold {
+	// Inverted index (large corpora only; EHNAS reads its threshold from config)
+	minChunks := invIdxThreshold
+	if cb.Engine() == EngineEHNAS {
+		minChunks = cb.config.RetrievalConfig.Ehnas.InvertedIndexMinChunks
+	}
+	if len(cb.chunks) > minChunks {
 		cb.invertedIdx = cb.buildInvertedIndex()
 	}
 }
@@ -245,6 +298,7 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 	postings := make(map[string][]Posting, len(cb.chunks)*8)
 	totalTokens, nonEmpty := 0, 0
 
+	var terms []string
 	for i, c := range cb.chunks {
 		if c.Content == "" {
 			continue
@@ -256,7 +310,10 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 			norm := normalizeSymbol(tok)
 			if norm != "" && !cb.isBoilerplateSymbol(norm) {
 				// Give path tokens a slight artificial frequency boost
-				counts[norm] += 2
+				terms = indexTerms(terms[:0], tok, norm)
+				for _, t := range terms {
+					counts[t] += 2
+				}
 			}
 		}
 
@@ -265,7 +322,10 @@ func (cb *ContextBuilder) buildInvertedIndex() *InvertedIndex {
 			if norm == "" || cb.isBoilerplateSymbol(norm) {
 				continue
 			}
-			counts[norm]++
+			terms = indexTerms(terms[:0], tok, norm)
+			for _, t := range terms {
+				counts[t]++
+			}
 		}
 
 		if len(counts) == 0 {
@@ -305,6 +365,30 @@ func isIdentBoundary(r rune) bool {
 	return true
 }
 
+// FilterServableCallGraph removes nodes in hidden or ignored files and the
+// edges touching them. Edges are matched by removed node ID, so calls to
+// external functions, which have no node, stay in the graph.
+func FilterServableCallGraph(ref *utils.CallGraphRef, projectPath string) {
+	servable := checksum.ServableMatcher(projectPath)
+	removed := make(map[string]bool)
+	nodes := ref.Nodes[:0]
+	for _, n := range ref.Nodes {
+		if servable(n.File) {
+			nodes = append(nodes, n)
+		} else {
+			removed[n.ID] = true
+		}
+	}
+	ref.Nodes = nodes
+	edges := ref.Edges[:0]
+	for _, e := range ref.Edges {
+		if !removed[e.From] && !removed[e.To] {
+			edges = append(edges, e)
+		}
+	}
+	ref.Edges = edges
+}
+
 // loadAndIndexCallGraph loads kb_call_graph.json and builds the
 // inter-procedural call graph used by call graph expansion during
 // retrieval. Gracefully skips if the file is absent or malformed.
@@ -319,6 +403,7 @@ func (cb *ContextBuilder) loadAndIndexCallGraph() {
 		return
 	}
 
+	FilterServableCallGraph(&cg, cb.sourceRoot)
 	cb.cgRef = &cg
 
 	if len(cg.Edges) > 0 {

@@ -8,10 +8,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
-	"eulix/internal/cache"
 	"eulix/internal/config"
 	"eulix/internal/llm"
 	"eulix/internal/query"
@@ -45,6 +45,14 @@ func (s *Server) setRepoPathLocked(repoPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid repository path %q: %w", repoPath, err)
 	}
+	canonicalPath, err := filepath.EvalSymlinks(absPath)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "", fmt.Errorf("repository path does not exist: %s", absPath)
+	case err != nil:
+		return "", fmt.Errorf("cannot resolve repository path %s: %w", absPath, err)
+	}
+	absPath = canonicalPath
 
 	fi, err := os.Stat(absPath)
 	switch {
@@ -64,7 +72,7 @@ func (s *Server) setRepoPathLocked(repoPath string) (string, error) {
 			absPath, kbPath)
 	}
 
-	if s.activeRepo == absPath && s.router != nil {
+	if s.activeRepo == absPath && s.router != nil && (s.activeInfo == nil || os.SameFile(fi, s.activeInfo)) {
 		return "Repository is already set to: " + absPath, nil
 	}
 
@@ -78,8 +86,9 @@ func (s *Server) setRepoPathLocked(repoPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize LLM client: %w", err)
 	}
-	cacheManager, _ := cache.CacheController(cfg)
-	router, err := query.QueryTrafficController(eulixDir, cfg, llmClient, cacheManager)
+	// No history cache: MCP never reads or writes chat history, and an open
+	// history.db stays locked, breaking 'eulix chat' and 'eulix history'.
+	router, err := query.QueryTrafficController(eulixDir, cfg, llmClient, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize router for %s: %w", absPath, err)
 	}
@@ -92,6 +101,7 @@ func (s *Server) setRepoPathLocked(repoPath string) (string, error) {
 	}
 
 	s.activeRepo = absPath
+	s.activeInfo = fi
 	s.eulixDir = eulixDir
 	s.cfg = cfg
 	s.router = router
@@ -118,6 +128,13 @@ func (s *Server) ExecuteQuery(ctx context.Context, repoPath, queryText string, k
 		return "", errors.New("repository path is not set. Provide the absolute path to your repository " +
 			"via the 'repo_path' argument or the 'set_repo_path' tool. The project must be initialized " +
 			"by running 'eulix analyze' in the project root in your terminal")
+	}
+
+	// A replaced folder would serve another repository's files against this index.
+	if s.activeInfo != nil {
+		if fi, err := os.Lstat(s.activeRepo); err != nil || !os.SameFile(s.activeInfo, fi) {
+			return "", fmt.Errorf("repository folder %s changed after it was bound; call set_repo_path again", s.activeRepo)
+		}
 	}
 
 	// Honor cancellation that happened while we waited for the lock.
@@ -176,12 +193,7 @@ func (s *Server) onIdleTimeout() {
 }
 
 func (s *Server) writeDebugLogLocked(queryText, result string, includeCoT bool, trace string) error {
-	logFile := filepath.Join(s.eulixDir, "debug", "mcp-query-debug.log")
-	if err := os.MkdirAll(filepath.Dir(logFile), 0o755); err != nil {
-		return err
-	}
-
-	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := utils.OpenEulixFile(s.eulixDir, filepath.Join("debug", "mcp-query-debug.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		return err
 	}
@@ -199,12 +211,33 @@ func (s *Server) writeDebugLogLocked(queryText, result string, includeCoT bool, 
 
 // parseURIPath converts a file:// URI (as sent in MCP roots) into a local path.
 func parseURIPath(rawURI string) string {
+	return uriPath(rawURI, runtime.GOOS == "windows")
+}
+
+func uriPath(rawURI string, windows bool) string {
 	raw := strings.TrimSpace(rawURI)
 	if !strings.HasPrefix(raw, "file://") {
 		return raw
 	}
+	// url.Parse rejects the encoded \\?\ prefix in the host position.
+	if windows && len(raw) >= 11 && strings.EqualFold(raw[:11], "file://%3F/") {
+		raw = "file:///%3F/" + raw[11:]
+	}
 	if u, err := url.Parse(raw); err == nil && u.Path != "" {
-		return filepath.FromSlash(u.Path)
+		p := u.Path
+		if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
+			p = "//" + u.Host + "/" + strings.TrimPrefix(p, "/")
+		} else if windows {
+			switch {
+			case strings.HasPrefix(p, "/?/"):
+				// file:///%3F/C:/repo is the URI form of \\?\C:\repo.
+				p = "/" + p
+			case len(p) >= 3 && p[0] == '/' && p[2] == ':':
+				// VS Code also percent-encodes the drive colon.
+				p = p[1:]
+			}
+		}
+		return filepath.FromSlash(p)
 	}
 	return strings.TrimPrefix(raw, "file://")
 }

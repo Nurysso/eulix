@@ -66,6 +66,9 @@ func QueryTrafficController(
 	llmClient *llm.Client,
 	cacheManager *cache.Manager,
 ) (*Router, error) {
+	if err := utils.CheckEulixDir(eulixDir); err != nil {
+		return nil, err
+	}
 	debugLogger := utils.NewDebugLogger(eulixDir)
 	debugLogger.StartAutoFlush(5 * time.Second) // once
 
@@ -78,11 +81,13 @@ func QueryTrafficController(
 	var indexRef utils.IndexDataRef
 	if err := mmap.DecodeJSONFile(filepath.Join(eulixDir, "kb_index.json"), &indexRef); err == nil {
 		kbIndex = indexRef.Indices
+		filterServableIndex(kbIndex, cfg.Project.Path)
 	}
 
 	var callGraphRef *utils.CallGraphRef
 	var cgRef utils.CallGraphRef
 	if err := mmap.DecodeJSONFile(filepath.Join(eulixDir, "kb_call_graph.json"), &cgRef); err == nil {
+		retrieval.FilterServableCallGraph(&cgRef, cfg.Project.Path)
 		callGraphRef = &cgRef
 	}
 
@@ -136,6 +141,10 @@ func (r *Router) PromptOrAnswerWithCoT(query string, includeCoT bool) (string, e
 		return "", err
 	}
 
+	// cb is used after the lock is released, so Close can run mid-query. On
+	// Linux that unmaps the embeddings under us. MCP serializes queries and
+	// Close; chat's quit path doesn't. Won't fix: RET-11 in
+	// docs/Known-Issues/Retrieval-And-Query.md.
 	r.mu.RLock()
 	cb := r.contextBuilder
 	r.mu.RUnlock()

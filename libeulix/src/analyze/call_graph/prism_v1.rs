@@ -13,10 +13,23 @@
 //! more than speed.
 
 use crate::struc::kb_struct::{
-    CallGraph, CallGraphEdge, CallGraphNode, CallerInfo, FileData, KnowledgeBase,
+    CallGraph, CallGraphEdge, CallGraphNode, CallerInfo, FileData, FunctionCall, KnowledgeBase,
 };
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+// These parsers retain separate receivers for v2. The name-only v1
+// consumers keep the previous one-call-per-name-and-line representation.
+fn legacy_calls<'a>(
+    calls: &'a [FunctionCall],
+    language: &str,
+) -> impl Iterator<Item = &'a FunctionCall> {
+    let per_line = matches!(language, "python" | "typescript" | "rust");
+    let mut seen = HashSet::new();
+    calls
+        .iter()
+        .filter(move |call| !per_line || seen.insert((call.callee.as_str(), call.line)))
+}
 
 /// Internal, compact representation of a node.
 ///
@@ -58,7 +71,7 @@ struct CompactNode {
 /// exactly the extra work v2 exists to do. Recording but not using them
 /// keeps this path's cost profile flat while still leaving the data
 /// available to callers who want it.
-pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
+pub fn build_call_graph(structure: &BTreeMap<String, FileData>) -> CallGraph {
     const CHUNK_SIZE: usize = 2000;
 
     // Node collection happens before edge resolution because every edge
@@ -199,7 +212,7 @@ pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
 
                 for func in &filedata.functions {
                     if let Some(&from_idx) = node_map.get(&func.id) {
-                        for call in &func.calls {
+                        for call in legacy_calls(&func.calls, &filedata.language) {
                             if let Some(to_idx) = resolve(&call.callee) {
                                 local_edges.push((
                                     from_idx,
@@ -222,7 +235,7 @@ pub fn build_call_graph(structure: &HashMap<String, FileData>) -> CallGraph {
                         }
                         for method in &class.methods {
                             if let Some(&m_from_idx) = node_map.get(&method.id) {
-                                for call in &method.calls {
+                                for call in legacy_calls(&method.calls, &filedata.language) {
                                     if let Some(to_idx) = resolve(&call.callee) {
                                         local_edges.push((
                                             m_from_idx,
@@ -418,7 +431,7 @@ pub fn populate_called_by(kb: &mut KnowledgeBase) {
 
             for (filepath, filedata) in chunk.iter() {
                 for func in &filedata.functions {
-                    for call in &func.calls {
+                    for call in legacy_calls(&func.calls, &filedata.language) {
                         let key = call.callee.clone();
                         local.push((
                             key,
@@ -435,7 +448,7 @@ pub fn populate_called_by(kb: &mut KnowledgeBase) {
 
                 for class in &filedata.classes {
                     for method in &class.methods {
-                        for call in &method.calls {
+                        for call in legacy_calls(&method.calls, &filedata.language) {
                             let key = call.callee.clone();
                             local.push((
                                 key,
@@ -484,7 +497,7 @@ mod tests {
     use super::*;
     mod resolve_indirect_call_tests {
         use super::*;
-        use std::collections::HashMap;
+        use std::collections::{BTreeMap, HashMap};
 
         #[test]
         fn direct_hit_wins_over_symbol_index() {
@@ -541,7 +554,7 @@ mod tests {
             use crate::grammar_files::parse_source;
             use std::path::Path;
 
-            let mut structure = HashMap::new();
+            let mut structure = BTreeMap::new();
             let (_, fd_a) =
                 parse_source(Path::new("a.py"), "def caller():\n    target()\n").unwrap();
             let (_, fd_b) = parse_source(
@@ -582,7 +595,7 @@ mod tests {
             use crate::struc::kb_struct::{DependencyGraph, Indices, Metadata, PatternInfo};
             use std::path::Path;
 
-            fn kb_from(structure: HashMap<String, FileData>) -> KnowledgeBase {
+            fn kb_from(structure: BTreeMap<String, FileData>) -> KnowledgeBase {
                 KnowledgeBase {
                     metadata: Metadata {
                         version: String::new(),
@@ -620,13 +633,13 @@ mod tests {
                 )))
                 .collect();
 
-            let mut forward_map = HashMap::new();
+            let mut forward_map = BTreeMap::new();
             for (path, src) in &files {
                 let (_, fd) = parse_source(Path::new(path), src).unwrap();
                 forward_map.insert(path.clone(), fd);
             }
 
-            let mut reverse_map = HashMap::new();
+            let mut reverse_map = BTreeMap::new();
             for (path, src) in files.iter().rev() {
                 let (_, fd) = parse_source(Path::new(path), src).unwrap();
                 reverse_map.insert(path.clone(), fd);

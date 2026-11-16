@@ -1,0 +1,223 @@
+# DRAFT: 31 new eulix questions, pending review. Not loaded by corpora.toml.
+# On approval, move them into eulix.toml; until then nothing is measured with them.
+# Each expect path was checked against the frozen eulix commit (f9006ea).
+schema = 1
+
+# --- code vocabulary (15) ---------------------------------------------------
+[[q]]
+id = "go-bm25-score"
+component = "go-cli"
+style = "code"
+text = "How does bm25Score compute the contribution of a term in a chunk"
+expect = ["eulix-cli/internal/query/retrieval/bm25.go"]
+
+[[q]]
+id = "go-graph-expansion"
+component = "go-cli"
+style = "code"
+text = "How does buildContextWithGraph add callers and callees of retrieved chunks"
+expect = ["eulix-cli/internal/query/retrieval/graph.go"]
+
+[[q]]
+id = "go-etiya-mmr"
+component = "go-cli"
+style = "code"
+text = "How does mmrSelect balance relevance against diversity when picking chunks"
+expect = ["eulix-cli/internal/query/retrieval/mmr_etiya.go"]
+
+[[q]]
+id = "go-anchor-pins"
+component = "go-cli"
+style = "code"
+text = "How does resolveAnchorPins pin chunks for the entities named in a query"
+expect = ["eulix-cli/internal/query/retrieval/anchors.go"]
+
+[[q]]
+id = "mcp-quality-assess"
+component = "go-cli"
+style = "code"
+text = "How does the MCP server assess the quality of a retrieval result before trying the next strategy"
+expect = ["eulix-cli/internal/mcp/strategy_quality.go"]
+
+[[q]]
+id = "mcp-project-memory"
+component = "go-cli"
+style = "code"
+text = "How does projectMemory learn symbols and their co-occurrences from earlier results"
+expect = ["eulix-cli/internal/mcp/strategy_memory.go"]
+
+[[q]]
+id = "go-verify-extract"
+component = "go-cli"
+style = "code"
+text = "How does VerifyOrExtract check the parser binary against the embedded hash"
+expect = ["eulix-cli/internal/assets/assets.go"]
+
+[[q]]
+id = "go-analysis-complete"
+component = "go-cli"
+style = "code"
+text = "How is analysis-complete.json used to decide whether analyze can be skipped"
+expect = ["eulix-cli/internal/cli/analyze_state.go"]
+
+[[q]]
+id = "go-strip-go-comments"
+component = "go-cli"
+style = "code"
+text = "How does stripGoComments remove comments from Go source"
+expect = ["eulix-cli/internal/query/strip/GoStrip.go"]
+
+[[q]]
+id = "lsp-workspace-scan"
+component = "rust-lsp"
+style = "code"
+text = "How does the workspace scan index files in the background for the LSP"
+expect = ["eulix-lsp/src/scan.rs"]
+
+[[q]]
+id = "lsp-debounced-reparse"
+component = "rust-lsp"
+style = "code"
+text = "How does spawn_debounced_reparse reparse a document after the debounce window"
+expect = ["eulix-lsp/src/backend.rs"]
+
+[[q]]
+id = "parser-parse-cache"
+component = "parser"
+style = "code"
+text = "How does the parse cache decide a cached file is fresh and reuse it"
+expect = ["eulix-parser/src/cache.rs"]
+
+[[q]]
+id = "lib-prism-receivers"
+component = "libeulix"
+style = "code"
+text = "How does PRISM v2 resolve the receiver of a method call to a class"
+expect = ["libeulix/src/analyze/call_graph/prism_v2/receivers.rs", "libeulix/src/analyze/call_graph/prism_v2.rs"]
+
+[[q]]
+id = "embed-binary-writer"
+component = "embed"
+style = "code"
+text = "How is embeddings.bin written with its EULX header and quantized records"
+expect = ["eulix-embed/data_io/binary.py"]
+
+[[q]]
+id = "embed-ndjson-server"
+component = "embed"
+style = "code"
+text = "How does the embed server answer NDJSON query requests on stdin"
+expect = ["eulix-embed/server/server.py"]
+
+# --- plain language (16): no identifiers or terms from the target code -------
+[[q]]
+id = "plain-tamper-check"
+component = "go-cli"
+style = "plain"
+text = "How does the tool make sure the helper program it unpacks was not tampered with"
+expect = ["eulix-cli/internal/assets/assets.go"]
+
+[[q]]
+id = "plain-links-escape"
+component = "go-cli"
+style = "plain"
+text = "How does it stop shortcuts inside its own data folder from pointing somewhere else on disk"
+expect = ["eulix-cli/internal/utils/eulixdir.go"]
+
+[[q]]
+id = "plain-browse-past"
+component = "go-cli"
+style = "plain"
+text = "How can someone scroll through the questions they asked in earlier sessions"
+expect = ["eulix-cli/internal/tui/history-tui.go", "eulix-cli/internal/cli/history.go"]
+
+[[q]]
+id = "plain-first-run-setup"
+component = "go-cli"
+style = "plain"
+text = "How does the first-time questionnaire collect settings and save them to a file"
+expect = ["eulix-cli/internal/cli/setup/"]
+
+[[q]]
+id = "plain-remove-remarks"
+component = "go-cli"
+style = "plain"
+text = "How are remarks written for humans removed from source code before it is shown to the model"
+expect = ["eulix-cli/internal/query/strip/"]
+
+[[q]]
+id = "plain-fit-window"
+component = "go-cli"
+style = "plain"
+text = "How does it estimate how much text will fit into the model's input window"
+expect = ["eulix-cli/internal/utils/tokenizer.go", "eulix-cli/internal/query/retrieval/intent.go"]
+
+[[q]]
+id = "plain-hidden-windows"
+component = "go-cli"
+style = "plain"
+text = "How does it tell whether a file is marked invisible on Microsoft's operating system"
+expect = ["eulix-cli/internal/checksum/hidden_windows.go"]
+
+[[q]]
+id = "plain-pretty-answers"
+component = "go-cli"
+style = "plain"
+text = "How are formatted answers with headings and lists drawn inside the terminal chat window"
+expect = ["eulix-cli/internal/tui/app.go"]
+
+[[q]]
+id = "plain-typing-pause"
+component = "rust-lsp"
+style = "plain"
+text = "How does the editor helper wait for the user to stop typing before checking a file again"
+expect = ["eulix-lsp/src/backend.rs"]
+
+[[q]]
+id = "plain-object-owner"
+component = "libeulix"
+style = "plain"
+text = "How does it work out which class an object belongs to when one of its functions is called"
+expect = ["libeulix/src/analyze/call_graph/prism_v2/receivers.rs", "libeulix/src/analyze/call_graph/prism_v2.rs"]
+
+[[q]]
+id = "plain-skip-folders"
+component = "libeulix"
+style = "plain"
+text = "How does it decide which folders and files to leave out when reading a project"
+expect = ["libeulix/src/utils/file_walker.rs"]
+
+[[q]]
+id = "plain-third-party"
+component = "libeulix"
+style = "plain"
+text = "How does it list the outside libraries a project pulls in"
+expect = ["libeulix/src/analyze/dependencies.rs"]
+
+[[q]]
+id = "plain-unchanged-skip"
+component = "parser"
+style = "plain"
+text = "How does the code reader avoid redoing work for source files that have not been touched since the previous run"
+expect = ["eulix-parser/src/cache.rs"]
+
+[[q]]
+id = "plain-group-by-length"
+component = "embed"
+style = "plain"
+text = "How are text pieces of similar length grouped together so the network processes them faster"
+expect = ["eulix-embed/utils/buckets.py"]
+
+[[q]]
+id = "plain-trace-back"
+component = "embed"
+style = "plain"
+text = "How is the list of text piece names stored next to the numbers so results can be traced back"
+expect = ["eulix-embed/data_io/binary.py"]
+
+[[q]]
+id = "plain-draw-graph"
+component = "vizEulize"
+style = "plain"
+text = "How does the browser page draw the network of function calls"
+expect = ["vizEulize/vizeulize.html"]

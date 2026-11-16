@@ -27,7 +27,7 @@ pub fn position_to_char(rope: &Rope, pos: Position) -> Option<usize> {
 
     let mut utf16_seen: u32 = 0;
     let mut char_offset: usize = 0;
-    for c in line_slice.chars() {
+    for c in line_slice.chars().take_while(|c| *c != '\r' && *c != '\n') {
         if utf16_seen >= pos.character {
             break;
         }
@@ -45,7 +45,7 @@ pub fn position_to_char(rope: &Rope, pos: Position) -> Option<usize> {
 
 // char index to LSP Position.
 pub fn char_to_position(rope: &Rope, char_idx: usize) -> Position {
-    let char_idx = char_idx.min(rope.len_chars().saturating_sub(1).max(0));
+    let char_idx = char_idx.min(rope.len_chars());
     if rope.len_chars() == 0 {
         return Position::new(0, 0);
     }
@@ -163,11 +163,15 @@ pub fn find_name_on_line(rope: &Rope, line_1based: usize, name: &str) -> Option<
         let before_ok = start == 0 || !is_ident_char(prev_char(&text, start));
         let after_ok = end == bytes.len() || !is_ident_char(next_char(&text, end));
         if before_ok && after_ok {
-            return Some(chars_to_range(rope, line_start + start, line_start + end));
+            // `start` and `end` are byte offsets into the line; the rope
+            // and `chars_to_range` count characters.
+            let start_char = line_start + text[..start].chars().count();
+            let end_char = start_char + name.chars().count();
+            return Some(chars_to_range(rope, start_char, end_char));
         }
-        // Keep searching from one byte later so overlapping candidates are
-        // still considered.
-        from = start + 1;
+        // Keep searching from the next character so overlapping candidates
+        // are still considered, without slicing inside a multi-byte one.
+        from = start + text[start..].chars().next().map_or(1, char::len_utf8);
     }
     None
 }
@@ -180,12 +184,78 @@ fn next_char(text: &str, byte_idx: usize) -> char {
     text[byte_idx..].chars().next().unwrap_or(' ')
 }
 
+// Every occurrence of `name` on a 1-based line, on identifier boundaries.
+// Rename needs all of them: `f(); f();` is two call sites on one line.
+pub fn find_names_on_line(rope: &Rope, line_1based: usize, name: &str) -> Vec<Range> {
+    let mut out = Vec::new();
+    let line = line_1based.saturating_sub(1);
+    if name.is_empty() || line >= rope.len_lines() {
+        return out;
+    }
+    let line_start = rope.line_to_char(line);
+    let text = rope.line(line).to_string();
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find(name) {
+        let start = from + rel;
+        let end = start + name.len();
+        let before_ok = start == 0 || !is_ident_char(prev_char(&text, start));
+        let after_ok = end == text.len() || !is_ident_char(next_char(&text, end));
+        if before_ok && after_ok {
+            let start_char = line_start + text[..start].chars().count();
+            out.push(chars_to_range(
+                rope,
+                start_char,
+                start_char + name.chars().count(),
+            ));
+            from = end;
+        } else {
+            from = start + text[start..].chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn r(s: &str) -> Rope {
         Rope::from_str(s)
+    }
+
+    #[test]
+    fn eof_ranges_include_the_final_character_without_a_newline() {
+        for text in ["name", "café", "𝄞", "héllo\nlast", "", "line\n"] {
+            let rope = r(text);
+            let end_line = rope.len_lines() - 1;
+            let end_column = rope
+                .line(end_line)
+                .chars()
+                .map(char::len_utf16)
+                .sum::<usize>();
+            let end = Position::new(end_line as u32, end_column as u32);
+            assert_eq!(char_to_position(&rope, rope.len_chars()), end, "{text:?}");
+            assert_eq!(chars_to_range(&rope, 0, rope.len_chars()).end, end);
+            assert_eq!(position_to_char(&rope, end), Some(rope.len_chars()));
+        }
+    }
+
+    #[test]
+    fn positions_past_line_content_do_not_cross_lf_or_crlf() {
+        for text in ["ab\r\ncd", "ab\ncd", "𝄞é\r\ncd", "\r\ncd"] {
+            let rope = r(text);
+            let expected = text
+                .chars()
+                .take_while(|c| *c != '\r' && *c != '\n')
+                .count();
+            assert_eq!(
+                position_to_char(&rope, Position::new(0, 999)),
+                Some(expected),
+                "{text:?}"
+            );
+            let range = Range::new(Position::new(0, 0), Position::new(0, 999));
+            assert_eq!(range_to_chars(&rope, range), Some((0, expected)));
+        }
     }
 
     #[test]
@@ -299,6 +369,46 @@ mod tests {
         assert!(find_name_on_line(&r, 1, "").is_none());
     }
 
+    #[test]
+    fn find_names_returns_every_bounded_match_on_the_line() {
+        let r = r("fn run() { helper(); rehelper(); helper(); }\n");
+        let starts: Vec<u32> = find_names_on_line(&r, 1, "helper")
+            .iter()
+            .map(|range| range.start.character)
+            .collect();
+        assert_eq!(starts, vec![11, 33], "`rehelper` must not match");
+    }
+
+    #[test]
+    fn find_names_counts_characters_and_skips_multibyte_candidates() {
+        let r = r("x = 'ção'; éa(); xéa(); éa()\n");
+        let starts: Vec<u32> = find_names_on_line(&r, 1, "éa")
+            .iter()
+            .map(|range| range.start.character)
+            .collect();
+        assert_eq!(starts, vec![11, 24]);
+        assert!(find_names_on_line(&r, 99, "éa").is_empty());
+        assert!(find_names_on_line(&r, 1, "").is_empty());
+    }
+
+    #[test]
+    fn find_name_range_counts_chars_after_multibyte_text() {
+        // `ç` and `ã` are two bytes each; the range is in characters.
+        let r = r("s = 'ção'; run()\n");
+        let hit = find_name_on_line(&r, 1, "run").expect("should find run");
+        assert_eq!(hit.start, Position::new(0, 11));
+        assert_eq!(hit.end, Position::new(0, 14));
+    }
+
+    #[test]
+    fn find_name_skips_a_rejected_multibyte_candidate_without_panicking() {
+        // The first `éa` is inside `xéa`; moving one byte past it would land
+        // inside `é`.
+        let r = r("éa = 1\nxéa = éa\n");
+        let hit = find_name_on_line(&r, 2, "éa").expect("should find the second éa");
+        assert_eq!(hit.start, Position::new(1, 6));
+        assert_eq!(hit.end, Position::new(1, 8));
+    }
     #[test]
     fn full_line_range_is_clamped_to_the_line() {
         let r = r("ab\ncd\n");

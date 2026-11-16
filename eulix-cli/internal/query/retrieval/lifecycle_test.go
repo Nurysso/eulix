@@ -8,8 +8,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"eulix/internal/config"
 	"eulix/internal/utils"
 )
 
@@ -33,6 +35,25 @@ func TestCloseClosesEmbedderOnce(t *testing.T) {
 	}
 	if embedder.closes != 1 {
 		t.Errorf("embedder closed %d times, want 1", embedder.closes)
+	}
+}
+
+// RET-9: the router shares one debug logger with every context builder it
+// creates. Closing a builder (the MCP idle release) must leave it writing.
+func TestCloseLeavesSharedDebugLoggerOpen(t *testing.T) {
+	dir := t.TempDir()
+	logger := utils.NewDebugLogger(dir)
+	t.Cleanup(logger.Close)
+
+	cb := NewTestContextBuilder(config.DefaultConfig(), dir, logger)
+	if err := cb.Close(); err != nil {
+		t.Fatal(err)
+	}
+	logger.Log("written after the builder closed")
+
+	lines := logger.Lines()
+	if len(lines) == 0 || !strings.HasSuffix(lines[len(lines)-1], "written after the builder closed") {
+		t.Fatalf("logger stopped writing after the builder closed; lines: %q", lines)
 	}
 }
 

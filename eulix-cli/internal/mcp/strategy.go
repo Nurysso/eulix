@@ -76,6 +76,10 @@ type StrategyConfig struct {
 	// LexicalMaxFiles caps how many files are rendered in a lexical result.
 	LexicalMaxFiles int
 
+	// LexicalExclude lists paths the lexical walk skips. Set per query from
+	// [retrievalConfig.etiya] lexical_exclude, and only under etiya.
+	LexicalExclude []string
+
 	// LexicalMaxBytes is an approximate byte cap for the rendered lexical
 	// result, so it cannot blow up the model's context window.
 	LexicalMaxBytes int

@@ -1,0 +1,82 @@
+# Frozen code every eulix version is measured on.
+#
+# A corpus is pinned to a 40-hex commit, never a branch. Moving a pin
+# invalidates that corpus's saved results, so do it on purpose. To pin an
+# outside repo, take its latest stable release tag and peel it:
+#     git ls-remote <url> 'refs/tags/<tag>^{}'
+#
+# source   "self" (this repo's history) or a git URL
+# measures which result groups run on it: indexing, retrieval, query, parser
+# embed    false: index with `eulix parser` only (no embedding, no etiya)
+# exclude  deleted from the snapshot. They must be physically gone: the grep
+#          fallback reads files on disk and v0.8.3 ignores .euignore there.
+# euignore_extra  appended to the `eulix init` default .euignore
+schema = 1
+
+[[corpus]]
+name = "eulix"
+source = "self"
+commit = "f9006ea89ea2dc134cdc0b55ca798c13e071b5ea"  # dev, 2026-11-13
+tier = "default"
+measures = ["indexing", "retrieval", "query", "parser"]
+questions = "questions/eulix.toml"
+# Files that quote the benchmark questions, so retrieval can't "find" the answer
+# in the question list, plus config the harness writes itself.
+exclude = [
+  "eulix.toml", ".euignore", ".eulix/", "docs/", "bench/",
+  "scripts/eval_mcp.py", "scripts/retrival_eval.py", "scripts/check_embed_*.py",
+  "eulix-cli/internal/query/retrieval/long_chunk_test.go",
+  "**/*eval_results*.json",
+]
+euignore_extra = ["script-test-dump/"]
+
+[[corpus]]
+name = "flask"
+source = "https://github.com/pallets/flask"
+commit = "22d924701a6ae2e4cd01e9a15bbaf3946094af65"
+tag = "3.1.3"
+tier = "default"
+measures = ["indexing", "query", "parser"]
+questions = "questions/flask.toml"
+exclude = ["eulix.toml", ".euignore", ".eulix/"]
+
+[[corpus]]
+name = "gin"
+source = "https://github.com/gin-gonic/gin"
+commit = "73726dc606796a025971fe451f0aa6f1b9b847f6"
+tag = "v1.12.0"
+tier = "default"
+measures = ["indexing", "query", "parser"]
+questions = "questions/gin.toml"
+exclude = ["eulix.toml", ".euignore", ".eulix/"]
+
+[[corpus]]
+name = "ripgrep"
+source = "https://github.com/BurntSushi/ripgrep"
+commit = "e89fff89ac9af12e8d4ce9d5fd07beb408ca730f"
+tag = "15.2.0"
+tier = "default"
+measures = ["indexing", "query", "parser"]
+questions = "questions/ripgrep.toml"
+exclude = ["eulix.toml", ".euignore", ".eulix/"]
+
+[[corpus]]
+name = "gson"
+source = "https://github.com/google/gson"
+commit = "fcd416909db2bea96eb916bcfb2d0a83cb9b86c3"
+tag = "gson-parent-2.15.0"
+tier = "default"
+measures = ["indexing", "query", "parser"]
+questions = "questions/gson.toml"
+exclude = ["eulix.toml", ".euignore", ".eulix/"]
+
+[[corpus]]
+name = "linux"
+source = "https://github.com/torvalds/linux"
+commit = "c03c1a14507dfaf8b856c2608f9ac216021fc222"
+tag = "v7.3"
+tier = "large"  # only with --large
+embed = false
+index_repeats = 1
+measures = ["indexing", "parser"]
+exclude = ["eulix.toml", ".euignore", ".eulix/"]

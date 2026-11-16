@@ -1,0 +1,44 @@
+# Latency-only questions for the gin (Go) corpus: no `expect`, so they time
+# query speed without grading. Phrased "How does/is/are ..." so they reach
+# retrieval instead of a direct-answer class.
+schema = 1
+
+[[q]]
+id = "gin-01"
+text = "How does the radix tree match a route path with parameters"
+
+[[q]]
+id = "gin-02"
+text = "How does Context.Next run the handler chain"
+
+[[q]]
+id = "gin-03"
+text = "How does ShouldBindJSON bind the request body to a struct"
+
+[[q]]
+id = "gin-04"
+text = "How does the recovery middleware handle a panic"
+
+[[q]]
+id = "gin-05"
+text = "How does the logger middleware format each request line"
+
+[[q]]
+id = "gin-06"
+text = "How are route groups combined with a base path"
+
+[[q]]
+id = "gin-07"
+text = "How does BasicAuth check the credentials of a request"
+
+[[q]]
+id = "gin-08"
+text = "How does the response writer track the status code and size"
+
+[[q]]
+id = "gin-09"
+text = "How does Context.Abort stop the remaining handlers"
+
+[[q]]
+id = "gin-10"
+text = "How is the trusted proxy list used to find the client IP"

@@ -13,9 +13,7 @@ MADV_SEQUENTIAL for improved performance
 package mmap
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -25,6 +23,8 @@ import (
 // The caller passes size from an os.Stat; re-stat the open fd to close
 // the stat-then-mmap TOCTOU window without this a concurrent truncation produces
 // a mapping that extends past EOF and get SIGBUS on the first access.
+// Truncation after mapping (during the parse) still raises SIGBUS. Won't fix:
+// RET-10 in docs/Known-Issues/Retrieval-And-Query.md.
 func DecodeViaMmap(path string, size int64, v any) error {
 	if SizeOverflows(size) {
 		return ErrFileTooLargeForPath(path, size)
@@ -62,39 +62,4 @@ func DecodeViaMmap(path string, size int64, v any) error {
 	// Using sonic.ConfigDefault (CopyString: false) here would leave decoded
 	// string headers pointing into the now-unmapped region — use-after-free.
 	return SonicCopy.Unmarshal(data, v)
-}
-
-// MmapForSequentialRead mmaps path read-only and advises the kernel to
-// prefetch sequentially (MADV_SEQUENTIAL), matching JSON parse order.
-func MmapForSequentialRead(path string, size int64) (io.Reader, func(), error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// If size isn't provided (<= 0), fetch it via Stat()
-	if size <= 0 {
-		fi, err := f.Stat()
-		if err != nil {
-			_ = f.Close()
-			return nil, nil, err
-		}
-		size = fi.Size()
-	}
-
-	if SizeOverflows(size) || size == 0 {
-		_ = f.Close()
-		return nil, nil, fmt.Errorf("MmapForSequentialRead: invalid size %d for %s", size, path)
-	}
-
-	mmaped, err := mmapPlatform(f, int(size))
-	if err != nil {
-		_ = f.Close()
-		return nil, nil, err
-	}
-
-	_ = f.Close() // mapping holds the pages; fd not needed after mmap
-	mmapAdvisePlatform(mmaped)
-
-	return bytes.NewReader(mmaped), func() { _ = unix.Munmap(mmaped) }, nil
 }

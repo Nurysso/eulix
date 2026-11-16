@@ -1,12 +1,12 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex, walk};
+use super::utils::{extract_todos, static_regex, walk, Nested, JS_NESTED_KINDS as NESTED_KINDS};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::str;
 use std::sync::LazyLock;
@@ -227,6 +227,7 @@ static TAG_RULES: LazyLock<Vec<TagRule>> = LazyLock::new(|| {
 pub struct JsParser {
     source_code: String,
     file_path: String,
+    nested: Nested,
 }
 
 impl JsParser {
@@ -234,6 +235,7 @@ impl JsParser {
         Self {
             source_code,
             file_path,
+            nested: Nested::default(),
         }
     }
 
@@ -258,12 +260,15 @@ impl JsParser {
             .parse(&self.source_code, None)
             .ok_or_else(|| "Failed to parse JS/JSX file".to_string())?;
         let root = tree.root_node();
+        let mut functions = self.extract_top_level_functions(&root);
+        let classes = self.extract_classes(&root);
+        functions.extend(self.nested.take());
         Ok(FileData {
             language: "javascript".to_string(),
             loc: self.count_lines(),
             imports: self.extract_imports(&root),
-            functions: self.extract_top_level_functions(&root),
-            classes: self.extract_classes(&root),
+            functions,
+            classes,
             global_vars: self.extract_global_vars(&root),
             todos: extract_todos(&self.source_code),
             security_notes: self.detect_security_patterns(),
@@ -515,7 +520,13 @@ impl JsParser {
         let control_flow = self.build_control_flow(&body);
         let exceptions = self.build_exception_info(&body);
         let complexity = self.calculate_complexity(&body);
-        let id = self.make_function_id(name, class_context);
+        let id = self
+            .nested
+            .id(|| self.make_function_id(name, class_context));
+        self.nested
+            .collect(body, NESTED_KINDS, &id, &self.source_code, |n| {
+                self.parse_function_decl(&n, "")
+            });
         let has_jsx = self.contains_jsx(&body);
         let tags = self.auto_tag_function(name, &docstring, &calls, &body_text, has_jsx);
         let importance_score = self.estimate_importance(name, &tags);
@@ -695,6 +706,9 @@ impl JsParser {
         context: &str,
     ) {
         walk(*node, context, |node, context| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
             let child_context = match node.kind() {
                 "if_statement" => "if",
@@ -712,6 +726,7 @@ impl JsParser {
                             seen.insert(key);
                             let args = self.extract_call_arguments(node);
                             calls.push(FunctionCall {
+                                receiver: None,
                                 callee,
                                 defined_in: None,
                                 line: node.start_position().row + 1,
@@ -768,7 +783,7 @@ impl JsParser {
 
     // Variables
     fn extract_variables(&self, body: &Node, params: &[Parameter]) -> Vec<Variable> {
-        let mut variables: HashMap<String, Variable> = HashMap::new();
+        let mut variables: BTreeMap<String, Variable> = BTreeMap::new();
         for param in params {
             if param.type_annotation != "destructured" {
                 variables.insert(
@@ -789,8 +804,11 @@ impl JsParser {
         variables.into_values().collect()
     }
 
-    fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
+    fn track_variable_usage(&self, node: &Node, variables: &mut BTreeMap<String, Variable>) {
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
             if node.kind() == "lexical_declaration" || node.kind() == "variable_declaration" {
                 let mut c = node.walk();
@@ -847,6 +865,9 @@ impl JsParser {
 
     fn extract_control_structures(&self, node: &Node, cf: &mut ControlFlow) {
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
             match node.kind() {
                 "if_statement" => {
@@ -905,6 +926,9 @@ impl JsParser {
 
     fn find_call_names(&self, node: &Node, calls: &mut Vec<String>, seen: &mut HashSet<String>) {
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
             if node.kind() == "call_expression" {
                 if let Some(func_node) = node.child_by_field_name("function") {
@@ -922,6 +946,9 @@ impl JsParser {
     fn find_return_value(&self, node: &Node) -> Option<String> {
         let mut result = None;
         walk(*node, (), |child, _| {
+            if NESTED_KINDS.contains(&child.kind()) {
+                return None;
+            }
             if result.is_some() {
                 return None;
             }
@@ -947,6 +974,9 @@ impl JsParser {
     fn find_throw_value(&self, node: &Node) -> Option<String> {
         let mut result = None;
         walk(*node, (), |child, _| {
+            if NESTED_KINDS.contains(&child.kind()) {
+                return None;
+            }
             if result.is_some() {
                 return None;
             }
@@ -1041,6 +1071,9 @@ impl JsParser {
 
     fn collect_throws(&self, node: &Node, raises: &mut Vec<String>) {
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
             if node.kind() == "throw_statement" {
                 raises.push(self.get_node_text(node));
@@ -1051,6 +1084,9 @@ impl JsParser {
 
     fn collect_catches(&self, node: &Node, handles: &mut Vec<String>) {
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
             if node.kind() == "catch_clause" {
                 let exception_type = node
@@ -1286,6 +1322,9 @@ impl JsParser {
     fn contains_jsx(&self, node: &Node) -> bool {
         let mut found = false;
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             if found {
                 return None;
             }
@@ -1357,6 +1396,9 @@ impl JsParser {
     fn has_var_decl(&self, node: &Node) -> bool {
         let mut found = false;
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             if found {
                 return None;
             }
@@ -1379,6 +1421,9 @@ impl JsParser {
     fn returns_function(&self, body: &Node) -> bool {
         let mut found = false;
         walk(*body, (), |child, _| {
+            if NESTED_KINDS.contains(&child.kind()) {
+                return None;
+            }
             if found {
                 return None;
             }
@@ -1481,6 +1526,9 @@ impl JsParser {
     fn calculate_complexity(&self, node: &Node) -> usize {
         let mut complexity = 1;
         walk(*node, (), |node, _| {
+            if NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
             match node.kind() {
                 "if_statement" | "for_statement" | "for_in_statement" | "while_statement"

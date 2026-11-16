@@ -6,8 +6,8 @@
 //go:build linux
 
 /*
-	This file owns the Linux-specific constants (MAP_POPULATE,
-	MADV_HUGEPAGE) so that the macOS / BSD build (which doesn't have
+	This file owns the Linux-specific constants (MADV_HUGEPAGE)
+	so that the macOS / BSD build (which doesn't have
 	them) still compiles. mmap_unix.go calls into mmapPlatform /
 	mmapAdvisePlatform, which are defined here for Linux and in
 	mmap_darwin.go (and any future mmap_*bsd.go) for the other targets.
@@ -23,44 +23,40 @@ import (
 )
 
 // mmapPlatform [tested] on Linux kernel 6.18 LTS
-
-// MAP_POPULATE pre-faults the page tables at mmap time, eliminating
-// the minor-fault spike on first access. For multi-GB files this is
-// a real win without it, sonic's first scan over the mapping pays
-// a fault for every 4 KiB page. With it, the cost is paid up-front
-// during the mmap syscall, where the kernel can parallelise the I/O.
 //
-// MAP_SHARED: we read but the kernel also keeps the file in the page
-// cache for other processes / future reads. With MADV_SEQUENTIAL the
-// pages are released from the cache as we move past them, so cache
-// pressure is bounded by the readahead window (capped at 2 MiB on
-// Linux 6.x after the kernel's doubling pattern stabilises).
+// MAP_SHARED, read-only: the pages are the file's page-cache pages, so
+// nothing is copied and other readers share them.
+//
+// No MAP_POPULATE. It pre-faults the whole file inside the mmap call,
+// so the load waits for the full disk read before sonic starts. On a
+// 228 MB kb_index.json it was no faster (276 ms with it vs 254 ms
+// without, cold cache; 198 vs 199 ms warm). Peak memory is the same
+// either way: sonic touches every page, and touched pages stay mapped
+// until Munmap. TestMmapPlatformDoesNotPrefault guards this.
 func mmapPlatform(f *os.File, size int) ([]byte, error) {
 	return unix.Mmap(
 		int(f.Fd()),
 		0,
 		size,
 		unix.PROT_READ,
-		unix.MAP_SHARED|unix.MAP_POPULATE,
+		unix.MAP_SHARED,
 	)
 }
 
 // mmapAdvisePlatform
-// MADV_SEQUENTIAL: the kernel doubles readahead on each call (capped
-// at 2 MiB) and releases consumed pages from the page cache. For a
-// 4 GB JSON file, peak page-cache usage during a single linear scan
-// stays under 100 MB even though the entire file is read once.
+// MADV_SEQUENTIAL: more aggressive readahead, and pages already passed
+// are treated as cheap to reclaim under memory pressure. It does not
+// drop them: they stay resident until Munmap, so a whole-file decode
+// holds about the file's size in page cache at its peak.
 //
-// MADV_HUGEPAGE: prefer 2 MiB transparent huge pages. For a 4 GB
-// mapping this cuts TLB pressure by ~512× (4 GB / 2 MiB ≈ 2 K TLB
-// entries vs ~1 M for base pages). Best-effort: ENOMEM or EINVAL
-// just means we fall back to base pages, which is still correct.
+// MADV_HUGEPAGE: prefer 2 MiB transparent huge pages to cut TLB
+// pressure on large mappings. Best-effort: ENOMEM or EINVAL just
+// means we fall back to base pages, which is still correct. For file
+// mappings it only applies where the filesystem supports large folios.
 //
 // MADV_COLLAPSE (5.18+) would be a stronger hint that actively
-// collapses pages, but it requires the range to already be populated
-// — combined with MAP_POPULATE it could replace MADV_HUGEPAGE for a
-// small additional win. Not added by default; revisit if you see TLB
-// misses in perf traces.
+// collapses pages, but it requires the range to already be populated.
+// Not added; revisit if you see TLB misses in perf traces.
 func mmapAdvisePlatform(data []byte) {
 	_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
 	_ = unix.Madvise(data, unix.MADV_HUGEPAGE)
@@ -77,6 +73,9 @@ func AllocEmbeddingMatrix(n, dim int) [][]float32 {
 }
 
 // AllocEmbeddingMatrixOwned retains the entire mapping for deterministic release.
+// After release the rows are unmapped: a query still reading them segfaults.
+// Only chat's quit path can do that. Won't fix: RET-11 in
+// docs/Known-Issues/Retrieval-And-Query.md.
 func AllocEmbeddingMatrixOwned(n, dim int) ([][]float32, func() error) {
 	if n == 0 || dim == 0 {
 		return AllocEmbeddingMatrix(n, dim), func() error { return nil }

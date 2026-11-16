@@ -33,8 +33,21 @@ else
     USER_HOME := $(HOME)
 endif
 
+# Absolute root so targets work no matter where make was started (sub-dir
+# Makefiles forward here with `make -C ..` and pass CALLER_DIR).
+ROOT_DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+CALLER_DIR ?= $(CURDIR)
+SCRIPTS_DIR := $(ROOT_DIR)/scripts
+KI_DIR := $(SCRIPTS_DIR)/known_issues
+PARSER_BIN ?= $(ROOT_DIR)/eulix-parser/target/release/eulix_parser
+PYTHON ?= $(if $(wildcard $(HOME)/.Eulix/.venv/bin/python),$(HOME)/.Eulix/.venv/bin/python,python3)
+# Scripts run from the directory you typed `make` in, so relative ARGS/paths resolve there.
+RUN_IN_CALLER = cd "$(CALLER_DIR)" &&
+
 # Directories
+LIB_DIR := libeulix
 PARSER_DIR := eulix-parser
+LSP_DIR := eulix-lsp
 EMBED_DIR := eulix-embed
 CLI_DIR := eulix-cli
 ASSETS_BINS_DIR := $(CLI_DIR)/internal/assets/bins
@@ -66,13 +79,69 @@ else
     NC := \033[0m
 endif
 
-.PHONY: all help build-dir parsers parser-linux parser-windows embed-zip \
+.PHONY: build-windows-native \
+        all help build-dir parsers parser-linux parser-windows embed-zip \
         build-linux-amd build-linux-nvidia build-win-amd build-win-nvidia \
         build-single build-all clean \
         lint lint-rust lint-go lint-python \
-        test test-rust test-go test-python check
+        test test-rust test-go test-python check \
+        scripts-help script parser-release \
+        repro-prism check-tsx perf-rust-workspace check-prism-v2 repro-all \
+        eval-mcp kb-diff kb-field-usage kb-id-name-check vec-stats \
+        bench-run bench-compare bench-list bench-clean bench-test \
+        bench-callgraph bench-callgraph-micro bench-callgraph-test \
+        install install-cli install-parser install-lsp install-viz
 
 all: help
+
+# ------------------------------------------------------------------------------
+# Quick installs from source: make install <cli|parser|lsp|viz>
+# ------------------------------------------------------------------------------
+INSTALL_PROJECTS := cli parser lsp viz
+INSTALL_NAME := $(word 2,$(MAKECMDGOALS))
+EULIX_HOME := $(USER_HOME)/.Eulix
+ifeq ($(DETECTED_OS),Windows)
+    HOST_OS_TARGET := windows
+else
+    HOST_OS_TARGET := linux
+endif
+
+install:
+ifeq ($(filter $(INSTALL_NAME),$(INSTALL_PROJECTS)),)
+	@$(ECHO) "$(RED)Usage: make install <$(subst $() ,|,$(INSTALL_PROJECTS))>$(NC)"
+	@exit 1
+else
+	@$(MAKE) --no-print-directory install-$(INSTALL_NAME)
+endif
+
+# The project name after `install` is only an argument: make it a no-op goal.
+ifneq ($(filter install,$(MAKECMDGOALS)),)
+$(INSTALL_PROJECTS):
+	@:
+endif
+
+install-cli:
+	@$(MAKE) --no-print-directory build-single OS_TARGET=$(HOST_OS_TARGET) GPU=$(GPU)
+	$(MKDIR) "$(INSTALL_DIR)"
+	$(CP) "$(BUILD_DIR)/eulix_$(HOST_OS_TARGET)_$(GPU)$(EXE_EXT)" "$(INSTALL_DIR)/eulix$(EXE_EXT)"
+	@$(ECHO) "$(GREEN)✓ Installed eulix → $(INSTALL_DIR)$(NC)"
+
+install-parser:
+	cd $(PARSER_DIR) && cargo build --release
+	$(MKDIR) "$(INSTALL_DIR)"
+	$(CP) "$(PARSER_DIR)/target/release/eulix_parser$(EXE_EXT)" "$(INSTALL_DIR)/"
+	@$(ECHO) "$(GREEN)✓ Installed eulix_parser → $(INSTALL_DIR)$(NC)"
+
+install-lsp:
+	cd eulix-lsp && cargo build --release
+	$(MKDIR) "$(INSTALL_DIR)"
+	$(CP) "eulix-lsp/target/release/eulixlsp$(EXE_EXT)" "$(INSTALL_DIR)/"
+	@$(ECHO) "$(GREEN)✓ Installed eulixlsp → $(INSTALL_DIR)$(NC)"
+
+install-viz:
+	$(MKDIR) "$(EULIX_HOME)/bin"
+	$(CP) "vizEulize/vizeulize.html" "$(EULIX_HOME)/bin/vizeulize.html"
+	@$(ECHO) "$(GREEN)✓ Installed vizeulize.html → $(EULIX_HOME)/bin$(NC)"
 
 help:
 	@echo "Eulix Build System"
@@ -83,6 +152,7 @@ help:
 	@echo "Full Pipeline Targets:"
 	@echo "  make build-all        - Build all parser targets, zip embed, and build all Go CLI variants"
 	@echo "  make build-single     - Build for single OS and GPU (default: OS_TARGET=linux GPU=amd)"
+	@echo "  make build-windows-native - Native Windows build via build.ps1 (GPU=amd|nvidia)"
 	@echo ""
 	@echo "Specific Variant Targets:"
 	@echo "  make build-linux-amd     - Build Linux AMD/CPU CLI binary"
@@ -98,6 +168,12 @@ help:
 	@echo "  make build-single OS_TARGET=windows GPU=nvidia"
 	@echo "  make build-single OS_TARGET=linux GPU=amd"
 	@echo ""
+	@echo "Quick install from source (into $(INSTALL_DIR)):"
+	@echo "  make install cli      - Build and install the eulix CLI (GPU=amd|nvidia)"
+	@echo "  make install parser   - Build and install eulix_parser"
+	@echo "  make install lsp      - Build and install eulixlsp (unreleased)"
+	@echo "  make install viz      - Copy vizeulize.html to ~/.Eulix/bin"
+	@echo ""
 	@echo "Clean:"
 	@echo "  make clean            - Remove build artifacts and assets"
 	@echo ""
@@ -107,10 +183,12 @@ help:
 	@echo "  make lint-go          - golangci-lint run on eulix-cli"
 	@echo "  make lint-python      - lint.sh on eulix-embed"
 	@echo "  make test             - Run all tests"
-	@echo "  make test-rust        - cargo test on eulix-parser"
+	@echo "  make test-rust        - cargo test on libeulix, eulix-parser and eulix-lsp"
 	@echo "  make test-go          - go test -cover ./... on eulix-cli"
 	@echo "  make test-python      - pytest on eulix-embed"
 	@echo "  make check            - Run lint and test"
+	@echo ""
+	@echo "Scripts: make scripts-help (works from any sub-directory)"
 
 # Directory Creation Targets
 $(BUILD_DIR) $(ASSETS_BINS_DIR):
@@ -135,6 +213,10 @@ parser-windows: | build-dir
 	@$(ECHO) "$(BLUE)Building eulix-parser for Windows (x86_64)...$(NC)"
 	cd $(PARSER_DIR) && RUSTFLAGS="-C link-args=-ladvapi32" cargo build --release --target x86_64-pc-windows-gnu
 	$(CP) $(PARSER_DIR)/target/x86_64-pc-windows-gnu/release/eulix_parser.exe $(PARSER_WINDOWS)
+
+# Native Windows build (MSVC toolchain) via build.ps1. Usage: make build-windows-native [GPU=nvidia]
+build-windows-native:
+	powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Gpu $(GPU)
 
 # Zip Eulix Embed Python Package
 embed-zip: | build-dir
@@ -223,8 +305,12 @@ test: test-rust test-go test-python
 	@$(ECHO) "$(GREEN)✓ All tests passed$(NC)"
 
 test-rust:
+	@$(ECHO) "$(BLUE)Testing libeulix (cargo test)...$(NC)"
+	cd $(LIB_DIR) && cargo test
 	@$(ECHO) "$(BLUE)Testing eulix-parser (cargo test)...$(NC)"
 	cd $(PARSER_DIR) && cargo test
+	@$(ECHO) "$(BLUE)Testing eulix-lsp (cargo test)...$(NC)"
+	cd $(LSP_DIR) && cargo test
 
 test-go:
 	@$(ECHO) "$(BLUE)Testing eulix-cli (go test -cover)...$(NC)"
@@ -236,3 +322,106 @@ test-python:
 
 # Lint + test everything
 check: lint test
+
+# ==============================================================================
+# Scripts (scripts/). Usable from the root or any sub-dir Makefile.
+# Parser-based repros use PARSER_BIN (default: eulix-parser release build).
+# Pass extra arguments with ARGS="...".
+# ==============================================================================
+scripts-help:
+	@echo "Script targets (run from anywhere in the repo):"
+	@echo "  make repro-prism          PRISM-2..6 repro        [PARSER_BIN=..]"
+	@echo "  make check-tsx            PARSE-2 (.tsx/.jsx rejected)"
+	@echo "  make perf-rust-workspace  PRISM-8 slowdown        [ARGS='40 80']"
+	@echo "  make check-prism-v2       #152 review findings"
+	@echo "  make repro-all            all parser repros above"
+	@echo "  make eval-mcp             retrieval eval          [ARGS=out.json]"
+	@echo "  make kb-diff              ARGS='a.json b.json [--depth N]'"
+	@echo "  make kb-field-usage       ARGS='--rust .. --go-dir ..'"
+	@echo "  make kb-id-name-check     ARGS=path/to/kb.json (default .eulix/kb.json)"
+	@echo "  make vec-stats            ARGS=path/to/embeddings.bin"
+	@echo "  make script SCRIPT=name.py ARGS='...'   run any file in scripts/"
+	@echo ""
+	@echo "Version benchmark (bench/, state in ~/.Eulix/bench; docs/Architecture/Benchmarking.md):"
+	@echo "  make bench-compare A=v0.8.3 B=HEAD [ARGS='--corpus eulix --groups retrieval']"
+	@echo "  make bench-run REV=HEAD [ARGS=..]   measure one version and save the results"
+	@echo "  make bench-list                     what has been measured"
+	@echo "  make bench-clean ARGS='--work'      free disk space"
+	@echo "  make bench-test                     harness unit tests"
+	@echo ""
+	@echo "Call-graph accuracy (bench/callgraph/, state in ~/.Eulix/bench/callgraph):"
+	@echo "  make bench-callgraph [ARGS='--lang go,java --prism 2']   score PRISM against language tooling"
+	@echo "  make bench-callgraph-micro          tiny fixtures per language, seconds"
+	@echo "  make bench-callgraph-test           scoring unit tests"
+
+parser-release:
+	cd $(PARSER_DIR) && cargo build --release
+
+repro-prism: parser-release
+	$(RUN_IN_CALLER) bash $(KI_DIR)/repro_prism.sh "$(PARSER_BIN)" $(ARGS)
+
+check-tsx:
+	$(RUN_IN_CALLER) bash $(KI_DIR)/check_tsx.sh $(ARGS)
+
+perf-rust-workspace: parser-release
+	$(RUN_IN_CALLER) bash $(KI_DIR)/perf_rust_workspace.sh "$(PARSER_BIN)" $(ARGS)
+
+check-prism-v2: parser-release
+	$(RUN_IN_CALLER) bash $(SCRIPTS_DIR)/check_prism_v2_methods.sh "$(PARSER_BIN)"
+
+repro-all: repro-prism check-tsx check-prism-v2 perf-rust-workspace
+
+eval-mcp:
+	$(RUN_IN_CALLER) $(PYTHON) $(SCRIPTS_DIR)/eval_mcp.py $(ARGS)
+
+kb-diff:
+	$(RUN_IN_CALLER) uv run $(SCRIPTS_DIR)/kb_diff.py $(ARGS)
+
+kb-field-usage:
+	$(RUN_IN_CALLER) uv run $(SCRIPTS_DIR)/kb_field_usage.py $(ARGS)
+
+kb-id-name-check:
+	$(RUN_IN_CALLER) $(PYTHON) $(SCRIPTS_DIR)/kb_id_name_check.py  $(ARGS)
+
+vec-stats:
+	$(RUN_IN_CALLER) $(PYTHON) $(SCRIPTS_DIR)/vec_stats.py $(ARGS)
+
+# Version benchmark. System python3 (3.11+), not $(PYTHON): that is eulix's own
+# venv, and the harness needs only the standard library.
+BENCH := python3 $(ROOT_DIR)/bench/eulix_bench.py
+
+bench-run:
+	$(RUN_IN_CALLER) $(BENCH) run $(or $(REV),HEAD) $(ARGS)
+
+bench-compare:
+	@test -n "$(A)" -a -n "$(B)" || { echo "usage: make bench-compare A=v0.8.3 B=HEAD [ARGS='..']"; exit 2; }
+	$(RUN_IN_CALLER) $(BENCH) compare $(A) $(B) $(ARGS)
+
+bench-list:
+	$(RUN_IN_CALLER) $(BENCH) list $(ARGS)
+
+bench-clean:
+	$(RUN_IN_CALLER) $(BENCH) clean $(ARGS)
+
+bench-test:
+	python3 -m unittest discover -s $(ROOT_DIR)/bench/tests
+
+CALLGRAPH := python3 $(ROOT_DIR)/bench/callgraph/cg_eval.py
+
+bench-callgraph: parser-release
+	$(RUN_IN_CALLER) $(CALLGRAPH) $(ARGS)
+
+bench-callgraph-micro: parser-release
+	$(RUN_IN_CALLER) $(CALLGRAPH) --set micro $(ARGS)
+
+bench-callgraph-test:
+	python3 -m unittest discover -s $(ROOT_DIR)/bench/callgraph/tests
+
+# Generic runner: make script SCRIPT=known_issues/cross_language_edges.py ARGS=kb_call_graph.json
+script:
+	@test -n "$(SCRIPT)" || { echo "usage: make script SCRIPT=<file in scripts/> ARGS='...'"; exit 2; }
+	$(RUN_IN_CALLER) case "$(SCRIPT)" in \
+		*.sh) bash "$(SCRIPTS_DIR)/$(SCRIPT)" $(ARGS) ;; \
+		*.py) $(PYTHON) "$(SCRIPTS_DIR)/$(SCRIPT)" $(ARGS) ;; \
+		*.go) go run "$(SCRIPTS_DIR)/$(SCRIPT)" $(ARGS) ;; \
+		*) echo "unknown script type: $(SCRIPT)"; exit 2 ;; esac

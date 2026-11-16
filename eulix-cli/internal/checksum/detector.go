@@ -3,7 +3,8 @@
 
 // Package checksum handles project-level source file hashing and change detection.
 /*
-It walks the configured project directory, hashes each source file with xxh3,
+It walks the configured project directory, hashes each source file's size and
+mtime with xxh3 (matching the Rust parser, which never reads contents here),
 and produces a combined project hash used by eulix to detect whether
 re-analysis is needed.
 
@@ -18,8 +19,9 @@ subsequent runs and reports the percentage of the codebase that changed.
 package checksum
 
 import (
-	"bufio"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -38,8 +40,7 @@ import (
 	"eulix/internal/utils"
 )
 
-// FileEntry stores enough metadata per file to allow cheap "did this file
-// possibly change" checks (mtime/size) before paying for a full xxh3 hash.
+// FileEntry stores per-file metadata; Hash is MetaHash(Size, ModTime).
 type FileEntry struct {
 	Hash    string `json:"hash"`
 	Size    int64  `json:"size"`
@@ -78,6 +79,9 @@ type Detector struct {
 	checksumDir    string
 	ignorePatterns []string
 	exts           map[string]bool
+
+	nestedMu sync.Mutex
+	nested   map[string][]string // dir (slash, root-relative) → its own .euignore patterns
 }
 
 // newDetector builds a Detector for the given project root and loads its
@@ -180,31 +184,30 @@ func (d *Detector) loadIgnorePatterns() {
 		"build/", ".eggs/", ".ipynb_checkpoints/", "target/", "*.egg-info/",
 	}
 
-	var user []string
-	if f, err := os.Open(filepath.Join(d.projectPath, utils.EuignorePath)); err == nil {
-		defer func() { _ = f.Close() }()
+	user := readIgnoreFile(filepath.Join(d.projectPath, utils.EuignorePath))
+	d.ignorePatterns = append(user, defaults...)
+}
 
-		sc := bufio.NewScanner(f)
-		first := true
-		for sc.Scan() {
-			text := sc.Text()
-			if first {
-				text = strings.TrimPrefix(text, "\ufeff")
-				first = false
-			}
-			line := strings.TrimSpace(text)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			user = append(user, line)
+// readIgnoreFile returns the patterns in an ignore file, skipping blank lines
+// and #-comments. The file is read whole: a bufio.Scanner stops at a 64 KiB
+// line and would silently drop every rule after it, which the Rust walker
+// still applies.
+func readIgnoreFile(name string) []string {
+	data, err := os.ReadFile(name)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			// stderr: under 'eulix mcp', stdout carries the protocol.
+			fmt.Fprintf(os.Stderr, "reading %s: %v\n", name, err)
 		}
-
-		// Check for read errors after scanning finishes
-		if err := sc.Err(); err != nil {
-			fmt.Printf("reading euignore file: %v\n", err)
+		return nil
+	}
+	var patterns []string
+	for _, line := range strings.Split(strings.TrimPrefix(string(data), "\ufeff"), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			patterns = append(patterns, line)
 		}
 	}
-	d.ignorePatterns = append(user, defaults...)
+	return patterns
 }
 
 // IgnoreMatcher reports whether a path under projectPath is excluded by the
@@ -212,6 +215,99 @@ func (d *Detector) loadIgnorePatterns() {
 // checksum scan uses. It reads .euignore once, so build one per walk.
 func IgnoreMatcher(projectPath string) func(path string) bool {
 	return newDetector(projectPath).shouldIgnore
+}
+
+// ServableMatcher reports whether a repo-relative path listed in the knowledge
+// base may still be read and served: it stays inside projectPath, has no
+// hidden component (the parser never indexes those), and the current
+// .euignore rules do not exclude it. The KB cannot be taken on trust: it can
+// predate the rules, or come inside a cloned repository. Index entries repeat
+// files, so each answer is remembered. Not safe for concurrent use.
+func ServableMatcher(projectPath string) func(rel string) bool {
+	ignored := IgnoreMatcher(projectPath)
+	check := func(rel string) bool {
+		rel = filepath.FromSlash(rel)
+		if !filepath.IsLocal(rel) {
+			return false
+		}
+		path := projectPath
+		for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+			path = filepath.Join(path, part)
+			if strings.HasPrefix(part, ".") || hiddenPath(path) {
+				return false
+			}
+		}
+		return !ignored(filepath.Join(projectPath, rel))
+	}
+	seen := make(map[string]bool)
+	return func(rel string) bool {
+		ok, known := seen[rel]
+		if !known {
+			ok = check(rel)
+			seen[rel] = ok
+		}
+		return ok
+	}
+}
+
+// ReadRegularNoSymlinks opens every path component relative to a pinned root.
+// Comparing each opened handle with its lstat result closes the race where a
+// regular component is replaced by a symlink between validation and use.
+func ReadRegularNoSymlinks(root *os.Root, filePath string) ([]byte, error) {
+	clean := filepath.Clean(filepath.FromSlash(filePath))
+	if clean == "." || !filepath.IsLocal(clean) {
+		return nil, fmt.Errorf("path is not local: %s", filePath)
+	}
+	parts := strings.Split(clean, string(filepath.Separator))
+	current := root
+	owned := false
+	defer func() {
+		if owned {
+			_ = current.Close()
+		}
+	}()
+	for _, part := range parts[:len(parts)-1] {
+		before, err := current.Lstat(part)
+		if err != nil {
+			return nil, err
+		}
+		if before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
+			return nil, fmt.Errorf("path component is not a real directory: %s", part)
+		}
+		next, err := current.OpenRoot(part)
+		if err != nil {
+			return nil, err
+		}
+		after, err := next.Stat(".")
+		if err != nil || !os.SameFile(before, after) {
+			_ = next.Close()
+			return nil, fmt.Errorf("path component changed while opening: %s", part)
+		}
+		if owned {
+			_ = current.Close()
+		}
+		current = next
+		owned = true
+	}
+
+	name := parts[len(parts)-1]
+	before, err := current.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("path is not a regular file: %s", filePath)
+	}
+	file, err := current.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(before, after) || !after.Mode().IsRegular() {
+		return nil, fmt.Errorf("file changed while opening: %s", filePath)
+	}
+	return io.ReadAll(file)
 }
 
 func (d *Detector) shouldIgnore(path string) bool {
@@ -222,152 +318,143 @@ func (d *Detector) shouldIgnore(path string) bool {
 
 	// Normalize to forward slashes for consistent matching
 	relPath = filepath.ToSlash(relPath)
-	if relPath == ".." || strings.HasPrefix(relPath, "../") {
+	if relPath == "." || relPath == ".." || strings.HasPrefix(relPath, "../") {
 		return false
 	}
 
-	pathParts := strings.Split(relPath, "/")
-
-	for _, pattern := range d.ignorePatterns {
-		pattern = filepath.ToSlash(pattern)
-		pattern = strings.TrimPrefix(pattern, "./")
-
-		isDirOnly := strings.HasSuffix(pattern, "/")
-		if isDirOnly {
-			pattern = strings.TrimSuffix(pattern, "/")
-		}
-
-		isAnchored := strings.HasPrefix(pattern, "/")
-		if isAnchored {
-			pattern = strings.TrimPrefix(pattern, "/")
-		}
-
-		if matchIgnorePattern(pattern, relPath, pathParts, isAnchored, isDirOnly) {
+	parts := strings.Split(relPath, "/")
+	if matchesAny(d.ignorePatterns, parts) {
+		return true
+	}
+	// As with nested .gitignore files, a .euignore below the root applies to
+	// its own directory, with paths relative to it. The Rust walker reads them.
+	for i := 1; i < len(parts); i++ {
+		if matchesAny(d.nestedPatterns(parts[:i]), parts[i:]) {
 			return true
 		}
 	}
-
 	return false
 }
 
-func matchIgnorePattern(pattern, relPath string, pathParts []string, isAnchored, isDirOnly bool) bool {
-	// If pattern contains a slash (other than trailing/leading which were stripped),
-	// or if it was anchored, it matches against relPath (or prefixes).
-	// Otherwise, it can match against individual path components or relPath.
-	hasSlash := strings.Contains(pattern, "/")
-
-	if strings.HasPrefix(pattern, "**/") {
-		subPattern := strings.TrimPrefix(pattern, "**/")
-		// Match against full relPath
-		if matchGlob(subPattern, relPath) {
-			return true
-		}
-		// Match against any path component if subPattern has no slash
-		if !strings.Contains(subPattern, "/") {
-			for _, part := range pathParts {
-				if matchGlob(subPattern, part) {
-					return true
-				}
-			}
-		}
-		// Also match any directory prefix
-		curr := ""
-		for _, part := range pathParts {
-			if curr == "" {
-				curr = part
-			} else {
-				curr = curr + "/" + part
-			}
-			if matchGlob(subPattern, curr) {
-				return true
-			}
-		}
-		return false
+// nestedPatterns returns the patterns of the .euignore inside the directory
+// dirParts (root-relative), reading each one once.
+func (d *Detector) nestedPatterns(dirParts []string) []string {
+	dir := strings.Join(dirParts, "/")
+	d.nestedMu.Lock()
+	defer d.nestedMu.Unlock()
+	if patterns, ok := d.nested[dir]; ok {
+		return patterns
 	}
-
-	if isAnchored || hasSlash {
-		if matchGlob(pattern, relPath) {
-			return true
-		}
-		// If it's a directory pattern or prefix match
-		if relPath == pattern || strings.HasPrefix(relPath, pattern+"/") {
-			return true
-		}
-		return false
+	if d.nested == nil {
+		d.nested = make(map[string][]string)
 	}
-
-	// Pattern has no slashes and is unanchored (e.g. "secret.py", "build", ".*", "*.log")
-	for _, part := range pathParts {
-		if matchGlob(pattern, part) {
-			// If it's dir-only, it matches if part is a directory (i.e. not the last part or path is dir)
-			// But shouldIgnore is called for both files and dirs.
-			// When called on "/repo/node_modules/x.js", part "node_modules" matches.
-			return true
-		}
-	}
-
-	return matchGlob(pattern, relPath)
+	patterns := readIgnoreFile(filepath.Join(d.projectPath, filepath.FromSlash(dir), utils.EuignorePath))
+	d.nested[dir] = patterns
+	return patterns
 }
 
+// matchesAny reports whether any gitignore-style pattern excludes the path
+// given as slash-separated parts.
+func matchesAny(patterns, parts []string) bool {
+	for _, pattern := range patterns {
+		pattern = strings.TrimPrefix(filepath.ToSlash(pattern), "./")
+		// Dir-only "x/" also matches a file named x: hiding more is the safe side.
+		pattern = strings.TrimSuffix(pattern, "/")
+		// A leading or inner slash anchors the pattern to the ignore file's directory.
+		anchored := strings.Contains(pattern, "/")
+		pattern = strings.TrimPrefix(pattern, "/")
+		if pattern != "" && matchIgnorePattern(pattern, parts, anchored) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchIgnorePattern reports whether pattern matches the path or one of its
+// parent directories: as with .gitignore, excluding a directory excludes
+// everything below it. Anchored patterns match the path from the top;
+// the others match any single name in it.
+func matchIgnorePattern(pattern string, parts []string, anchored bool) bool {
+	prefix := ""
+	for i, part := range parts {
+		if i > 0 {
+			prefix += "/"
+		}
+		prefix += part
+		target := part
+		if anchored {
+			target = prefix
+		}
+		if matchGlob(pattern, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchGlob matches a slash-separated target against a gitignore glob.
+// path.Match keeps "*" from crossing "/" on every OS; "**" needs a regexp.
 func matchGlob(pattern, target string) bool {
 	if strings.Contains(pattern, "**") {
-		// Convert gitignore globstar to regex
-		var re strings.Builder
-		re.WriteString("^")
-		i := 0
-		for i < len(pattern) {
-			if i+2 < len(pattern) && pattern[i:i+3] == "/**" {
-				// check if followed by / or end
-				if i+3 == len(pattern) {
-					re.WriteString("(/.*)?")
-					i += 3
-					continue
-				} else if pattern[i+3] == '/' {
-					re.WriteString("(/.*)?")
-					i += 4
-					continue
-				}
-			}
-			if i+2 <= len(pattern) && pattern[i:i+2] == "**" {
-				if i+2 < len(pattern) && pattern[i+2] == '/' {
-					re.WriteString("(?:.*/)?")
-					i += 3
-					continue
-				}
-				re.WriteString(".*")
-				i += 2
-				continue
-			}
-			c := pattern[i]
-			switch c {
-			case '*':
-				re.WriteString("[^/]*")
-			case '?':
-				re.WriteString("[^/]")
-			case '.', '+', '(', ')', '|', '^', '$', '[', ']', '{', '}', '\\':
-				re.WriteByte('\\')
-				re.WriteByte(c)
-			default:
-				re.WriteByte(c)
-			}
-			i++
-		}
-		re.WriteString("$")
-		matched, _ := path.Match(pattern, target)
-		return matched
+		ok, err := regexpMatch(globstarRegexp(pattern), target)
+		return ok && err == nil
 	}
-
-	matched, _ := filepath.Match(pattern, target)
-	return matched
+	ok, _ := path.Match(pattern, target)
+	return ok
 }
 
-// nolint: unused
+// globstarRegexp converts a gitignore glob containing "**" into an anchored
+// regexp. A leading "**/" is any run of directories, "/**/" is zero or more
+// directories, a trailing "/**" is everything below, and any other "**" is a
+// plain "*".
+func globstarRegexp(pattern string) string {
+	var re strings.Builder
+	re.WriteString("^")
+	for i := 0; i < len(pattern); {
+		rest := pattern[i:]
+		switch {
+		case i == 0 && strings.HasPrefix(rest, "**/"):
+			re.WriteString("(?:.*/)?")
+			i += 3
+		case strings.HasPrefix(rest, "/**/"):
+			re.WriteString("/(?:.*/)?")
+			i += 4
+		case rest == "/**":
+			re.WriteString("(?:/.*)?")
+			i += 3
+		case strings.HasPrefix(rest, "**"):
+			re.WriteString("[^/]*")
+			i += 2
+		case rest[0] == '*':
+			re.WriteString("[^/]*")
+			i++
+		case rest[0] == '?':
+			re.WriteString("[^/]")
+			i++
+		case rest[0] == '[' && strings.IndexByte(rest, ']') > 1:
+			class := rest[1:strings.IndexByte(rest, ']')]
+			if strings.HasPrefix(class, "!") {
+				class = "^" + class[1:]
+			}
+			re.WriteString("[" + class + "]")
+			i += len(class) + 2
+		case rest[0] == '\\' && len(rest) > 1:
+			re.WriteString(regexp.QuoteMeta(rest[1:2]))
+			i += 2
+		default:
+			re.WriteString(regexp.QuoteMeta(rest[:1]))
+			i++
+		}
+	}
+	re.WriteString("$")
+	return re.String()
+}
+
 var (
 	regexCache   = make(map[string]*regexp.Regexp)
 	regexCacheMu sync.RWMutex
 )
 
-// nolint: unused
 func regexpMatch(pattern, s string) (bool, error) {
 	regexCacheMu.RLock()
 	re, ok := regexCache[pattern]
@@ -393,9 +480,8 @@ func slashKeys(m map[string]FileEntry) map[string]FileEntry {
 	return out
 }
 
-func (d *Detector) scan(stored *Checksum) (*Checksum, error) {
+func (d *Detector) scan(_ *Checksum) (*Checksum, error) {
 	files := make(map[string]FileEntry)
-	prev := slashKeys(stored.Files)
 
 	root := d.projectPath
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
@@ -416,7 +502,7 @@ func (d *Detector) scan(stored *Checksum) (*Checksum, error) {
 			return skip()
 		}
 		// Rust's walker skips hidden entries and doesn't follow symlinks.
-		if strings.HasPrefix(e.Name(), ".") || e.Type()&fs.ModeSymlink != 0 {
+		if strings.HasPrefix(e.Name(), ".") || HiddenByAttr(e) || e.Type()&fs.ModeSymlink != 0 {
 			return skip()
 		}
 		rel, err := filepath.Rel(root, p)
@@ -437,15 +523,7 @@ func (d *Detector) scan(stored *Checksum) (*Checksum, error) {
 
 		key := filepath.ToSlash(rel)
 		entry := FileEntry{Size: info.Size(), ModTime: info.ModTime().UnixNano()}
-		if old, ok := prev[key]; ok && old.Size == entry.Size && old.ModTime == entry.ModTime {
-			entry.Hash = old.Hash
-		} else {
-			h, err := hashFile(p)
-			if err != nil {
-				return nil
-			}
-			entry.Hash = h
-		}
+		entry.Hash = MetaHash(entry.Size, entry.ModTime)
 		files[key] = entry
 		return nil
 	})
@@ -545,16 +623,10 @@ func compare(stored, current *Checksum) (added, deleted, modified int, ratio flo
 	return
 }
 
-func hashFile(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = f.Close() }()
-
-	h := xxh3.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%016x", h.Sum64()), nil
+// MetaHash must match the Rust FileWalker: xxh3 of size then mtime, both little-endian.
+func MetaHash(size, modTime int64) string {
+	var b [16]byte
+	binary.LittleEndian.PutUint64(b[:8], uint64(size))
+	binary.LittleEndian.PutUint64(b[8:], uint64(modTime))
+	return fmt.Sprintf("%016x", xxh3.Hash(b[:]))
 }

@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"time"
@@ -62,6 +63,9 @@ func CacheController(cfg *config.Config) (*Manager, error) {
 	path := cfg.Cache.Path
 	if path == "" {
 		path = filepath.Join(utils.EulixDir, "history.db")
+	}
+	if fi, err := os.Lstat(path); err == nil && !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("history database %s is not a regular file", path)
 	}
 
 	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 2 * time.Second})

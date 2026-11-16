@@ -1,15 +1,6 @@
-.PHONY: default test lint build
+ALIAS_default := test-go
+ALIAS_test := test-go
+ALIAS_lint := lint-go
+ALIAS_build := build-single
 
-default: test-go
-
-test:
-	$(MAKE) -C .. test-go
-
-lint:
-	$(MAKE) -C .. lint-go
-
-build:
-	$(MAKE) -C .. build-single
-
-%:
-	$(MAKE) -C .. $@
+include ../make/forward.mk

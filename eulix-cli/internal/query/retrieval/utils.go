@@ -31,6 +31,12 @@ import (
 var debugLevel3 = utils.IsDebugLevel3()
 
 // Close cleans up resources used by ContextBuilder and frees memory.
+//
+// It does not close cb.debugLog: the logger belongs to whoever passed it to
+// ContextWindowCreator. The router shares one logger with every builder it
+// creates and closes it in Router.Close; closing it here silenced
+// context_debug.log for the rest of an MCP session after the first idle
+// release (RET-9).
 func (cb *ContextBuilder) Close() error {
 	if cb == nil {
 		return nil
@@ -39,10 +45,7 @@ func (cb *ContextBuilder) Close() error {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
-	if cb.debugLog != nil {
-		cb.debugLog.Log("Closing ContextBuilder...")
-		cb.debugLog.Close()
-	}
+	cb.debugLog.Log("Closing ContextBuilder...")
 	var releaseErr error
 	if cb.embeddingRelease != nil {
 		releaseErr = cb.embeddingRelease()
@@ -60,6 +63,7 @@ func (cb *ContextBuilder) Close() error {
 	cb.vectorMap = nil
 	cb.hydrateIdx = nil
 	cb.symbolIndex = nil
+	cb.chunkFiles = nil
 	cb.subsystemTree = nil
 	cb.noisePaths = nil
 	cb.invertedIdx = nil
@@ -195,13 +199,9 @@ func mmrWatchMatch(id, name, file string) bool {
 // Uses timestamp in filename for uniqueness.
 // Intended for offline analysis; not used in production path.
 func (cb *ContextBuilder) writeContextToFile(ctx *utils.ContextWindow) error {
-	logDir := filepath.Join(cb.config.Project.Path, utils.EulixDir, "debug", "retrieval")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return err
-	}
 	fileName := fmt.Sprintf("retrieval_debug_%s.txt", time.Now().Format("20060102_150405"))
-	logPath := filepath.Join(logDir, fileName)
-	f, err := os.Create(logPath)
+	f, err := utils.OpenEulixFile(filepath.Join(cb.config.Project.Path, utils.EulixDir),
+		filepath.Join("debug", "retrieval", fileName), os.O_CREATE|os.O_WRONLY|os.O_TRUNC)
 	if err != nil {
 		return err
 	}
@@ -210,7 +210,10 @@ func (cb *ContextBuilder) writeContextToFile(ctx *utils.ContextWindow) error {
 	return err
 }
 
-func jsonSkipToKey(dec *json.Decoder, target string) error {
+// jsonSkipToKey advances dec to the value of the top-level key target.
+// The values of keys before it are skipped; if seen is non-nil, it gets each
+// skipped key and its raw value (streamKBChunks reads "metadata" this way).
+func jsonSkipToKey(dec *json.Decoder, target string, seen func(key string, raw json.RawMessage)) error {
 	// Consume the opening '{' of the top-level object
 	if _, err := dec.Token(); err != nil {
 		return err
@@ -231,6 +234,9 @@ func jsonSkipToKey(dec *json.Decoder, target string) error {
 		if err := dec.Decode(&skip); err != nil {
 			return fmt.Errorf("skipping key %q: %w", key, err)
 		}
+		if seen != nil {
+			seen(key, skip)
+		}
 	}
 	return fmt.Errorf("key %q not found", target)
 }
@@ -240,10 +246,11 @@ func ApplyPreMMRFloor(candidates []ScoredChunk, cfg *config.RetrievalConfig) []S
 		return candidates
 	}
 
-	// Find the maximum score among all current candidates
+	// Find the maximum score among unpinned candidates. Pins score 5000+ and
+	// would set a cutoff that drops nearly every ordinary hit; they always pass.
 	maxScore := 0.0
 	for _, c := range candidates {
-		if c.Score > maxScore {
+		if !c.Pinned && c.Score > maxScore {
 			maxScore = c.Score
 		}
 	}
@@ -253,7 +260,7 @@ func ApplyPreMMRFloor(candidates []ScoredChunk, cfg *config.RetrievalConfig) []S
 
 	filtered := make([]ScoredChunk, 0, len(candidates))
 	for _, c := range candidates {
-		if c.Score >= cutoff {
+		if c.Pinned || c.Score >= cutoff {
 			filtered = append(filtered, c)
 		}
 	}
@@ -369,6 +376,67 @@ func splitIdentifierToTokens(s string) []string {
 	return toks
 }
 
+// indexKeys turns free text into inverted-index keys with the same rules
+// buildInvertedIndex applies, so query words and indexed code words meet.
+func indexKeys(words []string) []string {
+	var out []string
+	for _, w := range words {
+		for _, tok := range strings.FieldsFunc(w, isIdentBoundary) {
+			if norm := normalizeSymbol(tok); norm != "" {
+				out = indexTerms(out, tok, norm)
+			}
+		}
+	}
+	return uniqueStrings(out)
+}
+
+// indexTerms appends the keys for one raw token: its stemmed normalized form
+// and, for camelCase, each stemmed part (mcSeedIndices -> ..., mc, seed, indic).
+func indexTerms(dst []string, raw, norm string) []string {
+	dst = append(dst, stemTerm(norm))
+	if !isCodeIdentifier(raw) {
+		return dst
+	}
+	for _, p := range splitIdentifierToTokens(raw) {
+		if len(p) > 1 {
+			dst = append(dst, stemTerm(p))
+		}
+	}
+	return dst
+}
+
+// stemTerm conflates simple inflections (loaded, loads, loading -> load).
+// Applied to a fixpoint so it is idempotent: re-stemming a key is a no-op.
+// shortcut: suffix rules only, irregular forms (index/indices) do not meet; swap in a Porter stemmer if that matters.
+func stemTerm(t string) string {
+	for {
+		s := stemStep(t)
+		if s == t {
+			return t
+		}
+		t = s
+	}
+}
+
+func stemStep(t string) string {
+	if strings.HasSuffix(t, "ss") {
+		return t
+	}
+	for _, suf := range []string{"ings", "ing", "ed", "s"} {
+		if strings.HasSuffix(t, suf) && len(t)-len(suf) >= 4 {
+			t = t[:len(t)-len(suf)]
+			break
+		}
+	}
+	if len(t) > 4 && t[len(t)-1] == 'e' {
+		t = t[:len(t)-1]
+	}
+	if n := len(t); n > 4 && t[n-1] == t[n-2] && !strings.ContainsRune("lsz", rune(t[n-1])) {
+		t = t[:n-1]
+	}
+	return t
+}
+
 // Helper to prevent unnecessary memory allocations in strings.ToLower
 func hasUpper(s string) bool {
 	for _, r := range s {
@@ -450,7 +518,7 @@ func byScoreDesc(a, b ScoredChunk) int {
 	case a.Score < b.Score:
 		return 1
 	default:
-		return 0
+		return strings.Compare(a.ID, b.ID)
 	}
 }
 

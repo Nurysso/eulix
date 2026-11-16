@@ -62,9 +62,6 @@ func (cb *ContextBuilder) kbExactLookup(query string, intent QueryIntent) []Scor
 							MatchType:    "kb_function",
 							MatchDetails: "Function: " + fn.Name,
 						})
-						if intent.Type == IntentCallees {
-							scored = append(scored, cb.expandFromKBFunction(fn, filePath, 110.0)...)
-						}
 					}
 				}
 			}
@@ -136,17 +133,12 @@ func (cb *ContextBuilder) findChunkForLocation(loc string) *Chunk {
 }
 
 func extractFnParts(fn utils.KBFunction) fnParts {
-	calls := make([]callPart, len(fn.Calls))
-	for i, c := range fn.Calls {
-		calls[i] = callPart{callee: c.Callee, line: c.Line}
-	}
 	return fnParts{
 		name:      fn.Name,
 		signature: fn.Signature,
 		docstring: fn.Docstring,
 		lineStart: fn.LineStart,
 		lineEnd:   fn.LineEnd,
-		calls:     calls,
 	}
 }
 
@@ -169,12 +161,6 @@ func (cb *ContextBuilder) buildChunkFromParts(p fnParts, filePath string) Chunk 
 		p.name, p.signature, p.lineStart, p.lineEnd)
 	if p.docstring != "" {
 		content += "Documentation: " + p.docstring + "\n"
-	}
-	if len(p.calls) > 0 {
-		content += "Calls:\n"
-		for _, c := range p.calls {
-			content += fmt.Sprintf("  - %s (line %d)\n", c.callee, c.line)
-		}
 	}
 	return Chunk{
 		ID:        fmt.Sprintf("%s:%d-%d", filePath, p.lineStart, p.lineEnd),
@@ -270,12 +256,6 @@ func (cb *ContextBuilder) buildChunkFromKBFunction(fn utils.KBFunction, filePath
 		fn.Name, fn.Signature, fn.LineStart, fn.LineEnd)
 	if fn.Docstring != "" {
 		content += "Documentation: " + fn.Docstring + "\n"
-	}
-	if len(fn.Calls) > 0 {
-		content += "Calls:\n"
-		for _, c := range fn.Calls {
-			content += fmt.Sprintf("  - %s (line %d)\n", c.Callee, c.Line)
-		}
 	}
 	// Note to self fn.ID (e.g. "func_Name::path" / "method_Class_Name::path") is the
 	// single source of truth for chunk identity this is what eulix_embed's

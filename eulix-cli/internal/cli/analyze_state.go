@@ -11,16 +11,26 @@ import (
 	"path/filepath"
 
 	"eulix/internal/config"
+	"eulix/internal/query/retrieval"
 	"eulix/internal/utils"
 )
 
 const analysisCompleteFile = "analysis-complete.json"
 
 type analysisSettings struct {
-	Version int    `json:"version"`
-	Model   string `json:"model"`
-	Engine  string `json:"engine"`
-	Prism   int    `json:"prism"`
+	Version   int    `json:"version"`
+	Retrieval string `json:"retrieval"`
+	Model     string `json:"model"`
+	Engine    string `json:"engine"`
+	Prism     int    `json:"prism"`
+}
+
+// needsEmbeddings reports whether the configured retrieval engine reads the
+// embedding artifacts. An unknown engine falls back to true so analyze still
+// produces everything; the query side reports the bad config value.
+func needsEmbeddings(cfg *config.Config) bool {
+	eng, err := retrieval.ResolveEngine(cfg.Project.Engine)
+	return err != nil || eng.UsesSemantic()
 }
 
 type analysisArtifact struct {
@@ -36,12 +46,20 @@ type analysisCompletion struct {
 func pipelineSettings(cfg *config.Config) analysisSettings {
 	// These are the output-affecting settings actually passed to subprocesses.
 	// Do not persist unrelated configuration (in particular provider API keys).
-	return analysisSettings{Version: 1, Model: cfg.Embeddings.Model, Engine: cfg.Embeddings.Engine, Prism: cfg.Parser.PrismV}
+	// Embedding settings only matter when embeddings are generated, so an
+	// ehnas project is not re-analyzed when the embedding model changes.
+	if !needsEmbeddings(cfg) {
+		return analysisSettings{Version: 2, Retrieval: "ehnas", Prism: cfg.Parser.PrismV}
+	}
+	return analysisSettings{Version: 2, Retrieval: "etiya", Model: cfg.Embeddings.Model, Engine: cfg.Embeddings.Engine, Prism: cfg.Parser.PrismV}
 }
 
-func analysisArtifacts(dir string) (map[string]analysisArtifact, error) {
+func analysisArtifacts(dir string, cfg *config.Config) (map[string]analysisArtifact, error) {
 	// The parser's checksum and the files consumed by embedding/retrieval.
-	names := []string{utils.ChecksumFileName, "kb.json", "kb_index.json", "kb_call_graph.json", "embeddings.bin", "vectors.bin"}
+	names := []string{utils.ChecksumFileName, "kb.json", "kb_index.json", "kb_call_graph.json"}
+	if needsEmbeddings(cfg) {
+		names = append(names, "embeddings.bin", "vectors.bin")
+	}
 	artifacts := make(map[string]analysisArtifact, len(names))
 	for _, name := range names {
 		info, err := os.Stat(filepath.Join(dir, name))
@@ -65,12 +83,12 @@ func analysisComplete(dir string, cfg *config.Config) bool {
 	if err := json.Unmarshal(data, &saved); err != nil || saved.Settings != pipelineSettings(cfg) {
 		return false
 	}
-	current, err := analysisArtifacts(dir)
+	current, err := analysisArtifacts(dir, cfg)
 	return err == nil && maps.Equal(saved.Artifacts, current)
 }
 
 func saveAnalysisCompletion(dir string, cfg *config.Config) error {
-	artifacts, err := analysisArtifacts(dir)
+	artifacts, err := analysisArtifacts(dir, cfg)
 	if err != nil {
 		return err
 	}

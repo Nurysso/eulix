@@ -20,7 +20,7 @@ use crate::config::Config;
 use crate::index::Def;
 use crate::position::{self, WordHit};
 use crate::scan;
-use crate::state::{Document, ServerState};
+use crate::state::{Document, DocumentRevision, ServerState};
 use crate::syntax::{self, ParsedFile};
 use crate::{convert, diagnostics};
 
@@ -115,11 +115,17 @@ impl Backend {
         path: PathBuf,
         parsed: Option<Arc<ParsedFile>>,
         parse_error: Option<String>,
-        version: Option<i32>,
+        revision: DocumentRevision,
     ) {
+        if !self
+            .state
+            .commit_buffer(&uri, &path, parsed.clone(), parse_error.clone(), &revision)
+        {
+            return;
+        }
+        let version = Some(revision.version);
         match parsed {
             Some(p) => {
-                self.state.commit(path.clone(), p.clone());
                 let diags = {
                     let rope = self.state.text_for_uri(&uri).map(|(r, _)| r);
                     let cfg = self.state.config.read().clone();
@@ -143,40 +149,49 @@ impl Backend {
     fn spawn_scan(&self) {
         let state = self.state.clone();
         let client = self.client.clone();
+        // Only `initialized` starts a scan, so the flag is only ever set by shutdown.
         let cancel = self.scan_cancel.clone();
-
-        // Kick any in-flight scan so this one supersedes it.
-        cancel.store(true, Ordering::SeqCst);
-        cancel.store(false, Ordering::SeqCst);
+        let Some(root) = state.workspace.read().root.clone() else {
+            return;
+        };
+        let cfg = state.config.read().clone();
+        let disk_ticket = state.reserve_disk_update();
 
         tokio::spawn(async move {
-            let Some(root) = state.workspace.read().root.clone() else {
-                return;
-            };
-            let cfg = state.config.read().clone();
-
             // Walking the tree is I/O bound and blocking, so keep it off the
             // reactor.
             let (paths, truncated) = {
                 let root = root.clone();
                 let cfg = cfg.clone();
-                match tokio::task::spawn_blocking(move || scan::collect_source_files(&root, &cfg))
-                    .await
+                let walk_cancel = cancel.clone();
+                match tokio::task::spawn_blocking(move || {
+                    scan::collect_source_files(&root, &cfg, Some(&walk_cancel))
+                })
+                .await
                 {
                     Ok(v) => v,
                     Err(e) => {
                         error!(error = %e, "workspace walk failed");
+                        state.scan.write().last_error = Some(format!("workspace walk failed: {e}"));
                         return;
                     }
                 }
             };
+            if cancel.load(Ordering::SeqCst) {
+                return;
+            }
             if paths.is_empty() {
                 info!("workspace scan found no indexable files");
                 return;
             }
+            {
+                let mut progress = state.scan.write();
+                progress.running = true;
+                progress.indexed = 0;
+                progress.last_error = None;
+            }
             info!(files = paths.len(), truncated, "workspace scan starting");
 
-            state.scan.write().running = true;
             let on_progress = {
                 let state = state.clone();
                 move |n: usize| state.scan.write().indexed = n
@@ -184,27 +199,12 @@ impl Backend {
             let (ok, failed) =
                 scan::parse_all(paths, cfg.clone(), cancel.clone(), on_progress).await;
 
-            if cancel.load(Ordering::SeqCst) || state.is_shutdown() {
-                debug!("scan superseded, discarding");
+            if cancel.load(Ordering::SeqCst) {
+                debug!("scan cancelled, discarding");
                 state.scan.write().running = false;
                 return;
             }
-
-            // Publish everything in one pass so nobody ever sees a half-built
-            // index.
-            {
-                let mut ix = state.index.write();
-                for (path, parsed) in &ok {
-                    ix.index_file(path, parsed);
-                }
-            }
-            {
-                let mut ws = state.workspace.write();
-                for (path, parsed) in &ok {
-                    ws.files.insert(path.clone(), parsed.clone());
-                }
-            }
-
+            state.commit_disk_batch(&ok, disk_ticket);
             {
                 let mut s = state.scan.write();
                 s.running = false;
@@ -234,30 +234,30 @@ impl Backend {
 
     // Reparse a document after the debounce window, but only if it is still
     // the current version.
-    fn spawn_debounced_reparse(&self, uri: Url, path: PathBuf, text: String, version: i32) {
+    fn spawn_debounced_reparse(
+        &self,
+        uri: Url,
+        path: PathBuf,
+        text: String,
+        revision: DocumentRevision,
+    ) {
         let state = self.state.clone();
         let client = self.client.clone();
         let delay = Duration::from_millis(state.config.read().debounce_ms);
-        let generation = {
-            let mut docs = state.documents.write();
-            match docs.open.get_mut(&uri) {
-                Some(d) => {
-                    d.generation += 1;
-                    d.generation
-                }
-                None => return,
-            }
-        };
-
-        // Cancel this document's previous pending task.
-        if let Some(prev) = state.documents.write().tasks.remove(&uri) {
+        let mut docs = state.documents.write();
+        if !docs.open.get(&uri).is_some_and(|d| d.matches(&revision)) {
+            return;
+        }
+        if let Some(prev) = docs.tasks.remove(&uri) {
             prev.abort();
         }
+        let task_state = state.clone();
 
         // The task gets its own clone of the URI; the caller keeps the
         // original to use as the map key.
         let task_uri = uri.clone();
         let handle = tokio::spawn(async move {
+            let state = task_state;
             sleep(delay).await;
 
             // The document might have been closed or superseded during the
@@ -265,7 +265,7 @@ impl Backend {
             {
                 let docs = state.documents.read();
                 match docs.open.get(&task_uri) {
-                    Some(d) if d.generation == generation => {}
+                    Some(d) if d.matches(&revision) => {}
                     _ => return,
                 }
             }
@@ -273,20 +273,10 @@ impl Backend {
             let cfg = state.config.read().clone();
             match Self::parse_one(path.clone(), text, cfg).await {
                 Ok(parsed) => {
+                    if !state.commit_buffer(&task_uri, &path, Some(parsed.clone()), None, &revision)
                     {
-                        let mut docs = state.documents.write();
-                        match docs.open.get_mut(&task_uri) {
-                            Some(d) if d.generation == generation => {
-                                d.parsed = Some(parsed.clone());
-                                d.parse_error = None;
-                            }
-                            // A newer generation replaced us while the parse
-                            // was running, so this result is stale and the
-                            // newer task will handle it.
-                            _ => return,
-                        }
+                        return;
                     }
-                    state.index.write().index_file(&path, &parsed);
                     let diags = {
                         let rope = state.text_for_uri(&task_uri).map(|(r, _)| r);
                         let cfg = state.config.read().clone();
@@ -301,7 +291,7 @@ impl Backend {
                         )
                     };
                     client
-                        .publish_diagnostics(task_uri, diags, Some(version))
+                        .publish_diagnostics(task_uri, diags, Some(revision.version))
                         .await;
                 }
                 Err(e) => {
@@ -310,13 +300,39 @@ impl Backend {
             }
         });
 
-        self.state.documents.write().tasks.insert(uri, handle);
+        docs.tasks.insert(uri, handle);
     }
 }
 
 fn line_range(line_1based: usize) -> Range {
     let l = line_1based.saturating_sub(1) as u32;
     Range::new(Position::new(l, 0), Position::new(l, u32::MAX))
+}
+
+// Keep the configured workspace spelling as the identity, like the scan.
+// Ignore symlink entries below it, including symlink directories; canonical
+// aliases of a symlink root must not create a second index entry. Missing
+// components are allowed so deletion events can remove already-gone paths.
+async fn resolve_workspace_path(
+    path: &Path,
+    root: &Path,
+    canonical_root: &Path,
+) -> Option<PathBuf> {
+    let relative = path.strip_prefix(root).ok()?;
+    let mut resolved = canonical_root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return None;
+        };
+        resolved.push(name);
+        match tokio::fs::symlink_metadata(&resolved).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => return None,
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    Some(resolved)
 }
 
 // === LSP surface ===
@@ -445,8 +461,8 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
-        self.state.shutdown.store(true, Ordering::SeqCst);
         self.scan_cancel.store(true, Ordering::SeqCst);
+        self.state.scan.write().running = false;
         self.state.abort_all_tasks();
         info!("shutdown requested");
         tokio::spawn(async {
@@ -468,35 +484,31 @@ impl LanguageServer for Backend {
         };
         let text = params.text_document.text;
         let version = params.text_document.version;
-        {
+        let revision = {
+            let mut index = self.state.index.write();
             let mut docs = self.state.documents.write();
-            docs.open
-                .insert(uri.clone(), Document::new(text.clone(), version, None));
-        }
+            if let Some(previous) = docs.tasks.remove(&uri) {
+                previous.abort();
+            }
+            let doc = Document::new(text.clone(), version, None);
+            let revision = doc.revision();
+            docs.open.insert(uri.clone(), doc);
+            // This session owns the path before its first parse completes,
+            // including when that parse fails. Never expose a disk snapshot.
+            index.remove_file(&path);
+            self.state.workspace.write().files.remove(&path);
+            revision
+        };
 
         let cfg = self.state.config.read().clone();
         match Self::parse_one(path.clone(), text, cfg).await {
             Ok(parsed) => {
-                {
-                    let mut docs = self.state.documents.write();
-                    if let Some(d) = docs.open.get_mut(&uri) {
-                        d.parsed = Some(parsed.clone());
-                        d.parse_error = None;
-                    }
-                }
-                self.apply_parse(uri.clone(), path, Some(parsed), None, Some(version))
-                    .await;
+                self.apply_parse(uri, path, Some(parsed), None, revision)
+                    .await
             }
             Err(e) => {
                 warn!(%uri, error = %e, "parse failed on open; buffer still tracked");
-                {
-                    let mut docs = self.state.documents.write();
-                    if let Some(d) = docs.open.get_mut(&uri) {
-                        d.parse_error = Some(e.clone());
-                    }
-                }
-                self.apply_parse(uri.clone(), path, None, Some(e), Some(version))
-                    .await;
+                self.apply_parse(uri, path, None, Some(e), revision).await;
             }
         }
     }
@@ -511,7 +523,7 @@ impl LanguageServer for Backend {
         // Apply the edits to the Rope. This is synchronous and we hold the
         //  lock only briefly because later changes assume the buffer
         //  already reflects this one.
-        let text = {
+        let (text, revision) = {
             let mut docs = self.state.documents.write();
             let Some(doc) = docs.open.get_mut(&uri) else {
                 warn!(%uri, "did_change for a document that is not open; ignoring");
@@ -537,17 +549,13 @@ impl LanguageServer for Backend {
                 }
             }
             doc.version = version;
-            doc.text.to_string()
+            doc.generation += 1;
+            // Keep the last buffer AST usable during debounce or a failed
+            // reparse. Disk updates cannot replace this buffer's content.
+            (doc.text.to_string(), doc.revision())
         };
 
-        {
-            let mut docs = self.state.documents.write();
-            if let Some(d) = docs.open.get_mut(&uri) {
-                d.parsed = None;
-            }
-        }
-
-        self.spawn_debounced_reparse(uri, path, text, version);
+        self.spawn_debounced_reparse(uri, path, text, revision);
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -557,26 +565,21 @@ impl LanguageServer for Backend {
         };
 
         // Skip the debounce. A save means the user wants current answers.
-        if let Some(h) = self.state.documents.write().tasks.remove(&uri) {
-            h.abort();
-        }
-        let Some((rope, version)) = self.state.text_for_uri(&uri) else {
-            return;
+        let (text, revision) = {
+            let mut docs = self.state.documents.write();
+            if let Some(h) = docs.tasks.remove(&uri) {
+                h.abort();
+            }
+            let Some(doc) = docs.open.get(&uri) else {
+                return;
+            };
+            (doc.text.to_string(), doc.revision())
         };
-        let text = rope.to_string();
         let cfg = self.state.config.read().clone();
-
         match Self::parse_one(path.clone(), text, cfg).await {
             Ok(parsed) => {
-                {
-                    let mut docs = self.state.documents.write();
-                    if let Some(d) = docs.open.get_mut(&uri) {
-                        d.parsed = Some(parsed.clone());
-                        d.parse_error = None;
-                    }
-                }
-                self.apply_parse(uri, path, Some(parsed), None, Some(version))
-                    .await;
+                self.apply_parse(uri, path, Some(parsed), None, revision)
+                    .await
             }
             Err(e) => debug!(error = %e, "reparse on save failed"),
         }
@@ -584,17 +587,65 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
+        let path = self.path_for(&uri);
         {
+            let mut index = self.state.index.write();
             let mut docs = self.state.documents.write();
             docs.open.remove(&uri);
+            if let Some(path) = &path {
+                // Relinquish buffer content before any close-time I/O.
+                index.remove_file(path);
+                self.state.workspace.write().files.remove(path);
+            }
             if let Some(h) = docs.tasks.remove(&uri) {
                 h.abort();
             }
         }
-        self.client.publish_diagnostics(uri, Vec::new(), None).await;
+        let Some(path) = path else {
+            return;
+        };
+        let ticket = self.state.reserve_disk_update();
+        self.state.activate_disk_update(&path, ticket);
+        self.client
+            .publish_diagnostics(uri.clone(), Vec::new(), None)
+            .await;
+        // Only workspace files regain disk symbols after close. The same
+        // scope and symlink policy applies to watcher and close-time reads.
+        let root = self.state.workspace.read().root.clone();
+        let read_path = if let Some(root) = root {
+            match tokio::fs::canonicalize(&root).await {
+                Ok(canonical_root) => resolve_workspace_path(&path, &root, &canonical_root).await,
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        let Some(read_path) = read_path else {
+            self.state.forget_disk(&path, ticket);
+            return;
+        };
+        match tokio::fs::read(read_path).await {
+            Ok(bytes) => {
+                // Lossy like the scan, so non-UTF-8 files keep their symbols.
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                let cfg = self.state.config.read().clone();
+                match Self::parse_one(path.clone(), text, cfg).await {
+                    Ok(parsed) => self.state.commit_disk(path, parsed, ticket),
+                    Err(_) => self.state.forget_disk(&path, ticket),
+                }
+            }
+            Err(_) => self.state.forget_disk(&path, ticket),
+        }
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let Some(root) = self.state.workspace.read().root.clone() else {
+            return;
+        };
+        let ticket = self.state.reserve_disk_update();
+        let Ok(canonical_root) = tokio::fs::canonicalize(&root).await else {
+            return;
+        };
         let mut changed = 0usize;
         let mut removed = 0usize;
         for ev in params.changes {
@@ -605,20 +656,33 @@ impl LanguageServer for Backend {
             if !syntax::is_supported(&path) {
                 continue;
             }
+            let Some(read_path) = resolve_workspace_path(&path, &root, &canonical_root).await
+            else {
+                continue;
+            };
+            if !self.state.activate_disk_update(&path, ticket) {
+                continue;
+            }
             match ev.typ {
                 FileChangeType::DELETED => {
-                    self.state.forget(&path);
+                    self.state.forget_disk(&path, ticket);
                     removed += 1;
-                    self.client.publish_diagnostics(uri, Vec::new(), None).await;
+                    // Diagnostics belong to the buffer lifecycle; didClose
+                    // clears them. Disk events must not clear an open session.
                 }
                 _ => {
-                    let Ok(text) = tokio::fs::read_to_string(&path).await else {
+                    let Ok(bytes) = tokio::fs::read(&read_path).await else {
+                        self.state.forget_disk(&path, ticket);
                         continue;
                     };
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
                     let cfg = self.state.config.read().clone();
-                    if let Ok(parsed) = Self::parse_one(path.clone(), text, cfg).await {
-                        self.state.commit(path, parsed);
-                        changed += 1;
+                    match Self::parse_one(path.clone(), text, cfg).await {
+                        Ok(parsed) => {
+                            self.state.commit_disk(path, parsed, ticket);
+                            changed += 1;
+                        }
+                        Err(_) => self.state.forget_disk(&path, ticket),
                     }
                 }
             }
@@ -766,6 +830,43 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let include_decl = params.context.include_declaration;
+        if parsed.language == "php" {
+            let declaration = is_php_declaration_name(&_rope, &word);
+            if !declaration && !is_call_name(&_rope, &word) {
+                return Ok(None);
+            }
+            let index = self.state.index.read();
+            let Some(def) = index.php_symbol_at(
+                &_path,
+                p.position.line as usize + 1,
+                &word.text,
+                !declaration,
+            ) else {
+                return Ok(None);
+            };
+            let mut locations = index
+                .php_call_sites(&def)
+                .into_iter()
+                .filter_map(|site| {
+                    Some(Location {
+                        uri: Url::from_file_path(site.path).ok()?,
+                        range: line_range(site.line),
+                    })
+                })
+                .collect::<Vec<_>>();
+            if include_decl {
+                if let Some(loc) = self.location_for(&def) {
+                    locations.push(loc);
+                }
+            }
+            locations.sort_by(|a, b| {
+                a.uri
+                    .cmp(&b.uri)
+                    .then(a.range.start.line.cmp(&b.range.start.line))
+            });
+            locations.dedup_by(|a, b| a.uri == b.uri && a.range.start.line == b.range.start.line);
+            return Ok(Some(locations));
+        }
 
         let mut out: Vec<Location> = Vec::new();
         let mut seen: HashSet<(String, u32)> = HashSet::new();
@@ -994,33 +1095,32 @@ impl LanguageServer for Backend {
             }
         }
 
-        // Call sites elsewhere. The reverse index only gives us file+line, so
-        // the edit range has to be recovered from each file's text where we
-        // have it.
+        // Call sites, including the ones in this file. The reverse index only
+        // gives us file+line, so the edit ranges have to be recovered from
+        // each file's text where we have it, and a line can hold several.
         let sites = self.state.index.read().call_sites(&word.text);
         for site in sites {
             let Ok(site_uri) = Url::from_file_path(&site.path) else {
                 continue;
             };
-            if site_uri == uri {
-                continue;
-            }
             let Some((rope, _)) = self.context_for(&site_uri) else {
                 // The file isn't open, so we have no text to build a precise
                 // range from. A whole-line edit would be wrong, so skip it
                 // rather than corrupt the file.
                 continue;
             };
-            if let Some(range) = position::find_name_on_line(&rope, site.line, &word.text) {
-                changes.entry(site_uri).or_default().push(TextEdit {
+            for range in position::find_names_on_line(&rope, site.line, &word.text) {
+                changes.entry(site_uri.clone()).or_default().push(TextEdit {
                     range,
                     new_text: new_name.clone(),
                 });
             }
         }
 
+        // A call on a declaration line, or a line indexed twice, yields the
+        // same edit more than once.
         for edits in changes.values_mut() {
-            edits.sort_by_key(|e| e.range.start.line);
+            edits.sort_by_key(|e| (e.range.start.line, e.range.start.character));
             edits.dedup_by_key(|e| e.range.start);
         }
         Ok(Some(WorkspaceEdit {
@@ -1056,6 +1156,22 @@ impl LanguageServer for Backend {
         let Some((word, _rope, parsed, _path)) = self.word_and_parsed(&uri, p.position) else {
             return Ok(None);
         };
+        if parsed.language == "php" {
+            let declaration = is_php_declaration_name(&_rope, &word);
+            if !declaration && !is_call_name(&_rope, &word) {
+                return Ok(None);
+            }
+            let index = self.state.index.read();
+            return Ok(index
+                .php_symbol_at(
+                    &_path,
+                    p.position.line as usize + 1,
+                    &word.text,
+                    !declaration,
+                )
+                .and_then(|def| hierarchy_item(&def))
+                .map(|item| vec![item]));
+        }
         let mut out = Vec::new();
         for f in parsed.functions.iter().filter(|f| f.name == word.text) {
             out.push(CallHierarchyItem {
@@ -1096,13 +1212,46 @@ impl LanguageServer for Backend {
     ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
         let item = params.item;
         let mut out: Vec<CallHierarchyIncomingCall> = Vec::new();
-        for site in self.state.index.read().call_sites(&item.name) {
+        let sites = {
+            let index = self.state.index.read();
+            match item.uri.to_file_path().ok().filter(|p| index.is_php(p)) {
+                Some(path) => index
+                    .php_symbol_at(&path, item.range.start.line as usize + 1, &item.name, false)
+                    .map(|def| index.php_call_sites(&def))
+                    .unwrap_or_default(),
+                None => index.call_sites(&item.name),
+            }
+        };
+        for site in sites {
             let Ok(caller_uri) = Url::from_file_path(&site.path) else {
                 continue;
             };
             let Some(caller_parsed) = self.parsed_for(&caller_uri) else {
                 continue;
             };
+            if caller_parsed.language == "php" {
+                if let Some((owner, kind)) = caller_parsed
+                    .all_callables()
+                    .filter(|(f, _)| f.line_start <= site.line && site.line <= f.line_end)
+                    .min_by_key(|(f, _)| f.line_end - f.line_start)
+                {
+                    let def = Def {
+                        name: owner.name.clone(),
+                        kind,
+                        path: site.path.clone(),
+                        line_start: owner.line_start,
+                        line_end: owner.line_end,
+                        container: owner.container.clone(),
+                    };
+                    if let Some(from) = hierarchy_item(&def) {
+                        out.push(CallHierarchyIncomingCall {
+                            from,
+                            from_ranges: vec![line_range(site.line)],
+                        });
+                    }
+                }
+                continue;
+            }
             // Figure out which function encloses the call site so we can name
             // the caller.
             let caller_name = caller_parsed
@@ -1187,9 +1336,16 @@ impl LanguageServer for Backend {
         let index = self.state.index.read();
 
         let mut out = Vec::new();
+        // Same-line calls on different receivers resolve by name and line
+        // here, so list each pair once.
+        let mut seen = HashSet::new();
         for call in calls {
+            if !seen.insert((call.callee.clone(), call.line)) {
+                continue;
+            }
             if let Some(path) = &from_path {
-                let Some(def) = index.resolve(&call.callee, path, root.as_deref()) else {
+                let Some(def) = index.resolve_call(&call.callee, path, call.line, root.as_deref())
+                else {
                     continue;
                 };
                 let Some(uri) = Url::from_file_path(&def.path).ok() else {
@@ -1223,4 +1379,62 @@ fn is_valid_identifier(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with(|c: char| c.is_ascii_digit())
         && s.chars().all(|c| c == '_' || c.is_alphanumeric())
+}
+
+#[cfg(test)]
+mod call_tests;
+#[cfg(test)]
+mod php_tests;
+#[cfg(test)]
+mod symbol_tests;
+#[cfg(test)]
+mod sync_tests;
+#[cfg(test)]
+mod uri_tests;
+
+// Distinguish `function foo()` from a same-line `Other::foo()` before
+// choosing a declaration by its enclosing span (which can include attributes).
+fn is_php_declaration_name(rope: &Rope, word: &WordHit) -> bool {
+    let Some((start, _)) = position::range_to_chars(rope, word.range) else {
+        return false;
+    };
+    let line_start = rope.line_to_char(word.range.start.line as usize);
+    let prefix = rope.slice(line_start..start).to_string();
+    let preceding = prefix
+        .trim_end()
+        .trim_end_matches('&')
+        .split_whitespace()
+        .next_back()
+        .unwrap_or("");
+    matches!(
+        preceding.to_ascii_lowercase().as_str(),
+        "function" | "class" | "interface" | "trait" | "enum"
+    )
+}
+
+// Parser call sites have line precision. Only accept a call-name token,
+// never an argument or receiver on the same line (including UTF-16 positions).
+fn is_call_name(rope: &Rope, word: &WordHit) -> bool {
+    let Some((start, end)) = position::range_to_chars(rope, word.range) else {
+        return false;
+    };
+    (start == 0 || rope.char(start - 1) != '$')
+        && rope.slice(end..).chars().find(|c| !c.is_whitespace()) == Some('(')
+}
+
+fn hierarchy_item(def: &Def) -> Option<CallHierarchyItem> {
+    Some(CallHierarchyItem {
+        name: def.name.clone(),
+        kind: match def.kind {
+            syntax::DefKind::Function => SymbolKind::FUNCTION,
+            syntax::DefKind::Method => SymbolKind::METHOD,
+            syntax::DefKind::Class => SymbolKind::CLASS,
+        },
+        tags: None,
+        detail: def.container.clone(),
+        uri: Url::from_file_path(&def.path).ok()?,
+        range: line_range(def.line_start),
+        selection_range: line_range(def.line_start),
+        data: None,
+    })
 }

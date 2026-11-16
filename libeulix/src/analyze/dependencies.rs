@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::struc::kb_struct::{ExternalDependency, KnowledgeBase};
 
@@ -18,7 +18,13 @@ pub fn analyze_external_deps(kb: &KnowledgeBase) -> Vec<ExternalDependency> {
                 .filter(|i| {
                     !matches!(
                         i.import_type.as_str(),
-                        "internal" | "cgo" | "include" | "include_dynamic"
+                        "internal"
+                            | "cgo"
+                            | "include"
+                            | "include_dynamic"
+                            | "reexport_all"
+                            | "reexport_named"
+                            | "rust_module"
                     )
                 })
                 .map(|i| (i.module.clone(), filepath.clone(), i.import_type.clone()))
@@ -26,16 +32,16 @@ pub fn analyze_external_deps(kb: &KnowledgeBase) -> Vec<ExternalDependency> {
         })
         .collect();
 
-    // A HashSet for `used_by` because the same module can legitimately
+    // A set for `used_by` because the same module can legitimately
     // be imported multiple times in one file (or the same file could
     // appear twice across parallel chunks) — dedup is required for
     // `import_count` to mean "number of distinct files," not "number of
     // import statements."
-    let mut deps_map: HashMap<String, (HashSet<String>, String)> = HashMap::new();
+    let mut deps_map: BTreeMap<String, (BTreeSet<String>, String)> = BTreeMap::new();
     for (module, filepath, import_type) in all_deps {
         let entry = deps_map
             .entry(module)
-            .or_insert_with(|| (HashSet::new(), import_type));
+            .or_insert_with(|| (BTreeSet::new(), import_type));
         entry.0.insert(filepath);
     }
 

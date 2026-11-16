@@ -65,23 +65,26 @@ func GetVenvPython(venvPath string) (string, []string, error) {
 		return "", nil, fmt.Errorf("unsupported Python version: %s (want 3.10 or 3.11)", ver)
 	}
 
-	// Prepend the venv bin/Scripts dir to PATH.
-	binDir := venvBinDir(venvPath)
-	env := os.Environ()
-	newEnv := make([]string, 0, len(env)+1)
-	foundPath := false
+	return pythonPath, prependPath(os.Environ(), venvBinDir(venvPath), runtime.GOOS == "windows"), nil
+}
+
+// prependPath puts dir first on PATH. Windows names env vars case-insensitively
+// and usually spells it "Path"; missing that adds a second PATH, which exec keeps
+// over the first, so the child would lose the system PATH entirely.
+func prependPath(env []string, dir string, windows bool) []string {
+	out := make([]string, 0, len(env)+1)
+	found := false
 	for _, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			newEnv = append(newEnv, "PATH="+binDir+string(os.PathListSeparator)+e[5:])
-			foundPath = true
-		} else {
-			newEnv = append(newEnv, e)
+		if k, v, _ := strings.Cut(e, "="); k == "PATH" || (windows && strings.EqualFold(k, "PATH")) {
+			e = k + "=" + dir + string(os.PathListSeparator) + v
+			found = true
 		}
+		out = append(out, e)
 	}
-	if !foundPath {
-		newEnv = append(newEnv, "PATH="+binDir)
+	if !found {
+		out = append(out, "PATH="+dir)
 	}
-	return pythonPath, newEnv, nil
+	return out
 }
 
 // FindEulixEmbed locates eulix_embed/main.py and resolves a usable Python

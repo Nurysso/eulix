@@ -1,15 +1,6 @@
-.PHONY: default test lint build
+ALIAS_default := test-python
+ALIAS_test := test-python
+ALIAS_lint := lint-python
+ALIAS_build := embed-zip
 
-default: test-python
-
-test:
-	$(MAKE) -C .. test-python
-
-lint:
-	$(MAKE) -C .. lint-python
-
-build:
-	$(MAKE) -C .. embed-zip
-
-%:
-	$(MAKE) -C .. $@
+include ../make/forward.mk

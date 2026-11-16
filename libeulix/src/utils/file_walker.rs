@@ -13,13 +13,14 @@ use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use xxhash_rust::xxh3::{xxh3_64, Xxh3};
 
+pub type Failed = Vec<(PathBuf, anyhow::Error)>;
+
 pub struct WalkedFile {
     pub path: PathBuf,
     pub rel: PathBuf,
-    pub content_hash: u64,
+    pub meta_hash: u64,
     pub size: i64,
     pub mod_time: i64, // unix nanos, same as Go's UnixNano()
-    pub lines: usize,
 }
 
 /// Statistics gathered during a single tree walk.
@@ -46,6 +47,7 @@ pub struct FileWalker {
     root: PathBuf,
     /// Optional path to a custom .euignore file (overrides the default ``<root>``/.euignore)
     euignore_path: Option<PathBuf>,
+    threads: usize,
 }
 
 #[derive(Serialize)]
@@ -67,7 +69,6 @@ struct DirEntry {
 struct Checksum {
     project_path: String,
     total_files: usize,
-    total_lines: usize,
     hash: String,
     files: BTreeMap<String, FileEntry>,
     dirs: BTreeMap<String, DirEntry>, // left empty, Go does a full walk
@@ -80,7 +81,15 @@ impl FileWalker {
         Self {
             root,
             euignore_path: None,
+            threads: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
         }
+    }
+
+    pub fn with_threads(mut self, n: usize) -> Self {
+        self.threads = n;
+        self
     }
 
     pub fn with_euignore(mut self, path: PathBuf) -> Self {
@@ -97,11 +106,7 @@ impl FileWalker {
         builder.git_ignore(false);
         builder.git_global(false);
         builder.git_exclude(false);
-        builder.threads(
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4),
-        );
+        builder.threads(self.threads);
 
         let ignored_dirs = [
             ".git",
@@ -142,15 +147,16 @@ impl FileWalker {
 
     /// Single parallel traversal. `filter` is applied per entry; `process`
     /// runs on the worker thread for every path that passes the filter.
-    /// Collects `WalkStats` for free.
-    fn walk_raw<F, T, P>(&self, filter: F, process: P) -> Result<(Vec<T>, WalkStats)>
+    /// Collects `WalkStats` for free. Paths whose `process` fails go to the
+    /// returned `Failed` list instead of aborting the walk.
+    fn walk_raw<F, T, P>(&self, filter: F, process: P) -> Result<(Vec<T>, Failed, WalkStats)>
     where
         F: Fn(&Path) -> bool + Sync,
         T: Send + 'static,
         P: Fn(&Path) -> Result<T> + Sync,
     {
         let builder = self.build_walker();
-        let (tx, rx) = mpsc::channel::<Result<T>>();
+        let (tx, rx) = mpsc::channel::<std::result::Result<T, (PathBuf, anyhow::Error)>>();
         let total_scanned = Arc::new(AtomicUsize::new(0));
         let total_matched = Arc::new(AtomicUsize::new(0));
 
@@ -170,7 +176,7 @@ impl FileWalker {
                     let path = entry.path();
                     if filter(path) {
                         matched.fetch_add(1, Ordering::Relaxed);
-                        let _ = tx.send(process(path));
+                        let _ = tx.send(process(path).map_err(|e| (path.to_path_buf(), e)));
                     }
                 }
                 WalkState::Continue
@@ -179,12 +185,17 @@ impl FileWalker {
         drop(tx);
 
         let mut files = Vec::with_capacity(30_000);
+        let mut failed = Vec::new();
         for res in rx {
-            files.push(res?);
+            match res {
+                Ok(f) => files.push(f),
+                Err(e) => failed.push(e),
+            }
         }
 
         Ok((
             files,
+            failed,
             WalkStats {
                 scanned: total_scanned.load(Ordering::Relaxed),
                 matched: total_matched.load(Ordering::Relaxed),
@@ -201,7 +212,8 @@ impl FileWalker {
     where
         F: Fn(&Path) -> bool + Sync,
     {
-        self.walk_raw(filter, |p| Ok(p.to_path_buf()))
+        let (paths, _, stats) = self.walk_raw(filter, |p| Ok(p.to_path_buf()))?;
+        Ok((paths, stats))
     }
 
     /// Backwards-compatible convenience. Returns just the paths.
@@ -215,29 +227,29 @@ impl FileWalker {
 
     // =========== Public: paths + hashes ==========
 
-    /// Walk + read + hash. Internal building block for `project_hash`.
-    fn walk_and_hash<F>(&self, filter: F) -> Result<(Vec<WalkedFile>, WalkStats)>
+    /// Walk + stat + hash the metadata. Internal building block for `project_hash`.
+    fn walk_and_hash<F>(&self, filter: F) -> Result<(Vec<WalkedFile>, Failed, WalkStats)>
     where
         F: Fn(&Path) -> bool + Sync,
     {
         let root = self.root.clone();
         self.walk_raw(filter, move |path| {
             let path = path.to_path_buf();
-            let contents = fs::read(&path).with_context(|| {
-                format!("failed to read {} while walking project", path.display())
+            let meta = fs::metadata(&path).with_context(|| {
+                format!("failed to stat {} while walking project", path.display())
             })?;
             let rel = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
-            let mod_time = fs::metadata(&path)
-                .and_then(|m| m.modified())
+            let size = meta.len() as i64;
+            let mod_time = meta
+                .modified()
                 .ok()
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .map(|d| d.as_nanos() as i64)
                 .unwrap_or(0);
             Ok(WalkedFile {
-                content_hash: xxh3_64(&contents),
-                size: contents.len() as i64,
+                meta_hash: xxh3_64(&[size.to_le_bytes(), mod_time.to_le_bytes()].concat()),
+                size,
                 mod_time,
-                lines: contents.iter().filter(|&&b| b == b'\n').count(),
                 path,
                 rel,
             })
@@ -250,7 +262,7 @@ impl FileWalker {
         for f in files.iter() {
             hasher.update(f.rel.to_string_lossy().as_bytes());
             hasher.update(b"\0");
-            hasher.update(&f.content_hash.to_le_bytes());
+            hasher.update(&f.meta_hash.to_le_bytes());
         }
         format!("{:016x}", hasher.digest())
     }
@@ -264,7 +276,7 @@ impl FileWalker {
 
     #[allow(dead_code)]
     pub fn project_hash_with_stats(&self) -> Result<(String, WalkStats)> {
-        let (mut files, stats) = self.walk_and_hash(|_| true)?;
+        let (mut files, _, stats) = self.walk_and_hash(|_| true)?;
         Ok((Self::hash_files(&mut files), stats))
     }
 
@@ -291,10 +303,15 @@ impl FileWalker {
     where
         F: Fn(&Path) -> bool + Sync,
     {
-        let (mut files, stats) = self.walk_and_hash(filter)?;
+        let (mut files, failed, stats) = self.walk_and_hash(filter)?;
         let hash = Self::hash_files(&mut files);
         self.write_checksum(&files, &hash, write_dir)?;
-        let paths = files.into_iter().map(|f| f.path).collect();
+        // Failed paths still go to the parser so it records them as failed.
+        let paths = files
+            .into_iter()
+            .map(|f| f.path)
+            .chain(failed.into_iter().map(|(p, _)| p))
+            .collect();
         Ok((paths, hash, stats))
     }
 
@@ -305,13 +322,11 @@ impl FileWalker {
         write_dir: &Path,
     ) -> Result<()> {
         let mut map = BTreeMap::new();
-        let mut total_lines = 0;
         for f in files {
-            total_lines += f.lines;
             map.insert(
                 f.rel.to_string_lossy().to_string(),
                 FileEntry {
-                    hash: format!("{:016x}", f.content_hash),
+                    hash: format!("{:016x}", f.meta_hash),
                     size: f.size,
                     mod_time: f.mod_time,
                 },
@@ -321,7 +336,6 @@ impl FileWalker {
         let checksum = Checksum {
             project_path: self.root.to_string_lossy().to_string(),
             total_files: map.len(),
-            total_lines,
             hash: root_hash.to_string(),
             files: map,
             dirs: BTreeMap::new(),
@@ -385,6 +399,54 @@ mod tests {
         assert!(files[0].ends_with("src/lib.rs"));
         assert!(!hash.is_empty());
         assert_eq!(hash.len(), 16);
+        Ok(())
+    }
+
+    #[test]
+    fn test_failed_files_do_not_abort_walk() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let root = temp_dir.path();
+        fs::write(root.join("ok.rs"), "fn ok() {}")?;
+        fs::write(root.join("bad.rs"), "fn bad() {}")?;
+
+        let walker = FileWalker::new(root.to_path_buf());
+        let (ok, failed, stats) = walker.walk_raw(
+            |_| true,
+            |p| {
+                if p.ends_with("bad.rs") {
+                    anyhow::bail!("unreadable")
+                }
+                Ok(p.to_path_buf())
+            },
+        )?;
+        assert_eq!(stats.matched, 2);
+        assert!(ok.len() == 1 && ok[0].ends_with("ok.rs"));
+        assert!(failed.len() == 1 && failed[0].0.ends_with("bad.rs"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(root.join("bad.rs"), fs::Permissions::from_mode(0o000))?;
+            let (files, _) = walker.walk_and_project_hash(|_| true, &root.join(".cache"))?;
+            assert!(files.iter().any(|p| p.ends_with("bad.rs")));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_threads_limits_workers() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let root = temp_dir.path();
+        for i in 0..200 {
+            fs::create_dir_all(root.join(format!("d{i}")))?;
+            fs::write(root.join(format!("d{i}/f.rs")), "")?;
+        }
+
+        let walker = FileWalker::new(root.to_path_buf()).with_threads(2);
+        let (ids, _, _) = walker.walk_raw(|_| true, |_| Ok(std::thread::current().id()))?;
+        let distinct: std::collections::HashSet<_> = ids.into_iter().collect();
+        assert_eq!(walker.threads, 2);
+        assert!(distinct.len() <= 2, "used {} threads", distinct.len());
         Ok(())
     }
 

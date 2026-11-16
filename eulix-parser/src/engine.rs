@@ -63,7 +63,6 @@ mod tests {
             "0.8.1",
             "test",
             out.path(),
-            false,
             &engine,
         )
         .unwrap();

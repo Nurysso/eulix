@@ -129,7 +129,7 @@ func (cb *ContextBuilder) multiStrategySearch(
 	querySymbolsExpanded := splitDottedSymbols(querySymbols) // dotted names+part
 	cb.debugLog.Log("[Step 1] Extracting explicit anchors...")
 	anchors := extractExplicitAnchors(query)
-	gate := buildPathGate(anchors)
+	gate := buildPathGate(anchors, cb.chunkFiles)
 	hc := newHydrationCache(cb)
 
 	// Track detailed results per strategy
@@ -649,7 +649,12 @@ func (cb *ContextBuilder) grepSymbolSearchWithSymbols(symbols []string, hc *hydr
 	if hydrationBudget <= 0 && debugLevel3 {
 		cb.debugLog.Log("[grepSymbolSearch] Hit hydration budget (%d), some chunks skipped content scan", maxContentFallbackHydrations)
 	}
-	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
+	sort.Slice(scored, func(i, j int) bool {
+		if cb.Engine() == EngineEHNAS && scored[i].Score == scored[j].Score {
+			return compareEhnasChunks(scored[i].Chunk, scored[j].Chunk) < 0
+		}
+		return scored[i].Score > scored[j].Score
+	})
 	if topK > 0 && len(scored) > topK {
 		scored = scored[:topK]
 	}
@@ -948,7 +953,12 @@ func (cb *ContextBuilder) keywordSearch(query string, topK int, hc *hydrationCac
 		}
 	}
 
-	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
+	sort.Slice(scored, func(i, j int) bool {
+		if cb.Engine() == EngineEHNAS && scored[i].Score == scored[j].Score {
+			return compareEhnasChunks(scored[i].Chunk, scored[j].Chunk) < 0
+		}
+		return scored[i].Score > scored[j].Score
+	})
 	if len(scored) > topK {
 		scored = scored[:topK]
 	}
@@ -970,7 +980,7 @@ func (cb *ContextBuilder) invertedKeywordSearchTFIDF(query string, topK int, hc 
 
 	keywords := extractQueryKeywords(strings.ToLower(query))
 	symbols := extractPotentialSymbols(query)
-	terms := uniqueStrings(append(keywords, symbols...))
+	terms := indexKeys(append(keywords, symbols...))
 
 	cb.invertedIdx.mu.RLock()
 	defer cb.invertedIdx.mu.RUnlock()
@@ -1024,7 +1034,7 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int, hc *
 	}
 	keywords := extractQueryKeywords(strings.ToLower(query))
 	symbols := extractPotentialSymbols(query)
-	terms := uniqueStrings(append(keywords, symbols...))
+	terms := indexKeys(append(keywords, symbols...))
 
 	if debugLevel3 {
 		cb.debugLog.Log("[invertedKeywordSearchBM25] START: terms=%v, topK=%d", terms, topK)
@@ -1066,7 +1076,15 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int, hc *
 	for idx, s := range scores {
 		candidates = append(candidates, scoredIdx{idx, s})
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		if cb.Engine() == EngineEHNAS {
+			return compareEhnasChunks(cb.chunks[candidates[i].idx], cb.chunks[candidates[j].idx]) < 0
+		}
+		return candidates[i].idx < candidates[j].idx
+	})
 
 	if proximityLimit > len(candidates) {
 		proximityLimit = len(candidates)
@@ -1104,7 +1122,15 @@ func (cb *ContextBuilder) invertedKeywordSearchBM25(query string, topK int, hc *
 			MatchDetails: strings.Join(uniqueStrings(matched[idx]), ", "),
 		})
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Score > result[j].Score })
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Score != result[j].Score {
+			return result[i].Score > result[j].Score
+		}
+		if cb.Engine() == EngineEHNAS {
+			return compareEhnasChunks(result[i].Chunk, result[j].Chunk) < 0
+		}
+		return result[i].ID < result[j].ID
+	})
 	if len(result) > topK {
 		result = result[:topK]
 	}

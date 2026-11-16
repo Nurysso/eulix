@@ -1,12 +1,12 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{extract_todos, static_regex, walk};
+use super::utils::{declare_variable, extract_todos, static_regex, walk};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::str;
 use std::sync::LazyLock;
@@ -1020,8 +1020,9 @@ impl JavaParser {
                         );
                         if seen.insert(key) {
                             calls.push(FunctionCall {
+                                receiver: object,
                                 callee,
-                                defined_in: object,
+                                defined_in: None,
                                 line: node.start_position().row + 1,
                                 args: self.extract_call_arguments(node),
                                 is_conditional: context != "unconditional",
@@ -1032,10 +1033,18 @@ impl JavaParser {
                 }
                 "object_creation_expression" => {
                     if let Some(type_node) = node.child_by_field_name("type") {
-                        let callee = format!("new {}", self.get_node_text(&type_node));
-                        let key = format!("{}:{}", callee, node.start_position().row);
-                        if seen.insert(key) {
+                        // `new Outer.Inner<T>(...)`: the constructor is named
+                        // after the class, `Outer` is where it is looked up.
+                        let type_text = self.get_node_text(&type_node);
+                        let type_name = type_text.split('<').next().unwrap_or("").trim();
+                        let (receiver, callee) = match type_name.rsplit_once('.') {
+                            Some((outer, name)) => (Some(outer.to_string()), name.to_string()),
+                            None => (None, type_name.to_string()),
+                        };
+                        let key = format!("new {}:{}", type_name, node.start_position().row);
+                        if !callee.is_empty() && seen.insert(key) {
                             calls.push(FunctionCall {
+                                receiver,
                                 callee,
                                 defined_in: None,
                                 line: node.start_position().row + 1,
@@ -1052,6 +1061,7 @@ impl JavaParser {
                         let key = format!("{}:{}", callee, node.start_position().row);
                         if seen.insert(key) {
                             calls.push(FunctionCall {
+                                receiver: None,
                                 callee,
                                 defined_in: None,
                                 line: node.start_position().row + 1,
@@ -1080,7 +1090,7 @@ impl JavaParser {
     }
 
     fn extract_variables(&self, node: &Node, params: &[Parameter]) -> Vec<Variable> {
-        let mut variables: HashMap<String, Variable> = HashMap::new();
+        let mut variables: BTreeMap<String, Variable> = BTreeMap::new();
         for param in params {
             if param.name.is_empty() {
                 continue;
@@ -1106,79 +1116,98 @@ impl JavaParser {
         variables.into_values().collect()
     }
 
-    fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
+    /// Declares `name` in the method's variable table; see `declare_variable`
+    /// for what happens to a name declared twice.
+    fn declare(
+        &self,
+        variables: &mut BTreeMap<String, Variable>,
+        name: Option<Node>,
+        var_type: Option<String>,
+        at: &Node,
+    ) {
+        let Some(name) = name.map(|n| self.get_node_text(&n)) else {
+            return;
+        };
+        if name.is_empty() || name == "_" {
+            return;
+        }
+        let line = at.start_position().row + 1;
+        declare_variable(variables, name, var_type, "local", Some(line));
+    }
+
+    /// The type and the name in a pattern (`Foo f`), which the grammar gives
+    /// as two unnamed children.
+    fn declare_pattern(&self, node: &Node, variables: &mut BTreeMap<String, Variable>) {
+        let mut cursor = node.walk();
+        let mut var_type = None;
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "identifier" => {
+                    self.declare(variables, Some(child), var_type.take(), node);
+                }
+                "modifiers" | "underscore_pattern" => {}
+                _ => var_type = Some(self.get_node_text(&child)),
+            }
+        }
+    }
+
+    fn track_variable_usage(&self, node: &Node, variables: &mut BTreeMap<String, Variable>) {
         walk(*node, (), |node, _| {
             let node = &node;
+            let type_of = |n: &Node| {
+                n.child_by_field_name("type")
+                    .map(|t| self.get_node_text(&t))
+            };
             match node.kind() {
-                "local_variable_declaration" => {
-                    let var_type = node
-                        .child_by_field_name("type")
-                        .map(|t| self.get_node_text(&t));
+                // A field of a local or anonymous class is declared in this
+                // body as well, and hides a field of the enclosing class.
+                "local_variable_declaration" | "field_declaration" => {
+                    let var_type = type_of(node);
                     let mut cursor = node.walk();
                     for child in node.children(&mut cursor) {
                         if child.kind() == "variable_declarator" {
-                            if let Some(name_node) = child.child_by_field_name("name") {
-                                let var_name = self.get_node_text(&name_node);
-                                if !var_name.is_empty() && !variables.contains_key(&var_name) {
-                                    variables.insert(
-                                        var_name.clone(),
-                                        Variable {
-                                            name: var_name,
-                                            var_type: var_type.clone(),
-                                            scope: "local".to_string(),
-                                            defined_at: Some(node.start_position().row + 1),
-                                            transformations: vec![],
-                                            used_in: vec![],
-                                            returned: false,
-                                        },
-                                    );
-                                }
-                            }
+                            let name = child.child_by_field_name("name");
+                            self.declare(variables, name, var_type.clone(), node);
                         }
                     }
                 }
-                "enhanced_for_statement" => {
-                    if let Some(name_node) = node.child_by_field_name("name") {
-                        let var_name = self.get_node_text(&name_node);
-                        let var_type = node
-                            .child_by_field_name("type")
-                            .map(|t| self.get_node_text(&t));
-                        if !var_name.is_empty() && !variables.contains_key(&var_name) {
-                            variables.insert(
-                                var_name.clone(),
-                                Variable {
-                                    name: var_name,
-                                    var_type,
-                                    scope: "local".to_string(),
-                                    defined_at: Some(node.start_position().row + 1),
-                                    transformations: vec![],
-                                    used_in: vec![],
-                                    returned: false,
-                                },
-                            );
-                        }
-                    }
+                // Loop variables, try resources, and the parameters of
+                // lambdas and of methods in local or anonymous classes.
+                "enhanced_for_statement" | "resource" | "formal_parameter" => {
+                    let name = node.child_by_field_name("name");
+                    self.declare(variables, name, type_of(node), node);
                 }
                 "catch_formal_parameter" => {
-                    if let Some(name_node) = node.child_by_field_name("name") {
-                        let var_name = self.get_node_text(&name_node);
-                        let var_type =
-                            find_child_by_kind(node, "catch_type").map(|t| self.get_node_text(&t));
-                        if !var_name.is_empty() && !variables.contains_key(&var_name) {
-                            variables.insert(
-                                var_name.clone(),
-                                Variable {
-                                    name: var_name,
-                                    var_type,
-                                    scope: "local".to_string(),
-                                    defined_at: Some(node.start_position().row + 1),
-                                    transformations: vec![],
-                                    used_in: vec![],
-                                    returned: false,
-                                },
-                            );
+                    let var_type =
+                        find_child_by_kind(node, "catch_type").map(|t| self.get_node_text(&t));
+                    self.declare(variables, node.child_by_field_name("name"), var_type, node);
+                }
+                // `x -> ...` and `(x, y) -> ...`: the types are inferred.
+                "lambda_expression" => {
+                    if let Some(params) = node.child_by_field_name("parameters") {
+                        match params.kind() {
+                            "identifier" => self.declare(variables, Some(params), None, node),
+                            "inferred_parameters" => {
+                                let mut cursor = params.walk();
+                                for name in params.named_children(&mut cursor) {
+                                    self.declare(variables, Some(name), None, node);
+                                }
+                            }
+                            _ => {}
                         }
                     }
+                }
+                // `o instanceof Foo f`
+                "instanceof_expression" => {
+                    if let Some(name) = node.child_by_field_name("name") {
+                        let var_type = node
+                            .child_by_field_name("right")
+                            .map(|t| self.get_node_text(&t));
+                        self.declare(variables, Some(name), var_type, node);
+                    }
+                }
+                "type_pattern" | "record_pattern_component" => {
+                    self.declare_pattern(node, variables);
                 }
                 "return_statement" => {
                     let mut cursor = node.walk();
@@ -1584,6 +1613,88 @@ pub fn parse_file(path: &Path) -> Result<(String, FileData), String> {
 #[cfg(test)]
 mod tests {
     #![expect(clippy::expect_used)]
+
+    use crate::struc::kb_struct::{FileData, Function};
+
+    fn parse(src: &str) -> FileData {
+        crate::grammar_files::parse_source(std::path::Path::new("App.java"), src)
+            .expect("parse should succeed")
+            .1
+    }
+
+    fn method<'a>(fd: &'a FileData, name: &str) -> &'a Function {
+        fd.classes
+            .iter()
+            .flat_map(|c| &c.methods)
+            .find(|m| m.name == name)
+            .expect("method exists")
+    }
+
+    fn var_type<'a>(f: &'a Function, name: &str) -> Option<&'a str> {
+        f.variables
+            .iter()
+            .find(|v| v.name == name)
+            .expect("variable exists")
+            .var_type
+            .as_deref()
+    }
+
+    // PRISM-5: the receiver has its own field, and a constructor call is
+    // recorded under the class name, as in the other languages.
+    #[test]
+    fn call_receiver_is_stored_apart_from_the_callee() {
+        let fd = parse(
+            "class App { void run(Foo f) {\n f.bar();\n this.x.go();\n baz();\n Util.help();\n new Foo(1);\n new Gen<String>();\n new Outer.Inner();\n new Foo().bar();\n } }",
+        );
+        let calls: Vec<(&str, Option<&str>, Option<&str>)> = method(&fd, "run")
+            .calls
+            .iter()
+            .map(|c| {
+                (
+                    c.callee.as_str(),
+                    c.receiver.as_deref(),
+                    c.defined_in.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                ("bar", Some("f"), None),
+                ("go", Some("this.x"), None),
+                ("baz", None, None),
+                ("help", Some("Util"), None),
+                ("Foo", None, None),
+                ("Gen", None, None),
+                ("Inner", Some("Outer"), None),
+                ("bar", Some("new Foo()"), None),
+                ("Foo", None, None),
+            ]
+        );
+    }
+
+    // Every way a name can be declared in a body is recorded, so that a
+    // name with two types is seen as such.
+    #[test]
+    fn every_declaration_form_is_tracked_and_a_second_type_drops_the_type() {
+        let fd = parse(
+            "class App { void run(Foo p, Foo keep) {\n Foo a = make();\n for (Foo x : foos) {}\n for (Bar x : bars) {}\n each(l -> l.go());\n each((Foo keep2) -> keep2.go());\n if (o instanceof Foo pat) {}\n try (Res r = open()) {} catch (Err e) {}\n new Object() { Bar p; void m(Foo keep) {} };\n } }",
+        );
+        let f = method(&fd, "run");
+        assert_eq!(var_type(f, "a"), Some("Foo"));
+        assert_eq!(var_type(f, "x"), None, "two loops, two types");
+        assert_eq!(var_type(f, "l"), None, "untyped lambda parameter");
+        assert_eq!(var_type(f, "keep2"), Some("Foo"));
+        assert_eq!(var_type(f, "pat"), Some("Foo"));
+        assert_eq!(var_type(f, "r"), Some("Res"));
+        assert_eq!(var_type(f, "e"), Some("Err"));
+        assert_eq!(
+            var_type(f, "p"),
+            None,
+            "parameter, then a field of a local class"
+        );
+        assert_eq!(var_type(f, "keep"), Some("Foo"), "same type twice");
+    }
 
     #[test]
     fn deep_expression_on_small_stack() {

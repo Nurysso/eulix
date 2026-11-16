@@ -1,12 +1,12 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
-use super::utils::{static_regex, todo_in_comment, walk};
+use super::utils::{static_regex, todo_in_comment, walk, Nested};
 
 use crate::struc::kb_struct::*;
 use crate::utils::syntax;
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 use tree_sitter::{Node, Parser};
@@ -79,9 +79,12 @@ static SECURITY_PATTERNS: LazyLock<Vec<SecurityPattern>> = LazyLock::new(|| {
     ]
 });
 
+const NESTED_KINDS: &[&str] = &["function_definition"];
+
 pub struct PythonParser {
     source_code: String,
     file_path: String,
+    nested: Nested,
 }
 
 impl PythonParser {
@@ -89,6 +92,7 @@ impl PythonParser {
         Self {
             source_code,
             file_path,
+            nested: Nested::default(),
         }
     }
 
@@ -115,13 +119,16 @@ impl PythonParser {
             .ok_or_else(|| "Failed to parse Python file".to_string())?;
 
         let root = tree.root_node();
+        let mut functions = self.extract_functions(&root);
+        let classes = self.extract_classes(&root);
+        functions.extend(self.nested.take());
 
         Ok(FileData {
             language: "python".to_string(),
             loc: self.count_lines(),
             imports: self.extract_imports(&root),
-            functions: self.extract_functions(&root),
-            classes: self.extract_classes(&root),
+            functions,
+            classes,
             global_vars: self.extract_global_vars(&root),
             todos: self.collect_todos(&root),
             security_notes: self.detect_security_patterns(),
@@ -208,7 +215,7 @@ impl PythonParser {
             let items_str = caps.get(2)?.as_str();
             let items: Vec<String> = items_str
                 .split(',')
-                .map(|s| s.split_whitespace().next().unwrap_or(s.trim()))
+                .map(|s| s.trim().trim_matches(['(', ')']))
                 .map(|s| s.to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
@@ -296,7 +303,15 @@ impl PythonParser {
 
         let complexity = self.calculate_complexity(node);
 
-        let id = self.make_function_id(&name, class_context);
+        let id = self
+            .nested
+            .id(|| self.make_function_id(&name, class_context));
+        if let Some(body) = node.child_by_field_name("body") {
+            self.nested
+                .collect(body, NESTED_KINDS, &id, &self.source_code, |n| {
+                    self.parse_function(&n, "")
+                });
+        }
 
         let tags = self.auto_tag_function(&name, &docstring, &calls);
 
@@ -453,7 +468,11 @@ impl PythonParser {
         seen: &mut HashSet<String>,
         context: &str,
     ) {
+        let root = *node;
         walk(*node, context, |node, context| {
+            if node != root && NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             let child_context = match node.kind() {
@@ -477,13 +496,21 @@ impl PythonParser {
                             .to_string();
 
                         if !name.is_empty() {
-                            let key = format!("{}:{}", name, node.start_position().row);
+                            let receiver = if func_node.kind() == "attribute" {
+                                func_node.child_by_field_name("object")
+                            } else {
+                                None
+                            }
+                            .map(|n| self.get_node_text(&n));
+                            let key =
+                                format!("{:?}:{}:{}", receiver, name, node.start_position().row);
                             if !seen.contains(&key) {
                                 seen.insert(key);
 
                                 let args = self.extract_call_arguments(node);
 
                                 calls.push(FunctionCall {
+                                    receiver,
                                     callee: name,
                                     defined_in: None, // Will be resolved in post-processing
                                     line: node.start_position().row + 1,
@@ -519,7 +546,7 @@ impl PythonParser {
     }
 
     fn extract_variables(&self, node: &Node, params: &[Parameter]) -> Vec<Variable> {
-        let mut variables: HashMap<String, Variable> = HashMap::new();
+        let mut variables: BTreeMap<String, Variable> = BTreeMap::new();
 
         for param in params {
             variables.insert(
@@ -545,8 +572,12 @@ impl PythonParser {
         variables.into_values().collect()
     }
 
-    fn track_variable_usage(&self, node: &Node, variables: &mut HashMap<String, Variable>) {
+    fn track_variable_usage(&self, node: &Node, variables: &mut BTreeMap<String, Variable>) {
+        let root = *node;
         walk(*node, (), |node, _| {
+            if node != root && NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             if node.kind() == "assignment" {
@@ -625,7 +656,11 @@ impl PythonParser {
     }
 
     fn extract_control_structures(&self, node: &Node, cf: &mut ControlFlow) {
+        let root = *node;
         walk(*node, (), |node, _| {
+            if node != root && NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             match node.kind() {
@@ -692,7 +727,11 @@ impl PythonParser {
     }
 
     fn find_call_names(&self, node: &Node, calls: &mut Vec<String>, seen: &mut HashSet<String>) {
+        let root = *node;
         walk(*node, (), |node, _| {
+            if node != root && NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             if node.kind() == "call" {
@@ -811,7 +850,11 @@ impl PythonParser {
     }
 
     fn find_exceptions(&self, node: &Node, info: &mut ExceptionInfo) {
+        let root = *node;
         walk(*node, (), |node, _| {
+            if node != root && NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             match node.kind() {
@@ -1167,7 +1210,11 @@ impl PythonParser {
 
     fn calculate_complexity(&self, node: &Node) -> usize {
         let mut complexity = 1;
+        let root = *node;
         walk(*node, (), |node, _| {
+            if node != root && NESTED_KINDS.contains(&node.kind()) {
+                return None;
+            }
             let node = &node;
 
             match node.kind() {

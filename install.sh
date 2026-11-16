@@ -20,7 +20,7 @@ EULIX_EMBED_PATH="$EULIX_DIR/eulix_embed"
 VIZEULIZE_HTML_PATH="$EULIX_BIN_DIR/vizeulize.html"
 
 REPO="Nurysso/eulix"
-DOC_URL="https://github.com/${REPO}/blob/main/docs/install.md"
+DOC_URL="https://github.com/${REPO}/blob/main/docs/Installation.md"
 
 # Resolved at runtime inside main()
 RELEASE_TAG=""

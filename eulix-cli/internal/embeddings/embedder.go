@@ -20,7 +20,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -52,6 +51,8 @@ type Embedder struct {
 	mu             sync.Mutex
 	requestTimeout time.Duration
 	stderrTail     *stderrTail
+	stderrDone     chan struct{} // closed once stderr is fully read
+	dead           error         // set when a timeout killed the process
 	model          string
 	dim            int
 	closed         bool
@@ -80,15 +81,17 @@ type serveResponse struct {
 	Error     string    `json:"error"`
 }
 
-// VectorWeaver starts eulix_embed in server mode. debug, when true, streams
-// the subprocess's stderr live to the parent's logger; otherwise it's only
-// kept in a rolling buffer for diagnosing startup/crash failures.
-func VectorWeaver(model string, debug bool) (*Embedder, error) {
+// VectorWeaver starts eulix_embed in server mode. engine must be the one that
+// built the index (as analyze passes to embed), or query vectors land in a
+// different space. debug, when true, streams the subprocess's stderr live to
+// the parent's logger; otherwise it's only kept in a rolling buffer for
+// diagnosing startup/crash failures.
+func VectorWeaver(model, engine string, debug bool) (*Embedder, error) {
 	scriptPath, pythonPath, venvEnv, err := FindEulixEmbed()
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(pythonPath, scriptPath, "server", "-m", model)
+	cmd := exec.Command(pythonPath, scriptPath, "server", "-m", model, "-e", engine)
 	cmd.Env = venvEnv
 
 	// Pipe stdin so we can send JSON requests.
@@ -109,7 +112,11 @@ func VectorWeaver(model string, debug bool) (*Embedder, error) {
 	}
 
 	tail := &stderrTail{}
-	go streamStderr(model, stderr, tail, debug)
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		streamStderr(model, stderr, tail, debug)
+	}()
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start eulix_embed server: %w", err)
@@ -126,13 +133,14 @@ func VectorWeaver(model string, debug bool) (*Embedder, error) {
 		model:          model,
 		requestTimeout: defaultRequestTimeout,
 		stderrTail:     tail,
+		stderrDone:     stderrDone,
 		debug:          debug,
 	}
 
 	// Block until the ready signal arrives or we time out
 	if err := e.waitReady(); err != nil {
 		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+		_ = e.reap()
 		if diag := tail.String(); diag != "" {
 			return nil, fmt.Errorf("embed process failed to start: %w\nrecent stderr:\n%s", err, diag)
 		}
@@ -227,6 +235,10 @@ func (e *Embedder) roundTrip(req any) ([]byte, error) {
 	if e.closed {
 		return nil, fmt.Errorf("embedder is closed")
 	}
+	if e.dead != nil {
+		// The timed-out read may still be inside Scan; a second one would race it.
+		return nil, e.dead
+	}
 	if err := e.enc.Encode(req); err != nil {
 		return nil, fmt.Errorf("write to embed process: %w", err)
 	}
@@ -261,6 +273,7 @@ func (e *Embedder) roundTrip(req any) ([]byte, error) {
 		// keep using this pipe, so kill it — the caller should treat this
 		// Embedder as dead and recreate it.
 		_ = e.cmd.Process.Kill()
+		e.dead = fmt.Errorf("embed process was killed after a request timed out; restart eulix to re-enable semantic search")
 		return nil, fmt.Errorf("embed process timed out after %s (process killed)", e.requestTimeout)
 	}
 }
@@ -305,7 +318,7 @@ func (e *Embedder) Close() error {
 	e.mu.Unlock()
 
 	waitDone := make(chan error, 1)
-	go func() { waitDone <- e.cmd.Wait() }()
+	go func() { waitDone <- e.reap() }()
 
 	select {
 	case err := <-waitDone:
@@ -314,6 +327,16 @@ func (e *Embedder) Close() error {
 		_ = e.cmd.Process.Kill()
 		return <-waitDone
 	}
+}
+
+// reap waits for stderr to drain, then reaps the process. exec's Wait closes
+// the stderr pipe, so calling it first can drop the server's last lines.
+func (e *Embedder) reap() error {
+	select {
+	case <-e.stderrDone:
+	case <-time.After(5 * time.Second): // a grandchild may still hold stderr open
+	}
+	return e.cmd.Wait()
 }
 
 // Embed generates an embedding vector for the given text.
@@ -338,7 +361,7 @@ func (e *Embedder) IsAlive() bool {
 		return false // already reaped, process exited
 	}
 	// Signal(0) checks liveness without actually sending a signal.
-	return e.cmd.Process.Signal(syscall.Signal(0)) == nil
+	return processRunning(e.cmd.Process)
 }
 
 // BatchEmbed embeds multiple texts sequentially.

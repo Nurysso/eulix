@@ -1,0 +1,222 @@
+# Retrieval questions about the eulix corpus (bench/suite/corpora.toml).
+#
+# id         stable, never reused for a different question
+# component  report grouping only
+# style      code: uses the identifiers and terms in the target code
+#            plain: describes behaviour without the target code's words
+# text       the question sent to `query_without_cot`
+# expect     path prefixes; a hit is the first result whose file starts with one.
+#            Omit for a latency-only question.
+#
+# Phrase questions "How does/is/are ...": shorter "where is X" / "who calls X"
+# questions hit direct-answer classes in the query router and skip retrieval.
+# Changing a question's text or expect makes it a new question (new hash).
+schema = 1
+
+# From scripts/eval_mcp.py CASES["ehnas"]: written while developing EHNAS.
+[[q]]
+id = "go-apply-budget"
+component = "go-cli"
+style = "code"
+text = "How does applyBudget work"
+expect = ["eulix-cli/internal/query/retrieval/intent.go"]
+
+[[q]]
+id = "go-engine-switch"
+component = "go-cli"
+style = "code"
+text = "How does the engine switch between etiya and ehnas"
+expect = ["eulix-cli/internal/query/retrieval/engine.go"]
+
+[[q]]
+id = "go-pre-mmr-floor"
+component = "go-cli"
+style = "code"
+text = "How is the pre-MMR score floor applied to candidates"
+expect = ["eulix-cli/internal/query/retrieval/utils.go"]
+
+[[q]]
+id = "go-structural-mmr"
+component = "go-cli"
+style = "code"
+text = "How does structuralMMR measure redundancy between two chunks"
+expect = ["eulix-cli/internal/query/retrieval/mmr_ehnas.go"]
+
+[[q]]
+id = "go-mc-seeds"
+component = "go-cli"
+style = "code"
+text = "How are the seeds for the Monte Carlo walk selected"
+expect = ["eulix-cli/internal/query/retrieval/walk_diag.go"]
+
+[[q]]
+id = "go-twins"
+component = "go-cli"
+style = "code"
+text = "How are cross-language twin chunks found"
+expect = ["eulix-cli/internal/query/retrieval/twins.go"]
+
+[[q]]
+id = "go-config-load"
+component = "go-cli"
+style = "code"
+text = "How is eulix.toml loaded and its values validated"
+expect = ["eulix-cli/internal/config/config.go"]
+
+[[q]]
+id = "go-prf"
+component = "go-cli"
+style = "code"
+text = "How does pseudo relevance feedback expand the keyword query"
+expect = ["eulix-cli/internal/query/retrieval/prf.go"]
+
+[[q]]
+id = "go-novelty-pack"
+component = "go-cli"
+style = "code"
+text = "How does noveltyPack demote redundant chunks"
+expect = ["eulix-cli/internal/query/retrieval/ehnas_search.go"]
+
+[[q]]
+id = "go-subsystems"
+component = "go-cli"
+style = "code"
+text = "How are subsystems detected from the query"
+expect = ["eulix-cli/internal/query/retrieval/subsystem.go"]
+
+[[q]]
+id = "go-mcp-idle-release"
+component = "go-cli"
+style = "code"
+text = "How does the MCP server release the context builder after being idle"
+expect = ["eulix-cli/internal/mcp/"]
+
+[[q]]
+id = "go-hydrate-source"
+component = "go-cli"
+style = "code"
+text = "How is source code hydrated to fit the token budget"
+expect = ["eulix-cli/internal/query/retrieval/source.go"]
+
+[[q]]
+id = "lsp-goto-definition"
+component = "rust-lsp"
+style = "code"
+text = "How does the LSP server handle goto definition"
+expect = ["eulix-lsp/src/backend.rs"]
+
+[[q]]
+id = "lsp-parse-diagnostic"
+component = "rust-lsp"
+style = "code"
+text = "How is a diagnostic created when a file fails to parse"
+expect = ["eulix-lsp/src/diagnostics.rs"]
+
+[[q]]
+id = "lsp-hover"
+component = "rust-lsp"
+style = "code"
+text = "How does the language server answer hover requests"
+expect = ["eulix-lsp/src/backend.rs"]
+
+[[q]]
+id = "parser-spill"
+component = "parser"
+style = "code"
+text = "How does the parser spill intermediate results to disk"
+expect = ["eulix-parser/src/spill.rs"]
+
+[[q]]
+id = "lib-call-graph"
+component = "libeulix"
+style = "code"
+text = "How is the call graph built"
+expect = ["libeulix/src/analyze/call_graph/"]
+
+[[q]]
+id = "lib-entry-points"
+component = "libeulix"
+style = "code"
+text = "How does find_entry_points detect entry points and HTTP routes"
+expect = ["libeulix/src/analyze/entry_points.rs"]
+
+[[q]]
+id = "embed-onnx"
+component = "embed"
+style = "code"
+text = "How does the ONNX embedder generate embeddings"
+expect = ["eulix-embed/embedders/onnx_embed.py"]
+
+[[q]]
+id = "embed-chunk-file"
+component = "embed"
+style = "code"
+text = "How is a single file chunked for embedding"
+expect = ["eulix-embed/chunking/chunker.py"]
+
+# Names a 523-line function: exact matches must survive the long-chunk penalty.
+[[q]]
+id = "go-ehnas-search"
+component = "go-cli"
+style = "code"
+text = "How does EhnasSearch work"
+expect = ["eulix-cli/internal/query/retrieval/ehnas_search.go"]
+
+# From scripts/eval_mcp.py CASES["etiya"]: plain language that avoids the
+# identifiers and terms used in the target code.
+[[q]]
+id = "plain-secret-token"
+component = "go-cli"
+style = "plain"
+text = "Where does the tool find the secret token for talking to the language model provider"
+expect = ["eulix-cli/internal/config/config.go"]
+
+[[q]]
+id = "plain-files-changed"
+component = "go-cli"
+style = "plain"
+text = "How does it notice that project files changed since the last indexing run"
+expect = ["eulix-cli/internal/checksum/"]
+
+[[q]]
+id = "plain-byte-per-dim"
+component = "go-cli"
+style = "plain"
+text = "How are vectors compressed to a single byte per dimension"
+expect = ["eulix-cli/internal/query/retrieval/loader.go", "eulix-cli/internal/query/retrieval/mmap/",
+          "eulix-embed/data_io/serialization.py"]
+
+[[q]]
+id = "plain-answer-memory"
+component = "go-cli"
+style = "plain"
+text = "How are previous answers remembered so the same question is not asked twice"
+expect = ["eulix-cli/internal/cache/"]
+
+[[q]]
+id = "plain-common-names"
+component = "go-cli"
+style = "plain"
+text = "How are names that appear in nearly every file kept from affecting ranking"
+expect = ["eulix-cli/internal/query/retrieval/boilerPlate.go"]
+
+[[q]]
+id = "plain-no-copy-read"
+component = "go-cli"
+style = "plain"
+text = "How does reading vectors from disk avoid copying the whole file into memory"
+expect = ["eulix-cli/internal/query/retrieval/mmap/"]
+
+[[q]]
+id = "plain-ann"
+component = "go-cli"
+style = "plain"
+text = "How does nearest neighbour lookup avoid comparing the question against every vector"
+expect = ["eulix-cli/internal/query/retrieval/vector_ivf.go"]
+
+[[q]]
+id = "plain-question-kind"
+component = "go-cli"
+style = "plain"
+text = "How does it decide what kind of question the user asked"
+expect = ["eulix-cli/internal/query/retrieval/intent.go", "eulix-cli/internal/query/classifier/"]

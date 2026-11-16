@@ -1,0 +1,5 @@
+[codespell]
+# `struc` is a real module name (libeulix::struc); `modle` is a deliberate typo used as an example.
+ignore-words = codespell-ignore.txt
+# The PRISM paper uses `inh` as a math subscript.
+skip = ./_build,./libeulix/Research/PRISM-V2-Methodology.md

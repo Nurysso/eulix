@@ -38,6 +38,11 @@ func analyzeProject(projectPath string) error {
 func analyzeWithPipeline(projectPath string, pipeline func(string, *config.Config) error) error {
 	startTime := time.Now()
 
+	// The parser and embedder write here and follow links, and a clone can ship this folder.
+	if err := utils.CheckEulixDir(filepath.Join(projectPath, utils.EulixDir)); err != nil {
+		return err
+	}
+
 	// Load config (used for parser and embedding settings)
 	cfg, err := config.Load()
 	if err != nil {
@@ -115,6 +120,12 @@ func runAnalysisPipeline(projectPath string, cfg *config.Config) error {
 		return fmt.Errorf("parser failed: %w", err)
 	}
 	fmt.Println("✓ Parser completed")
+
+	// Only etiya reads embeddings.bin/vectors.bin; ehnas is embedding-free.
+	if !needsEmbeddings(cfg) {
+		fmt.Println("Skipping embeddings (engine: ehnas does not use them)")
+		return nil
+	}
 
 	fmt.Println("Generating embeddings...")
 	venvPath := filepath.Join(homeDir, ".Eulix", ".venv")

@@ -29,4 +29,11 @@ eulix-cli/internal/assets/bins/eulix_parser_darwin
 eulix-cli/internal/assets/bins/eulix_parser_linux
 eulix-cli/internal/assets/bins/eulix_parser_windows.exe
 eulix-cli/internal/assets/bins/eulix_parser_macos_arm
+eulix-lsp/bench/results/
 *eulix-embed.zip*
+eulix-cli/*json
+# script output
+script-test-dump/
+
+# local notes
+DONTADD/

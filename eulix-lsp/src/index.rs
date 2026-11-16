@@ -23,6 +23,9 @@ use std::path::{Path, PathBuf};
 
 use crate::syntax::{DefKind, ParsedFile};
 
+mod php;
+use php::PhpIndex;
+
 // A single definition site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Def {
@@ -46,6 +49,7 @@ pub struct CallRef {
 
 #[derive(Debug, Default)]
 pub struct Index {
+    php: PhpIndex,
     // name -> path -> definitions in that path
     defs: HashMap<String, HashMap<PathBuf, Vec<Def>>>,
     // path -> names it defines, so removal is O(that file) not O(workspace)
@@ -71,6 +75,7 @@ impl Index {
     // Drop everything contributed by `path`. Safe to call for a path we've
     // never seen.
     pub fn remove_file(&mut self, path: &Path) {
+        self.php.remove(path);
         if let Some(names) = self.defined_names.remove(path) {
             for name in names {
                 if let Some(by_path) = self.defs.get_mut(&name) {
@@ -97,6 +102,9 @@ impl Index {
     // this twice with the same input is the same as calling it once.
     pub fn index_file(&mut self, path: &Path, parsed: &ParsedFile) {
         self.remove_file(path);
+        if parsed.language == "php" {
+            self.php.index(path, parsed);
+        }
         let mut defined: HashSet<String> = HashSet::new();
         let mut called: HashSet<String> = HashSet::new();
 
@@ -156,6 +164,7 @@ impl Index {
             }
         }
 
+        let mut seen: HashSet<(&str, usize)> = HashSet::new();
         for call in parsed
             .functions
             .iter()
@@ -169,19 +178,17 @@ impl Index {
             )
         {
             let (callee, line) = call;
-            if callee.is_empty() {
+            // remove_file ran above, so duplicates can only come from this file.
+            if callee.is_empty() || !seen.insert((callee, line)) {
                 continue;
             }
-            let entry = CallRef {
-                path: path.to_path_buf(),
-                line,
-            };
-            let sites = self.calls.entry(callee.to_string()).or_default();
-            // Guard against duplicates from overlapping call ranges without
-            // sorting the whole list on every insert.
-            if !sites.contains(&entry) {
-                sites.push(entry);
-            }
+            self.calls
+                .entry(callee.to_string())
+                .or_default()
+                .push(CallRef {
+                    path: path.to_path_buf(),
+                    line,
+                });
             called.insert(callee.to_string());
         }
 
@@ -251,6 +258,38 @@ impl Index {
         sites.sort();
         sites.dedup();
         sites
+    }
+
+    pub fn is_php(&self, path: &Path) -> bool {
+        self.php.contains(path)
+    }
+
+    pub fn php_symbol_at(
+        &self,
+        path: &Path,
+        line: usize,
+        name: &str,
+        at_call: bool,
+    ) -> Option<Def> {
+        self.php.symbol_at(path, line, name, at_call)
+    }
+
+    pub fn php_call_sites(&self, target: &Def) -> Vec<CallRef> {
+        self.php.sites_to(target)
+    }
+
+    pub fn resolve_call(
+        &self,
+        name: &str,
+        path: &Path,
+        line: usize,
+        root: Option<&Path>,
+    ) -> Option<Def> {
+        if self.is_php(path) {
+            self.php.resolve_call(path, line, name)
+        } else {
+            self.resolve(name, path, root)
+        }
     }
 
     // `prefix`-matched definitions for completion, ranked and capped.
@@ -427,6 +466,18 @@ mod tests {
         let sites = ix.call_sites("dup");
         assert_eq!(sites.len(), 2, "identical call site recorded twice");
         assert!(sites[0].line < sites[1].line, "call sites must be ordered");
+    }
+
+    #[test]
+    fn same_call_line_in_two_files_is_kept_and_reindex_does_not_duplicate() {
+        let mut ix = Index::new();
+        let mut f = func("caller", 1, 20);
+        f.calls = vec![call("dup", 7)];
+        let parsed = parsed_with(vec![f], vec![]);
+        ix.index_file(Path::new("/w/a.rs"), &parsed);
+        ix.index_file(Path::new("/w/b.rs"), &parsed);
+        ix.index_file(Path::new("/w/a.rs"), &parsed);
+        assert_eq!(ix.call_sites("dup").len(), 2);
     }
 
     #[test]

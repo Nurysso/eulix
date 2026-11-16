@@ -1,10 +1,12 @@
 // Copyright 2025-2026 Dawood K. (Nurysso)
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::cache::Cached;
 use crate::stats::{lang_counts, FailedFile, ParseStats, PartialFile};
 use libeulix::grammar_files::php;
 use libeulix::struc::kb_struct::FileData;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
+use std::collections::BTreeSet;
 
 /// Per-rayon-worker accumulator (fold) that is later merged (reduce).
 #[derive(Default)]
@@ -14,21 +16,17 @@ pub struct Acc {
     pub functions: usize,
     pub classes: usize,
     pub methods: usize,
-    pub languages: FxHashSet<String>,
+    pub languages: BTreeSet<String>,
     pub stats: ParseStats,
     pub index: Vec<(String, u64, u32)>,
     pub raw_imports: Vec<(String, String, String)>,
+    pub cache: Vec<(String, Cached)>,
+    pub reused: usize,
 }
 
 impl Acc {
-    pub fn record_ok(
-        &mut self,
-        rel: String,
-        fd: FileData,
-        loc: (u64, u32),
-        raw_imports: Vec<(String, String, String)>,
-    ) {
-        self.index.push((rel.clone(), loc.0, loc.1));
+    pub fn record_ok(&mut self, rel: String, fd: FileData, cached: Cached) {
+        self.index.push((rel.clone(), cached.emit.0, cached.emit.1));
         self.loc += fd.loc;
         // A PHP file's `{main}` holds its top-level code; it is not a
         // declared function.
@@ -44,7 +42,8 @@ impl Acc {
         }
 
         // Imports already filtered in parse_file before slim(); just store them
-        self.raw_imports.extend(raw_imports);
+        self.raw_imports.extend(cached.raw_imports.iter().cloned());
+        self.cache.push((rel.clone(), cached));
 
         let counts = lang_counts(&mut self.stats.by_lang, &fd.language);
         if fd.syntax.is_clean() {
@@ -75,6 +74,8 @@ impl Acc {
     pub fn merge(mut self, mut other: Acc) -> Acc {
         self.index.extend(other.index);
         self.raw_imports.append(&mut other.raw_imports);
+        self.cache.append(&mut other.cache);
+        self.reused += other.reused;
 
         if self.structure.len() < other.structure.len() {
             std::mem::swap(&mut self.structure, &mut other.structure);

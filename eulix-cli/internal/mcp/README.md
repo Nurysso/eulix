@@ -4,6 +4,8 @@ Model Context Protocol server for Eulix code intelligence. Lets AI coding agents
 (Windsurf, Cline, Claude Code, Continue, LM Studio, etc.) query any analyzed
 codebase on your machine and receive ranked source context in return.
 
+Full documentation: [docs/eulix-cli/mcp](../../../docs/eulix-cli/mcp/Overview.md).
+
 Built on the official Go SDK (`github.com/modelcontextprotocol/go-sdk`) and runs
 over stdio.
 
@@ -27,15 +29,22 @@ Unlike the one-off `eulix query` command, the MCP server:
 ## Quick start
 
 ```bash
-# 1. Analyze a repository once
-eulix analyze /path/to/repo
+# 1. Analyze a repository once (run inside the project; `analyze` takes no path)
+cd /path/to/repo && eulix analyze
 
 # 2. Run the MCP server (stdio transport)
 eulix mcp --repo /path/to/repo
 ```
 
-The server prints nothing and waits for JSON-RPC on stdin. Point any MCP client
-at that command.
+The server prints nothing to standard output (it carries the protocol) and
+waits for JSON-RPC on stdin. Logs go to standard error. Point any MCP client at
+that command.
+
+If `--repo` and the path argument are both omitted, the server uses the current
+directory when it contains `.eulix/kb.json`. If neither applies, it asks the
+client for its open workspace folders ("roots") after connecting, and binds the
+first usable one. The repository can also be chosen with `set_repo_path` or the
+`repo_path` argument of a query.
 
 ### Example client config (generic stdio)
 
@@ -43,15 +52,14 @@ at that command.
 {
   "mcpServers": {
     "eulix": {
-      "command": "/absolute/path/to/eulix_mcp",
+      "command": "/absolute/path/to/eulix",
       "args": ["mcp", "--repo", "/path/to/repo"]
     }
   }
 }
 ```
 
-The binary name may be `eulix` or `eulix_mcp` depending on your install; the
-`mcp` subcommand is required either way.
+The binary is `eulix`; the `mcp` subcommand is required.
 
 ---
 
@@ -110,7 +118,7 @@ attempt, stopping at the first one that clears a quality bar.
 
 ```
 1. multi-hop      agent knows the project (anchors in query and/or known_symbols)
-2. open-ended     plain semantic retrieval
+2. open-ended     retrieval from the question alone, using the configured engine
 3. anchored       re-query using anchors derived from what stage 2 returned
 4. lexical        grep-style filesystem search
 ```
@@ -152,6 +160,14 @@ walks the actual filesystem, so it can rescue queries that carry no extractable
 symbols or that the index has missed or gone stale on. It is deliberately last
 because it is the most expensive and least precise.
 
+The walk does **not** read hidden files and directories (names starting with a
+dot, or carrying the Windows hidden attribute), anything matched by `.euignore`,
+common dependency and build folders (`node_modules`, `vendor`, `dist`, `build`,
+`target`, `__pycache__`, `venv`, `coverage`), binary files, files over 1 MiB, or
+paths listed in `[retrievalConfig.etiya] lexical_exclude` (that last setting is
+read only when the engine is `etiya`). It inspects at most 20,000 files and
+stops at its time limit, returning what it has found.
+
 ### Project memory
 
 A small per-repository memory records which symbols appeared together in
@@ -173,7 +189,8 @@ what the calling agent knows.
 eulix mcp [path] [flags]
 
   --cot                Default to CoT when 'include_cot' is not specified
-  --repo string        Initial repository (can also be set via set_repo_path)
+  --repo string        Initial repository (or pass it as the positional argument;
+                       can also be set via set_repo_path or the client's roots)
   --timeout duration   Idle timeout before releasing memory (default 5m)
 ```
 
@@ -200,6 +217,8 @@ type StrategyConfig struct {
     LexicalTimeout    time.Duration // filesystem walk bound, default 10s
     LexicalMaxFiles   int           // files in lexical result, default 8
     LexicalMaxBytes   int           // size cap, default 24000
+    LexicalExclude    []string      // paths the lexical walk skips; set from
+                                    // [retrievalConfig.etiya] lexical_exclude
 }
 ```
 
@@ -219,7 +238,7 @@ version: 0.0.1
 schema: v1
 mcpServers:
   - name: eulix
-    command: /absolute/path/to/eulix_mcp
+    command: /absolute/path/to/eulix
     args:
       - mcp
       - --repo
@@ -237,7 +256,7 @@ Edit `mcp.json` via **Program → Install → Edit mcp.json**:
 {
   "mcpServers": {
     "eulix": {
-      "command": "/absolute/path/to/eulix_mcp",
+      "command": "/absolute/path/to/eulix",
       "args": ["mcp", "--repo", "/path/to/repo"]
     }
   }
@@ -254,7 +273,7 @@ the loop:
 
 ```bash
 npx @modelcontextprotocol/inspector \
-  /absolute/path/to/eulix_mcp \
+  /absolute/path/to/eulix \
   mcp --repo /path/to/repo
 ```
 
@@ -272,7 +291,7 @@ MCP stdio is newline-delimited JSON-RPC. You can drive the server directly:
 import json, subprocess, sys, time
 
 p = subprocess.Popen(
-    ["/absolute/path/to/eulix_mcp", "mcp", "--repo", "/path/to/repo"],
+    ["/absolute/path/to/eulix", "mcp", "--repo", "/path/to/repo"],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
     stderr=subprocess.PIPE, text=True, bufsize=1,
 )
@@ -300,26 +319,23 @@ print(json.dumps(recv(), indent=2))
 p.terminate()
 ```
 
-Run it with a query string. Cold queries should complete in 1–3 seconds on an
-analyzed repository.
+Run it with a query string. The author's notes put cold queries at 1–3 seconds
+on an analyzed repository; this has not been re-measured.
 
 ---
 
 ## Debugging retrieval
 
-Add a trace log line in `retrieveLocked` before returning:
-
-```go
-s.log.Info("retrieval", "trace", trace.String(),
-    "chosen_score", fmt.Sprintf("%.2f", best.score))
-```
-
-Each query then emits one line showing which stages ran, what each scored, and
-which was chosen:
+Every served query already logs one line to standard error, showing which
+stages ran, what each scored, and which was chosen:
 
 ```
-retrieval trace="anchors=[applyBudget] path=[multi-hop(0.42) -> open-ended(0.38) -> lexical(0.51)] chosen=lexical"
+query served repo=/path/to/repo retrieval="anchors=[applyBudget] path=[multi-hop(0.42) -> open-ended(0.38) -> lexical(0.51)] chosen=lexical"
 ```
+
+With `DebugConfig = true` in `eulix.toml`, each query is also appended, with its
+output and the same trace, to `.eulix/debug/mcp-query-debug.log` in the
+repository.
 
 This is the fastest way to answer "why did this query return bad context?" —
 you can see whether the router failed and lexical rescued it, or whether the
@@ -385,10 +401,10 @@ Beta. The stack is verified working:
 
 Known gaps:
 
-- Retrieval trace is not logged by default; add it before deploying to users.
-- The lexical fallback does not skip directories present in `.euignore` or dedupe
-  identical content across files, which wastes budget on repos with backup
-  trees.
+- The lexical fallback does not dedupe identical content across files, which
+  can waste budget on repos with backup trees. Use `.euignore` or
+  `[retrievalConfig.etiya] lexical_exclude` to keep such trees out.
+- `lexical_exclude` is read only when the retrieval engine is `etiya`.
 - `composeAnchored` relies on the router parsing a trailing `Key symbols:`
   line. This is an implicit contract; changing the router's prompt format can
   silently break multi-hop.
