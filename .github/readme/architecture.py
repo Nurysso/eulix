@@ -1,9 +1,12 @@
 """architecture.svg: the Eulix pipeline, eulix-parser -> eulix-embed -> eulix-cli -> MCP.
 
-The violet trace is the EHNAS path, which skips the embedding stage.
+The violet trace is the EHNAS path, which skips the embedding stage. PRISM v2
+and EHNAS, the two engines Eulix is built around, are named in violet too.
 """
 
-from _svg import arrow_right, cli, document, line, save, text, text_width
+from html import escape
+
+from _svg import arrow_right, cli, document, line, n, save, text, text_width
 
 WIDTH = 1000
 
@@ -11,7 +14,7 @@ NODES = [
     {
         "name": "eulix-parser",
         "chips": ["Rust"],
-        "lines": ["Tree-sitter parsing", "PRISM v2 call graph", "Incremental cache"],
+        "lines": ["Tree-sitter parsing", [("PRISM v2", "accent"), (" call graph", "")], "Incremental cache"],
         "out": ".eulix/kb*.json",
     },
     {
@@ -23,7 +26,7 @@ NODES = [
     {
         "name": "eulix-cli",
         "chips": ["Go"],
-        "lines": ["Query router", "ETIYA · EHNAS", "Budgeted MMR"],
+        "lines": ["Query router", [("EHNAS", "accent"), (" · ETIYA engines", "")], "Budgeted MMR"],
         "out": "reads .eulix/",
     },
     {
@@ -57,7 +60,16 @@ def draw_node(i: int, node: dict) -> list[str]:
         cx += w + 6
     out.append(line(x + 16, TOP + 78, x + NODE_W - 16, TOP + 78, "grid"))
     for j, body in enumerate(node["lines"]):
-        out.append(text(x + 16, TOP + 102 + j * 22, body, cls="ink2"))
+        y = TOP + 102 + j * 22
+        if isinstance(body, str):
+            out.append(text(x + 16, y, body, cls="ink2"))
+        else:  # segments: (text, class); an accent segment is a highlighted engine name
+            spans = "".join(
+                f'<tspan class="{cls}" font-weight="600">{escape(t, quote=False)}</tspan>' if cls
+                else escape(t, quote=False)
+                for t, cls in body
+            )
+            out.append(f'<text x="{n(x + 16)}" y="{n(y)}" class="sans ink2" font-size="13">{spans}</text>')
     out.append(
         text(x + NODE_W / 2, TOP + NODE_H + 26, node["out"], size=12, cls="ink2", family="mono", anchor="middle")
     )

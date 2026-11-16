@@ -1,0 +1,13 @@
+{
+  "name": "vizeulize-demo-bot",
+  "private": true,
+  "type": "module",
+  "description": "Drives vizEulize in a real browser window at a watchable pace for a screen recording",
+  "scripts": {
+    "setup": "playwright install chromium",
+    "bot": "node vizeulize-bot.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.64.1"
+  }
+}

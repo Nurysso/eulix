@@ -45,3 +45,55 @@ These find and confirm bugs. Each one prints a result that shows whether the bug
 | `vecstats.py`                | `vec_stats.py`                      | Pairwise cosine and int8 usage stats for a quantized vector file.                                                        |
 | `kb_usage.py` + `astdump.go` | `kb_field_usage.py` + `ast_dump.go` | Reports which `kb.json` struct fields the Go CLI reads.                                                                  |
 | `aligo-walk.sh`              | `alignment_go_walk.sh`              | Pages through files with the external `aligo` tool. Not related to Eulix bugs.                                           |
+
+## README demo
+
+The loop at the top of the README (`.github/readme/demo-dark.webp` and `demo-light.webp`) and the 90-second walkthrough it links to are recorded from scripts in `.github/readme/demo/`. After a change to the CLI's output or to Claude Code, record them again with one command:
+
+```
+.github/readme/demo/record.sh all       # walkthrough scenes, both loops, the edited video
+.github/readme/demo/record.sh teaser    # only the two README loops
+.github/readme/demo/record.sh walkthrough
+```
+
+It needs `vhs` (0.12 or later) with `ttyd`, `ffmpeg`, ImageMagick 7, the JetBrainsMono Nerd Font, `eulix` on `PATH` and a logged-in Claude Code. Claude Code is started with its `dark-ansi` or `light-ansi` theme so it draws with the demo's terminal colors; your own theme setting is not touched. Run it from a normal terminal: it removes the variables a parent Claude Code session sets, but the Claude takes count against the logged-in account's usage (two short questions per run). Work goes to `/tmp/eulix-demo` (pass another folder as the second argument); Claude Code shows that folder in its banner, so keep it neutral. The two loops are written to `.github/readme/demo-dark.webp` and `demo-light.webp`, and the video to `/tmp/eulix-demo/out/eulix-walkthrough.mp4`. None of them is committed (the repository's `.gitignore` keeps images and video out of git): drag each into any GitHub comment box, copy its `https://github.com/user-attachments/assets/…` link without posting the comment, and put the links in the README's demo block.
+
+| File | What it does |
+| --- | --- |
+| `demo.env` | The Flask release, the two questions asked on camera and the font. |
+| `stage.sh` | Clones Flask at that release into the work folder and, unless `--no-mcp`, registers eulix in its `.mcp.json`. |
+| `settings.tape`, `scene*.tape`, `teaser.tape` | The VHS scripts. Setup steps run inside `Hide` blocks. |
+| `claude.zsh` | Starts Claude Code without personal plugins, hooks or claude.ai connectors, in the default permission mode, with eulix as its only MCP server. |
+| `themes/` | Terminal colors from the README palette, dark and light. |
+| `record.sh` | Runs the tapes, speeds up the loop's wait and labels it, and encodes the WebP files (2 MB each at most). |
+| `edit.sh` | Builds the video: captions, labelled speed-ups, title and end cards, crossfades. |
+
+Why it looks the way it does:
+
+- **Flask, pinned.** Most viewers know Flask and can judge the answers; a fixed release keeps re-recordings comparable. The questions were chosen because eulix answers them well on this release. Questions about a bare Python method name (for example "who calls `full_dispatch_request`") currently retrieve the `Flask` class summary instead of the method ([RET-13](Known-Issues/Retrieval-And-Query.md#ret-13-a-question-naming-a-python-method-gets-the-class-not-the-method)), so avoid them until that is fixed.
+- **One Claude take per color scheme.** The walkthrough reuses the dark loop's take, so a full run asks Claude two questions.
+- **Speed-ups are labelled.** Waits play faster with a "k×" badge, and the programs' own timings (`analyze` prints how long it took) stay on screen, because the README makes speed claims.
+- **Claude's startup is off camera.** The trust prompt prints the full folder path and Claude Code's footer can show account usage. Check the sampled frames for anything personal before publishing.
+- **Captions, no audio.** GitHub plays attached videos muted.
+- **README palette and JetBrains Mono**, dark and light, so the loop follows the reader's GitHub theme. The video is dark only.
+
+### vizEulize recording
+
+`.github/readme/demo/viz/vizeulize-bot.mjs` drives vizEulize in a real browser window for a screen recording. It starts `eulix vizeulize` on the README demo's Flask checkout (`/tmp/eulix-demo/work/flask`, created by `record.sh`) and walks through search, callers, callees, clicking through to a caller, back, a class hierarchy and the theme switch, with step captions and a visible pointer. It needs vizEulize 0.2.0 or later installed (`make install-viz`), because it uses the page's keyboard shortcuts.
+
+```
+cd .github/readme/demo/viz
+npm install && npm run setup                                       # once: Playwright and its Chromium
+node vizeulize-bot.mjs --dry-run /tmp/viz-check                    # headless check, a screenshot per step
+node vizeulize-bot.mjs --record vizeulize-dark.mp4                 # the bot starts and stops wf-recorder
+node vizeulize-bot.mjs --theme light --record vizeulize-light.mp4
+```
+
+With `--record`, the bot also writes `<file>.steps.json`, the time each step starts, which `record.sh` uses to cut the README excerpt. On Hyprland it finds its own window with `hyprctl` and records exactly that area; elsewhere it asks you to select the area with `slurp`. Move your own mouse pointer off the window first, because the recording shows it. The browser opens full screen and renders the page at 1.5× (`--zoom`) so its text stays readable once scaled down; `--windowed`, `--pace 1.5` (slower) and `--no-captions` are also available. The launcher's own browser window is suppressed (the bot puts a no-op `xdg-open` first on its `PATH`). The steps name Flask functions as vizEulize displays them (methods keep their class prefix, as in `Flask_full_dispatch_request`); for another repository, edit `STEPS` at the top of the script.
+
+Where the recordings go:
+
+- `record.sh loop` rebuilds both README loops from the Claude takes already recorded, followed by the vizEulize part from "Search for any function" up to "And what it calls" in `viz/vizeulize-dark.mp4` and `viz/vizeulize-light.mp4`. It asks Claude nothing. `record.sh teaser` and `all` do the same after recording new takes.
+- `edit.sh` (run by `record.sh walkthrough` and `all`, or directly as `edit.sh /tmp/eulix-demo`) adds `viz/vizeulize-dark.mp4` to the video as step 5, at normal speed.
+
+A missing recording is skipped with a note, and the recordings themselves are not committed.

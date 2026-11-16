@@ -9,6 +9,7 @@ Regenerate everything from the repository root:
     python3 .github/readme/architecture.py
     python3 .github/readme/bench_parse.py
     python3 .github/readme/bench_memory.py
+    python3 .github/readme/bench_callgraph.py
 
 Pass `--theme light` or `--theme dark` with `--out <file>` to preview one mode.
 """

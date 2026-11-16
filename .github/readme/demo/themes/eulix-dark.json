@@ -1,0 +1,23 @@
+{
+  "name": "Eulix Dark",
+  "black": "#2a3142",
+  "red": "#f38ba8",
+  "green": "#86e1a0",
+  "yellow": "#f5c77e",
+  "blue": "#7aa2f7",
+  "magenta": "#a78bfa",
+  "cyan": "#5eead4",
+  "white": "#c9ceda",
+  "brightBlack": "#8b93a7",
+  "brightRed": "#f7a1b8",
+  "brightGreen": "#a6ebb8",
+  "brightYellow": "#f9d9a3",
+  "brightBlue": "#9cbbfa",
+  "brightMagenta": "#c4b5fd",
+  "brightCyan": "#99f6e4",
+  "brightWhite": "#f5f7fa",
+  "background": "#1a2030",
+  "foreground": "#e7e9ee",
+  "selection": "#2e3650",
+  "cursor": "#5eead4"
+}

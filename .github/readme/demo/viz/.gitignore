@@ -1,0 +1,4 @@
+node_modules/
+# Recordings are inputs to edit.sh and record.sh, not committed.
+*.mp4
+*.steps.json

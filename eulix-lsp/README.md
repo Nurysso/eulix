@@ -109,3 +109,18 @@ cargo clippy
 ## License
 
 Apache 2.0, like every Eulix component. See [LICENSE](../LICENSE).
+
+## Thank you, Gabriel
+
+Much of what makes this server dependable comes from [Gabriel Maia](https://github.com/gabrielmaialva33). He wrote 9 of the 22 commits in this directory, and seven of his pull requests were for this server:
+
+- Renames reach every call site, including the file that declares the symbol ([#106](https://github.com/Nurysso/eulix/pull/106)).
+- Positions count characters, not bytes, so lines with non-ASCII text get the right ranges ([#105](https://github.com/Nurysso/eulix/pull/105)).
+- Symbol names, ranges and position bounds are correct ([#154](https://github.com/Nurysso/eulix/pull/154)).
+- PHP method calls resolve in references and the call hierarchy ([#89](https://github.com/Nurysso/eulix/pull/89)).
+- Stale scans stop, and open buffers and the file watcher stay within bounds ([#162](https://github.com/Nurysso/eulix/pull/162)).
+- The server builds against libeulix 0.9.0 ([#150](https://github.com/Nurysso/eulix/pull/150)), and its tests run with the rest of the Rust tests in `make test-rust` ([#156](https://github.com/Nurysso/eulix/pull/156)).
+
+He also wrote the PHP support in libeulix that this server reads its symbols from. Gabriel, thank you: this server got a lot sturdier in your hands.
+
+— Nurysso

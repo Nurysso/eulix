@@ -1,0 +1,23 @@
+{
+  "name": "Eulix Light",
+  "black": "#24292f",
+  "red": "#c2334a",
+  "green": "#1a7f37",
+  "yellow": "#8a5a00",
+  "blue": "#0969da",
+  "magenta": "#6250d6",
+  "cyan": "#0f766e",
+  "white": "#57606a",
+  "brightBlack": "#59636e",
+  "brightRed": "#a40e26",
+  "brightGreen": "#116329",
+  "brightYellow": "#7d4e00",
+  "brightBlue": "#0550ae",
+  "brightMagenta": "#4c3bb5",
+  "brightCyan": "#115e59",
+  "brightWhite": "#24292f",
+  "background": "#f6f8fa",
+  "foreground": "#1f2328",
+  "selection": "#ddd8fa",
+  "cursor": "#6250d6"
+}

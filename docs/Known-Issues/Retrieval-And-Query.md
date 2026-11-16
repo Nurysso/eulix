@@ -156,6 +156,20 @@ To reproduce it, map a 16 MB file, rewrite it in place, then read on through the
 
 ---
 
+## RET-13: A question naming a Python method gets the class, not the method
+
+**Severity:** Medium · **Status:** Open · **Verification:** Reproduced (2026-11-16, `07907ad`, on Flask 3.1.3 with the default configuration)
+
+**Symptom.** Asked about a method by its bare name, retrieval returns the summary of the class that defines it and misses the method and its callers. `eulix query "full_dispatch_request"` and the MCP `query` tool both rank `src/flask/app.py:81-1536`, the 1,450-line `Flask` class summary, first. The method's own chunk, `app.py:904-920`, is not in the top five, and its caller `wsgi_app` is absent. `finalize_request` behaves the same way. Written as `Flask.full_dispatch_request`, the method comes back at rank 2, but over MCP `wsgi_app` is still missing even when the question asks who calls it. The index is correct: `functions_by_name` maps `full_dispatch_request` to `src/flask/app.py:904`, and `functions_calling` lists `wsgi_app` as its caller.
+
+**Cause.** Probably [RET-1](#ret-1-the-kb_exact-search-strategy-never-returns-anything). The only lookup that maps a bare name through `functions_by_name` to its chunk is in `kbExactLookup` (`internal/query/retrieval/kb.go`), which always returns before reaching it. Not confirmed by a fix.
+
+**Workaround.** Qualify the name with its class (`Flask.full_dispatch_request`). For callers, `eulix query "who calls full_dispatch_request"` takes the call-graph route and prints `← Flask.wsgi_app ← Flask.__call__` correctly.
+
+**Fix direction.** Fix RET-1 so the `functions_by_name` lookup runs (or move it into the `exact` strategy), then check that a method's chunk outranks its class summary and that MCP caller questions reach the call graph.
+
+---
+
 ## Related Docs
 
 - [Retrieval Overview](../eulix-cli/query/retrieval/Overview.md): the pipeline.
