@@ -566,7 +566,7 @@ async fn watched_changes_and_deletions_preserve_pending_buffer_content() {
 async fn first_buffer_parse_does_not_fall_back_to_cached_disk_content() {
     let (service, _) = LspService::new(Backend::new);
     let backend = service.inner();
-    let path = PathBuf::from("/workspace/app.py");
+    let path = std::env::temp_dir().join("workspace").join("app.py");
     backend.state.commit(
         path.clone(),
         Arc::new(syntax::parse(&path, "def disk_only(): pass\n").unwrap()),

@@ -8,7 +8,7 @@ use tower_lsp::LspService;
 async fn workspace_symbol_keeps_real_names_for_prefix_queries() {
     let (service, _) = LspService::new(Backend::new);
     let backend = service.inner();
-    let path = PathBuf::from("/workspace/demo.rs");
+    let path = std::env::temp_dir().join("workspace").join("demo.rs");
     let parsed = Arc::new(syntax::parse(&path, "fn run() {}\nfn runner() {}\n").unwrap());
     backend.state.commit(path, parsed);
     let symbols = backend

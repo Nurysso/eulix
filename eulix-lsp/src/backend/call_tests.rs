@@ -10,7 +10,7 @@ const APP: &str = "def get():\n    pass\n\ndef total(a, b):\n    return a.get() 
 async fn same_line_calls_on_different_receivers_are_listed_once() {
     let (service, _) = LspService::new(Backend::new);
     let backend = service.inner();
-    let path = PathBuf::from("/workspace/app.py");
+    let path = std::env::temp_dir().join("workspace").join("app.py");
     let uri = Url::from_file_path(&path).unwrap();
     let parsed = Arc::new(syntax::parse(&path, APP).unwrap());
     backend.state.commit(path, parsed.clone());

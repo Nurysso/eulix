@@ -40,7 +40,7 @@ function task() {} // @wrongfunction
 "#;
 
 fn install(backend: &Backend, name: &str, source: &str) -> Url {
-    let path = PathBuf::from(format!("/workspace/{name}"));
+    let path = std::env::temp_dir().join("workspace").join(name);
     let uri = Url::from_file_path(&path).unwrap();
     let parsed = Arc::new(syntax::parse(&path, source).unwrap());
     backend.state.commit(path, parsed.clone());
