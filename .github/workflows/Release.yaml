@@ -87,7 +87,7 @@ jobs:
             variants: 'amd nvidia'
 
           - name: macos-arm64 # Apple Silicon (M series)
-            runner: macos-14
+            runner: macos-15
             goos: darwin
             goarch: arm64
             rust_target: aarch64-apple-darwin

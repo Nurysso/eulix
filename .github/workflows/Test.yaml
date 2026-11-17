@@ -84,7 +84,7 @@ jobs:
           # -race needs cgo and a C toolchain on Windows; macOS kept the same.
           - os: windows-latest
             flags: ''
-          - os: macos-14
+          - os: macos-15
             flags: ''
     defaults:
       run:
@@ -118,7 +118,7 @@ jobs:
       fail-fast: false
       matrix:
         crate: ${{ fromJSON(needs.changes.outputs.rust) }}
-        os: [ubuntu-latest, windows-latest, macos-14]
+        os: [ubuntu-latest, windows-latest, macos-15]
     defaults:
       run:
         shell: bash
