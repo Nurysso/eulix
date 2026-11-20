@@ -115,17 +115,98 @@ func (s *Server) setRepoPathLocked(repoPath string) (string, error) {
 // switches to that repository first. Switching and querying happen under one lock, so
 // concurrent calls can never query the wrong repository.
 func (s *Server) ExecuteQuery(ctx context.Context, repoPath, queryText string, known []string, includeCoT bool) (string, error) {
+	return s.executeQuery(ctx, repoPath, queryText, known, queryOpts{cot: includeCoT, route: true})
+}
+
+// queryOpts are the per-call knobs of the free-text tools.
+type queryOpts struct {
+	cot       bool
+	maxTokens int  // 0 = sized by question type
+	route     bool // answer callers / definition questions from the index first
+	fresh     bool // resend chunks already sent this session
+	answer    string
+	// legacy reproduces the pre-budget output exactly (router-sized context,
+	// no routing, no header): the retrieval benchmark compares versions on it.
+	legacy bool
+}
+
+// executeQuery is the body of 'query' and 'search'. With route set, a
+// question the index answers exactly (who calls X, where is X defined) is
+// answered from the call graph or definitions and never reaches ranked
+// retrieval; everything else runs the cascade with a budget sized by
+// question type.
+func (s *Server) executeQuery(ctx context.Context, repoPath, queryText string, known []string, o queryOpts) (string, error) {
+	var out string
+	err := s.withRepo(ctx, repoPath, func() error {
+		ro := retrieveOpts{cot: o.cot, fresh: o.fresh, answer: o.answer}
+		if s.router != nil && !o.legacy {
+			ac := s.router.ClassifyForAgent(queryText)
+			if o.route {
+				if text, ok := s.answerExactLocked(ac, o); ok {
+					out = text
+					return nil
+				}
+				ro.want = ac.Intent
+			}
+			if ro.answer == "" {
+				ro.answer = string(ac.Intent)
+			}
+			ro.budget = s.budgetFor(ac.Intent, o.maxTokens)
+		}
+		result, trace, err := s.retrieveWith(ctx, queryText, known, ro)
+		if err != nil {
+			return err
+		}
+		if !o.legacy {
+			s.markSentLocked(result)
+		}
+		s.log.Info("query served", "repo", s.activeRepo, "retrieval", trace.String())
+		s.debugLocked(queryText, result, o.cot, trace.String())
+		out = result
+		return nil
+	})
+	return out, err
+}
+
+// answerExactLocked answers a callers/callees/definition question from the
+// index. ok is false when the question is another kind or the symbol is not
+// in the index, so the caller falls through to ranked retrieval.
+func (s *Server) answerExactLocked(ac query.AgentClassification, o queryOpts) (string, bool) {
+	if ac.Symbol == "" || o.cot {
+		return "", false
+	}
+	switch ac.Intent {
+	case query.IntentCallersQ, query.IntentCalleesQ:
+		rep, err := s.router.Calls(ac.Symbol, ac.Intent == query.IntentCalleesQ, 1, callSiteLimit)
+		if err != nil || !rep.Found {
+			return "", false
+		}
+		return renderCalls(rep), true
+	case query.IntentDefinitionQ:
+		defs, _, err := s.router.Definitions(ac.Symbol, definitionBodyLines, 3)
+		if err != nil || len(defs) == 0 {
+			return "", false
+		}
+		return renderDefinitions(ac.Symbol, defs, nil), true
+	}
+	return "", false
+}
+
+// withRepo binds repoPath (when given), checks the server is ready, and runs
+// fn under s.mu. Every tool goes through it, so switching and querying can
+// never interleave.
+func (s *Server) withRepo(ctx context.Context, repoPath string, fn func() error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if strings.TrimSpace(repoPath) != "" {
 		if _, err := s.setRepoPathLocked(repoPath); err != nil {
-			return "", err
+			return err
 		}
 	}
 
 	if s.router == nil {
-		return "", errors.New("repository path is not set. Provide the absolute path to your repository " +
+		return errors.New("repository path is not set. Provide the absolute path to your repository " +
 			"via the 'repo_path' argument or the 'set_repo_path' tool. The project must be initialized " +
 			"by running 'eulix analyze' in the project root in your terminal")
 	}
@@ -133,29 +214,28 @@ func (s *Server) ExecuteQuery(ctx context.Context, repoPath, queryText string, k
 	// A replaced folder would serve another repository's files against this index.
 	if s.activeInfo != nil {
 		if fi, err := os.Lstat(s.activeRepo); err != nil || !os.SameFile(s.activeInfo, fi) {
-			return "", fmt.Errorf("repository folder %s changed after it was bound; call set_repo_path again", s.activeRepo)
+			return fmt.Errorf("repository folder %s changed after it was bound; call set_repo_path again", s.activeRepo)
 		}
 	}
 
 	// Honor cancellation that happened while we waited for the lock.
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return err
 	}
-
-	result, trace, err := s.retrieveLocked(ctx, queryText, known, includeCoT)
-	if err != nil {
-		return "", err
+	if err := fn(); err != nil {
+		return err
 	}
-	s.log.Info("query served", "repo", s.activeRepo, "retrieval", trace.String())
+	s.touchLocked()
+	return nil
+}
 
+// debugLocked writes the debug log entry when [project] DebugConfig is on.
+func (s *Server) debugLocked(queryText, result string, cot bool, trace string) {
 	if s.cfg != nil && s.cfg.Project.DebugConfig && s.eulixDir != "" {
-		if err := s.writeDebugLogLocked(queryText, result, includeCoT, trace.String()); err != nil {
+		if err := s.writeDebugLogLocked(queryText, result, cot, trace); err != nil {
 			s.log.Debug("failed to write debug log", "err", err)
 		}
 	}
-
-	s.touchLocked()
-	return result, nil
 }
 
 // ========== Idle handling ==========

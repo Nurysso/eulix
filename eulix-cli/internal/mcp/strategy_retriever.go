@@ -32,30 +32,64 @@ type Retriever interface {
 
 // ========== Router-backed Retriever ==========
 
-// routerRetriever adapts *query.Router to the Retriever interface. The
-// router's only public entry point is PromptOrAnswerWithCoT, so anchors are
+// routerRetriever adapts *query.Router to the Retriever interface. Anchors are
 // passed by appending them to the query text; the router's own symbol
 // detection then picks them up.
 //
-// PLUG POINT: if query.Router grows dedicated anchored or graph-expansion
-// methods, call them here instead of rewriting the query text.
-type routerRetriever struct{ router *query.Router }
+// Questions the index answers directly (location, call graph, dependencies,
+// ...) get the router's direct answer; callers/callees questions get the
+// compact call report. Everything else is ranked context built with the
+// agent budget (no answer reserve) and rendered for an agent.
+type routerRetriever struct {
+	router   *query.Router
+	budget   int             // context tokens; 0 = the router's own LLM-sized budget
+	maxLines int             // per-chunk line cap
+	sent     map[string]bool // chunk ranges already sent this session
+	answer   string          // answer type for the reply header
+}
+
+func (r routerRetriever) retrieve(q string, cot bool) (string, error) {
+	if r.budget <= 0 {
+		return r.router.PromptOrAnswerWithCoT(q, cot)
+	}
+	if r.router.IsDirectAnswer(q) {
+		ac := r.router.ClassifyForAgent(q)
+		if (ac.Intent == query.IntentCallersQ || ac.Intent == query.IntentCalleesQ) && ac.Symbol != "" {
+			if rep, err := r.router.Calls(ac.Symbol, ac.Intent == query.IntentCalleesQ, 1, callSiteLimit); err == nil && rep.Found {
+				return renderCalls(rep), nil
+			}
+		}
+		return r.router.PromptOrAnswerWithCoT(q, cot)
+	}
+	ctx, err := r.router.AgentContextFor(q, r.budget, r.maxLines)
+	if err != nil {
+		return "", err
+	}
+	o := renderOpts{answer: r.answer, maxLines: r.maxLines, sent: r.sent}
+	if o.answer == "" {
+		o.answer = "search"
+	}
+	if cot {
+		o.cot = r.router.CoTFor(q, ctx.Window)
+	}
+	return renderContext(ctx, o), nil
+}
 
 // OpenEnded forwards to the router.
 func (r routerRetriever) OpenEnded(_ context.Context, q string, cot bool) (string, error) {
-	return r.router.PromptOrAnswerWithCoT(q, cot)
+	return r.retrieve(q, cot)
 }
 
 // Anchored rewrites the query to include the given anchors.
 func (r routerRetriever) Anchored(_ context.Context, q string, anchors []string, cot bool) (string, error) {
-	return r.router.PromptOrAnswerWithCoT(composeAnchored(q, anchors), cot)
+	return r.retrieve(composeAnchored(q, anchors), cot)
 }
 
 // MultiHop is Anchored with seeds and remembered expansion neighbours
 // concatenated into a single anchor list.
 func (r routerRetriever) MultiHop(_ context.Context, q string, seeds, expansion []string, cot bool) (string, error) {
 	all := append(append([]string{}, seeds...), expansion...)
-	return r.router.PromptOrAnswerWithCoT(composeAnchored(q, all), cot)
+	return r.retrieve(composeAnchored(q, all), cot)
 }
 
 // composeAnchored appends a "Key symbols: ..." hint to the query so the

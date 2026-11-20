@@ -83,6 +83,10 @@ type StrategyConfig struct {
 	// LexicalMaxBytes is an approximate byte cap for the rendered lexical
 	// result, so it cannot blow up the model's context window.
 	LexicalMaxBytes int
+
+	// Enclosing names the function or method containing file:line (set per
+	// query from the index); nil leaves lexical hits unlabelled.
+	Enclosing func(file string, line int) string
 }
 
 // DefaultStrategyConfig returns the tuned defaults used when a field is left
@@ -95,7 +99,7 @@ func DefaultStrategyConfig() StrategyConfig {
 		MaxMemorySymbols:  4000,
 		LexicalTimeout:    10 * time.Second,
 		LexicalMaxFiles:   8,
-		LexicalMaxBytes:   24_000,
+		LexicalMaxBytes:   8_000, // ~2,000 tokens: a fallback, not a full answer
 	}
 }
 
@@ -139,8 +143,8 @@ const (
 
 	// lexicalPreface prefixes every lexical result so the agent understands
 	// that the text below is grep output, not a semantic answer.
-	lexicalPreface = "> Semantic retrieval was low-confidence for this query, so these are lexical " +
-		"(text-search) matches from the repository.\n\n"
+	lexicalPreface = "answer: search · source: lexical fallback (ranked retrieval was low-confidence for this query) " +
+		"· complete: no — text matches only, one line per hit with its enclosing function; read the files for context\n\n"
 )
 
 // StageAttempt records what one stage of the cascade did: its score on

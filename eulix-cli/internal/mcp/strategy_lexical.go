@@ -23,7 +23,8 @@ import (
 // lexicalSearch is the last stage of the cascade. When semantic and anchored
 // retrieval both fail to clear the quality bar, this walks the repository,
 // scores files by weighted term frequency (anchors weigh 3x, other query
-// terms weigh 1x), and renders the best line windows from the top files.
+// terms weigh 1x), and renders the best-matching lines of the top files, one
+// line per hit.
 //
 // The walk is bounded by maxLexScanFiles, maxLexFileBytes, and the caller's
 // context. A timeout returns partial results; only cancellation aborts.
@@ -68,9 +69,6 @@ type fileHit struct {
 	data  []byte
 	score float64
 }
-
-// window is an inclusive line range rendered from a file.
-type window struct{ start, end int }
 
 // lexicalSearch ranks files by weighted term frequency and path matches, then
 // renders the best line windows from the top files.
@@ -189,45 +187,46 @@ func lexicalSearch(ctx context.Context, root, q string, anchors []Anchor, cfg St
 		hits = hits[:cfg.LexicalMaxFiles]
 	}
 
+	// One line per hit, with the function it sits in, instead of 7-line
+	// windows: the agent gets every location for a fraction of the tokens and
+	// reads the one it needs.
 	var b strings.Builder
-outer:
 	for _, h := range hits {
+		if b.Len() >= cfg.LexicalMaxBytes {
+			break
+		}
 		lines := strings.Split(string(h.data), "\n")
-		for _, w := range bestWindows(lines, weights, 3, 3) {
-			if b.Len() >= cfg.LexicalMaxBytes {
-				break outer
+		hitLines := bestLines(lines, weights, lexLinesPerFile)
+		if len(hitLines) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "### %s:%d\n", h.rel, hitLines[0]+1)
+		for _, i := range hitLines {
+			b.WriteString("  ")
+			fmt.Fprintf(&b, "%d", i+1)
+			if cfg.Enclosing != nil {
+				if fn := cfg.Enclosing(h.rel, i+1); fn != "" {
+					fmt.Fprintf(&b, "  [%s]", fn)
+				}
 			}
-			fmt.Fprintf(&b, "### %s:%d-%d\n```\n", h.rel, w.start+1, w.end+1)
-			for i := w.start; i <= w.end; i++ {
-				b.WriteString(truncate(lines[i], 300))
-				b.WriteByte('\n')
-			}
-			b.WriteString("```\n\n")
+			b.WriteString("  ")
+			b.WriteString(truncate(strings.TrimSpace(lines[i]), lexLineBytes))
+			b.WriteByte('\n')
 		}
 	}
 	return b.String(), nil
 }
 
-// sortHits orders hits best first, with the path as a stable tie-break.
-func sortHits(hits []fileHit) {
-	sort.Slice(hits, func(a, b int) bool {
-		if hits[a].score != hits[b].score {
-			return hits[a].score > hits[b].score
-		}
-		return hits[a].rel < hits[b].rel
-	})
-}
+const (
+	// lexLinesPerFile caps the hit lines shown per file.
+	lexLinesPerFile = 5
+	// lexLineBytes caps one rendered line.
+	lexLineBytes = 200
+)
 
-// isHidden covers both conventions: dot-prefixed names (Unix, and common
-// on Windows for .env/.npmrc) and the NTFS hidden attribute.
-func isHidden(name string, d fs.DirEntry) bool {
-	return strings.HasPrefix(name, ".") || checksum.HiddenByAttr(d)
-}
-
-// bestWindows picks up to maxWin non-overlapping windows around the
-// best-scoring lines. Each window covers ctxLines lines on either side of its
-// centre. Windows are returned in ascending line order.
-func bestWindows(lines []string, weights map[string]float64, maxWin, ctxLines int) []window {
+// bestLines returns up to n line indexes with the highest term score, in
+// ascending line order.
+func bestLines(lines []string, weights map[string]float64, n int) []int {
 	type scoredLine struct {
 		idx   int
 		score float64
@@ -251,26 +250,31 @@ func bestWindows(lines []string, weights map[string]float64, maxWin, ctxLines in
 		}
 		return scored[a].idx < scored[b].idx
 	})
-
-	var wins []window
-	for _, c := range scored {
-		if len(wins) >= maxWin {
-			break
-		}
-		w := window{start: max(0, c.idx-ctxLines), end: min(len(lines)-1, c.idx+ctxLines)}
-		overlap := false
-		for _, o := range wins {
-			if w.start <= o.end && w.end >= o.start {
-				overlap = true
-				break
-			}
-		}
-		if !overlap {
-			wins = append(wins, w)
-		}
+	if len(scored) > n {
+		scored = scored[:n]
 	}
-	sort.Slice(wins, func(a, b int) bool { return wins[a].start < wins[b].start })
-	return wins
+	out := make([]int, len(scored))
+	for i, s := range scored {
+		out[i] = s.idx
+	}
+	sort.Ints(out)
+	return out
+}
+
+// sortHits orders hits best first, with the path as a stable tie-break.
+func sortHits(hits []fileHit) {
+	sort.Slice(hits, func(a, b int) bool {
+		if hits[a].score != hits[b].score {
+			return hits[a].score > hits[b].score
+		}
+		return hits[a].rel < hits[b].rel
+	})
+}
+
+// isHidden covers both conventions: dot-prefixed names (Unix, and common
+// on Windows for .env/.npmrc) and the NTFS hidden attribute.
+func isHidden(name string, d fs.DirEntry) bool {
+	return strings.HasPrefix(name, ".") || checksum.HiddenByAttr(d)
 }
 
 // isBinary reports whether data looks binary, by scanning the first 8 KiB for

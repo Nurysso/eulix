@@ -16,7 +16,9 @@ over stdio.
 Eulix keeps a knowledge base and context builder cached in memory between
 queries, so an agent can ask many questions against the same repository without
 paying the analysis cost each time. The MCP server exposes that capability as
-four tools and two prompts.
+typed tools for structural questions (answered from the call graph and index),
+budgeted ranked search, and two prompts. Every reply starts with a
+`answer: ... · complete: yes|no` line.
 
 Unlike the one-off `eulix query` command, the MCP server:
 
@@ -65,30 +67,32 @@ The binary is `eulix`; the `mcp` subcommand is required.
 
 ## Tools
 
-### `query`
+| Tool         | Answers                                   | Source                       |
+| ------------ | ----------------------------------------- | ---------------------------- |
+| `callers`    | who calls X (one line per call site)      | call graph, exact            |
+| `callees`    | what X calls                              | call graph, exact            |
+| `definition` | where X is defined: signature, doc, body  | symbol index, exact          |
+| `trace`      | how A reaches B: ordered hops, then code  | call graph + ranked code     |
+| `search`     | concepts and open questions               | ranked code, within a budget |
+| `query`      | free text (older clients); routes callers and definition questions like the typed tools | either |
 
-The general-purpose retrieval tool.
+`callers` / `callees` take `symbol`, `depth` (1–4) and `limit`; `definition`
+takes `symbol` and `body_lines`; `trace` takes `from`, `to` and/or `question`;
+`search` takes `question`, `known_symbols`, `max_tokens`, `format`
+(`plain`/`cot`) and `fresh`. All take an optional `repo_path`.
 
-| Argument        | Type     | Required | Purpose                                                    |
-| --------------- | -------- | -------- | ---------------------------------------------------------- |
-| `query`         | string   | yes      | The question, symbol, or search string                     |
-| `repo_path`     | string   | no       | Switch/target a repository for this call                   |
-| `include_cot`   | bool     | no       | Include Chain-of-Thought headers (default: server setting) |
-| `known_symbols` | []string | no       | Symbols/files the agent already knows from its session     |
+`known_symbols` is still the important argument for `search`/`query`: it
+enables multi-hop retrieval — see _How retrieval works_ below.
 
-`known_symbols` is the important one. Passing it enables multi-hop retrieval —
-see _How retrieval works_ below.
+Replies are budgeted: `[mcp] reply_tokens` in `eulix.toml` (default 1800) for
+search, less for narrow questions, `max_tokens` per call. Chunks already sent in
+the session come back as one-line references. Details:
+[docs/eulix-cli/mcp/Server-And-Tools.md](../../../docs/eulix-cli/mcp/Server-And-Tools.md).
 
-### `query_with_cot`
+### `query_with_cot` / `query_without_cot` (deprecated)
 
-Same as `query` with `include_cot=true` forced. Returns retrieved context plus
-reasoning instructions, an honesty contract, and a citation legend. Use when
-you want the model to reason over the context before answering.
-
-### `query_without_cot`
-
-Same as `query` with `include_cot=false` forced. Returns clean context only.
-Use when injecting into a model that already has its own instructions.
+The pre-budget output, unchanged, kept because the retrieval benchmark compares
+releases on `query_without_cot`. Use `search` (with `format: "cot"` if needed).
 
 ### `set_repo_path`
 
