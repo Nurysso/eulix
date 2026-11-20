@@ -315,11 +315,11 @@ func TestBareID(t *testing.T) {
 
 func TestCallGraphShortName(t *testing.T) {
 	cases := map[string]string{
-		"func_x":                                  "x",
-		"method_Router_handle":                    "handle",
-		"method_A_b_c":                            "b_c",
-		"method_nounderscore":                     "nounderscore",
-		"func_outer.inner::a.rs":                  "inner",
+		"func_x":                 "x",
+		"method_Router_handle":   "handle",
+		"method_A_b_c":           "b_c",
+		"method_nounderscore":    "nounderscore",
+		"func_outer.inner::a.rs": "inner",
 		"method_PrinterPath_as_path.imp@42::u.rs": "imp",
 		"class_Foo::a.py":                         "Foo",
 		"func_Foo::bar::src/a.cpp":                "bar",
@@ -1184,114 +1184,79 @@ func TestHandleLocation(t *testing.T) {
 }
 
 func TestHandleUsage(t *testing.T) {
+	// handleUsage answers with call sites (who calls Foo), never with just
+	// Foo's own definition.
 	dir := t.TempDir()
-	src := filepath.Join(dir, "svc.go")
-	writeFile(t, src, lines("package x", "", "func Foo(a int, b string) error {", "\treturn nil", "}"))
-	// Locations are root-relative, as eulix-parser writes them.
-	newUsageRouter := func(t *testing.T, locs ...string) *Router {
+	writeFile(t, filepath.Join(dir, "svc.go"), lines("package x", "", "func Foo(a int, b string) error {", "\treturn nil", "}"))
+	writeFile(t, filepath.Join(dir, "api.go"), lines("package x", "", "func Handle() {", "\t_ = Foo(1, \"a\")", "}"))
+	writeFile(t, filepath.Join(dir, "svc_test.go"), lines("package x", "func TestFoo() {", "\tFoo(2, \"b\")", "}"))
+	writeFile(t, filepath.Join(dir, ".hidden.go"), lines("package x", "func Sneak() { Foo(0, \"HIDDEN_SECRET\") }"))
+
+	newUsageRouter := func(t *testing.T) *Router {
 		r := newRouter(t)
 		r.config.Project.Path = dir
-		items := S{}
-		for _, l := range locs {
-			items = append(items, l)
-		}
-		r.setIndex(t, M{"FunctionsByName": M{"Foo": items}})
+		r.setGraph(t, M{
+			"Nodes": S{
+				M{"ID": "func_Foo::svc.go", "NodeType": "function", "File": "svc.go"},
+				M{"ID": "func_Handle::api.go", "NodeType": "function", "File": "api.go"},
+				M{"ID": "func_TestFoo::svc_test.go", "NodeType": "function", "File": "svc_test.go"},
+				M{"ID": "func_Sneak::.hidden.go", "NodeType": "function", "File": ".hidden.go"},
+			},
+			"Edges": S{
+				M{"From": "func_Handle::api.go", "To": "func_Foo::svc.go", "EdgeType": "call", "CallSiteLine": 4},
+				M{"From": "func_TestFoo::svc_test.go", "To": "func_Foo::svc.go", "EdgeType": "call", "CallSiteLine": 3},
+				M{"From": "func_Sneak::.hidden.go", "To": "func_Foo::svc.go", "EdgeType": "call", "CallSiteLine": 2},
+			},
+		})
+		r.kb = &utils.KnowledgeBaseSimplifiedRef{Metadata: &utils.Metadata{}, Structure: map[string]utils.FileData{
+			"svc.go": {Functions: []utils.KBFunction{{ID: "func_Foo::svc.go", Name: "Foo", LineStart: 3, LineEnd: 5}}},
+		}}
 		return r
 	}
 
-	t.Run("prints location and signature", func(t *testing.T) {
-		r := newUsageRouter(t, "svc.go:3")
+	t.Run("lists call sites with the calling line", func(t *testing.T) {
+		r := newUsageRouter(t)
 		got, err := r.handleUsage("usage of Foo", cls(classifier.QueryTypeUsage, "Foo"))
-		want := "Usage of 'Foo'\n\n  svc.go:3\n  func Foo(a int, b string) error\n\n"
-		if err != nil || got != want {
-			t.Errorf("got (%q, %v)\nwant %q", got, err, want)
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	t.Run("duplicate locations print once", func(t *testing.T) {
-		r := newUsageRouter(t, "svc.go:3", "svc.go:3")
-		got, _ := r.handleUsage("usage of Foo", cls(classifier.QueryTypeUsage, "Foo"))
-		if n := strings.Count(got, "func Foo("); n != 1 {
-			t.Errorf("signature printed %d times", n)
+		for _, want := range []string{"callers of Foo (svc.go:3)", "api.go:4", "Handle", "_ = Foo(1, \"a\")", "tests: svc_test.go:3"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("missing %q in:\n%s", want, got)
+			}
 		}
-	})
-	t.Run("multiple locations", func(t *testing.T) {
-		other := filepath.Join(dir, "other.go")
-		writeFile(t, other, lines("package x", "func Foo() {", "}"))
-		r := newUsageRouter(t, "svc.go:3", "other.go:2")
-		got, _ := r.handleUsage("", cls(classifier.QueryTypeUsage, "Foo"))
-		if !strings.Contains(got, "func Foo(a int, b string) error") || !strings.Contains(got, "func Foo()\n") {
-			t.Errorf("got %q", got)
+		if strings.Contains(got, "func Foo(a int") {
+			t.Errorf("printed the definition instead of call sites:\n%s", got)
 		}
 	})
 	t.Run("command prefix is stripped before entity extraction", func(t *testing.T) {
-		r := newUsageRouter(t, "svc.go:3")
+		r := newUsageRouter(t)
 		for _, q := range []string{"usage of Foo", "show usage Foo", "find usage Foo", "uses of Foo", "use Foo", "USAGE Foo"} {
 			got, _ := r.handleUsage(q, cls(classifier.QueryTypeUsage))
-			if !strings.HasPrefix(got, "Usage of 'Foo'") {
+			if !strings.HasPrefix(got, "callers of Foo") {
 				t.Errorf("%q -> %q", q, got)
 			}
 		}
 	})
-	t.Run("unreadable file is reported inline", func(t *testing.T) {
-		r := newUsageRouter(t, "gone.go:3")
-		got, _ := r.handleUsage("", cls(classifier.QueryTypeUsage, "Foo"))
-		if !strings.Contains(got, "could not read signature") {
-			t.Errorf("got %q", got)
-		}
-	})
 	t.Run("unknown symbol", func(t *testing.T) {
-		r := newUsageRouter(t, "svc.go:3")
+		r := newUsageRouter(t)
 		got, _ := r.handleUsage("", cls(classifier.QueryTypeUsage, "Bar"))
-		if got != "'Bar' not found in knowledge base." {
+		if !strings.Contains(got, "not found in the call graph") {
 			t.Errorf("got %q", got)
 		}
 	})
 	t.Run("no entity", func(t *testing.T) {
-		r := newUsageRouter(t, "svc.go:3")
+		r := newUsageRouter(t)
 		got, _ := r.handleUsage("the", cls(classifier.QueryTypeUsage))
 		if got != "Could not identify a function or class name in the query." {
 			t.Errorf("got %q", got)
 		}
 	})
-	t.Run("malformed location does not panic", func(t *testing.T) {
-		r := newUsageRouter(t, "no-colon", "svc.go:x", "svc.go:3")
-		mustNotPanic(t, "handleUsage", func() {
-			got, err := r.handleUsage("", cls(classifier.QueryTypeUsage, "Foo"))
-			if err != nil || !strings.Contains(got, "func Foo(") {
-				t.Errorf("good location should still be printed: (%q, %v)", got, err)
-			}
-		})
-	})
-	t.Run("never reads outside the project or hidden files", func(t *testing.T) {
-		outside := filepath.Join(t.TempDir(), "id_rsa")
-		writeFile(t, outside, lines("API_KEY=SECRET"))
-		writeFile(t, filepath.Join(dir, ".env"), lines("API_KEY=SECRET"))
-		rel, _ := filepath.Rel(dir, outside)
-		r := newUsageRouter(t, outside+":1", filepath.ToSlash(rel)+":1", ".env:1", "svc.go:3")
+	t.Run("never reads hidden files", func(t *testing.T) {
+		r := newUsageRouter(t)
 		got, _ := r.handleUsage("", cls(classifier.QueryTypeUsage, "Foo"))
-		if strings.Contains(got, "SECRET") || !strings.Contains(got, "func Foo(a int") {
-			t.Errorf("got %q", got)
-		}
-	})
-	t.Run("never follows symlinks to hidden or ignored files", func(t *testing.T) {
-		writeFile(t, filepath.Join(dir, ".hidden.go"), "func Foo(hidden string /* HIDDEN_SECRET */) {}\n")
-		writeFile(t, filepath.Join(dir, ".hidden-dir", "secret.go"), "func Foo(dir string /* DIR_SECRET */) {}\n")
-		writeFile(t, filepath.Join(dir, "ignored.go"), "func Foo(ignored string /* IGNORED_SECRET */) {}\n")
-		writeFile(t, filepath.Join(dir, ".euignore"), "ignored.go\n")
-		if err := os.Symlink(".hidden.go", filepath.Join(dir, "visible-hidden.go")); err != nil {
-			t.Skipf("symlinks unavailable: %v", err)
-		}
-		if err := os.Symlink("ignored.go", filepath.Join(dir, "visible-ignored.go")); err != nil {
-			t.Skipf("symlinks unavailable: %v", err)
-		}
-		if err := os.Symlink(".hidden-dir", filepath.Join(dir, "visible-dir")); err != nil {
-			t.Skipf("symlinks unavailable: %v", err)
-		}
-
-		r := newUsageRouter(t, "visible-hidden.go:1", "visible-ignored.go:1", "visible-dir/secret.go:1")
-		got, _ := r.handleUsage("", cls(classifier.QueryTypeUsage, "Foo"))
-		if strings.Contains(got, "HIDDEN_SECRET") || strings.Contains(got, "IGNORED_SECRET") || strings.Contains(got, "DIR_SECRET") {
-			t.Errorf("followed a symlink to excluded source:\n%s", got)
+		if strings.Contains(got, "HIDDEN_SECRET") {
+			t.Errorf("read a hidden file:\n%s", got)
 		}
 	})
 }

@@ -44,6 +44,7 @@ type Router struct {
 	cgBuild         *retrieval.CallGraphIdx
 	currentChecksum string
 	debug           *utils.DebugLogger
+	syms            *symTable // definitions by name, built on first agent lookup
 }
 
 type callGraphIndex struct {
