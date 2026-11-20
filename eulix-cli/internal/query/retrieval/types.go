@@ -27,7 +27,13 @@ type CallGraphIdx struct {
 	Nodes    map[string]*utils.CallGraphNode
 	CalledBy map[string][]string
 	Calls    map[string][]string
+	// Sites holds the call-site lines of each edge, keyed by SiteKey(from, to).
+	// The line is in the caller's file. Nil when the index was built without it.
+	Sites map[string][]int
 }
+
+// SiteKey is the CallGraphIdx.Sites key for the edge from → to.
+func SiteKey(from, to string) string { return from + "\x00" + to }
 
 type FunctionNode struct {
 	Name     string   `json:"name"`
