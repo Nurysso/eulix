@@ -4,7 +4,8 @@
 #
 # Environment overrides:
 #   EULIX_VERSION=v0.9.0   install this release tag instead of the latest
-#   EULIX_GPU=amd|nvidia   skip the backend prompt (Linux only; macOS has one build)
+#   EULIX_GPU=cpu|nvidia   skip GPU detection and install that build (Linux only;
+#                          default: NVIDIA build when an NVIDIA driver is loaded, else CPU)
 set -euo pipefail
 
 # Colours
@@ -131,7 +132,41 @@ Check_OS() {
     esac
 }
 
-# Ask user which GPU/backend variant to download
+# True when an NVIDIA driver is loaded: nvidia-smi lists a GPU (WSL keeps it
+# in /usr/lib/wsl/lib), or the kernel module has registered itself.
+has_nvidia_driver() {
+    local smi out
+    for smi in "$(command -v nvidia-smi 2>/dev/null || true)" /usr/lib/wsl/lib/nvidia-smi; do
+        [[ -n "$smi" && -x "$smi" ]] || continue
+        # Capture first: `| grep -q` can SIGPIPE nvidia-smi, which pipefail reports as failure.
+        out="$("$smi" -L 2>/dev/null || true)"
+        [[ "$out" == GPU* || "$out" == *$'\n'GPU* ]] && return 0
+    done
+    [[ -r /proc/driver/nvidia/version ]]
+}
+
+# Prints the vendor of the first display controller on the PCI bus whose
+# vendor is NVIDIA (0x10de) or AMD (0x1002), read from sysfs so lspci is
+# not needed. Prints nothing when there is neither.
+pci_gpu_vendor() {
+    local dev vendor class found=""
+    for dev in /sys/bus/pci/devices/*; do
+        [[ -r "$dev/class" && -r "$dev/vendor" ]] || continue
+        class="$(cat "$dev/class")"
+        [[ "$class" == 0x03* ]] || continue   # 0x03xxxx: display controller
+        vendor="$(cat "$dev/vendor")"
+        case "$vendor" in
+            0x10de) echo "nvidia"; return ;;
+            0x1002) found="amd" ;;
+        esac
+    done
+    [[ -n "$found" ]] && echo "$found"
+    return 0
+}
+
+# Pick the ONNX backend variant. EULIX_GPU wins when set; otherwise the NVIDIA
+# build when an NVIDIA driver is loaded, and the CPU build (onnx-amd, which
+# also drives AMD GPUs) everywhere else.
 choose_gpu_variant() {
     if [[ "$DETECTED_OS" == "darwin" ]]; then
         # The release has a single macOS build. There is no CUDA on a Mac;
@@ -141,40 +176,41 @@ choose_gpu_variant() {
         return
     fi
 
-    if [[ -n "${EULIX_GPU:-}" ]]; then
-        case "$EULIX_GPU" in
-            amd|nvidia) GPU_VARIANT="$EULIX_GPU" ;;
-            *) die "EULIX_GPU must be 'amd' or 'nvidia', got '$EULIX_GPU'." ;;
-        esac
-        success "Selected variant (EULIX_GPU): $GPU_VARIANT"
+    case "${EULIX_GPU:-auto}" in
+        cpu|amd)
+            GPU_VARIANT="amd"
+            success "Installing the CPU build (onnx-amd), selected by EULIX_GPU."
+            return
+            ;;
+        nvidia)
+            GPU_VARIANT="nvidia"
+            success "Installing the NVIDIA build (onnx-nvidia), selected by EULIX_GPU."
+            return
+            ;;
+        auto) ;;
+        *) die "EULIX_GPU must be 'auto', 'cpu', 'amd' or 'nvidia', got '$EULIX_GPU'." ;;
+    esac
+
+    info "Detecting GPU..."
+    if has_nvidia_driver; then
+        GPU_VARIANT="nvidia"
+        success "NVIDIA driver found: installing the NVIDIA build (onnx-nvidia). For the CPU build, re-run with EULIX_GPU=cpu."
         return
     fi
 
-    # With `curl ... | bash` the script itself is on stdin (BASH_SOURCE is
-    # empty), so reading stdin would eat script lines: ask the terminal instead.
-    local input="/dev/stdin"
-    if [[ -z "${BASH_SOURCE[0]:-}" ]]; then
-        if { : </dev/tty; } 2>/dev/null; then
-            input="/dev/tty"
-        else
-            die "No terminal to ask for the GPU variant. Set EULIX_GPU=amd or EULIX_GPU=nvidia and run again."
-        fi
-    fi
-
-    info "Select the ONNX backend variant to install:"
-    echo "  1) amd     - CPU / AMD (onnx-amd)"
-    echo "  2) nvidia  - NVIDIA GPU (onnx-nvidia)"
-    local choice
-    while true; do
-        read -rp "Enter choice [1-2]: " choice <"$input" \
-            || die "No answer received. Set EULIX_GPU=amd or EULIX_GPU=nvidia and run again."
-        case "$choice" in
-            1) GPU_VARIANT="amd"; break ;;
-            2) GPU_VARIANT="nvidia"; break ;;
-            *) warn "Invalid choice, enter 1 or 2." ;;
-        esac
-    done
-    success "Selected variant: $GPU_VARIANT"
+    GPU_VARIANT="amd"
+    case "$(pci_gpu_vendor)" in
+        nvidia)
+            warn "NVIDIA GPU found but no NVIDIA driver is loaded, so CUDA cannot run."
+            success "Installing the CPU build (onnx-amd). After installing the driver, re-run with EULIX_GPU=nvidia."
+            ;;
+        amd)
+            success "AMD GPU found: installing the CPU / AMD build (onnx-amd)."
+            ;;
+        *)
+            success "No NVIDIA GPU found: installing the CPU build (onnx-amd)."
+            ;;
+    esac
 }
 
 # Check if uv is available

@@ -9,7 +9,7 @@ The `mcp` package lets AI coding agents ask Eulix questions about your code over
 
 ## Overview
 
-AI coding assistants such as Claude Code, Cursor, Windsurf, Cline and Continue can use external "tools". The Model Context Protocol (MCP) is the standard way they discover and call them. `eulix mcp` starts a tool server that speaks that protocol over standard input and output. The assistant calls a tool named `query` with a question, and Eulix replies with ranked source code and call-graph facts that the assistant can use in its own answer.
+AI coding assistants such as Claude Code, Cursor, Windsurf, Cline and Continue can use external "tools". The Model Context Protocol (MCP) is the standard way they discover and call them. `eulix mcp` starts a tool server that speaks that protocol over standard input and output. The assistant calls typed tools for structural questions (`callers`, `callees`, `definition`, `trace`), answered exactly from the call graph and symbol index, and `search` for open questions, answered with ranked source code within a token budget. Every reply starts with a line saying whether it is complete. See [Server And Tools](Server-And-Tools.md).
 
 The server does the retrieval, not the answering. It never calls a language model itself; the assistant brings its own. That is why the MCP replies are *context*, not *answers*.
 
@@ -22,7 +22,7 @@ Querying from the command line costs the full start-up each time: load the knowl
 ## How It Works
 
 1. You start `eulix mcp [path]` (or the assistant starts it from its configuration). The server prints nothing of its own to standard output, because that stream carries the protocol; all logs go to standard error.
-2. The assistant connects and the server announces its four tools and two prompts.
+2. The assistant connects and the server announces its tools, its two prompts, and instructions saying which questions Eulix answers better than grep. `eulix mcp install claude|cursor|cline` registers the server and adds the same guidance to the project's agent instructions.
 3. A repository is chosen: from the command line, from a `repo_path` argument on a call, from the `set_repo_path` tool, or, if none of those happened, from the client's own "roots" (the folders open in the editor).
 4. Each `query` call runs the [retrieval cascade](Retrieval-Cascade.md): up to four search strategies in order, stopping at the first one whose result scores well enough.
 5. After 5 idle minutes (configurable), the server frees the loaded index. The next question reloads it.
@@ -34,7 +34,9 @@ The repository must already have been analyzed with `eulix analyze`. If not, the
 | File | Responsibility |
 | --- | --- |
 | `server.go` | The server object, options, tool and prompt registration, binding from client roots. |
-| `tools.go` | The tool and prompt handlers. |
+| `agent_tools.go` | The typed tools: `callers`, `callees`, `definition`, `trace`, `search`. |
+| `agent_render.go` | Reply budgets, the completeness line, chunk cuts and session references. |
+| `tools.go` | `set_repo_path` and the prompt handlers. |
 | `helpers.go` | Switching repositories, running queries, the idle timer, debug log. |
 | `lifecycle.go` | `Serve` and `Close`. |
 | `strategy*.go` | The retrieval cascade, anchors, scoring, memory and the text-search fallback. |
@@ -97,5 +99,7 @@ The package README says cold queries on an analyzed repository should complete i
 
 - [Server And Tools](Server-And-Tools.md): the protocol surface.
 - [Retrieval Cascade](Retrieval-Cascade.md): how a question is answered.
+- [Agent Improvements](Agent-Improvements.md): what the agent benchmarks found and a plan to cut tokens and cost for agents.
+- [Agent Benchmark](../../Architecture/Agent-Benchmark.md): Claude Code with and without Eulix on bifrost and three other repos, every run and its limits.
 - [query Overview](../query/Overview.md): the router the MCP server wraps.
 - [Retrieval Overview](../query/retrieval/Overview.md): the engine underneath.

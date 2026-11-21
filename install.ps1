@@ -9,7 +9,9 @@
     installs them, sets up a Python venv via uv, and triggers first-run
     self-extraction of the embedded parser + eulix_embed.
 
-    Set $env:EULIX_GPU to 'amd' or 'nvidia' to skip the backend prompt.
+    The NVIDIA CUDA build is installed when an NVIDIA GPU with its driver is
+    found, the CPU build otherwise. Set $env:EULIX_GPU to 'cpu' or 'nvidia'
+    to skip detection.
 
     Keep this file ASCII-only: Windows PowerShell 5.1 reads a saved .ps1
     without a BOM as ANSI, and multi-byte characters can break parsing.
@@ -113,28 +115,56 @@ function Check-OS {
     Success "Detected Windows $($osVersion.Major).$($osVersion.Minor) (AMD64)."
 }
 
-# Ask user which GPU/backend variant to download
-function Choose-GpuVariant {
-    if ($env:EULIX_GPU) {
-        if ($env:EULIX_GPU -notin @('amd', 'nvidia')) {
-            Die "EULIX_GPU must be 'amd' or 'nvidia', got '$($env:EULIX_GPU)'."
+# True when an NVIDIA driver is installed: nvidia-smi lists a GPU, or Windows
+# reports an NVIDIA display adapter (without the driver it shows up as
+# "Microsoft Basic Display Adapter" instead).
+function Test-NvidiaDriver {
+    $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+    if (-not $smi) {
+        $path = Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'
+        if (Test-Path $path) { $smi = $path }
+    }
+    if ($smi) {
+        try {
+            $out = & $smi -L 2>$null
+            if ($LASTEXITCODE -eq 0 -and ($out -match '^GPU')) { return $true }
+        } catch { }
+    }
+    try {
+        $adapters = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop)
+        foreach ($a in $adapters) {
+            if ("$($a.AdapterCompatibility) $($a.Name)" -match 'NVIDIA') { return $true }
         }
-        $script:GpuVariant = $env:EULIX_GPU.ToLower()
-        Success "Selected variant (EULIX_GPU): $GpuVariant"
-        return
+    } catch { }
+    return $false
+}
+
+# Pick the ONNX backend variant. EULIX_GPU wins when set; otherwise the NVIDIA
+# build when an NVIDIA driver is installed, and the CPU build (onnx-amd) everywhere else.
+function Choose-GpuVariant {
+    $choice = if ($env:EULIX_GPU) { $env:EULIX_GPU.ToLower() } else { 'auto' }
+    switch ($choice) {
+        { $_ -in @('cpu', 'amd') } {
+            $script:GpuVariant = 'amd'
+            Success "Installing the CPU build (onnx-amd), selected by EULIX_GPU."
+            return
+        }
+        'nvidia' {
+            $script:GpuVariant = 'nvidia'
+            Success "Installing the NVIDIA build (onnx-nvidia), selected by EULIX_GPU."
+            return
+        }
+        'auto' { }
+        default { Die "EULIX_GPU must be 'auto', 'cpu', 'amd' or 'nvidia', got '$($env:EULIX_GPU)'." }
     }
 
-    Info "Select the ONNX backend variant to install:"
-    Write-Host "  1) amd     - CPU / AMD (onnx-amd)"
-    Write-Host "  2) nvidia  - NVIDIA GPU (onnx-nvidia)"
-
-    while ($true) {
-        $choice = Read-Host "Enter choice [1-2]"
-        switch ($choice) {
-            '1' { $script:GpuVariant = 'amd';    return }
-            '2' { $script:GpuVariant = 'nvidia'; return }
-            default { Warn "Invalid choice, enter 1 or 2." }
-        }
+    Info "Detecting GPU..."
+    if (Test-NvidiaDriver) {
+        $script:GpuVariant = 'nvidia'
+        Success "NVIDIA GPU found: installing the NVIDIA build (onnx-nvidia). For the CPU build, re-run with `$env:EULIX_GPU='cpu'."
+    } else {
+        $script:GpuVariant = 'amd'
+        Success "No NVIDIA GPU found: installing the CPU build (onnx-amd). For NVIDIA CUDA, re-run with `$env:EULIX_GPU='nvidia'."
     }
 }
 

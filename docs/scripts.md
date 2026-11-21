@@ -45,6 +45,7 @@ These find and confirm bugs. Each one prints a result that shows whether the bug
 | `vecstats.py`                | `vec_stats.py`                      | Pairwise cosine and int8 usage stats for a quantized vector file.                                                        |
 | `kb_usage.py` + `astdump.go` | `kb_field_usage.py` + `ast_dump.go` | Reports which `kb.json` struct fields the Go CLI reads.                                                                  |
 | `aligo-walk.sh`              | `alignment_go_walk.sh`              | Pages through files with the external `aligo` tool. Not related to Eulix bugs.                                           |
+| (new)                        | `lint_ps1.py`                       | Lints `install.ps1`, `build.ps1` and other tracked PowerShell files with PSScriptAnalyzer: `uv run scripts/lint_ps1.py [files] [--severity Error]`. Downloads a pinned, checksum-checked `pwsh` into `script-test-dump/pwsh/` when none is on PATH. |
 
 ## README demo
 
@@ -67,6 +68,9 @@ It needs `vhs` (0.12 or later) with `ttyd`, `ffmpeg`, ImageMagick 7, the JetBrai
 | `themes/` | Terminal colors from the README palette, dark and light. |
 | `record.sh` | Runs the tapes, speeds up the loop's wait and labels it, and encodes the WebP files (2 MB each at most). |
 | `edit.sh` | Builds the video: captions, labelled speed-ups, title and end cards, crossfades. |
+| `sidebyside.sh`, `sidebyside.tape` | The 30-second side-by-side clip: one task from the agent benchmark, asked without Eulix (left) and with Eulix (right). See below. |
+
+**Side-by-side clip.** `sidebyside.sh <task-id> bench/results/agent/<run-id> [scratch] [dark|light]` copies the benchmark's prepared repos for that task (run `python3 bench/agent/agent_bench.py prepare` first). It records the task's prompt in Claude Code once without Eulix and once with Eulix registered and the benchmark's hint in `CLAUDE.md`. The two takes go side by side, sped up by the same labelled factor to fit 30 s, as `.github/readme/sidebyside-<scheme>.gif` and `.mp4`. The caption under each half is that task's median input tokens, cost and tool calls from the given run, so the clip shows only measured numbers. One task is not the average: the README text next to the clip must name the task and link the full results.
 
 Why it looks the way it does:
 

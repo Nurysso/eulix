@@ -26,7 +26,7 @@ For the install script, you need only the following. The script installs the res
 | Network access                                                | To download the release, `uv`, Python 3.11 and the embedding model's Python packages. The model itself is downloaded the first time it is used. |
 | About a few GB of disk                                        | Python packages and the model.                                                                                                                  |
 
-**GPU:** on Linux and Windows the script asks you to pick a variant (set `EULIX_GPU=amd` or `EULIX_GPU=nvidia` to skip the question). Choose `nvidia` for NVIDIA GPUs (CUDA). Choose `amd` for AMD GPUs or for machines with no NVIDIA GPU, including CPU-only ones. The choice decides which ONNX packages are installed. On macOS there is one build and no question: it installs `onnxruntime`, which runs on the CPU or through CoreML. If you have an AMD GPU and get strange search results, read [EMB-1](Known-Issues/Embeddings.md#emb-1-onnx-on-rocm-produces-wrong-embeddings).
+**GPU:** the script picks the build for you without asking. On Linux and Windows it installs the NVIDIA build (`onnx-nvidia`, CUDA) when it finds an NVIDIA GPU with its driver installed, and the CPU build (`onnx-amd`) otherwise. The CPU build runs on any machine and also drives AMD GPUs, and the EHNAS engine needs no GPU at all. To skip detection, set `EULIX_GPU=cpu` or `EULIX_GPU=nvidia` before running it. If the script finds an NVIDIA GPU but no driver, it installs the CPU build and tells you so: install the driver, then run it again. The variant decides which ONNX packages are installed. On macOS there is one build and no question: it installs `onnxruntime`, which runs on the CPU or through CoreML. If you have an AMD GPU and get strange search results, read [EMB-1](Known-Issues/Embeddings.md#emb-1-onnx-on-rocm-produces-wrong-embeddings).
 
 ## Install with the script
 
@@ -48,7 +48,7 @@ irm https://raw.githubusercontent.com/Nurysso/eulix/main/install.ps1 | iex
 
 1. Finds the latest release on GitHub, or the one you name in `EULIX_VERSION` (for example `EULIX_VERSION=v0.8.3`).
 2. Checks your system: Linux x86-64, macOS on Apple Silicon (also from a Rosetta shell), or 64-bit Windows. Anything else stops with a link to [Build from source](#build-from-source).
-3. Asks which GPU variant you want (Linux and Windows only; `EULIX_GPU` skips the question).
+3. Picks the build: NVIDIA when `nvidia-smi` lists a GPU or the NVIDIA driver is loaded (on Windows, when an NVIDIA display adapter is installed), CPU otherwise. `EULIX_GPU=cpu` or `EULIX_GPU=nvidia` overrides this (Linux and Windows only).
 4. Installs `uv` if it is missing, and creates a Python 3.11 virtual environment at `~/.Eulix/.venv`. An existing environment with another Python version is deleted and created again.
 5. Downloads the `eulix` binary for your system and `vizeulize.html`, and **checks both against the release's `checksums.txt`** (`checksum.txt` in v0.8.3 and older). It stops on a mismatch.
 6. Installs them: `eulix` into `~/.local/bin` on Linux and macOS or `%LOCALAPPDATA%\Eulix\bin` on Windows, and the web page into `~/.Eulix/bin/`.
