@@ -13,8 +13,8 @@ use crate::cache::{self, Cached, ParseCache};
 use crate::os_io;
 use crate::parse::slim::{slim, strip_emitted};
 use crate::spill::Spill;
-use crate::views::FileDataSimpleView;
 
+use libeulix::fb_io;
 use libeulix::grammar_files;
 use libeulix::grammar_files::language::Language;
 use libeulix::grammar_files::php;
@@ -80,13 +80,9 @@ pub fn parse_file(
         syntax.first_error_line = Some(syntax.first_error_line.map_or(line, |l| l.min(line)));
     }
 
-    // Spill the rich view first. Phase 2 reads this back, so this has to
-    // happen before we slim or strip anything.
-    let loc = {
-        let mut frag = Vec::with_capacity(8 * 1024);
-        serde_json::to_writer(&mut frag, &FileDataSimpleView(&result))?;
-        spill.append(&relative_path, &frag)?
-    };
+    // Spill this file's kb.fb record first (language, loc, functions, classes, todos).
+    // It needs the full data, so it has to happen before we slim or strip anything.
+    let loc = spill.append(&relative_path, &fb_io::encode_file_record(&result))?;
 
     // Extract imports BEFORE slim() clears them
     let raw_imports: Vec<(String, String, String)> = result
@@ -128,7 +124,7 @@ pub fn parse_file(
         syntax: result.syntax,
         raw_imports,
         emit: loc,
-        slim: slim_spill.append(&relative_path, &serde_json::to_vec(&result)?)?,
+        slim: slim_spill.append(&relative_path, &cache::encode_slim(&result)?)?,
     };
     Ok((relative_path, result, cached, false))
 }
@@ -287,6 +283,7 @@ mod tests {
             "test",
             out.path(),
             &engine,
+            false,
         )
         .unwrap();
 
@@ -327,6 +324,7 @@ mod tests {
             "test",
             out.path(),
             &engine,
+            false,
         )
         .unwrap();
         let kb = analyze_and_build(kb, false, 2, repo.path());
@@ -368,6 +366,7 @@ mod tests {
             "test",
             out.path(),
             &engine,
+            false,
         )
         .unwrap();
 
@@ -411,6 +410,7 @@ mod tests {
             "test",
             out.path(),
             &engine,
+            false,
         )
         .unwrap();
 

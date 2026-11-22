@@ -64,6 +64,7 @@ mod tests {
             "test",
             out.path(),
             &engine,
+            false,
         )
         .unwrap();
 
