@@ -3,7 +3,6 @@
 
 use anyhow::{Context, Result};
 use ignore::{WalkBuilder, WalkState};
-use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,6 +11,11 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use xxhash_rust::xxh3::{xxh3_64, Xxh3};
+
+use crate::fb_io;
+
+/// Name of the checksum baseline in the output directory.
+pub const CHECKSUM_FILE: &str = "checksum.fb.zst";
 
 pub type Failed = Vec<(PathBuf, anyhow::Error)>;
 
@@ -48,32 +52,6 @@ pub struct FileWalker {
     /// Optional path to a custom .euignore file (overrides the default ``<root>``/.euignore)
     euignore_path: Option<PathBuf>,
     threads: usize,
-}
-
-#[derive(Serialize)]
-struct FileEntry {
-    hash: String,
-    size: i64,
-    mod_time: i64,
-}
-
-#[derive(Serialize)]
-struct DirEntry {
-    hash: String,
-    mod_time: i64,
-    files: Vec<String>,
-    dirs: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct Checksum {
-    project_path: String,
-    total_files: usize,
-    hash: String,
-    files: BTreeMap<String, FileEntry>,
-    dirs: BTreeMap<String, DirEntry>, // left empty, Go does a full walk
-    last_analyzed: String,            // RFC3339, parses into Go time.Time
-    analysis_version: String,
 }
 
 impl FileWalker {
@@ -315,39 +293,47 @@ impl FileWalker {
         Ok((paths, hash, stats))
     }
 
+    /// Writes `checksum.fb.zst`: a zstd-compressed FlatBuffer (schema/checksum.fbs)
+    /// with every walked file's size and mtime, read back by eulix-cli. The file
+    /// is replaced by rename, so a reader never sees a half-written baseline.
     fn write_checksum(
         &self,
         files: &[WalkedFile],
         root_hash: &str,
         write_dir: &Path,
     ) -> Result<()> {
-        let mut map = BTreeMap::new();
-        for f in files {
-            map.insert(
-                f.rel.to_string_lossy().to_string(),
-                FileEntry {
-                    hash: format!("{:016x}", f.meta_hash),
-                    size: f.size,
-                    mod_time: f.mod_time,
-                },
-            );
-        }
-
-        let checksum = Checksum {
-            project_path: self.root.to_string_lossy().to_string(),
-            total_files: map.len(),
-            hash: root_hash.to_string(),
-            files: map,
-            dirs: BTreeMap::new(),
-            last_analyzed: chrono::Utc::now().to_rfc3339(),
-            analysis_version: env!("CARGO_PKG_VERSION").to_string(),
-        };
+        let rows: BTreeMap<String, (String, i64, i64)> = files
+            .iter()
+            .map(|f| {
+                (
+                    f.rel.to_string_lossy().to_string(),
+                    (format!("{:016x}", f.meta_hash), f.size, f.mod_time),
+                )
+            })
+            .collect();
+        let entries: Vec<fb_io::ChecksumEntry<'_>> = rows
+            .iter()
+            .map(|(path, (hash, size, mod_time))| fb_io::ChecksumEntry {
+                path,
+                hash,
+                size: *size,
+                mod_time: *mod_time,
+            })
+            .collect();
+        let buf = fb_io::encode_checksum(
+            &self.root.to_string_lossy(),
+            root_hash,
+            &entries,
+            &chrono::Utc::now().to_rfc3339(),
+            env!("CARGO_PKG_VERSION"),
+        )?;
 
         fs::create_dir_all(write_dir).context("failed to create .eulix directory")?;
-        let json = serde_json::to_vec(&checksum)?;
-        let compressed = zstd::encode_all(&json[..], 3)?;
-        fs::write(write_dir.join("checksum.json.zst"), compressed)
-            .context("failed to write checksum file")?;
+        let compressed = zstd::encode_all(&buf[..], 3)?;
+        let path = write_dir.join(CHECKSUM_FILE);
+        let tmp = write_dir.join(format!("{CHECKSUM_FILE}.tmp"));
+        fs::write(&tmp, compressed).context("failed to write checksum file")?;
+        fs::rename(&tmp, &path).context("failed to replace checksum file")?;
         Ok(())
     }
 }

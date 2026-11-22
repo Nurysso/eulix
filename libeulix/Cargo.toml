@@ -28,9 +28,11 @@ name = "libeulix"
 path = "src/lib.rs"
 
 [dependencies]
+# Pinned to the flatc version in scripts/gen_flatbuffers.sh.
+flatbuffers = "=25.12.19"
 rayon = "1.10"
 serde = { version = "1.0", features = ["derive", "rc"] }
-serde_json = { version = "1.0", features = ["raw_value"] }
+serde_json = { version = "1.0", features = ["raw_value", "preserve_order"] }
 chrono = { version = "0.4", default-features = false, features = [
     "now",
     "serde",
