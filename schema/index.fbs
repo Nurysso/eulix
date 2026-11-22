@@ -1,0 +1,23 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+// kb_index.fb: lookup indices. Each is a map from a name to a list of strings,
+// stored as StringList entries sorted by key. Values repeat heavily (paths,
+// caller names), so the writer stores each distinct string once.
+
+include "common.fbs";
+
+namespace eulix.fb;
+
+table Indices {
+  format_version:uint;
+  functions_by_name:[StringList];   // name -> "path:line"
+  functions_calling:[StringList];   // callee -> caller names
+  functions_by_tag:[StringList];    // tag -> function ids
+  types_by_name:[StringList];       // type name -> "path:line"
+  files_by_category:[StringList];   // category -> files
+}
+
+root_type Indices;
+file_identifier "EUIX";
+file_extension "fb";

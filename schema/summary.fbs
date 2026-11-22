@@ -1,0 +1,30 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+// kb_summary.fb: project overview.
+
+include "common.fbs";
+
+namespace eulix.fb;
+
+table DependencyInfo {
+  stdlib:[string];
+  third_party:[string];
+}
+
+table Summary {
+  format_version:uint;
+  project_name:string;
+  total_files:ulong;
+  total_loc:ulong;
+  languages:[string];
+  categories:[StringList];   // category -> files, sorted by key
+  key_features:[string];
+  entry_points:[string];     // "file:line"
+  dependencies:DependencyInfo;
+  patterns:PatternInfo;
+}
+
+root_type Summary;
+file_identifier "EUSM";
+file_extension "fb";

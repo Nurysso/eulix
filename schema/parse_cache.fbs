@@ -1,0 +1,43 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+// parse_cache/index.<gen>.fb.zst: the incremental parse cache's index, private
+// to eulix_parser (eulix-parser/src/cache.rs). For every file parsed last run:
+// what identified it (size, mtime, content hash), what reusing it needs
+// (syntax health, external imports) and where its records sit in the emit and
+// slim spills of the same generation. The FlatBuffer is zstd-compressed.
+
+namespace eulix.fb;
+
+table RawImport {
+  module:string;
+  file:string;
+  import_type:string;
+}
+
+table CachedFile {
+  path:string (key);
+  size:ulong;
+  mtime:long;              // unix nanoseconds
+  hash_lo:ulong;           // xxh3-128 of the contents, low 64 bits
+  hash_hi:ulong;           // and high 64 bits
+  error_nodes:ulong;
+  missing_nodes:ulong;
+  first_error_line:ulong = null;
+  raw_imports:[RawImport];
+  emit_offset:ulong;       // kb.fb FileRecord in emit.<gen>.spill
+  emit_length:uint;
+  slim_offset:ulong;       // slimmed FileData in slim.<gen>.spill
+  slim_length:uint;
+}
+
+table ParseCacheIndex {
+  format_version:uint;
+  key:string;              // format, parser version, git SHA, binary size and mtime
+  started_at:long;         // unix nanoseconds when the run that wrote it started
+  files:[CachedFile];      // sorted by path
+}
+
+root_type ParseCacheIndex;
+file_identifier "EUPC";
+file_extension "fb";

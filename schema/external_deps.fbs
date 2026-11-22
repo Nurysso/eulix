@@ -1,0 +1,25 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+// kb_external_deps.fb: each external package and the files importing it.
+
+include "common.fbs";
+
+namespace eulix.fb;
+
+table ExternalDependency {
+  name:string;
+  version:string;      // absent when unknown
+  source:string;       // "stdlib" or "external"
+  used_by:[string];
+  import_count:ulong;
+}
+
+table ExternalDeps {
+  format_version:uint;
+  external_dependencies:[ExternalDependency];
+}
+
+root_type ExternalDeps;
+file_identifier "EUXD";
+file_extension "fb";

@@ -1,0 +1,27 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+// kb_metrics.fb: project metadata and the most complex functions.
+
+include "common.fbs";
+
+namespace eulix.fb;
+
+table FunctionMetric {
+  name:string;
+  file:string;
+  complexity:ulong;
+  importance_score:float;
+  line_start:ulong;
+  line_end:ulong;
+}
+
+table Metrics {
+  format_version:uint;
+  metadata:Metadata;
+  top_complex_functions:[FunctionMetric];
+}
+
+root_type Metrics;
+file_identifier "EUMT";
+file_extension "fb";

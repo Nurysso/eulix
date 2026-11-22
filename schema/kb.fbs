@@ -1,0 +1,63 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+// One source file's record in kb.fb (see kb_header.fbs for the file layout).
+// The fields are those of the parser's FileDataSimpleView: no imports, calls,
+// globals or security notes. Each record is its own finished buffer, so a
+// knowledge base larger than 2 GiB is fine as long as each file's record is
+// smaller.
+
+namespace eulix.fb;
+
+table Parameter {
+  name:string;
+  type_annotation:string;
+  default_value:string;   // absent when the parameter has no default
+}
+
+table Function {
+  id:string;
+  name:string;
+  signature:string;
+  params:[Parameter];
+  return_type:string;
+  docstring:string;
+  line_start:ulong;
+  line_end:ulong;
+}
+
+table Attribute {
+  name:string;
+  type_annotation:string;
+  value:string;           // absent when the attribute has no value
+}
+
+table Class {
+  id:string;
+  name:string;
+  bases:[string];
+  docstring:string;
+  line_start:ulong;
+  line_end:ulong;
+  methods:[Function];
+  attributes:[Attribute];
+  decorators:[string];
+}
+
+table Todo {
+  line:ulong;
+  text:string;
+  priority:string;        // "high", "medium", "low"
+}
+
+table FileRecord {
+  language:string;
+  loc:ulong;
+  functions:[Function];
+  classes:[Class];
+  todos:[Todo];
+}
+
+root_type FileRecord;
+file_identifier "EUFR";
+file_extension "fb";
