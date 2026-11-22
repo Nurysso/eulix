@@ -18,18 +18,6 @@ func (s *Server) handleSetRepo(_ context.Context, _ *mcpsdk.CallToolRequest, a s
 	return textResult(msg), nil, nil
 }
 
-// toolQuery is the shared body of all query tools.
-func (s *Server) toolQuery(ctx context.Context, repoPath, q string, known []string, cot bool) (*mcpsdk.CallToolResult, any, error) {
-	if strings.TrimSpace(q) == "" {
-		return nil, nil, errors.New("argument 'query' must be a non-empty string")
-	}
-	out, err := s.ExecuteQuery(ctx, repoPath, q, known, cot)
-	if err != nil {
-		return nil, nil, fmt.Errorf("query execution failed: %w", err)
-	}
-	return textResult(out), nil, nil
-}
-
 func (s *Server) promptHandler(cot bool) mcpsdk.PromptHandler {
 	return func(ctx context.Context, req *mcpsdk.GetPromptRequest) (*mcpsdk.GetPromptResult, error) {
 		args := req.Params.Arguments

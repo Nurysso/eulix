@@ -330,14 +330,16 @@ func (c *Classifier) level2SymbolAnalysis(queryLower string, symbols []string, e
 			}
 		}
 
-		if ContainsAny(queryLower, []string{"calls", "uses", "invokes", "called by", "used by"}) {
+		// "What calls X" / "X is used by": a callers question. It goes to the
+		// call graph, which lists call sites, never to a definition lookup.
+		if ContainsAny(queryLower, []string{"calls", "uses", "invokes", "called by", "used by", "callers"}) {
 			return &Classification{
-				Type:         QueryTypeUsage,
+				Type:         QueryTypeCallGraph,
 				Confidence:   0.90,
 				Symbols:      symbols,
 				Keywords:     keywords,
 				Entities:     entities,
-				Reasoning:    "Level 2: single symbol with usage keywords",
+				Reasoning:    "Level 2: single symbol with caller keywords",
 				NeedsContext: false,
 				Priority:     4,
 			}

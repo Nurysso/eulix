@@ -30,6 +30,20 @@ type Config struct {
 	RetrievalConfig RetrievalConfig  `toml:"retrievalConfig"`
 	Cache           CacheConfig      `toml:"cache"`
 	Checksum        ChecksumConfig   `toml:"checksum"`
+	MCP             MCPConfig        `toml:"mcp"`
+}
+
+// MCPConfig sizes what 'eulix mcp' returns to an agent. An agent re-reads
+// every tool result on each later turn, so replies are budgeted on their own,
+// apart from [llm].max_tokens (which also reserves room for an LLM answer the
+// MCP server never generates).
+type MCPConfig struct {
+	// ReplyTokens is the default token budget for ranked code context
+	// (search / explain / trace). Narrow questions use less.
+	ReplyTokens int `toml:"reply_tokens"`
+	// MaxChunkLines caps how many lines of one chunk are sent in full; the
+	// rest is cut with a file:line range the agent can read if it needs it.
+	MaxChunkLines int `toml:"max_chunk_lines"`
 }
 
 type ProjectConfig struct {
@@ -257,6 +271,10 @@ func validateAndClampConfig(cfg *Config) *Config {
 	cfg.Parser.Threads = max(cfg.Parser.Threads, 1)
 	cfg.Embeddings.Dimension = max(cfg.Embeddings.Dimension, 1)
 
+	// MCP Configuration
+	cfg.MCP.ReplyTokens = clamp(cfg.MCP.ReplyTokens, 200, 32_000)
+	cfg.MCP.MaxChunkLines = clamp(cfg.MCP.MaxChunkLines, 10, 2000)
+
 	// LLM Configuration
 	cfg.LLM.MaxTokens = max(cfg.LLM.MaxTokens, 1)
 	cfg.LLM.Temperature = clamp(cfg.LLM.Temperature, 0.0, 2.0)
@@ -390,6 +408,10 @@ func DefaultConfig() *Config {
 		Checksum: ChecksumConfig{
 			ChangeThreshold:         0.10,
 			ForceReanalyzeThreshold: 0.30,
+		},
+		MCP: MCPConfig{
+			ReplyTokens:   1800,
+			MaxChunkLines: 60,
 		},
 	}
 }

@@ -1170,3 +1170,27 @@ func BenchmarkClassify(b *testing.B) {
 		})
 	}
 }
+
+// Every way an agent asks "who calls X" must reach the call graph. Usage used
+// to print only X's definition, and agents grepped anyway.
+func TestCallerPhrasingsRouteToCallGraph(t *testing.T) {
+	c := newC(t)
+	for _, q := range []string{
+		"What calls shouldTryFallbacks?",
+		"what calls Bifrost.shouldTryFallbacks",
+		"Who calls shouldTryFallbacks",
+		"which functions call QuerySet._fetch_all",
+		"shouldTryFallbacks is called by?",
+		"Where is shouldTryFallbacks used",
+		"where is _fetch_all called",
+		"callers of SearchWorker::search",
+		"call sites of handleRequest",
+		"what invokes requestWorker",
+		"what does handleRequest call",
+		"functions invoked by tryRequest",
+	} {
+		if got := c.Classify(q).Type; got != QueryTypeCallGraph {
+			t.Errorf("Classify(%q) = %v, want CallGraph", q, got)
+		}
+	}
+}

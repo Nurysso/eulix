@@ -73,7 +73,7 @@ func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Cl
 // BuildContext constructs the ContextWindow for the target query.
 func (cb *ContextBuilder) BuildContext(query string) (*utils.ContextWindow, error) {
 	maxLines := cb.config.Project.MaxLines
-	ctx, _, err := cb.buildContextInternal(query, maxLines)
+	ctx, _, err := cb.buildContextInternal(query, maxLines, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +88,21 @@ func (cb *ContextBuilder) BuildContext(query string) (*utils.ContextWindow, erro
 	return ctx, nil
 }
 
-func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int) (*utils.ContextWindow, *DebugTrace, error) {
+// BuildContextBudget builds context for a tool caller (an agent over MCP)
+// that will not generate an answer from it: contextBudget replaces the
+// [llm].max_tokens-derived budget, with no answer reserve. maxLines caps the
+// span hydrated in full per chunk (0 = [project] Max_Lines).
+func (cb *ContextBuilder) BuildContextBudget(query string, contextBudget, maxLines int) (*utils.ContextWindow, *DebugTrace, error) {
+	if maxLines <= 0 {
+		maxLines = cb.config.Project.MaxLines
+	}
+	if contextBudget < 128 {
+		contextBudget = 128
+	}
+	return cb.buildContextInternal(query, maxLines, contextBudget)
+}
+
+func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault, budgetOverride int) (*utils.ContextWindow, *DebugTrace, error) {
 	start := time.Now()
 	trace := &DebugTrace{Query: query}
 	explicitAnchor := extractExplicitAnchors(query)
@@ -119,6 +133,10 @@ func (cb *ContextBuilder) buildContextInternal(query string, maxLinesDefault int
 	elapsed := time.Since(etime)
 	cb.debugLog.Log("Embedder took %d ms to run", elapsed.Milliseconds())
 	budget := cb.allocateBudget(query, intent)
+	if budgetOverride > 0 {
+		budget.ResponseReserve = 0
+		budget.ContextBudget = budgetOverride
+	}
 	budget.StrategyWeights = cb.EnsureWeightKeys(budget.StrategyWeights)
 	trace.Budget = budget
 	cb.debugLog.Log("Budget: %d tokens for context (total: %d)",

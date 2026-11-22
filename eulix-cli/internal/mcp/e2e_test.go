@@ -11,6 +11,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -175,16 +176,17 @@ func TestE2EToolsAndPromptsAreAdvertised(t *testing.T) {
 	for _, tool := range tools.Tools {
 		got[tool.Name] = tool
 	}
-	for _, name := range []string{"set_repo_path", "query", "query_with_cot", "query_without_cot"} {
+	readTools := []string{"callers", "callees", "definition", "trace", "search", "query", "query_without_cot", "query_with_cot"}
+	for _, name := range append([]string{"set_repo_path"}, readTools...) {
 		if got[name] == nil {
 			t.Fatalf("tool %q missing; have %v", name, got)
 		}
 	}
-	if len(got) != 4 {
+	if len(got) != 1+len(readTools) {
 		t.Errorf("unexpected extra tools: %v", got)
 	}
 	// Query tools only read; agents rely on the hint to skip confirmation prompts.
-	for _, name := range []string{"query", "query_with_cot", "query_without_cot"} {
+	for _, name := range readTools {
 		if a := got[name].Annotations; a == nil || !a.ReadOnlyHint {
 			t.Errorf("%s should be annotated read-only", name)
 		}
@@ -338,10 +340,30 @@ func TestE2ENeverReturnsHiddenOrIgnoredFiles(t *testing.T) {
 		}
 	}
 	for _, q := range queries {
-		for _, tool := range []string{"query", "query_with_cot", "query_without_cot"} {
+		for _, cot := range []bool{false, true} {
+			args := map[string]any{"include_cot": cot}
+			for k, v := range q {
+				args[k] = v
+			}
+			text, _ := call(t, cs, "query", args)
+			check(fmt.Sprintf("query(cot=%v) %s", cot, q["query"]), text)
+		}
+		searchArgs := map[string]any{"question": q["query"]}
+		if ks, ok := q["known_symbols"]; ok {
+			searchArgs["known_symbols"] = ks
+		}
+		text, _ := call(t, cs, "search", searchArgs)
+		check("search "+q["query"].(string), text)
+		for _, tool := range []string{"query_without_cot", "query_with_cot"} {
 			text, _ := call(t, cs, tool, q)
 			check(tool+" "+q["query"].(string), text)
 		}
+		for _, tool := range []string{"callers", "callees", "definition"} {
+			text, _ := call(t, cs, tool, map[string]any{"symbol": q["query"]})
+			check(tool+" "+q["query"].(string), text)
+		}
+		text, _ = call(t, cs, "trace", map[string]any{"question": q["query"]})
+		check("trace "+q["query"].(string), text)
 		res, err := cs.GetPrompt(context.Background(), &mcpsdk.GetPromptParams{
 			Name: "query_without_cot", Arguments: map[string]string{"query": q["query"].(string)},
 		})
