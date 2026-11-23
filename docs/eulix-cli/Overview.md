@@ -42,7 +42,7 @@ eulix analyze                      eulix chat / query / mcp
 checksum: what changed?            classifier: what kind of question?
      │                                      │
      ▼                                      ├── factual (location, usage, call graph, ...)
-eulix_parser  → kb.json, ...                │      answered directly from the knowledge base
+eulix_parser  → kb.fb, ...                  │      answered directly from the knowledge base
      │                                      │
      ▼                                      └── needs understanding
 eulix_embed   → embeddings.bin, ...                │
@@ -78,8 +78,6 @@ These are the commands registered in the code today.
 | `verifyBins`, `getEmbedDeps`, `printEmbedDeps` | Maintenance commands for the embedded assets and the Python environment. |
 | `embed [args]`, `parser [args]` | Pass-through wrappers around the embedding tool and the parser. |
 
-The `glados` and `aspirine` repair commands are not registered. Their definitions exist but are commented out of the registration list, and they print "deprecated" if reached. See [Fixers](Fixers.md).
-
 ### Main Components
 
 | Package | Page | Responsibility |
@@ -96,7 +94,6 @@ The `glados` and `aspirine` repair commands are not registered. Their definition
 | `internal/tui` | [Tui](tui/Overview.md) | The chat and history screens. |
 | `internal/cache` | [Cache](Cache.md) | Query history database. |
 | `internal/utils` | [Utils](Utils.md) | Shared constants, types, logging and colours. |
-| `internal/fixers` | [Fixers](Fixers.md) | Dormant repair tools. |
 
 ### Data In, Data Out
 
@@ -104,11 +101,11 @@ On disk, a project gets a `.eulix/` folder. These are the files the question-ans
 
 | File | Made by | Used for |
 | --- | --- | --- |
-| `kb.json` | parser | The knowledge base; the retrieval chunks come from it. |
+| `kb.fb` | parser | The knowledge base; the retrieval chunks come from it. |
 | `kb_index.json` | parser | Lookup indices; also trains the classifier's symbol list. |
 | `kb_call_graph.json` | parser | Call relationships. |
 | `embeddings.bin`, `vectors.bin` | embedder | Vectors and the chunk-id map. Only the default retrieval engine reads them. |
-| `checksum.json.zst` | parser | The baseline for change detection. |
+| `checksum.fb.zst` | parser | The baseline for change detection. |
 | `analysis-complete.json` | `eulix` | Marks a finished analysis. |
 | `history.db` | `eulix` | Query history. |
 | `debug/` | `eulix` | Debug logs, when debugging is on. |
@@ -137,7 +134,7 @@ Expected result: after `analyze`, a `.eulix/` folder with the files above; after
 
 ## Performance Notes
 
-The retrieval engine memory-maps large index and call-graph files while it decodes them, and streams `kb.json` through a buffered reader instead of loading it whole; see [Mmap](query/retrieval/Mmap.md) and [Index Loading](query/retrieval/Index-Loading.md). The MCP server keeps the loaded index in memory between questions and frees it after five idle minutes by default.
+The retrieval engine memory-maps large index and call-graph files while it decodes them, and streams `kb.fb` through a buffered reader instead of loading it whole; see [Mmap](query/retrieval/Mmap.md) and [Index Loading](query/retrieval/Index-Loading.md). The MCP server keeps the loaded index in memory between questions and frees it after five idle minutes by default.
 
 ## Limitations
 

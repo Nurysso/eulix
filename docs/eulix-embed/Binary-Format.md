@@ -93,7 +93,6 @@ It checks the header, duplicate ids, dimensions, vector norms (outliers) and spo
 | Limitation | Why it happens | Workaround |
 | --- | --- | --- |
 | Changing the layout breaks old indices. | The Go loader requires version 5 exactly. | Re-run `eulix analyze` after an upgrade. |
-| The repair tools in `eulix-cli` assume an older layout. | See [Fixers](../eulix-cli/Fixers.md). | They are unused. |
 
 ## Related Docs
 

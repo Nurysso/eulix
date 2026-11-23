@@ -23,7 +23,7 @@ Asking a model to classify every question would add latency and cost to somethin
 
 **Layer 1: patterns.** About two dozen compiled regular expressions recognise phrasings for each type ("where is", "who calls", "show the call graph", "entry points", "todos", and so on). If a pattern matches with confidence 0.95 or more, the question is classified and the rest is skipped.
 
-**Layer 2: symbols.** Otherwise the classifier extracts identifier-looking words and **validates them against the project's real symbols**. The valid set is built from `kb_index.json` when the classifier is created, from function names and type names. If valid symbols are found, simple rules decide the type. Two or more symbols with a comparison word ("difference", "compare", "vs", "versus", "similar") give *Comparison*. A single symbol with "where", "find", "locate" or "show" gives *Location*; with "calls", "uses", "invokes", "called by" or "used by" gives *Usage*; with "example", "how to use" or "sample" gives *Example*. Any other question with several symbols gives *Understanding*. Each symbol also becomes an *entity*, tagged as a function or a type.
+**Layer 2: symbols.** Otherwise the classifier extracts identifier-looking words and **validates them against the project's real symbols**. The valid set is meant to be built from the index (`kb_index.fb`) when the classifier is created, from function names and type names; today it stays empty ([CLI-12](../../Known-Issues/CLI-MCP-And-TUI.md#cli-12-the-classifier-never-learns-the-projects-symbols)). If valid symbols are found, simple rules decide the type. Two or more symbols with a comparison word ("difference", "compare", "vs", "versus", "similar") give *Comparison*. A single symbol with "where", "find", "locate" or "show" gives *Location*; with "calls", "uses", "invokes", "called by" or "used by" gives *Usage*; with "example", "how to use" or "sample" gives *Example*. Any other question with several symbols gives *Understanding*. Each symbol also becomes an *entity*, tagged as a function or a type.
 
 **Layer 3: keywords.** Finally, if nothing else decided, keyword lists pick the type, checked in this order: debug words ("error", "bug", "crash", "not working"), performance words ("slow", "optimize", "bottleneck"), refactoring words, testing words, and so on, falling back to *Understanding*.
 
@@ -66,7 +66,7 @@ None. The length limit (`maxQueryLen`) is a constant; a source comment suggests 
 ## Usage Examples
 
 ```go
-c, _ := classifier.QuerySheriff(".eulix/kb_index.json")
+c, _ := classifier.QuerySheriff(".eulix/kb_index.fb")
 cl := c.Classify("who calls applyBudget?")
 fmt.Println(cl.Type, cl.Confidence) // Usage 0.95 (illustrative)
 ```

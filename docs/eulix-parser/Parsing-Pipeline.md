@@ -63,7 +63,7 @@ Above 100,000 files the call-graph step is skipped, and the tool says so when ve
 
 ### Phase 4: output
 
-The tool computes the indices, builds borrowed views, and streams each artifact to disk. `kb.json` is assembled from the spill; the others are serialized directly from the views. Every file is described in [Output Files](Output-Files.md).
+The tool computes the indices, builds borrowed views, and streams each artifact to disk. `kb.fb` is assembled from the spill; the others are encoded directly from the in-memory data. Every file is described in [Output Files](Output-Files.md).
 
 ### Main Components
 

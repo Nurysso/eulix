@@ -18,7 +18,7 @@ The harness answers one question: when eulix says "function A calls function B",
           ┌───────────┴────────────┐
           ▼                        ▼
   reference tool             eulix_parser --prism N
-  (go/types, javac, …)       (kb.json, kb_call_graph.json)
+  (go/types, javac, …)       (kb.fb, kb_call_graph.fb)
           │                        │
   call sites (JSON lines)    nodes (spans) + call edges
           └───────────┬────────────┘
@@ -101,9 +101,9 @@ Reference output is cached under `~/.Eulix/bench/callgraph/refs/` as `<corpus>-<
 eulix_parser --root <snapshot> --output <run>/kb.json --prism <1|2> --threads <N>
 ```
 
-into `~/.Eulix/bench/callgraph/runs/<corpus>/v<N>/`, which is wiped first, and then loads two things.
+into `~/.Eulix/bench/callgraph/runs/<corpus>/v<N>/`, which is wiped first, and then loads two things. Current parsers write `kb.fb` and `kb_call_graph.fb` whatever `--output`'s extension; the bench reads those through `bench/lib/kbfb.py`, and the `.json` files of older parsers directly.
 
-**Nodes, from `kb.json`.** Every object in `structure` with an `id` and a `line_start` becomes a node with a span (`line_start..line_end`). Its kind comes from the id prefix:
+**Nodes, from the knowledge base.** Every file record (the `structure` entries of the old `kb.json`) with an `id` and a `line_start` becomes a node with a span (`line_start..line_end`). Its kind comes from the id prefix:
 
 | Id prefix | Node kind |
 | --- | --- |

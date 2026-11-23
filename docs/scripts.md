@@ -10,14 +10,14 @@ Every sub-directory Makefile (`eulix-cli`, `eulix-embed`, `eulix-parser`) forwar
 make scripts-help
 make repro-prism                       # builds the parser, then runs known_issues/repro_prism.sh
 make repro-all                         # every parser repro
-make kb-diff ARGS="run1/kb.json run2/kb.json"
-make script SCRIPT=known_issues/cross_language_edges.py ARGS=kb_call_graph.json
+make kb-diff ARGS="run1/kb.json run2/kb.json"     # --emit-json copies of two runs
+make script SCRIPT=known_issues/cross_language_edges.py ARGS=kb_call_graph.fb
 make repro-prism PARSER_BIN=/other/eulix_parser
 ```
 
 ## Defaults and output
 
-Scripts need no arguments when run from the repo: input files default to `.eulix/kb.json`, `.eulix/kb_call_graph.json` and `.eulix/embeddings.bin`, the parser defaults to `eulix-parser/target/release/eulix_parser`, and `check_embed_*.py` use the repo's `eulix-embed/` (override with `EULIX_EMBED_DIR`). Anything a script writes goes to `script-test-dump/` at the repo root, which is in `.gitignore` and `.euignore`. `kb_diff.py` has no default because it needs two files. When you pass a path through `make`, use `ARGS=`, for example `make script SCRIPT=call_graph_id_patterns.py ARGS=other.json`.
+Scripts need no arguments when run from the repo: input files default to `.eulix/kb.fb`, `.eulix/kb_call_graph.fb` and `.eulix/embeddings.bin`, the parser defaults to `eulix-parser/target/release/eulix_parser`, and `check_embed_*.py` use the repo's `eulix-embed/` (override with `EULIX_EMBED_DIR`). Anything a script writes goes to `script-test-dump/` at the repo root, which is in `.gitignore` and `.euignore`. `kb_diff.py` has no default because it needs two files. When you pass a path through `make`, use `ARGS=`, for example `make script SCRIPT=call_graph_id_patterns.py ARGS=other.fb`. The FlatBuffers files are read through `bench/lib/kbfb.py` and its vendored runtime, so the scripts still need only the standard library.
 
 ## Bug-repro scripts (run these before a release)
 
@@ -39,11 +39,11 @@ These find and confirm bugs. Each one prints a result that shows whether the bug
 
 | Former name                  | Name                                | Use                                                                                                                      |
 | ---------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `kb_diff.py`                 | `kb_diff.py` (keep)                 | Compare two parser runs (`kb.json`, `kb_index.json`); exit 1 if different. Use it to confirm output stays deterministic. |
-| `kbloader.py`                | `kb_id_name_check.py`               | Checks every function/method ID in `kb.json` against its `name` and file; prints mismatches and exits 1 if any. \|       |
-| `ID_Pattern.py`              | `call_graph_id_patterns.py`         | Prints node ID prefix and pattern statistics from a call graph JSON.                                                     |
+| `kb_diff.py`                 | `kb_diff.py` (keep)                 | Compare two parser runs through their `--emit-json` copies (`kb.json`, `kb_index.json`); exit 1 if different. Use it to confirm output stays deterministic. |
+| `kbloader.py`                | `kb_id_name_check.py`               | Checks every function/method ID in `kb.fb` against its `name` and file; prints mismatches and exits 1 if any. |
+| `ID_Pattern.py`              | `call_graph_id_patterns.py`         | Prints node ID prefix and pattern statistics from `kb_call_graph.fb`.                                                    |
 | `vecstats.py`                | `vec_stats.py`                      | Pairwise cosine and int8 usage stats for a quantized vector file.                                                        |
-| `kb_usage.py` + `astdump.go` | `kb_field_usage.py` + `ast_dump.go` | Reports which `kb.json` struct fields the Go CLI reads.                                                                  |
+| `kb_usage.py` + `astdump.go` | `kb_field_usage.py` + `ast_dump.go` | Reports which knowledge-base struct fields the Go CLI reads.                                                             |
 | `aligo-walk.sh`              | `alignment_go_walk.sh`              | Pages through files with the external `aligo` tool. Not related to Eulix bugs.                                           |
 
 ## README demo

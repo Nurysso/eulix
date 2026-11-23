@@ -27,9 +27,9 @@ Each run keeps a cache in `<output directory>/parse_cache/`. It is made of three
 
 | File | Contents |
 | --- | --- |
-| `index.<gen>.json.zst` | A compressed table with one entry per file: size, modification time, content hash, syntax health, external imports, and the location of that file's two records. It also holds the cache key and the time the run started. |
-| `emit.<gen>.spill` | The detailed `kb.json` fragment for every file. |
-| `slim.<gen>.spill` | The slim `FileData` for every file, used as input to analysis. |
+| `index.<gen>.fb.zst` | A zstd-compressed FlatBuffer (`schema/parse_cache.fbs`) with one entry per file: size, modification time, content hash, syntax health, external imports, and the location of that file's two records. It also holds the cache key and the time the run started. With `--emit-json`, `parse_cache/index.json` is its JSON copy. Caches from before this format (`index.<gen>.json.zst`) are discarded and their files deleted on the next run. |
+| `emit.<gen>.spill` | The `kb.fb` record (a FlatBuffers `FileRecord`) for every file. |
+| `slim.<gen>.spill` | The slim `FileData` for every file, used as input to analysis, as FlexBuffers (FlatBuffers' schemaless format, through serde). |
 
 The two spill files are the same ones described in [Spill to Disk](Spill-To-Disk.md). The cache is simply those files, kept after the run instead of thrown away, plus the index that says where to find each file's records.
 

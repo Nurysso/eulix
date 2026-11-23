@@ -42,7 +42,7 @@ On smaller repositories with the same flags: gin (99 files, 24,515 lines) parses
 
 ### Main Components
 
-Output sizes for the same run:
+Output sizes for the same run (v0.8.1, when every output was JSON):
 
 | File | Size |
 | --- | --- |
@@ -89,7 +89,7 @@ The notes above say the read hints were reverted in v0.7.3 and should not be add
 Measure peak memory and wall time yourself:
 
 ```bash
-/usr/bin/time -v eulix_parser -r ./proj -p 2 -o out/kb.json --verbose 2> time.txt
+/usr/bin/time -v eulix_parser -r ./proj -p 2 -o out/kb.fb --verbose 2> time.txt
 grep -E 'Maximum resident|Elapsed' time.txt
 ```
 

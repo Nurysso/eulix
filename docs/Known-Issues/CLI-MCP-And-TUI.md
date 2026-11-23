@@ -84,7 +84,6 @@ All in `internal/llm/client.go`:
 - **`DebugLogger` data races.** `Log` and `Flush` read the `closed` flag without the lock, and `Lines` and `Write` do not lock. Harmless today, but `go test -race` will flag any test that logs while the logger is closing.
 - **Lint config is never loaded.** The file is `eulix-cli/golangci.yml`; golangci-lint looks for `.golangci.yml`, and the file uses the version 1 format that golangci-lint 2.x rejects. `make lint` runs only the default linters.
 - **A misleading comment.** `chat.go` says the checksum "is already saved by `checksum.Run()`". `Run` only compares; the parser writes the baseline during `eulix analyze`. The code is right; the comment is not.
-- **Dead repair tools.** `internal/fixers` (`GLaDOS`, `Aspirine`) is not imported by anything, the `glados` and `aspirine` commands are stubs, and the code assumes a binary layout that no longer matches the quantized files. See [Fixers](../eulix-cli/Fixers.md).
 - **Leftovers in the chat screen.** `StateTyping` is never set, and the welcome text and title bar are fixed strings (the title says "local-first" even with a cloud provider).
 
 ---
@@ -220,6 +219,18 @@ The serious routes are closed: see [Fixed Issues](Fixed-Issues.md). The `.eulix`
 **Workaround.** Switch the active repository away and back (`set_repo_path`) or restart the MCP server; both clear the memory.
 
 **Fix direction.** Don't learn co-occurrence from class summaries or other large blocks, or cap the symbols taken per block, and rank remembered neighbours below the query's own anchors.
+
+---
+
+## CLI-12: The classifier never learns the project's symbols
+
+**Severity:** Medium · **Status:** Open · **Verification:** Read in code (2026-11-19)
+
+**Symptom.** Layer 2 of the [classifier](../eulix-cli/query/Classifier.md) is meant to keep only extracted words that are real symbols of the project, so a question naming a function is classified by its symbol. In practice no word is ever a valid symbol, so those questions fall through to the keyword layer.
+
+**Cause.** `QuerySheriff(kbIndexPath)` in `internal/query/classifier/classifier_patterns.go` ignores its argument and returns empty `validSymbols` and `validTypes` maps. Nothing else fills them; only the tests set entries by hand.
+
+**Fix direction.** Read the index (`kbfile.ReadIndex`) in `QuerySheriff` and fill `validSymbols` from `functions_by_name` and `validTypes` from `types_by_name`, then check the classifier's known-gap tests.
 
 ---
 
