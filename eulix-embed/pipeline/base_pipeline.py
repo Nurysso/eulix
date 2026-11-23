@@ -8,7 +8,7 @@
 # torch_pipeline.py) only supply the generator and a few small hooks; everything
 # else lives here. This file must not import torch or onnxruntime, so that
 # selecting one engine never pays the import cost of the other.
-# Step 1+2: one pass over the KB JSON using ijson (incremental parser) and chunk each
+# Step 1+2: one pass over kb.fb, one file record at a time (data_io/fb_stream.py), chunking each
 # file in a bounded thread pool (MAX_INFLIGHT) – this prevents queuing more work than
 # we can hold and avoids sequential blocking. Step 3+4: embed chunks batch by batch and
 # write the binary files incrementally (embeddings.bin, vectors.bin) so peak RAM is just
@@ -31,12 +31,10 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Generic, Protocol, TypeVar
 
-import ijson
-
 from chunking.chunker import chunk_one_file
 from chunking.cleaners import drop_docstrings
 from data_io.binary import save_embeddings_bin, save_vectors_bin
-from data_io.json_stream import stream_kb
+from data_io.fb_stream import KbFormatError, read_kb_header, stream_kb_fb
 from utils.buckets import snap_to_bucket
 from utils.constants import BUCKETS_JINA, BUCKETS_STANDARD, DC_KW
 from utils.json_util import HAS_ORJSON
@@ -256,33 +254,14 @@ class BaseEmbeddingPipeline(ABC, Generic[G]):
         free = shutil.disk_usage(output_dir.parent if not output_dir.exists() else output_dir).free
 
         chunk_count: int
-        # Try to estimate from kb.json without full parse
         if n_chunks is None:
+            # kb.fb's header carries the totals: one chunk per function, class and method.
             try:
-                chunk_count = 0
                 with open(kb_path, "rb") as fh:
-                    # Quick scan - count IDs without loading everything
-                    parser = ijson.parse(fh)
-                    for prefix, event, value in parser:
-                        # Count function, class, method IDs
-                        if prefix.endswith(
-                            (
-                                ".functions.item.id",
-                                ".classes.item.id",
-                                ".methods.item.id",
-                            )
-                        ):
-                            chunk_count += 1
-                        # Stop after reasonable sample or end
-                        if chunk_count > 1000 and prefix and "item" in prefix:
-                            # Estimate total file size ratio
-                            file_size_mb = kb_path.stat().st_size / 1_048_576
-                            # Rough heuristic: ~40KB per chunk in JSON
-                            estimated_total = int(file_size_mb * 25)
-                            chunk_count = max(chunk_count, estimated_total)
-                            break
-            except (OSError, ValueError):
-                # Fallback: assume 100 chunks per MB of JSON
+                    meta, _, _ = read_kb_header(fh)
+                chunk_count = sum(int(meta.get(k, 0)) for k in ("total_functions", "total_classes", "total_methods"))
+            except (OSError, KbFormatError):
+                # Unreadable header: assume about one chunk per 10 KB of knowledge base.
                 chunk_count = kb_path.stat().st_size // 10_000
         else:
             chunk_count = n_chunks
@@ -366,7 +345,7 @@ class BaseEmbeddingPipeline(ABC, Generic[G]):
             return executor.submit(_work)
 
         with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 4)) as executor:
-            for event_type, *payload in stream_kb(kb_path):
+            for event_type, *payload in stream_kb_fb(kb_path):
                 if event_type == "meta":
                     key, value = payload
                     meta[key] = value
@@ -450,7 +429,6 @@ class BaseEmbeddingPipeline(ABC, Generic[G]):
 
         print(f"\n{SEP}\n  EULIX EMBED — EMBEDDING PIPELINE")
         print(f"  Engine : {self.ENGINE_LABEL}")
-        print(f"  ijson backend : {ijson.backend}")
         print(f"  orjson        : {'yes' if HAS_ORJSON else 'no (stdlib json)'}")
         print(f"  Chunk slots   : {'yes' if DC_KW else 'no (Python <3.10)'}")
         print(f"  Quantization  : {quant}\n{SEP}\n")

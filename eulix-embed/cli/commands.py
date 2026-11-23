@@ -180,21 +180,3 @@ def cmd_compare(args: argparse.Namespace) -> None:
 
     if failures:
         raise SystemExit(1)
-
-
-# Checks ijson backend
-def ijson_check():
-    """Check which ijson backend is active."""
-    try:
-        import ijson
-
-        print(f"ijson backend: {ijson.backend}")
-        if ijson.backend == "yajl2_c":
-            print("  ✓ Fast C backend (yajl2_c) - optimal performance")
-        elif ijson.backend == "yajl2_cffi":
-            print("  ✓ C backend via CFFI - good performance")
-        else:
-            print("  ⚠ Pure Python backend - slower, consider: pip install 'ijson[yajl2_cffi]'")
-    except ImportError:
-        print("❌ ijson not installed")
-        print("   Install with: uv pip install ijson")

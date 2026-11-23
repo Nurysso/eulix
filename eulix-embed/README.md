@@ -6,16 +6,16 @@
 | :-- | :-- | :-- | :-- |
 | Python 3.11 | 0.4.2 | Beta | [docs/eulix-embed](../docs/eulix-embed/Overview.md) |
 
-`eulix_embed` reads the knowledge base (`kb.json`) written by [`eulix-parser`](../eulix-parser/), splits the code into chunks, embeds them with a Transformer model, and writes memory-mapped vector files (`embeddings.bin` and `vectors.bin`) for fast retrieval. `eulix analyze` runs it only when the retrieval engine is ETIYA; the EHNAS engine needs no embeddings. The `eulix` binary ships these scripts inside it and installs them into `~/.Eulix/`, so you only need this README to run or develop the pipeline yourself.
+`eulix_embed` reads the knowledge base (`kb.fb`) written by [`eulix-parser`](../eulix-parser/), splits the code into chunks, embeds them with a Transformer model, and writes memory-mapped vector files (`embeddings.bin` and `vectors.bin`) for fast retrieval. `eulix analyze` runs it only when the retrieval engine is ETIYA; the EHNAS engine needs no embeddings. The `eulix` binary ships these scripts inside it and installs them into `~/.Eulix/`, so you only need this README to run or develop the pipeline yourself.
 
 ## Features
 
 - **Two inference engines.** ONNX Runtime (`--engine onnx`, default): lightweight, high-throughput inference with no PyTorch overhead, on CPU or GPU. PyTorch (`--engine torch`): CUDA, ROCm/HIP (AMD) and Apple Silicon (MPS). See [Embedders](../docs/eulix-embed/Embedders.md).
 - **Persistent daemon mode.** `server` runs as a long-lived stdin/stdout process for the Go CLI, so the model loads once and queries embed in under 50 ms.
-- **Single-pass streaming.** `ijson` with its C extension (`libyajl2`) and `orjson` stream multi-gigabyte knowledge-base files with little memory.
+- **Single-pass streaming.** `kb.fb` is read one file record at a time, decoded straight from the FlatBuffers wire format, so multi-gigabyte knowledge bases need little memory.
 - **SQ8 int8 quantization.** `--quantize` shrinks embeddings 4× with under 1% loss in retrieval quality. `eulix analyze` always passes it.
 - **Token bucketing.** Chunks are grouped by sequence length before batching on GPU or CPU, which removes most padding and raises throughput.
-- **Compact chunk text.** Each function, method, class and file becomes a short text card: name, lines, signature, parameters and class bases. Docstrings are removed before embedding, and the parser's slim `kb.json` carries no calls or complexity, so cards hold only structure and names. See [Chunking](../docs/eulix-embed/Chunking.md).
+- **Compact chunk text.** Each function, method, class and file becomes a short text card: name, lines, signature, parameters and class bases. Docstrings are removed before embedding, and the parser's slim `kb.fb` carries no calls or complexity, so cards hold only structure and names. See [Chunking](../docs/eulix-embed/Chunking.md).
 
 ## Install
 
@@ -36,7 +36,7 @@ Then install the requirements for your engine and hardware:
 | PyTorch | NVIDIA (CUDA 13.0) | `uv pip install -r requiremenents/torch-nvidia.txt` |
 | PyTorch | AMD (ROCm) | `uv pip install -r requiremenents/torch-amd.txt` |
 
-For other CUDA versions, pick the matching torch build from the PyTorch website. For 10× faster JSON parsing through `ijson`'s C backend, install `libyajl2` (`sudo apt install libyajl2` on Ubuntu/Debian).
+For other CUDA versions, pick the matching torch build from the PyTorch website.
 
 ## Usage
 
@@ -48,7 +48,7 @@ python main.py <command> [options]
 
 ```bash
 uv run main.py embed \
-  --kb-path .eulix/kb.json \
+  --kb-path .eulix/kb.fb \
   --output .eulix \
   --model BAAI/bge-base-en-v1.5 \
   --engine onnx \

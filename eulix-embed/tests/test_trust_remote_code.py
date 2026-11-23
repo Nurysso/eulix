@@ -14,7 +14,13 @@ class TrustRemoteCodeTests(unittest.TestCase):
     def test_only_jinas_own_hub_models_run_repository_code(self):
         for name in ("jinaai/jina-embeddings-v2-base-code", "JinaAI/jina-embeddings-v3"):
             self.assertTrue(trusts_remote_code(name), name)
-        for name in ("attacker/jina-embeddings-v2", "jina-embeddings-v2", "BAAI/bge-base-en-v1.5", "jinaai", "./jinaai/x"):
+        for name in (
+            "attacker/jina-embeddings-v2",
+            "jina-embeddings-v2",
+            "BAAI/bge-base-en-v1.5",
+            "jinaai",
+            "./jinaai/x",
+        ):
             self.assertFalse(trusts_remote_code(name), name)
 
     def test_a_local_directory_named_like_a_jina_model_is_not_trusted(self):

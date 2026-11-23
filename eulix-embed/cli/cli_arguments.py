@@ -138,7 +138,6 @@ def parse_args() -> argparse.ArgumentParser:
     cp = sub.add_parser("compare", help="Compare embeddings.bin with vectors.bin")
     cp.add_argument("emb", nargs="?", default="embeddings/embeddings.bin")
     cp.add_argument("vec", nargs="?", default="embeddings/vectors.bin")
-    sub.add_parser("ijson-backend", help="Report active ijson C-backend")
     vp = sub.add_parser("version", help="Print version information")
     vp.add_argument("--short", action="store_true", help="Print only version number")
 

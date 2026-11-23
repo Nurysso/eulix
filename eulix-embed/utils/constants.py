@@ -8,25 +8,6 @@
 import sys
 from typing import Any
 
-try:
-    import ijson.backends.python
-except ImportError:
-    pass
-try:
-    import ijson.backends.yajl2_c
-except ImportError:
-    pass
-try:
-    import ijson.backends.yajl2_cffi
-except ImportError:
-    pass
-try:
-    import ijson.backends.yajl2
-except ImportError:
-    pass
-
-import ijson.common
-
 # Sequence-length "buckets" for embedding inference. Instead of padding every
 # batch to the longest sequence (wasteful) or padding to one global max
 # (also wasteful), we snap each chunk's estimated token length up to the
@@ -43,5 +24,3 @@ Version = "0.4.2"  # different from Binary and vector magic
 
 # Dataclass slots: Python ≥3.10 natively; earlier versions fall back gracefully.
 DC_KW: dict[str, Any] = {"slots": True} if sys.version_info >= (3, 10) else {}
-
-ijson_backend = ijson.backend
