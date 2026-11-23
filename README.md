@@ -5,28 +5,29 @@
   <img src="https://github.com/user-attachments/assets/3218952d-3a97-4606-af4a-327589df6ebc" alt="Eulix" width="720" />
 </picture>
 
-# Stop paying your agent to grep.
+# A map of code you've never read, for you and your agent.
 
-Eulix is a **local-first retrieval engine** that gives AI coding agents ranked, token-budgeted context from a structural index of your repo, served over MCP from your own machine.
-
-It runs on two engines of its own: **[PRISM](#-prism-v2-precise-call-graphs-from-syntax-alone)** turns your code into a call graph, and **[EHNAS](#-ehnas-zero-embeddings-zero-gpu-zero-network)** answers your agent from that graph with no model in the loop.
-
-[![PRISM v2](https://img.shields.io/badge/PRISM_v2-98.6%25_precise_call_graphs-A78BFA?style=for-the-badge&labelColor=1A2030)](#-prism-v2-precise-call-graphs-from-syntax-alone)
-[![EHNAS](https://img.shields.io/badge/EHNAS-retrieval_with_no_embeddings-5EEAD4?style=for-the-badge&labelColor=1A2030)](#-ehnas-zero-embeddings-zero-gpu-zero-network)
+Ask *who calls this* or *how does A reach B* and get one complete answer from the call graph, on your machine, with no build step or GPU.
 
 [![Version](https://img.shields.io/badge/version-v0.9.0-A78BFA?style=for-the-badge&labelColor=1A2030)](changelog.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-5EEAD4?style=for-the-badge&labelColor=1A2030)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio_server-A78BFA?style=for-the-badge&labelColor=1A2030)](docs/eulix-cli/mcp/Overview.md)
 
-[![Rust](https://img.shields.io/badge/Rust-parser_%26_PRISM-5EEAD4?style=flat-square&logo=rust&logoColor=E7E9EE&labelColor=1A2030)](libeulix/)
-[![Go](https://img.shields.io/badge/Go-CLI_%26_MCP_server-5EEAD4?style=flat-square&logo=go&logoColor=E7E9EE&labelColor=1A2030)](eulix-cli/)
-[![Python](https://img.shields.io/badge/Python-embeddings-5EEAD4?style=flat-square&logo=python&logoColor=E7E9EE&labelColor=1A2030)](eulix-embed/)
-
-[**Quick start**](#-quick-start) · [**See a real reply**](#-what-your-agent-gets-back) · [**Benchmarks**](#-benchmarks) · [**Docs**](docs/README.md)
+[**Why Eulix**](#-why-eulix-code-nobody-has-explained-to-you) · [**See a real reply**](#-what-your-agent-gets-back) · [**Quick start**](#-quick-start) · [**Benchmarks**](#-benchmarks) · [**Docs**](docs/README.md)
 
 <sub>Works with Claude Code, Cursor, Windsurf, Cline, Continue, LM Studio and other MCP clients.</sub>
 
 </div>
+
+<!--
+  30-second side-by-side clip slot: the same question to Claude Code without and
+  with Eulix. Record it with
+      .github/readme/demo/sidebyside.sh <task-id> bench/results/agent/<run-id>
+  upload sidebyside-{dark,light}.gif to GitHub, and put them here as a <picture>
+  in place of (or above) the teaser below. The captions come from the benchmark
+  run, and the README text under the clip must say which task it is and link the
+  full results, since one task is not the average.
+-->
 
 <p align="center">
 <a href="https://github.com/user-attachments/assets/5c6cedc8-4ff4-4626-a90c-2eaaa2c7f3fd">
@@ -40,38 +41,71 @@ It runs on two engines of its own: **[PRISM](#-prism-v2-precise-call-graphs-from
 
 <br>
 
-|      🎯 98.6%       |      ⚡ < 20 ms      |    🪶 < 90 MB     |                   🐧 53.9 s                    |          🔁 < 10 s           |
-| :-----------------: | :------------------: | :---------------: | :--------------------------------------------: | :--------------------------: |
-| of PRISM's call edges are right | per warm query (p50) | MCP server memory | to parse the Linux kernel, call graph included | to re-parse it incrementally |
+|              💸 −6%              |        📦 1.6M lines         |          🎯 98.6%           |      ⚡ < 20 ms      |              🐧 53.9 s              |
+| :------------------------------: | :--------------------------: | :-------------------------: | :------------------: | :---------------------------------: |
+| agent cost, with the same 13/13 correct answers | of bifrost indexed in 5.7 s | of call-graph edges are right | per warm query (p50) | to parse the Linux kernel (37.3M lines) |
 
-<sub>Call-graph figure: PRISM v2 on eight open-source projects, one per language, checked against each language's own compiler tooling. Query figures: EHNAS engine with v0.9.0 on five open-source repos (eulix, flask, gin, ripgrep, gson), Ryzen 5 5600X. Kernel figures: 37.3M lines on 12 threads. Details in [Benchmarks](#-benchmarks).</sub>
-
-## ⭐ Two engines at the core
-
-**PRISM v2 reads your code.** It parses nine languages with Tree-sitter and resolves calls from the syntax tree alone, with no build step and no type checker. On eight open-source projects checked against each language's own compiler tooling, 98.6% of the call edges it draws are right. It gets through the whole Linux kernel, 37.3M lines, in 53.9 seconds. [How PRISM works ↓](#-prism-v2-precise-call-graphs-from-syntax-alone)
-
-**EHNAS answers your agent.** It searches the symbol index and PRISM's call graph with exact matches, Monte Carlo walks and cross-language twin search, then packs the reply to your token budget. No embedding model runs at any point, so the MCP server fits in 81–89 MB and a warm query takes under 20 ms at the median. [How EHNAS works ↓](#-ehnas-zero-embeddings-zero-gpu-zero-network)
+<sub>Agent figures: Claude Code with Claude Sonnet 5.5 (medium effort), 13 questions on bifrost, with and without Eulix. Call-graph figure: eight open-source projects, one per language, checked against each language's own compiler tooling. Query figure: v0.9.0 with no embeddings on five open-source repos, Ryzen 5 5600X. Kernel figure: 12 threads. Details in [Benchmarks](#-benchmarks).</sub>
 
 ---
 
-## 🎯 The problem: every guess costs tokens
+## 🎯 Why Eulix: code nobody has explained to you
 
-Ask a coding agent where your auth token gets validated and watch it work. It greps for `token`, opens a file, greps for `validate`, opens three more and backs out of a dead end before it reaches the twenty lines that matter. Search-and-read is the only tool it has for code it has never seen, and every step has a price. Each tool call is a round trip and a model turn, and each result lands in the context window, where it rides along on every later turn. A file read at step two is still taking up room at step twenty. The context fills with grep listings and whole files, the code that matters gets buried under code that doesn't, and the session runs out of room before the work is done.
+On a repository you know, you remember where things are. On one you don't (a new job, a dependency you have to debug, a codebase newer than your model's training data), every question starts with a search. Grep matches strings. It can't tell you who calls a function, which of five `validate()` methods a call means, or whether you have found every caller. Eulix answers those from structure: it parses the repository once into symbols, scopes and a call graph, then answers from that index on your own machine.
 
-Embedding-based RAG tries to skip the search and mostly moves the cost somewhere else. Every question waits on a model forward pass before search can start, the embedding model stays resident in memory, and every code change means re-embedding. Indexing is where it hurts most: on the Linux kernel, embedding 837,531 chunks took 26 minutes on a consumer GPU, while parsing the whole tree and building its call graph took 54 seconds. Our own embedding engine pays the same toll at query time too: about a second and close to 1 GB of memory before its first answer. And generic chunkers split code by token count, so a function can land in two halves, while the structure that answers most code questions (who calls this, which definition does this name mean) never reaches the index.
+**For AI agents.** An agent on unfamiliar code greps, opens a file, greps again and backs out of dead ends. Every step is a model turn, and every result stays in context for the rest of the session. With Eulix it asks the question as a tool call and gets a short, complete answer: a `callers` reply is about 110 tokens, one line per call site, and ends with `complete: yes`, so the agent doesn't re-check with grep. Measured with Claude Code (Claude Sonnet 5.5) on bifrost, a Go codebase from November 2026 with 1.6 million lines in 3,242 files:
 
-Eulix starts from that structure. It parses your repository once into symbols, scopes and a call graph, keeps the index warm in a local MCP server, and answers each lookup with one ranked reply that fits a token budget. When you want semantic recall, ETIYA adds embeddings on top. When you don't, EHNAS answers from structure alone, with no model anywhere in the loop, in under 90 MB.
+| 13 questions on bifrost | Cost (list price) | Output tokens | Time | Correct |
+| :-- | --: | --: | --: | :-: |
+| Grep and file reads only | $7.34 | 186k | 298 s | 13/13 |
+| With Eulix | $6.92 (**−6%**) | 150k (−20%) | 284 s | 13/13 |
+
+- Eulix was cheaper on 11 of the 13 questions. Its index of the whole repository took 5.7 s to build.
+- The questions about structure gain most. In a separate run on four repos, *what calls X* questions cost **27% less**. *Where is X* questions were about even, since grep is already good at finding a name.
+- Agents rarely call Eulix unless told to. `eulix mcp install` registers the server and adds the one-line hint that the numbers above use.
+- One session per setup, so a few percent either way per question is noise. A call through a struct field, goroutine or callback has no edge in the call graph yet, and the first version of these tools cost 18–40% *more* than grep. [Every run, the method and its limits ↓](#agent-token-use-claude-code-with-and-without-eulix)
+
+**For people.** The same index answers you directly. `eulix vizeulize` opens the call graph in your browser, searchable and served from `127.0.0.1`. `eulix chat` answers questions in the terminal with a local model (Ollama, LM Studio, vLLM) or a hosted one. [`eulix-lsp`](eulix-lsp/README.md) (beta) brings definitions, references and call hierarchy into your editor without a build.
+
+**Local, fast and without a model.** Indexing reads only your source: no build step, no type checker, no GPU, no network. With the EHNAS engine no neural model runs at all, the MCP server uses under 90 MB and a warm query takes under 20 ms. Your code never leaves the machine.
 
 | The grep loop                                                                                                        | Eulix                                                                                        |
 | :------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------- |
-| **Slow.** Every guess is another tool call and another model turn.                                                   | **One call.** The agent asks a question and gets ranked code back.                           |
-| **Burns tokens.** File reads and raw match lists pile up in context and ride along on every later turn.              | **Budgeted.** Only the chunks that fit your token budget, each with a `file:line` reference. |
+| **Slow.** Every guess is another tool call and another model turn.                                                   | **One call.** The agent asks a question and gets the answer back.                            |
+| **Burns tokens.** File reads and raw match lists pile up in context and ride along on every later turn.              | **Budgeted.** Each reply fits a per-question budget, with a `file:line` reference per item.  |
 | **Misses context.** grep matches strings. It can't tell who calls a function or which `validate()` a call refers to. | **Structural.** Lookups run against a symbol index and a call graph built from the AST.      |
-| **Forgets.** Every new question starts the search from scratch.                                                      | **Learns the session.** `known_symbols` and a per-project memory anchor each follow-up.      |
+| **Never knows it's done.** Grep can't say whether it found every caller.                                             | **Says when it's complete.** Every reply starts with `complete: yes` or `complete: no`.      |
+
+<details>
+<summary>Why not embedding-based RAG?</summary>
+
+Embeddings move the cost somewhere else. Every question waits on a model forward pass before search can start, the embedding model stays resident in memory, and every code change means re-embedding. Indexing is where it hurts most: on the Linux kernel, embedding 837,531 chunks took 26 minutes on a consumer GPU, while parsing the whole tree and building its call graph took 54 seconds. Eulix's own embedding engine, ETIYA, pays the same toll at query time too: about a second and close to 1 GB of memory before its first answer. And generic chunkers split code by token count, so a function can land in two halves, while the structure that answers most code questions never reaches the index. Eulix keeps embeddings optional: ETIYA adds them on top of the structural index for semantic recall, and EHNAS answers from structure alone.
+
+</details>
 
 ## 🔍 What your agent gets back
 
-The agent asks one question over MCP. Here is a real reply (trimmed) from the EHNAS engine to a question about Eulix's own source, _"Who calls ResolveEngine, and where is the engine chosen?"_
+A real reply from the bifrost benchmark. The agent asked `callers` for `Bifrost.shouldTryFallbacks`:
+
+```text
+answer: callers · source: call graph (exact, static) · complete: yes
+callers of Bifrost.shouldTryFallbacks (core/bifrost.go:5874): 2 call sites + 1 in tests, complete
+  core/bifrost.go:6193  Bifrost.handleRequest        shouldTryFallbacks := bifrost.shouldTryFallbacks(ctx, req, primaryErr)
+  core/bifrost.go:6425  Bifrost.handleStreamRequest  shouldTryFallbacks := bifrost.shouldTryFallbacks(ctx, req, primaryErr)
+  (tests: core/bifrost_test.go:8845)
+```
+
+That one call answered the question. The first line says where the answer came from and that the list is complete, so the agent stopped there.
+
+| Tool | Answers | Typical reply |
+| :-- | :-- | :-- |
+| `callers` / `callees` | Who calls X, what X calls | One line per call site |
+| `definition` | Where X is defined, with its signature and optionally its body | A few lines |
+| `trace` | How A reaches B across files: the call path, then the code along it | Path plus ranked code |
+| `search` | How a feature works: ranked code chunks for a question in words | Up to about 2,000 tokens |
+| `query` | Any question, routed to the right strategy (the original tool) | Sized to `max_tokens` |
+
+`search` and `query` replies are ranked code chunks. Here is one (trimmed) from the EHNAS engine, for a question about Eulix's own source, _"Who calls ResolveEngine, and where is the engine chosen?"_
 
 ```text
 Context: 15 source chunks, 0 metadata, 2067 tokens across 8 files
@@ -94,27 +128,27 @@ func (cb *ContextBuilder) InitEngine() error {
 … 13 more chunks
 ```
 
-Every chunk arrives with its file, line range and score, so the agent can cite it, open it or build its next question on it. The header line states what the reply costs before the agent reads a single chunk: 15 chunks, 2,067 tokens, 8 files.
+Every chunk arrives with its file, line range and score, so the agent can cite it, open it or build its next question on it. The header line states what the reply costs before the agent reads a single chunk.
 
-- **Ranked and budgeted.** Candidates are scored, merged and picked with MMR, which weighs relevance against redundancy, until the context budget is spent. The budget comes from `max_tokens` in `eulix.toml` (8,192 by default).
+- **Ranked and budgeted.** Candidates are scored, merged and picked with MMR, which weighs relevance against redundancy, until the budget is spent.
 - **Warm between calls.** The server keeps the index in memory, frees it after 5 idle minutes and switches repositories on demand with `set_repo_path`.
 - **Read-only.** The query tools are marked read-only, so a client can run them without write permissions.
 
 ### Tell Eulix what your agent already knows
 
-Every query tool takes an optional `known_symbols` list: function names, class names or file paths the agent has already met in this session, in code it read, an earlier reply or your own message. Those names change how Eulix searches. A question with no anchors goes to open-ended retrieval. A question with anchors starts with a multi-hop lookup that begins at those symbols and follows their edges through the call graph, so a vague question becomes a precise one.
+`search` and `query` take an optional `known_symbols` list: function names, class names or file paths the agent has already met in this session, in code it read, an earlier reply or your own message. Those names change how Eulix searches. A question with no anchors goes to open-ended retrieval. A question with anchors starts with a multi-hop lookup that begins at those symbols and follows their edges through the call graph, so a vague question becomes a precise one.
 
 ```json
 {
-  "name": "query",
+  "name": "search",
   "arguments": {
-    "query": "Who calls ResolveEngine, and where is the engine chosen?",
+    "question": "Where is the retrieval engine chosen?",
     "known_symbols": ["ResolveEngine", "InitEngine"]
   }
 }
 ```
 
-The server also keeps a small memory per project. When an answer scores well, the symbols around it are remembered and added to later queries on the same repository, so the session gets sharper as it goes. Asked a second time, the question above came back as 10 chunks from `engine.go` alone, in 1,521 tokens instead of 2,067. Agents pick the habit up from the tool descriptions, which tell them to pass exact names and paths whenever they have them.
+The server also keeps a small memory per project. When an answer scores well, the symbols around it are remembered and added to later queries on the same repository, so the session gets sharper as it goes. Asked a second time, the question above came back as 10 chunks from `engine.go` alone, in 1,521 tokens instead of 2,067.
 
 <details>
 <summary>How the MCP server picks a search strategy</summary>
@@ -132,71 +166,82 @@ Only results that clear the quality bar feed the project memory, so a fallback n
 
 </details>
 
-## 🧩 Architecture
+## 🚀 Quick start
 
-<p align="center">
-  <img src=".github/readme/architecture.svg" alt="Eulix pipeline: eulix-parser (Rust) writes the knowledge base, eulix-embed (Python) adds vectors for ETIYA only, eulix-cli (Go) runs the retrieval engines, and the MCP server hands ranked context to your AI agent. EHNAS skips the embedding stage.">
-</p>
+Three steps from install to your agent's first query.
 
-Eulix is three programs in three languages, each picked for its job and shipped as one binary. `eulix analyze` runs the first two; every query runs through the third.
+### 1. Install
 
-- **Rust · `eulix-parser` on `libeulix`.** Parses every source file with Tree-sitter grammars for nine languages, extracts functions, classes, methods, imports and call sites, and resolves calls with PRISM v2. A spill-to-disk writer keeps peak memory near 3.7 GB on the full kernel, and a parse cache makes re-runs incremental. It writes eight JSON files to `.eulix/`, among them `kb.json` (symbols), `kb_index.json` (lookup indexes), `kb_call_graph.json` (the call graph) and `kb_summary.json` (the project summary).
-- **Python · `eulix-embed`.** Runs only when the retrieval engine is ETIYA. It chunks the knowledge base, embeds the chunks with ONNX Runtime (default) or PyTorch on GPU or CPU, and writes SQ8-quantized vectors to `embeddings.bin` and `vectors.bin`.
-- **Go · `eulix-cli`.** The `eulix` binary you install. It carries the parser and the embedder inside it, unpacks them on first run and checks the parser against a hash compiled into the build. It routes each question, runs the ETIYA or EHNAS engine, and serves `eulix mcp`, `eulix chat` and `eulix vizeulize` from the same index.
-- **MCP server · `eulix mcp`.** Speaks the Model Context Protocol over stdio with four tools (`query`, `query_with_cot`, `query_without_cot`, `set_repo_path`) and two prompts. It keeps the index warm between calls and never calls a model itself.
+**Linux and macOS** (Apple Silicon)
 
-<details>
-<summary>Text version of the diagram</summary>
-
-```text
- your repository
-        │
-        ▼
- eulix_parser   Rust · libeulix · Tree-sitter · PRISM v2
-        │       symbols, scopes, call graph       →  .eulix/kb*.json
-        ▼
- eulix_embed    Python · ONNX Runtime (default) or PyTorch · ETIYA only
-        │       SQ8 vectors                       →  .eulix/embeddings.bin
-        ▼
- eulix          Go · retrieval engines: ETIYA │ EHNAS
-        │
-        ├──►  eulix mcp         MCP server for AI coding agents
-        ├──►  eulix chat        terminal Q&A with a local or hosted model
-        └──►  eulix vizeulize   call-graph explorer in your browser
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Nurysso/eulix/main/install.sh)
 ```
 
-</details>
+**Windows** (PowerShell)
 
-### Embedders
-
-| Backend          | Setting                         | Why pick it                                                          |
-| :--------------- | :------------------------------ | :------------------------------------------------------------------- |
-| **ONNX Runtime** | `engine = "onnx"` _(default)_   | Lighter and faster to start, with no PyTorch at inference time.      |
-| **PyTorch**      | `engine = "torch"` _(optional)_ | More devices, including Apple MPS, and models that need custom code. |
-
-Both run on GPU or CPU and produce comparable vectors for the same model. Embeddings are built only when the retrieval engine is ETIYA. The default model is [`BAAI/bge-base-en-v1.5`](https://huggingface.co/BAAI/bge-base-en-v1.5) (768 dimensions).
-
-```toml
-# excerpt of eulix.toml
-[project]
-engine = "etiya"                  # retrieval engine: "etiya" (default) or "ehnas"
-
-[embeddings]
-model  = "BAAI/bge-base-en-v1.5"
-engine = "onnx"                   # embedder: "onnx" (default) or "torch"
-
-[llm]
-max_tokens = 8192                 # replies are sized to fit this budget
+```powershell
+irm https://raw.githubusercontent.com/Nurysso/eulix/main/install.ps1 | iex
 ```
 
-### Also in the box
+**Intel Mac or Linux on ARM:** [build from source](docs/Installation.md#build-from-source).
 
-| Tool                                            | What it does                                                                                                 |
-| :---------------------------------------------- | :----------------------------------------------------------------------------------------------------------- |
-| `eulix chat`                                    | Terminal Q&A over your repo with a local model (Ollama, LM Studio, vLLM) or a hosted provider you configure. |
-| `eulix vizeulize`                               | Interactive, searchable call graph in your browser, served from `127.0.0.1`.                                 |
-| [`libeulix`](https://crates.io/crates/libeulix) | The parser and PRISM engine as a Rust crate: `cargo add libeulix`.                                           |
-| [`eulix-lsp`](eulix-lsp/README.md)              | Language server built on libeulix (beta): definitions, references, hover, call hierarchy.                    |
+The installer detects your GPU and picks the build without asking: NVIDIA CUDA when it finds an NVIDIA driver, the CPU build otherwise (it also drives AMD GPUs). It verifies the Eulix binary against the release checksums. Set `EULIX_GPU=cpu` or `EULIX_GPU=nvidia` to skip detection.
+
+### 2. Index your repository
+
+```bash
+cd your-repo
+eulix init      # writes eulix.toml and .euignore (short wizard)
+eulix analyze   # parses and builds the call graph; ETIYA also embeds
+```
+
+> [!TIP]
+> **Want the embedding-free setup?** Before running `eulix analyze`, add one line under the `[project]` table in `eulix.toml`:
+>
+> ```toml
+> engine = "ehnas"   # default: "etiya"
+> ```
+>
+> `analyze` then stops after parsing, and the MCP server never loads a model.
+
+### 3. Connect your agent
+
+**Claude Code, Cursor or Cline.** Run this in the repo:
+
+```bash
+eulix mcp install claude     # or cursor, cline
+```
+
+It registers the MCP server for the project and adds a one-line hint to the agent's instructions (for Claude Code, a block in `CLAUDE.md`) saying when to use each tool. Agents rarely call Eulix without that hint, and the benchmark figures above use it.
+
+**Any other MCP client** (Windsurf, Continue, LM Studio, …), or to register it by hand:
+
+```bash
+claude mcp add eulix -- eulix mcp --repo "$PWD"
+```
+
+```json
+{
+  "mcpServers": {
+    "eulix": {
+      "command": "eulix",
+      "args": ["mcp", "--repo", "/absolute/path/to/your-repo"]
+    }
+  }
+}
+```
+
+> [!TIP]
+> If your client can't find `eulix`, set `command` to the absolute path from `which eulix`. Setup notes for Continue, LM Studio and the MCP Inspector are in the [MCP server README](eulix-cli/internal/mcp/README.md#connecting-a-client).
+
+Your agent now has `callers`, `callees`, `definition`, `trace` and `search`, plus the routed `query` tool and `set_repo_path`.
+
+<!-- No agent handy? Call them by hand in your browser:
+```bash
+npx @modelcontextprotocol/inspector eulix mcp --repo "$PWD"
+``` -->
+
 
 ## ✨ Core features
 
@@ -255,9 +300,107 @@ Parsing, indexing, embedding and retrieval all run on your hardware. The MCP ser
 
 It also stays inside the repository you point it at. MCP and retrieval skip hidden files, anything matched by `.euignore` and paths that escape the repo through symlinks. The installer checks the Eulix binary against the release checksums, and the binary checks its embedded parser against a hash compiled into the build before running it.
 
+## 🧩 Architecture
+
+<p align="center">
+  <img src=".github/readme/architecture.svg" alt="Eulix pipeline: eulix-parser (Rust) writes the knowledge base, eulix-embed (Python) adds vectors for ETIYA only, eulix-cli (Go) runs the retrieval engines, and the MCP server hands ranked context to your AI agent. EHNAS skips the embedding stage.">
+</p>
+
+Eulix is three programs in three languages, each picked for its job and shipped as one binary. `eulix analyze` runs the first two; every query runs through the third.
+
+- **Rust · `eulix-parser` on `libeulix`.** Parses every source file with Tree-sitter grammars for nine languages, extracts functions, classes, methods, imports and call sites, and resolves calls with PRISM v2. A spill-to-disk writer keeps peak memory near 3.7 GB on the full kernel, and a parse cache makes re-runs incremental. It writes eight FlatBuffers files to `.eulix/`, among them `kb.fb` (symbols), `kb_index.fb` (lookup indexes), `kb_call_graph.fb` (the call graph) and `kb_summary.fb` (the project summary); `--emit-json` adds a one-to-one JSON copy of each for inspection.
+- **Python · `eulix-embed`.** Runs only when the retrieval engine is ETIYA. It chunks the knowledge base, embeds the chunks with ONNX Runtime (default) or PyTorch on GPU or CPU, and writes SQ8-quantized vectors to `embeddings.bin` and `vectors.bin`.
+- **Go · `eulix-cli`.** The `eulix` binary you install. It carries the parser and the embedder inside it, unpacks them on first run and checks the parser against a hash compiled into the build. It routes each question, runs the ETIYA or EHNAS engine, and serves `eulix mcp`, `eulix chat` and `eulix vizeulize` from the same index.
+- **MCP server · `eulix mcp`.** Speaks the Model Context Protocol over stdio. Agents get typed tools (`callers`, `callees`, `definition`, `trace`, `search`), the routed `query` tool and `set_repo_path`, plus two prompts. Every reply starts with a `complete: yes|no` line and fits a per-question budget. It keeps the index warm between calls and never calls a model itself.
+
+<details>
+<summary>Text version of the diagram</summary>
+
+```text
+ your repository
+        │
+        ▼
+ eulix_parser   Rust · libeulix · Tree-sitter · PRISM v2
+        │       symbols, scopes, call graph       →  .eulix/kb*.fb
+        ▼
+ eulix_embed    Python · ONNX Runtime (default) or PyTorch · ETIYA only
+        │       SQ8 vectors                       →  .eulix/embeddings.bin
+        ▼
+ eulix          Go · retrieval engines: ETIYA │ EHNAS
+        │
+        ├──►  eulix mcp         MCP server for AI coding agents
+        ├──►  eulix chat        terminal Q&A with a local or hosted model
+        └──►  eulix vizeulize   call-graph explorer in your browser
+```
+
+</details>
+
+### Embedders
+
+| Backend          | Setting                         | Why pick it                                                          |
+| :--------------- | :------------------------------ | :------------------------------------------------------------------- |
+| **ONNX Runtime** | `engine = "onnx"` _(default)_   | Lighter and faster to start, with no PyTorch at inference time.      |
+| **PyTorch**      | `engine = "torch"` _(optional)_ | More devices, including Apple MPS, and models that need custom code. |
+
+Both run on GPU or CPU and produce comparable vectors for the same model. Embeddings are built only when the retrieval engine is ETIYA. The default model is [`BAAI/bge-base-en-v1.5`](https://huggingface.co/BAAI/bge-base-en-v1.5) (768 dimensions).
+
+```toml
+# excerpt of eulix.toml
+[project]
+engine = "etiya"                  # retrieval engine: "etiya" (default) or "ehnas"
+
+[embeddings]
+model  = "BAAI/bge-base-en-v1.5"
+engine = "onnx"                   # embedder: "onnx" (default) or "torch"
+
+[llm]
+max_tokens = 8192                 # replies are sized to fit this budget
+```
+
+### Also in the box
+
+| Tool                                            | What it does                                                                                                 |
+| :---------------------------------------------- | :----------------------------------------------------------------------------------------------------------- |
+| `eulix chat`                                    | Terminal Q&A over your repo with a local model (Ollama, LM Studio, vLLM) or a hosted provider you configure. |
+| `eulix vizeulize`                               | Interactive, searchable call graph in your browser, served from `127.0.0.1`.                                 |
+| [`libeulix`](https://crates.io/crates/libeulix) | The parser and PRISM engine as a Rust crate: `cargo add libeulix`.                                           |
+| [`eulix-lsp`](eulix-lsp/README.md)              | Language server built on libeulix (beta): definitions, references, hover, call hierarchy.                    |
+
 ## 📊 Benchmarks
 
 > Local engineering runs. Results vary with hardware, repository, configuration and query shape. Method: [Benchmarking](docs/Architecture/Benchmarking.md) and [Call-Graph Scoring](docs/Architecture/Call-Graph-Scoring.md). Raw v0.9.0 numbers: [benchmark report](bench/results/v0.8.3-vs-f9006ea.md) and [call-graph accuracy](docs/libeulix/Call-Graph-Accuracy.md).
+
+### Agent token use: Claude Code with and without Eulix
+
+Questions a developer might ask about an unfamiliar repo (*what calls X*, *where is X*, *trace a flow*, a config lookup, and longer multi-file questions), asked of Claude Code (Claude Sonnet 5.5) with grep alone and with Eulix plus the one-line hint that `eulix mcp install` writes. Method, every run and its limits: [Agent Benchmark](docs/Architecture/Agent-Benchmark.md).
+
+**Current MCP tools, on bifrost.** [Bifrost](https://github.com/maximhq/bifrost) at a commit from 2026-11-19 is a Go codebase of 1.6M lines (3,242 files, indexed in 5.7 s) newer than the model's training data, so the agent has to read the code instead of answering from memory. 13 questions were asked in one long session per setup (10 regular, 3 deep), at medium effort:
+
+| Setup | Input tokens | Output tokens | Cost (list price) | Time | Correct answers |
+| :-- | --: | --: | --: | --: | :-: |
+| No Eulix | 17.65M | 186k | $7.34 | 298 s | 13/13 |
+| Eulix + hint | 17.92M (+2%) | 150k (−20%) | $6.92 (**−6%**) | 284 s | 13/13 |
+
+- **Cheaper on 11 of 13 questions**, by 4–16%, at the same accuracy. The saving comes from the agent reasoning and writing less. Input tokens are about the same, because both sessions carry the same growing conversation.
+- **Structural questions gain most.** In a separate low-effort run with one session per question on all four repos (19 questions), callers questions cost 27% less with Eulix, and all questions together cost 5% less. A `callers` reply is about 110 tokens, one line per call site, ending in `complete: yes` so the agent doesn't re-check with grep. "Where is X" questions were about even (+3%).
+- **Opus 4.8 on bifrost.** One session per question, all 15 questions (10 regular, 5 deep): **$6.78 with Eulix against $8.67 without (−22%)**, 14/15 correct against 13/15. Savings were largest on traces and deep questions (−22% to −48% each) and nil on small lookups. [Run summary](bench/results/agent/2026-11-20-opus48-bifrost/SUMMARY.md).
+- **Limits.** A call through a struct field, goroutine or callback has no edge in the call graph. At low effort that sent one trace answer down the wrong path. Most figures come from one session per question, so per-question differences of a few percent are noise. Results: [bifrost, Opus 4.8](bench/results/agent/2026-11-20-opus48-bifrost/SUMMARY.md) · [bifrost, chained](bench/results/agent/2026-11-20-bifrost-chain-medium/SUMMARY.md) · [four repos, low effort](bench/results/agent/2026-11-20-sonnet55-low-mcp2/SUMMARY.md).
+
+**Before the typed tools (v0.9.0 MCP, one `query` tool).** Ten questions on Flask 3.1.3, Django 6.1.3 and ripgrep 15.2.0, each asked five times in each of three setups: no Eulix; Eulix added with `claude mcp add` and nothing else; and Eulix plus one line telling the agent to query it first. Figures are sums of per-task medians.
+
+| Setup | Input tokens | Cost (list price) | Tool calls | Correct answers |
+| :-- | --: | --: | --: | :-: |
+| No Eulix | 330,451 | $0.348 | 42 | 50/50 |
+| Eulix added, no hint | 337,277 (+2%) | $0.350 (+1%) | 37 | 50/50 |
+| Eulix + "query Eulix first" | 450,073 (+36%) | $0.409 (+18%) | 29 (−31%) | 50/50 |
+
+- **No saving then.** Every setup answered every question correctly. With the hint, the agent used fewer tool calls but read more tokens, so it paid more.
+- **Unprompted, the agent rarely uses Eulix.** With Eulix installed and no hint, Claude called it in 5 of 50 sessions and grepped in the rest. A CLAUDE.md line is needed for the agent to use it.
+- **Replies are large.** The median Eulix reply was about 5,600 tokens. With the hint, Claude queried Eulix in 40 of 50 sessions and answered from that reply alone in 12. In the rest it made a median of 3 more tool calls to check.
+- **Where it helped.** Cost went down on four tasks with the hint. The clearest case: on *trace how ripgrep turns its arguments and config file into HiArgs*, Eulix cut input tokens by 43% and cost by 18%, answering in one call instead of five.
+- **A repo the model knows less well shows the same pattern.** On [bifrost](https://github.com/maximhq/bifrost) at a commit from 2026-11-19 (a large Go codebase), ten more questions gave the same result. With the hint, input tokens rose 40–41% and cost 32–40%, in a partial default-effort run (54 sessions, cut short by a usage limit) and a low-effort run (20 sessions). Eulix replies there were again about 5,700 tokens. Those runs have only 1–2 sessions per task, so per-task differences are noise. Results: [default effort](bench/results/agent/2026-11-20-sonnet-bifrost/report.md), [low effort](bench/results/agent/2026-11-20-sonnet-low-bifrost/report.md).
+
+<sub>Run `2026-11-20-sonnet`: Claude Code 2.1.328, Eulix v0.9.0 with no embeddings, five reps per task and setup, isolated sessions (no user settings, plugins or other MCP servers). Per-task table, every answer and the grading rubric: [report](bench/results/agent/2026-11-20-sonnet/report.md) · method and limits: [bench/agent](bench/agent/README.md).</sub>
 
 ### Call-graph accuracy (PRISM v2)
 
@@ -419,75 +562,6 @@ Parsing took 0.05–0.27 s of each run.
 
 Linux kernel · Go compiler · FFmpeg · Gecko / Firefox · Django · OpenStack Nova
 
-## 🚀 Quick start
-
-Three steps from install to your agent's first query.
-
-### 1. Install
-
-**Linux and macOS** (Apple Silicon)
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Nurysso/eulix/main/install.sh)
-```
-
-**Windows** (PowerShell)
-
-```powershell
-irm https://raw.githubusercontent.com/Nurysso/eulix/main/install.ps1 | iex
-```
-
-**Intel Mac or Linux on ARM:** [build from source](docs/Installation.md#build-from-source).
-
-The installer asks for your GPU variant (`nvidia` for CUDA, `amd` for AMD GPUs and CPU-only machines; macOS has one build and is not asked) and verifies the Eulix binary against the release checksums.
-
-### 2. Index your repository
-
-```bash
-cd your-repo
-eulix init      # writes eulix.toml and .euignore (short wizard)
-eulix analyze   # parses and builds the call graph; ETIYA also embeds
-```
-
-> [!TIP]
-> **Want the embedding-free setup?** Before running `eulix analyze`, add one line under the `[project]` table in `eulix.toml`:
->
-> ```toml
-> engine = "ehnas"   # default: "etiya"
-> ```
->
-> `analyze` then stops after parsing, and the MCP server never loads a model.
-
-### 3. Connect your agent
-
-**Claude Code**
-
-```bash
-claude mcp add eulix -- eulix mcp --repo "$PWD"
-```
-
-**Cursor, Windsurf, Cline, LM Studio or any other MCP client**
-
-```json
-{
-  "mcpServers": {
-    "eulix": {
-      "command": "eulix",
-      "args": ["mcp", "--repo", "/absolute/path/to/your-repo"]
-    }
-  }
-}
-```
-
-> [!TIP]
-> If your client can't find `eulix`, set `command` to the absolute path from `which eulix`. Setup notes for Continue, LM Studio and the MCP Inspector are in the [MCP server README](eulix-cli/internal/mcp/README.md#connecting-a-client).
-
-Your agent now has four tools: `query`, `query_with_cot`, `query_without_cot` and `set_repo_path`. No agent handy? Call them by hand in your browser:
-
-<!-- ```bash
-npx @modelcontextprotocol/inspector eulix mcp --repo "$PWD"
-``` -->
-
 ## 📖 Documentation
 
 | Read                                                                 | To learn                                              |
@@ -502,6 +576,7 @@ npx @modelcontextprotocol/inspector eulix mcp --repo "$PWD"
 | [Embedders](docs/eulix-embed/Embedders.md)                           | The ONNX Runtime and PyTorch backends                 |
 | [Configuration](docs/eulix-cli/Config.md)                            | Every `eulix.toml` setting                            |
 | [Benchmarking](docs/Architecture/Benchmarking.md)                    | How releases are measured against each other          |
+| [Agent benchmark](docs/Architecture/Agent-Benchmark.md)              | Claude Code with and without Eulix: cost and accuracy |
 
 Everything else is mapped in [docs/README.md](docs/README.md).
 

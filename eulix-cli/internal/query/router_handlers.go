@@ -687,42 +687,17 @@ func (r *Router) handleLocation(query string, class *c.Classification) (string, 
 	return b.String(), nil
 }
 
+// handleUsage answers "usage of X" / "what uses X" with X's call sites. It
+// used to print only where X is defined, which answers a different question.
 func (r *Router) handleUsage(query string, class *c.Classification) (string, error) {
 	query = stripCommandPrefix(query, "usage of", "usage", "use", "uses of", "show usage", "find usage")
 	entity := firstSymbolOrExtracted(class, query)
 	if entity == "" {
 		return "Could not identify a function or class name in the query.", nil
 	}
-
-	locations, ok := r.kbIndex.FunctionsByName[entity]
-	if !ok || len(locations) == 0 {
-		return fmt.Sprintf("'%s' not found in knowledge base.", entity), nil
-	}
-
-	// Locations come from the repository's own .eulix files: read them inside
-	// the project only, and never from hidden or .euignore'd files.
-	root, err := os.OpenRoot(r.config.Project.Path)
+	rep, err := r.Calls(entity, false, 1, 60)
 	if err != nil {
-		return "", fmt.Errorf("open project root: %w", err)
+		return "", err
 	}
-	defer func() { _ = root.Close() }()
-	servable := checksum.ServableMatcher(r.config.Project.Path)
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "Usage of '%s'\n\n", entity)
-
-	for _, loc := range dedupe(locations) {
-		file, line, err := parseLocation(loc) // "path/to/file.go:42"
-		if err != nil || !servable(file) {
-			continue
-		}
-		sig, err := extractSignature(root, file, line)
-		if err != nil {
-			fmt.Fprintf(&b, "  %s — could not read signature: %v\n", loc, err)
-			continue
-		}
-		fmt.Fprintf(&b, "  %s\n%s\n", loc, sig)
-	}
-
-	return b.String(), nil
+	return FormatCallReport(rep), nil
 }

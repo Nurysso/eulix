@@ -62,6 +62,9 @@ func (r *Router) Close() error {
 func (r *Router) CloseContextBuilder() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// The full KB and the definition table are rebuilt on demand; on a large
+	// repository they are tens of MB, so they go with the context builder.
+	r.kb, r.syms = nil, nil
 	if r.contextBuilder != nil {
 		err := r.contextBuilder.Close()
 		r.contextBuilder = nil
@@ -122,7 +125,7 @@ func (r *Router) ensureContextBuilder() error {
 // bareID strips the node-type prefix and file path that eulix-parser emits.
 func bareID(id string) string {
 	id = retrieval.IDWithoutFile(id)
-	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
+	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "ifacemethod_", "type_"}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(id, prefix) {
 			s := strings.TrimPrefix(id, prefix)
@@ -787,7 +790,7 @@ func (r *Router) resolveCallGraphEntity(name string) (string, *utils.CallGraphNo
 	}
 
 	// Simple prefix variants
-	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
+	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "ifacemethod_", "type_"}
 	for _, prefix := range prefixes {
 		key := prefix + name
 		if n, ok := r.cgBuild.Nodes[key]; ok {
@@ -858,6 +861,7 @@ func BuildCallGraphIndex(ref *utils.CallGraphRef) *retrieval.CallGraphIdx {
 			Nodes:    make(map[string]*utils.CallGraphNode),
 			CalledBy: make(map[string][]string),
 			Calls:    make(map[string][]string),
+			Sites:    make(map[string][]int),
 		}
 	}
 
@@ -865,6 +869,7 @@ func BuildCallGraphIndex(ref *utils.CallGraphRef) *retrieval.CallGraphIdx {
 		Nodes:    make(map[string]*utils.CallGraphNode, len(ref.Nodes)),
 		CalledBy: make(map[string][]string, len(ref.Nodes)),
 		Calls:    make(map[string][]string, len(ref.Nodes)),
+		Sites:    make(map[string][]int, len(ref.Edges)),
 	}
 
 	for i := range ref.Nodes {
@@ -876,6 +881,10 @@ func BuildCallGraphIndex(ref *utils.CallGraphRef) *retrieval.CallGraphIdx {
 		if e.EdgeType == "call" {
 			idx.Calls[e.From] = append(idx.Calls[e.From], e.To)
 			idx.CalledBy[e.To] = append(idx.CalledBy[e.To], e.From)
+			if e.CallSiteLine > 0 {
+				k := retrieval.SiteKey(e.From, e.To)
+				idx.Sites[k] = append(idx.Sites[k], e.CallSiteLine)
+			}
 		}
 	}
 	for id, callers := range idx.CalledBy {
@@ -893,7 +902,7 @@ func callGraphShortName(key string) string {
 	key = retrieval.IDWithoutFile(key)
 
 	// Strip known type prefixes
-	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"}
+	prefixes := []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "ifacemethod_", "type_"}
 	for _, prefix := range prefixes {
 		after, ok := strings.CutPrefix(key, prefix)
 		if !ok {

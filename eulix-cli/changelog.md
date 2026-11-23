@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Typed MCP tools for agents:** `callers`, `callees`, `definition`, `trace` and `search`. `callers` / `callees` return one line per call site from the call graph (enclosing function and the calling line, tests counted apart): about 110 tokens for a caller list that used to cost ~5,600. `trace` returns the ordered call path between two functions (or back to an entry point), then the code for the hops, and says where a chain stops when it can't be followed.
+- Every MCP reply starts with `answer: … · source: … · complete: yes|no`, naming what was left out (budget hit, chunks cut, more sites).
+- `[mcp] reply_tokens` (default 1800) and `[mcp] max_chunk_lines` (default 60) in `eulix.toml`, and `max_tokens` per call. MCP replies no longer use the `[llm].max_tokens` budget with its 2,048-token answer reserve; narrow questions get less (definition ~600, explain ~1,500, trace ~2,000).
+- MCP replies refer to chunks already sent in the session (`(already sent this session) file:a-b …`) instead of resending them. `fresh: true` resends.
+- `eulix mcp install claude|cursor|cline` registers the server and adds a short instruction telling the agent which questions Eulix answers better than grep.
+
+### Changed
+
+- "What calls X?", "where is X used", "X is called by", "callers of X" and "what does X call" are classified as call-graph questions. `usage of X` lists X's call sites instead of its definition.
+- The MCP `query` tool answers callers and definition questions from the index before ranked retrieval, and its quality gate rejects a callers answer that lists no call sites.
+- The MCP lexical fallback lists one line per hit with its enclosing function (5 per file), capped at ~2,000 tokens instead of 24 KB of 7-line windows.
+- Server instructions and tool descriptions say when to use each tool and when grep is better.
+- `query_with_cot` / `query_without_cot` are deprecated; they keep their old output for the retrieval benchmark. Use `search` (`format: "cot"`).
+- Interface-method nodes (`ifacemethod_`) are named like other symbols in call-graph output.
+- `install.sh` and `install.ps1` no longer ask which build to install. They install the NVIDIA build when they find an NVIDIA GPU with its driver (`nvidia-smi`, the loaded kernel module, or on Windows an NVIDIA display adapter) and the CPU build otherwise. An NVIDIA GPU without a driver gets the CPU build and a warning. `EULIX_GPU=cpu|nvidia` skips detection.
+
 ## Eulix CLI 0.9.0 - 2026-11-17
 
 Changes since v0.8.3.

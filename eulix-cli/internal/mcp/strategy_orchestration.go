@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 
+	"eulix/internal/query"
 	"eulix/internal/query/retrieval"
 )
 
@@ -40,15 +41,53 @@ import (
 // the signal that the agent has project context — which is what selects the
 // multi-hop path.
 func (s *Server) retrieveLocked(ctx context.Context, q string, known []string, cot bool) (string, RetrievalTrace, error) {
+	return s.retrieveWith(ctx, q, known, retrieveOpts{cot: cot})
+}
+
+// retrieveOpts are the per-call knobs of the cascade.
+type retrieveOpts struct {
+	cot    bool
+	budget int               // context tokens for ranked stages; 0 = router default
+	answer string            // answer type named in the reply header
+	want   query.AgentIntent // the answer type the question asks for (quality gate)
+	fresh  bool              // resend chunks already sent this session
+}
+
+// wantsCallReport reports whether an answer must list call sites to count.
+func (o retrieveOpts) wantsCallReport() bool {
+	return o.want == query.IntentCallersQ || o.want == query.IntentCalleesQ
+}
+
+// looksLikeCallReport reports whether text answers a callers/callees question.
+func looksLikeCallReport(text string) bool {
+	low := strings.ToLower(text)
+	return strings.Contains(low, "callers of") || strings.Contains(low, "calls made by") ||
+		strings.Contains(low, "called by") || strings.Contains(low, "call graph:")
+}
+
+func (s *Server) retrieveWith(ctx context.Context, q string, known []string, o retrieveOpts) (string, RetrievalTrace, error) {
+	cot := o.cot
 	cfg := s.strategy
 	if s.cfg != nil {
 		if eng, err := retrieval.ResolveEngine(s.cfg.Project.Engine); err == nil && eng == retrieval.EngineEtiya {
 			cfg.LexicalExclude = s.cfg.RetrievalConfig.Etiya.LexicalExclude
 		}
 	}
+	if o.budget > 0 {
+		// The fallback gets the same budget as everything else (~4 bytes a token).
+		cfg.LexicalMaxBytes = min(cfg.LexicalMaxBytes, o.budget*4)
+	}
+	if s.router != nil {
+		r := s.router
+		cfg.Enclosing = r.EnclosingSymbol
+	}
 	retr := s.retriever
 	if retr == nil {
-		retr = routerRetriever{router: s.router}
+		sent := s.sentLocked()
+		if o.fresh {
+			sent = nil
+		}
+		retr = routerRetriever{router: s.router, budget: o.budget, maxLines: s.maxChunkLines(), sent: sent, answer: o.answer}
 	}
 
 	mem := s.memoryLocked()
@@ -59,7 +98,7 @@ func (s *Server) retrieveLocked(ctx context.Context, q string, known []string, c
 	agentKnows := len(seeds) > 0
 
 	trace := RetrievalTrace{Anchors: seeds}
-	var best *candidate
+	var best, bestRanked *candidate
 	var lastErr error
 
 	// try records the outcome of one stage and reports whether the result
@@ -80,10 +119,19 @@ func (s *Server) retrieveLocked(ctx context.Context, q string, known []string, c
 			return false
 		}
 		qual := assess(q, anchors, text, echoes...)
+		// A callers question answered with a definition (or prose) has not
+		// been answered, however many query words it repeats.
+		if o.wantsCallReport() && stage != StageLexical && !looksLikeCallReport(text) {
+			qual.Score = 0
+			att.Note = "wrong answer type"
+		}
 		att.Score = qual.Score
 		trace.Attempts = append(trace.Attempts, att)
 		if best == nil || qual.Score > best.score {
 			best = &candidate{stage: stage, text: text, score: qual.Score}
+		}
+		if stage != StageLexical && (bestRanked == nil || qual.Score > bestRanked.score) {
+			bestRanked = &candidate{stage: stage, text: text, score: qual.Score}
 		}
 		return qual.Score >= cfg.MinQuality
 	}
@@ -97,6 +145,12 @@ func (s *Server) retrieveLocked(ctx context.Context, q string, known []string, c
 				return "", trace, lastErr
 			}
 			return noContextMessage, trace, nil
+		}
+		// Grep output contains the query's words by construction, so it
+		// outscores real code on term coverage. Keep ranked code that came
+		// close to the bar; the fallback is for when retrieval really failed.
+		if best.stage == StageLexical && bestRanked != nil && bestRanked.score >= nearMissRatio*cfg.MinQuality {
+			best = bestRanked
 		}
 		trace.Chosen = best.stage
 		if best.score >= cfg.MinQuality {
@@ -159,6 +213,43 @@ func (s *Server) retrieveLocked(ctx context.Context, q string, known []string, c
 
 	return finish()
 }
+
+// nearMissRatio: a ranked result scoring at least this share of MinQuality is
+// preferred to the lexical fallback.
+const nearMissRatio = 0.8
+
+// sentLocked returns the set of chunk ranges already sent to the agent for
+// the active repository. Caller must hold s.mu.
+func (s *Server) sentLocked() map[string]bool {
+	if s.sent == nil {
+		s.sent = make(map[string]map[string]bool)
+	}
+	m, ok := s.sent[s.activeRepo]
+	if !ok {
+		m = make(map[string]bool)
+		s.sent[s.activeRepo] = m
+	}
+	return m
+}
+
+// markSentLocked records the chunks a reply carried in full. Caller must
+// hold s.mu.
+func (s *Server) markSentLocked(text string) {
+	ref := sentChunks(text)
+	if len(ref) == 0 {
+		return
+	}
+	m := s.sentLocked()
+	if len(m) > maxSentChunks {
+		clear(m) // a long session: start over rather than grow without bound
+	}
+	for _, k := range ref {
+		m[k] = true
+	}
+}
+
+// maxSentChunks bounds the per-repository sent-chunk memory.
+const maxSentChunks = 5000
 
 // memoryLocked returns the projectMemory for the active repository, lazily
 // creating it. Caller must hold s.mu. The memory is small and survives the

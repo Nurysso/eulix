@@ -239,7 +239,7 @@ func symbolEqualsFold(syms []string, target string) bool {
 // last one. An unprefixed ID keeps only what precedes the first.
 func IDWithoutFile(id string) string {
 	i := strings.Index(id, "::")
-	for _, prefix := range []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "type_"} {
+	for _, prefix := range []string{"func_", "method_", "class_", "struct_", "enum_", "interface_", "ifacemethod_", "type_"} {
 		if strings.HasPrefix(id, prefix) {
 			i = strings.LastIndex(id, "::")
 			break

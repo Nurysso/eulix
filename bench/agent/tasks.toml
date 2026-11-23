@@ -1,0 +1,360 @@
+# Tasks for the agent token-savings benchmark (bench/agent/agent_bench.py).
+#
+# Each task is a question a developer would ask a coding agent on a repo it has
+# never seen. The same prompt goes to both arms; only the tools differ.
+#
+# Grading: the final answer passes when every [[task.require]] group matches.
+# A group matches when ANY of its regexes (case-insensitive) is found in the
+# answer. Ground truth was checked by hand against the pinned commit; the line
+# references in `truth` are for reviewers, not for grading.
+schema = 1
+
+[[corpus]]
+name = "flask"
+source = "https://github.com/pallets/flask"
+commit = "22d924701a6ae2e4cd01e9a15bbaf3946094af65"
+tag = "3.1.3"
+
+[[corpus]]
+name = "django"
+source = "https://github.com/django/django"
+commit = "f16e25dcb9fe55734ba4ea2b00ac34405b7df74a"
+tag = "6.1.3"
+
+[[corpus]]
+name = "ripgrep"
+source = "https://github.com/BurntSushi/ripgrep"
+commit = "e89fff89ac9af12e8d4ce9d5fd07beb408ca730f"
+tag = "15.2.0"
+
+# A repo the model is unlikely to know well: a young, fast-moving Go project
+# pinned to a commit newer than any training data. .claude/ holds the project's
+# own agent skills; it is removed so no arm can load them.
+[[corpus]]
+name = "bifrost"
+source = "https://github.com/maximhq/bifrost"
+commit = "783c682951a1c4d6a07a677779e0becab8bbbe2c"
+tag = "dev@2026-11-19"
+exclude = [".claude/"]
+
+# ---------------------------------------------------------------- flask
+
+[[task]]
+id = "flask-session-signing"
+corpus = "flask"
+kind = "where"
+prompt = "Where is the session cookie signed, and which key derivation and digest does it use?"
+truth = "src/flask/sessions.py: SecureCookieSessionInterface.get_signing_serializer builds an itsdangerous URLSafeTimedSerializer, key_derivation='hmac', digest_method=_lazy_sha1 (SHA-1), salt 'cookie-session'."
+require = [
+  ["sessions\\.py"],
+  ["get_signing_serializer"],
+  ["sha-?1"],
+  ["hmac"],
+]
+
+[[task]]
+id = "flask-callers-handle-user-exception"
+corpus = "flask"
+kind = "callers"
+prompt = "What calls Flask.handle_user_exception?"
+truth = "Only Flask.full_dispatch_request (src/flask/app.py:919), in its `except Exception` branch."
+require = [
+  ["full_dispatch_request"],
+]
+
+[[task]]
+id = "flask-trace-request"
+corpus = "flask"
+kind = "trace"
+prompt = "Trace how an incoming WSGI request reaches a view function in Flask, step by step."
+truth = "Flask.__call__ -> wsgi_app -> request_context().push() -> full_dispatch_request -> preprocess_request -> dispatch_request -> view_functions[rule.endpoint] -> finalize_request."
+require = [
+  ["wsgi_app"],
+  ["full_dispatch_request"],
+  ["dispatch_request"],
+  ["view_functions"],
+]
+
+[[task]]
+id = "flask-config-default"
+corpus = "flask"
+kind = "lookup"
+prompt = "Where is the default value of SESSION_COOKIE_NAME defined, and what is it?"
+truth = "Flask.default_config in src/flask/app.py:190, value 'session'. A literal-string lookup: grep is expected to do well here."
+require = [
+  ["app\\.py", "default_config"],
+  ["[\"'`]session[\"'`]"],
+]
+
+# ---------------------------------------------------------------- django
+
+[[task]]
+id = "django-csrf-check"
+corpus = "django"
+kind = "where"
+prompt = "Where does Django check the CSRF token on a POST request, and how does it compare the tokens?"
+truth = "django/middleware/csrf.py: CsrfViewMiddleware.process_view -> _check_token -> _does_token_match, which unmasks and calls constant_time_compare."
+require = [
+  ["csrf\\.py", "CsrfViewMiddleware"],
+  ["_check_token", "process_view"],
+  ["constant_time_compare"],
+]
+
+[[task]]
+id = "django-callers-fetch-all"
+corpus = "django"
+kind = "callers"
+prompt = "What calls QuerySet._fetch_all in Django's ORM?"
+truth = "django/db/models/query.py: QuerySet.__len__, __iter__, __bool__, __getitem__ (single index), __getstate__; RawQuerySet.__len__/__bool__/__iter__ (around line 2491). Also prefetch paths call it on other querysets."
+require = [
+  ["__len__"],
+  ["__iter__"],
+  ["__bool__"],
+]
+
+[[task]]
+id = "django-trace-url-resolve"
+corpus = "django"
+kind = "trace"
+prompt = "Trace how Django resolves a request URL to a view function, step by step."
+truth = "BaseHandler.get_response -> _get_response -> resolve_request (core/handlers/base.py:302) -> get_resolver(urlconf) -> URLResolver.resolve -> pattern.match / URLPattern.resolve -> ResolverMatch."
+require = [
+  ["resolve_request"],
+  ["URLResolver"],
+  ["ResolverMatch"],
+]
+
+# ---------------------------------------------------------------- ripgrep
+
+[[task]]
+id = "ripgrep-binary-detection"
+corpus = "ripgrep"
+kind = "where"
+prompt = "Where does ripgrep decide how to treat binary files, and what happens when it finds a NUL byte?"
+truth = "crates/core/flags/hiargs.rs BinaryDetection::from_low_args picks grep::searcher::BinaryDetection::quit(b'\\x00') for implicit files by default (stop searching), convert(b'\\x00') for explicit files or --binary, none() for -a/--text."
+require = [
+  ["BinaryDetection"],
+  ["quit"],
+  ["convert"],
+]
+
+[[task]]
+id = "ripgrep-callers-search-worker"
+corpus = "ripgrep"
+kind = "callers"
+prompt = "What calls SearchWorker::search in ripgrep, and how is the single-threaded path chosen over the parallel one?"
+truth = "crates/core/main.rs: search() (line 107) and search_parallel() (line 160). run() picks search() when args.threads() == 1, else search_parallel()."
+require = [
+  ["search_parallel"],
+  ["threads\\(\\)\\s*==\\s*1", "threads.{0,40}\\b1\\b", "single.?thread"],
+]
+
+[[task]]
+id = "ripgrep-trace-config"
+corpus = "ripgrep"
+kind = "trace"
+prompt = "Trace how ripgrep turns its command-line arguments and config file into the HiArgs it searches with."
+truth = "crates/core/flags/parse.rs: parse() -> parse_low() which reads RIPGREP_CONFIG_PATH via flags::config::args() and prepends those args -> LowArgs -> HiArgs::from_low_args (hiargs.rs)."
+require = [
+  ["RIPGREP_CONFIG_PATH", "config::args"],
+  ["LowArgs"],
+  ["from_low_args"],
+]
+
+# ---------------------------------------------------------------- bifrost
+
+[[task]]
+id = "bifrost-trace-chat"
+corpus = "bifrost"
+kind = "trace"
+prompt = "Trace how a POST /v1/chat/completions request travels from the HTTP server to the provider call, step by step."
+truth = "transports/bifrost-http/handlers/inference.go: chatCompletion -> h.client.ChatCompletionRequest (core/bifrost.go) -> makeChatCompletionRequest -> handleRequest (fallbacks) -> tryRequest, which runs RunLLMPreHooks and enqueues a ChannelMessage on the provider's ProviderQueue -> requestWorker goroutine -> executeRequestWithRetries -> the provider's ChatCompletion."
+require = [
+  ["chatCompletion", "inference\\.go"],
+  ["handleRequest"],
+  ["tryRequest"],
+  ["requestWorker", "ProviderQueue"],
+  ["executeRequestWithRetries"],
+]
+
+[[task]]
+id = "bifrost-callers-should-try-fallbacks"
+corpus = "bifrost"
+kind = "callers"
+prompt = "What calls shouldTryFallbacks in Bifrost?"
+truth = "core/bifrost.go: handleRequest (line 6193) and handleStreamRequest (line 6425)."
+require = [
+  ["handleRequest"],
+  ["handleStreamRequest"],
+]
+
+[[task]]
+id = "bifrost-callers-pick-rotating-pool"
+corpus = "bifrost"
+kind = "callers"
+prompt = "What calls pickFromRotatingPool, and what is it used for?"
+truth = "Only requestWorker in core/bifrost.go (lines 8463 and 8472), inside the keyProvider closure it passes to executeRequestWithRetries, to pick the next key on a retry while skipping used and dead keys."
+require = [
+  ["requestWorker"],
+]
+
+[[task]]
+id = "bifrost-retry-backoff"
+corpus = "bifrost"
+kind = "where"
+prompt = "How does Bifrost back off between retries of a failed provider request?"
+truth = "core/utils.go calculateBackoff: RetryBackoffInitial * 2^attempt, capped at RetryBackoffMax, with jitter (x0.8 to x1.2), capped again; waitRetryBackoff sleeps unless the context ends. Called from executeRequestWithRetries in core/bifrost.go."
+require = [
+  ["calculateBackoff"],
+  ["jitter"],
+  ["RetryBackoffMax"],
+]
+
+[[task]]
+id = "bifrost-default-retries"
+corpus = "bifrost"
+kind = "lookup"
+prompt = "What are the default max retries, initial retry backoff and maximum retry backoff for a provider?"
+truth = "core/schemas/provider.go: DefaultMaxRetries = 0, DefaultRetryBackoffInitial = 500 * time.Millisecond, DefaultRetryBackoffMax = 5 * time.Second. A literal lookup: grep is expected to do well here."
+require = [
+  ["provider\\.go", "DefaultMaxRetries"],
+  ["DefaultMaxRetries\\s*=\\s*0", "retries[^\\n]{0,60}\\b0\\b", "\\b0\\b[^\\n]{0,40}retries", "no retries"],
+  ["500\\s*\\*?\\s*(time\\.Millisecond|ms)", "500\\s?ms"],
+  ["5\\s*\\*\\s*time\\.Second", "\\b5\\s?s\\b", "5 seconds"],
+]
+
+[[task]]
+id = "bifrost-plugin-hook-order"
+corpus = "bifrost"
+kind = "where"
+prompt = "In what order do LLM plugin pre-hooks and post-hooks run in Bifrost, and what happens when a pre-hook short-circuits?"
+truth = "core/bifrost.go PluginPipeline.RunLLMPreHooks runs p.llmPlugins in order and returns how many ran; RunPostLLMHooks runs from runFrom-1 down to 0 (reverse), so only plugins whose pre-hook ran get a post-hook. A pre-hook returning an LLMPluginShortCircuit skips the provider call."
+require = [
+  ["RunLLMPreHooks"],
+  ["RunPostLLMHooks"],
+  ["revers", "runFrom\\s*-\\s*1", "backwards"],
+]
+
+[[task]]
+id = "bifrost-governance-budget"
+corpus = "bifrost"
+kind = "where"
+prompt = "Where does the governance plugin reject a request that would exceed a virtual key's budget?"
+truth = "plugins/governance/main.go GovernancePlugin.PreLLMHook -> Evaluate -> BudgetResolver.evaluateLimits (resolver.go) -> LocalGovernanceStore.CheckBudgets (store.go); a DecisionBudgetExceeded becomes an LLMPluginShortCircuit carrying the error."
+require = [
+  ["PreLLMHook"],
+  ["CheckBudgets?"],
+  ["BudgetExceeded", "ShortCircuit"],
+]
+
+[[task]]
+id = "bifrost-key-selection"
+corpus = "bifrost"
+kind = "where"
+prompt = "How does Bifrost choose which API key to use when a provider has several keys configured?"
+truth = "core/bifrost.go SelectKeyForProviderRequestType -> selectKeyFromProviderForModelWithPool (keys that support the model); one key or a pinned pool returns the first; otherwise bifrost.keySelector, which defaults to keyselectors.WeightedRandom (core/keyselectors/weightedrandom.go), weighted by each key's Weight."
+require = [
+  ["WeightedRandom"],
+  ["selectKeyFromProviderForModel", "SelectKeyForProviderRequestType", "keySelector"],
+  ["weight"],
+]
+
+[[task]]
+id = "bifrost-semantic-cache-hit"
+corpus = "bifrost"
+kind = "trace"
+prompt = "How does the semantic cache plugin return a cached response instead of calling the provider?"
+truth = "plugins/semanticcache/main.go Plugin.PreLLMHook resolves the cache types, then performDirectSearch (hash match) and/or performSemanticSearch (embedding similarity) in search.go; a hit is returned as an LLMPluginShortCircuit holding the cached response, so core skips the provider."
+require = [
+  ["performDirectSearch"],
+  ["performSemanticSearch"],
+  ["ShortCircuit"],
+]
+
+[[task]]
+id = "bifrost-callers-run-llm-prehooks"
+corpus = "bifrost"
+kind = "callers"
+prompt = "What calls PluginPipeline.RunLLMPreHooks?"
+truth = "core/bifrost.go: tryRequest (6576), tryStreamRequest (6864), RunStreamPreHooks (5597) and RunRealtimeTurnPreHooks (5727)."
+require = [
+  ["tryRequest"],
+  ["tryStreamRequest"],
+  ["RunStreamPreHooks", "RunRealtimeTurnPreHooks"],
+]
+
+# ---------------------------------------------------------------- bifrost, deep multi-file
+# Each answer spans 3+ files or packages and a goroutine or callback hop that
+# grep alone does not reveal. Ground truth checked by hand at the pinned commit.
+
+[[task]]
+id = "bifrost-deep-fallback-chain"
+corpus = "bifrost"
+kind = "deep"
+prompt = "When the primary provider fails a chat request, trace how Bifrost decides whether to try fallbacks, builds each fallback request, which plugin hooks run again for it, and when it stops trying further fallbacks."
+truth = "core/bifrost.go handleRequest: tryRequest for the primary, then shouldTryFallbacks (false on success, RequestCancelled, AllowFallbacks=false, no fallbacks, or inferred fallbacks when ClassifyFailure in core/failureclass.go says FailureClassCallerFault). For each fallback: prepareFallbackRequest, then tryRequest again, which reruns RunLLMPreHooks (PreLLMHook runs per fallback; PreRequestHook runs once per request). shouldContinueWithFallbacks stops on success, cancellation or AllowFallbacks=false."
+require = [
+  ["shouldTryFallbacks"],
+  ["prepareFallbackRequest"],
+  ["shouldContinueWithFallbacks"],
+  ["AllowFallbacks"],
+  ["ClassifyFailure", "CallerFault", "caller_fault"],
+  ["PreLLMHook", "RunLLMPreHooks"],
+]
+
+[[task]]
+id = "bifrost-deep-key-rotation"
+corpus = "bifrost"
+kind = "deep"
+prompt = "A provider has three API keys and one of them returns HTTP 429. Trace how Bifrost classifies that failure, decides to retry, picks a different key for the next attempt, and decides whether to wait before it."
+truth = "requestWorker -> executeRequestWithRetries (core/bifrost.go). ClassifyFailure (core/failureclass.go) returns FailureClassRateLimit; IsPerKey (core/schemas/failureclass.go) makes it retryable with rotation; rate limits are not permanent, so the key goes into usedKeyIDs (permanent classes like credential/quota go into deadKeyIDs). The next attempt calls keyProvider -> pickFromRotatingPool, which skips used and dead keys (weighted pick, new round when exhausted). Backoff via calculateBackoff still applies to 429 rotations; it is skipped only for a genuine credential swap."
+require = [
+  ["ClassifyFailure"],
+  ["RateLimit", "rate_limit"],
+  ["usedKeyIDs"],
+  ["deadKeyIDs"],
+  ["pickFromRotatingPool"],
+  ["calculateBackoff", "backoff"],
+]
+
+[[task]]
+id = "bifrost-deep-governance-charge"
+corpus = "bifrost"
+kind = "deep"
+prompt = "After a chat response comes back, trace how its cost is calculated and charged to the virtual key's budget and rate limits, down to the store calls."
+truth = "plugins/governance/main.go GovernancePlugin.PostLLMHook starts a goroutine running postHookWorker, which computes cost with modelCatalog.CalculateCost (framework/modelcatalog/pricing.go), builds a UsageUpdate and calls tracker.UpdateUsage (plugins/governance/tracker.go). UpdateUsage dedupes with tryClaimBilling, then calls store.ChargeRateLimits and store.ChargeBudgets on the LocalGovernanceStore (store.go)."
+require = [
+  ["PostLLMHook"],
+  ["postHookWorker"],
+  ["CalculateCost"],
+  ["UpdateUsage"],
+  ["ChargeBudgets"],
+]
+
+[[task]]
+id = "bifrost-deep-provider-update"
+corpus = "bifrost"
+kind = "deep"
+prompt = "Trace what happens when a provider's configuration is updated through the HTTP API while requests are in flight: from the handler to the old workers being retired."
+truth = "PUT /api/providers/{provider} -> ProviderHandler.updateProvider (transports/bifrost-http/handlers/providers.go) -> Config.UpdateProviderConfig (transports/bifrost-http/lib/config.go), which writes ConfigStore.UpdateProvider in a transaction and then calls client.UpdateProvider -> Bifrost.UpdateProvider (core/bifrost.go): createBaseProvider, a new ProviderQueue stored in requestQueues, new requestWorker goroutines; then oldPq.signalClosing(), wait for the old workers, and drainQueueWithErrors on the old queue."
+require = [
+  ["updateProvider"],
+  ["UpdateProviderConfig"],
+  ["requestWorker"],
+  ["signalClosing", "drainQueueWithErrors"],
+  ["config\\.go", "ConfigStore"],
+]
+
+[[task]]
+id = "bifrost-deep-stream-chunks"
+corpus = "bifrost"
+kind = "deep"
+prompt = "Trace how a streaming chat completion's chunks get from the provider back to the HTTP client, including where plugin post-hooks run on each chunk."
+truth = "handlers/inference.go chatCompletion -> handleStreamingChatCompletion -> handleStreamingResponse (ranges over the stream channel and writes SSE). The stream comes from client.ChatCompletionStreamRequest -> handleStreamRequest -> tryStreamRequest (pre-hooks, enqueue) -> requestWorker, which builds a postHookRunner calling RunPostLLMHooks -> executeRequestWithRetries -> provider ChatCompletionStream; the provider goroutine calls providerUtils.ProcessAndSendResponse (core/providers/utils/utils.go), which runs postHookRunner on each chunk and sends it on the channel."
+require = [
+  ["handleStreamingResponse", "handleStreamingChatCompletion"],
+  ["tryStreamRequest", "handleStreamRequest"],
+  ["requestWorker"],
+  ["postHookRunner", "RunPostLLMHooks"],
+  ["ProcessAndSendResponse"],
+]

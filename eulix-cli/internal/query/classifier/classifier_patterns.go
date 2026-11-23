@@ -87,16 +87,18 @@ func QuerySheriff(kbIndexPath string) (*Classifier, error) {
 		examplePattern:        regexp.MustCompile(`(?i)\b(examples?|how\s+to\s+use|usage\s+examples?|samples?|demonstrat(e|es|ion|ing)|show\s+me\s+how)\b`),
 		testingPattern:        regexp.MustCompile(`(?i)\b(tests?|testing|unit\s+tests?|integration\s+tests?|mocks?|mocking|coverage|test\s+cases?)\b`),
 		codeGenPattern:        regexp.MustCompile(`(?i)\b(show\s+me\s+code|write\s+code|code\s+examples?|sample\s+code|how\s+to\s+implement|generate\s+code)\b`),
-		callGraphPattern:      regexp.MustCompile(`(?i)\b(call\s+graphs?|call\s+trees?|who\s+calls?|calls?\s+chains?|callers?\s+of|callees?\s+of|call\s+hierarchies?)\b`),
-		entryPointPattern:     regexp.MustCompile(`(?i)\b(entry\s+points?|api\s+routes?|cli\s+commands?|main\s+functions?)\b|(?i)\b(list|show|find|what\s+are)\b.{0,40}\bendpoints?\b`),
-		fileStructPattern:     regexp.MustCompile(`(?i)\b(what('?s|\s+is)\s+in\s+file|contents?\s+of\s+file|functions?\s+in\s+file|classes?\s+in\s+file|show\s+file|(project|directory|repo|codebase|file)\s+layouts?)\b`),
-		todosPattern:          regexp.MustCompile(`(?i)\b(todos?|fixmes?|hacks?|security\s+notes?|technical\s+debt)\b`),
-		metricsPattern:        regexp.MustCompile(`(?i)\b(complexit(y|ies)|metrics?|loc|lines\s+of\s+code|importan(ce|t)|hotspots?)\b`),
-		usagePrefixPattern:    regexp.MustCompile(`(?i)^(usage|use|uses\s+of|show\s+usage|find\s+usage|usage\s+of)\s+\S+`),
-		understandingPattern:  regexp.MustCompile(`(?i)^(how\s+(does|do|is|are)\s+[\w\s]+\s+(works?|built|build|generated|created|constructed|process|used)|explain\s+[\w\s]+|what\s+does\s+[\w\s]+\s+do|how\s+(is|are)\s+[\w\s]+\s+(used|built|created|generated))\b`),
-		symbolPattern:         regexp.MustCompile(`[A-Z][a-zA-Z0-9]*(?:[A-Z][a-zA-Z0-9]*)*|_?[a-z][a-zA-Z0-9_]{2,}`),
-		validSymbols:          make(map[string]bool),
-		validTypes:            make(map[string]bool),
+		// Every "who calls X" phrasing an agent uses must land here, not on
+		// QueryTypeUsage: usage used to print only the definition.
+		callGraphPattern:     regexp.MustCompile(`(?i)\b(call\s+graphs?|call\s+trees?|(who|what|which)\s+(\w+\s+){0,3}(calls?|invokes?)|calls?\s+chains?|callers?|callees?|call\s+sites?|call\s+hierarchies?|(is|are|gets?|being)\s+(called|invoked)\s+(by|from)|called\s+by|invoked\s+by|used\s+by|where\s+(is|are)\s+\S+\s+(used|called|invoked)|what\s+does\s+\S+\s+call)\b`),
+		entryPointPattern:    regexp.MustCompile(`(?i)\b(entry\s+points?|api\s+routes?|cli\s+commands?|main\s+functions?)\b|(?i)\b(list|show|find|what\s+are)\b.{0,40}\bendpoints?\b`),
+		fileStructPattern:    regexp.MustCompile(`(?i)\b(what('?s|\s+is)\s+in\s+file|contents?\s+of\s+file|functions?\s+in\s+file|classes?\s+in\s+file|show\s+file|(project|directory|repo|codebase|file)\s+layouts?)\b`),
+		todosPattern:         regexp.MustCompile(`(?i)\b(todos?|fixmes?|hacks?|security\s+notes?|technical\s+debt)\b`),
+		metricsPattern:       regexp.MustCompile(`(?i)\b(complexit(y|ies)|metrics?|loc|lines\s+of\s+code|importan(ce|t)|hotspots?)\b`),
+		usagePrefixPattern:   regexp.MustCompile(`(?i)^(usage|use|uses\s+of|show\s+usage|find\s+usage|usage\s+of)\s+\S+`),
+		understandingPattern: regexp.MustCompile(`(?i)^(how\s+(does|do|is|are)\s+[\w\s]+\s+(works?|built|build|generated|created|constructed|process|used)|explain\s+[\w\s]+|what\s+does\s+[\w\s]+\s+do|how\s+(is|are)\s+[\w\s]+\s+(used|built|created|generated))\b`),
+		symbolPattern:        regexp.MustCompile(`[A-Z][a-zA-Z0-9]*(?:[A-Z][a-zA-Z0-9]*)*|_?[a-z][a-zA-Z0-9_]{2,}`),
+		validSymbols:         make(map[string]bool),
+		validTypes:           make(map[string]bool),
 	}
 	return c, nil
 }

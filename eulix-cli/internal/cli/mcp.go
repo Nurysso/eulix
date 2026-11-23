@@ -40,10 +40,16 @@ Unlike the one-off 'query' command, the MCP server keeps the knowledge base and
 ContextBuilder cached in memory across queries for near-instant responses, releasing
 them only after a configurable period of inactivity.
 
-Communication modes:
-  - query: searches the codebase with optional 'include_cot' flag
-  - query_with_cot: includes Chain-of-Thought reasoning headers
-  - query_without_cot: clean context without Chain-of-Thought headers`,
+Tools:
+  - callers / callees: exact call sites from the call graph, one line each
+  - definition: location, signature, docstring and a short body of a symbol
+  - trace: the call path from one function to another, then the code for it
+  - search: ranked code for a concept, within a token budget ([mcp] reply_tokens)
+  - query: free-text alias kept for older clients (include_cot replaces the
+    removed query_with_cot / query_without_cot tools)
+
+Every reply starts with "answer: ... · complete: yes|no". Use
+'eulix mcp install claude|cursor|cline' to register the server with an agent.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		targetRepo := mcpRepoPath

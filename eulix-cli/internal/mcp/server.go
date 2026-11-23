@@ -13,7 +13,9 @@ Features:
   - Dynamic repository selection via the 'set_repo_path' tool, the 'repo_path' argument
     on queries, or automatically from the client's MCP "roots".
   - Helpful guidance if a project has not been initialized with 'eulix analyze'.
-  - Query with or without Chain-of-Thought (CoT) headers, as tools and as prompts.
+  - Typed tools for structural questions (callers, callees, definition, trace) answered
+    from the call graph and index, plus budgeted ranked search ('search', and 'query' for
+    older clients). Every reply starts with a line saying whether it is complete.
 
 Protocol concerns (JSON-RPC framing, initialize handshake, capability negotiation,
 schema generation and validation, ping, cancellation) are all handled by the SDK.
@@ -22,10 +24,13 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,9 +48,14 @@ const (
 	// ServerName is the identity of this MCP server.
 	ServerName = "eulix"
 
-	instructions = "Eulix MCP Server: query any codebase on your machine for fast, accurate context. " +
-		"Use 'set_repo_path' or pass 'repo_path' in queries to choose the repository. " +
-		"The repository must have been initialized with 'eulix analyze'."
+	// instructions tell the agent when Eulix beats grep. Without them agents
+	// rarely call it (5 of 50 sessions in the agent benchmark).
+	instructions = "Eulix answers structural questions about an indexed codebase from its call graph and symbol index. " +
+		"Use 'callers' / 'callees' for who calls what (exact call sites, complete list), 'definition' for where a " +
+		"symbol is defined, 'trace' for how one function reaches another across files, and 'search' for concepts " +
+		"and open questions. Prefer grep for literal strings, config values and log messages. " +
+		"Every reply starts with 'answer: ... · complete: yes|no'; when it says complete: yes, do not re-check with grep. " +
+		"Choose the repository with 'set_repo_path' or 'repo_path'; it must have been indexed with 'eulix analyze'."
 
 	rootsTimeout = 5 * time.Second
 )
@@ -71,8 +81,9 @@ type Server struct {
 
 	// Adaptive retrieval (see strategy.go).
 	strategy  StrategyConfig
-	retriever Retriever                 // optional override (tests); defaults to the Router adapter
-	memories  map[string]*projectMemory // per-repo project memory, guarded by mu
+	retriever Retriever                  // optional override (tests); defaults to the Router adapter
+	memories  map[string]*projectMemory  // per-repo project memory, guarded by mu
+	sent      map[string]map[string]bool // per-repo chunk ranges already sent, guarded by mu
 
 	mcp *mcpsdk.Server
 }
@@ -183,13 +194,13 @@ type queryArgs struct {
 	IncludeCoT *bool  `json:"include_cot,omitempty" jsonschema:"Include Chain-of-Thought reasoning instructions and headers. Defaults to the server setting"`
 
 	KnownSymbols []string `json:"known_symbols,omitempty" jsonschema:"Symbols, class or function names, or file paths relevant to the question that you already know from this session (code you have read, earlier results, the user's message). Pass them whenever you have them: they enable precise multi-hop retrieval"`
+	MaxTokens    int      `json:"max_tokens,omitempty" jsonschema:"Token budget for the reply. Default sized by question type"`
 }
 
 type fixedCoTArgs struct {
-	KnownSymbols []string `json:"known_symbols,omitempty" jsonschema:"Symbols, class or function names, or file paths relevant to the question that you already know from this session (code you have read, earlier results, the user's message). Pass them whenever you have them: they enable precise multi-hop retrieval"`
-
-	Query    string `json:"query" jsonschema:"Question, symbol, or search query about the codebase"`
-	RepoPath string `json:"repo_path,omitempty" jsonschema:"Optional absolute path to the repository. If omitted, the currently active repository is used"`
+	Query        string   `json:"query" jsonschema:"Question, symbol, or search query about the codebase"`
+	RepoPath     string   `json:"repo_path,omitempty" jsonschema:"Optional absolute path to the repository"`
+	KnownSymbols []string `json:"known_symbols,omitempty" jsonschema:"Symbols or file paths you already know from this session"`
 }
 
 func (s *Server) buildMCPServer() *mcpsdk.Server {
@@ -209,46 +220,57 @@ func (s *Server) buildMCPServer() *mcpsdk.Server {
 		Annotations: &mcpsdk.ToolAnnotations{Title: "Set repository", IdempotentHint: true},
 	}, s.handleSetRepo)
 
-	readOnly := &mcpsdk.ToolAnnotations{ReadOnlyHint: true}
+	s.addTypedTools(srv)
 
+	// 'query' is the free-text tool of earlier releases, kept as an alias. It
+	// routes callers / definition questions to the index first, like the typed
+	// tools, and replaces query_with_cot / query_without_cot via include_cot.
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "query",
-		Description: "Query the codebase using Eulix retrieval (same as 'eulix query'). " +
-			"Retrieves relevant source chunks, symbols, AST metadata, and call graphs. " +
-			"Optional 'repo_path' targets/switches the repository; optional 'include_cot' " +
-			"chooses between plain context and Chain-of-Thought headers. " +
-			"Include exact symbol names, function names, or file paths whenever you know them " +
-			"(e.g. 'SQLCompiler.get_from_clause'): they anchor exact lookup and multi-hop graph " +
-			"expansion, while open-ended questions rely on semantic signals only. " +
-			"Also pass 'known_symbols' with any relevant symbols or files you already know " +
-			"from this session (code you have read, earlier results).",
-		Annotations: readOnly,
+		Description: "Free-text question about the codebase (kept for older clients; prefer callers, callees, " +
+			"definition, trace or search). Callers and definition questions are answered from the index; others " +
+			"return ranked code within a budget. Include exact symbol names or file paths when you know them, " +
+			"and pass 'known_symbols' you already know from this session.",
+		Annotations: &mcpsdk.ToolAnnotations{ReadOnlyHint: true},
 	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, a queryArgs) (*mcpsdk.CallToolResult, any, error) {
 		cot := s.defaultCoT
 		if a.IncludeCoT != nil {
 			cot = *a.IncludeCoT
 		}
-		return s.toolQuery(ctx, a.RepoPath, a.Query, a.KnownSymbols, cot)
+		if strings.TrimSpace(a.Query) == "" {
+			return nil, nil, errors.New("argument 'query' must be a non-empty string")
+		}
+		out, err := s.executeQuery(ctx, a.RepoPath, a.Query, a.KnownSymbols,
+			queryOpts{cot: cot, maxTokens: a.MaxTokens, route: true})
+		if err != nil {
+			return nil, nil, fmt.Errorf("query execution failed: %w", err)
+		}
+		return textResult(out), nil, nil
 	})
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name: "query_with_cot",
-		Description: "Query the codebase and return retrieved context with Chain-of-Thought (CoT) " +
-			"reasoning instructions, honesty contract, and citation legend. Accepts optional 'repo_path'.",
-		Annotations: readOnly,
-	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, a fixedCoTArgs) (*mcpsdk.CallToolResult, any, error) {
-		return s.toolQuery(ctx, a.RepoPath, a.Query, a.KnownSymbols, true)
-	})
-
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name: "query_without_cot",
-		Description: "Query the codebase and return clean retrieved context without Chain-of-Thought " +
-			"instructions. Ideal for direct context injection or models with their own system " +
-			"instructions. Accepts optional 'repo_path'.",
-		Annotations: readOnly,
-	}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, a fixedCoTArgs) (*mcpsdk.CallToolResult, any, error) {
-		return s.toolQuery(ctx, a.RepoPath, a.Query, a.KnownSymbols, false)
-	})
+	// Deprecated aliases with the exact pre-budget output. The retrieval
+	// benchmark (bench/lib/mcp.py, scripts/eval_mcp.py) compares releases on
+	// query_without_cot, so its output must not change under it.
+	for _, legacy := range []struct {
+		name string
+		cot  bool
+	}{{"query_without_cot", false}, {"query_with_cot", true}} {
+		cot := legacy.cot
+		mcpsdk.AddTool(srv, &mcpsdk.Tool{
+			Name:        legacy.name,
+			Description: "Deprecated: unbudgeted legacy output, kept for benchmarks. Use search.",
+			Annotations: &mcpsdk.ToolAnnotations{ReadOnlyHint: true},
+		}, func(ctx context.Context, _ *mcpsdk.CallToolRequest, a fixedCoTArgs) (*mcpsdk.CallToolResult, any, error) {
+			if strings.TrimSpace(a.Query) == "" {
+				return nil, nil, errors.New("argument 'query' must be a non-empty string")
+			}
+			out, err := s.executeQuery(ctx, a.RepoPath, a.Query, a.KnownSymbols, queryOpts{cot: cot, legacy: true})
+			if err != nil {
+				return nil, nil, fmt.Errorf("query execution failed: %w", err)
+			}
+			return textResult(out), nil, nil
+		})
+	}
 
 	promptArgs := []*mcpsdk.PromptArgument{
 		{Name: "query", Description: "Question or search query about the codebase", Required: true},
