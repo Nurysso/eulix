@@ -5,7 +5,7 @@ import json
 import time
 from datetime import datetime
 
-from . import build, corpora, machine, paths, sandbox, venv
+from . import build, corpora, kbfb, machine, paths, sandbox, venv
 from .common import REAL_HOME, REPO, H, BenchError, run, say
 from .gitrev import Rev
 
@@ -86,7 +86,7 @@ def fixture_marker(work):
 def has_fixture(side: Side, corpus, work) -> bool:
     """An index built by this exact binary and config is still in the work dir."""
     m = fixture_marker(work)
-    if not m.exists() or not (work / ".eulix" / "kb.json").exists():
+    if not m.exists() or not kbfb.kb_path(work / ".eulix").exists():
         return False
     data = json.loads(m.read_text())
     return data.get("binary_sha256") == side.meta["binary_sha256"] and data.get("config_hash") == \

@@ -18,6 +18,9 @@ order, and hashed. Then per entry:
 
 Volatile fields (metadata/parsed_at, project_hash, git_hash) are ignored.
 
+FlatBuffers outputs (kb_index.fb, kb_call_graph.fb, ...) are not JSON: run
+eulix_parser with --emit-json and compare their .json copies instead.
+
 Usage:
   uv run scripts/kb_diff.py run1/kb.json run2/kb.json
   uv run scripts/kb_diff.py run1/kb_index.json run2/kb_index.json --depth 3

@@ -160,7 +160,7 @@ def main() -> int:
                     run_sc = score(run_nodes, run_edges, run_sites, c["lang"])
                     summaries.append(run_sc["summary"])
                     seconds.append(pm["seconds"])
-                    hashes.append(hashlib.sha256((run_dir / "kb_call_graph.json").read_bytes()).hexdigest())
+                    hashes.append(hashlib.sha256(eulix._kbfb().call_graph_path(run_dir).read_bytes()).hexdigest())
                     if i == 1:
                         pmeta, nodes, sites, sc = pm, run_nodes, run_sites, run_sc
                 runs = aggregate.combine_runs(summaries, seconds, hashes) if a.runs > 1 else None
