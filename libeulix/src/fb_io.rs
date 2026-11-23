@@ -1044,13 +1044,7 @@ pub fn kb_header(buf: &[u8]) -> Result<KbHeaderInfo, DecodeError> {
         .files()
         .into_iter()
         .flatten()
-        .map(|e| {
-            (
-                e.path().to_string(),
-                e.offset(),
-                e.length(),
-            )
-        })
+        .map(|e| (e.path().to_string(), e.offset(), e.length()))
         .collect();
     let mut o = Map::new();
     o.insert("format_version".into(), h.format_version().into());
@@ -1396,16 +1390,33 @@ mod tests {
     #[test]
     fn checksum_round_trip() {
         let files = [
-            ChecksumEntry { path: "a.go", hash: "00ff", size: 10, mod_time: -1 },
-            ChecksumEntry { path: "b/c.py", hash: "abcd", size: 0, mod_time: 1_700_000_000_000_000_000 },
+            ChecksumEntry {
+                path: "a.go",
+                hash: "00ff",
+                size: 10,
+                mod_time: -1,
+            },
+            ChecksumEntry {
+                path: "b/c.py",
+                hash: "abcd",
+                size: 0,
+                mod_time: 1_700_000_000_000_000_000,
+            },
         ];
         let buf = encode_checksum("/repo", "h", &files, "2026-11-19T00:00:00Z", "0.9.0").unwrap();
         let v = checksum_json(&buf).unwrap();
         assert_eq!(v["total_files"], 2);
-        assert_eq!(v["files"][1], json!({"path":"b/c.py","hash":"abcd","size":0,"mod_time":1_700_000_000_000_000_000_i64}));
+        assert_eq!(
+            v["files"][1],
+            json!({"path":"b/c.py","hash":"abcd","size":0,"mod_time":1_700_000_000_000_000_000_i64})
+        );
         assert_eq!(v["files"][0]["mod_time"], -1);
         let root = fb::root_as_checksum(&buf).unwrap();
-        assert!(root.files().unwrap().lookup_by_key("b/c.py", |e, k| e.key_compare_with_value(k)).is_some());
+        assert!(root
+            .files()
+            .unwrap()
+            .lookup_by_key("b/c.py", |e, k| e.key_compare_with_value(k))
+            .is_some());
     }
 
     #[test]

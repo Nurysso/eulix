@@ -106,6 +106,7 @@ use crate::parse::directory::parse_directory;
 use crate::report::{field_report, print_final_summary, write_parse_report};
 use crate::views::CallGraphRef;
 use libeulix::fb_io;
+use libeulix::utils::file_walker::ChecksumFormat;
 
 use libeulix::analyze;
 
@@ -160,6 +161,12 @@ pub struct Args {
     /// copies from an earlier run are removed.
     #[arg(long)]
     emit_json: bool,
+
+    /// Checksum baseline eulix-cli uses to spot changes: fb (checksum.fb.zst),
+    /// json (checksum.json.zst) or none (no hashing, no file). The baseline
+    /// of the other format is removed.
+    #[arg(long, default_value = "fb")]
+    checksum: ChecksumFormat,
 }
 
 pub fn validate_prism_input(val: &str) -> Result<u8, String> {
@@ -251,8 +258,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         &write_dir,
         &engine,
         args.emit_json,
+        args.checksum,
     )?;
-    write_checksum_copy(&write_dir, args.emit_json)?;
+    write_checksum_copy(
+        &write_dir,
+        args.emit_json && args.checksum == ChecksumFormat::FlatBuffers,
+    )?;
     if std::env::var_os("EULIX_FIELD_REPORT").is_some() {
         field_report(&kb);
     }

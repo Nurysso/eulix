@@ -1,5 +1,32 @@
 # Changelog
 
+## libeulix 0.10.0 - Unreleased
+
+This is a breaking release: the checksum baseline is now a FlatBuffer in `checksum.fb.zst` by default, and `checksum.json.zst` is written only when asked for (see Changed).
+
+### Added
+
+- **FlatBuffers output.** A new `fb` module holds the Rust code generated from `schema/*.fbs` by `scripts/gen_flatbuffers.sh`. It is checked in, never edited by hand, and skipped by rustfmt and clippy. `flatbuffers` is pinned to `=25.12.19` to match the `flatc` the script uses.
+- A new `fb_io` module encodes the files eulix-parser writes:
+  - `encode_entry_points`, `encode_external_deps`, `encode_metrics`, `encode_summary`, `encode_patterns`, `encode_call_graph`, `encode_indices`, `encode_file_record`, `encode_kb_header` and `encode_checksum`. Each returns a finished buffer with its file identifier.
+  - `FORMAT_VERSION` (currently `1`) is stamped into every output, and readers reject any other value. It must stay in step with `KBFormatVersion` in eulix-cli.
+  - `KB_RECORD_ALIGN` and `kb_pad` set the 8-byte alignment of per-file records in `kb.fb`. `kb_header` reads the header back into `KbHeaderInfo`.
+  - `EncodeError`, `DecodeError`, `KbEntry` and `ChecksumEntry` support these functions.
+- JSON copies built from the FlatBuffers: `entry_points_json`, `external_deps_json`, `metrics_json`, `summary_json`, `patterns_json`, `call_graph_json`, `indices_json`, `file_record_json` and `checksum_json`. Each one reads a finished buffer back through the generated accessors, not from the Rust values, so the `--emit-json` copy shows exactly what the binary file holds.
+- `file_walker::CHECKSUM_FILE` names the checksum baseline (`checksum.fb.zst`).
+- `file_walker::ChecksumFormat` and `FileWalker::with_checksum` pick the baseline `walk_and_project_hash*` writes: `FlatBuffers` (default, `checksum.fb.zst`), `Json` (`checksum.json.zst`, the 0.9 layout, named by `CHECKSUM_JSON_FILE`) or `None`, which writes nothing and skips stat and hashing, so the returned project hash is empty. The baseline of the other format is removed. `ChecksumFormat` parses from `fb`/`flatbuffers`, `json` and `none`/`off`.
+- `SyntaxHealth` derives `PartialEq` and `Eq`.
+- A `flatbuffers` cargo feature, on by default, gates the `flatbuffers` dependency, the `fb` and `fb_io` modules and `ChecksumFormat::FlatBuffers`. Crates that never touch `.fb` files can build with `default-features = false`; `ChecksumFormat` then defaults to `Json`, and parsing `fb` is an error.
+
+### Changed
+
+- **Breaking:** `FileWalker` writes the checksum baseline as a zstd-compressed FlatBuffer (`schema/checksum.fbs`) in `checksum.fb.zst`, in place of zstd JSON in `checksum.json.zst`. It writes to a temporary file and renames it into place, so a reader never sees a half-written baseline. Readers of the old file must switch to the new format, or opt back into it with `with_checksum(ChecksumFormat::Json)`.
+- `serde_json` is built with `preserve_order`, so the JSON copies keep the field order of the schema.
+
+### Removed
+
+- The private serde `Checksum`, `FileEntry` and `DirEntry` structs in `file_walker`, which `fb_io::encode_checksum` replaces. The always-empty `dirs` map is gone from the FlatBuffers checksum (the JSON one keeps it).
+
 ## libeulix 0.9.0 - 2026-11-17
 
 Changes since 0.8.2, the version that shipped with Eulix v0.8.3. This is a breaking release: `LanguageSpecificInfo` has a new `PhpInfo` variant, serialized maps are now `BTreeMap`/`BTreeSet`, `FunctionCall` has a new `receiver` field, `CallGraphOptions` has a new `go_modules` field, and some symbol IDs changed shape (see Changed).

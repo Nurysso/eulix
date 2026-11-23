@@ -11,6 +11,7 @@ use crate::stats::ParseStats;
 use libeulix::struc::kb_struct::{
     CallGraph, DependencyGraph, ExternalDependency, Indices, KnowledgeBase, Metadata, PatternInfo,
 };
+use libeulix::utils::file_walker::ChecksumFormat;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -26,6 +27,7 @@ pub fn parse_directory(
     write_dir: &Path,
     engine: &crate::engine::Engine,
     emit_json: bool,
+    checksum: ChecksumFormat,
 ) -> Result<(KnowledgeBase, ParseStats, SpillIndex), Box<dyn std::error::Error>> {
     let path = PathBuf::from(dir);
     let euignore = euignore_path.map(PathBuf::from).or_else(|| {
@@ -45,6 +47,7 @@ pub fn parse_directory(
         verbose,
         write_dir,
         engine.threads(),
+        checksum,
     )?;
 
     if verbose {

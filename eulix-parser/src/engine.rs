@@ -37,6 +37,7 @@ impl Engine {
 mod tests {
     use super::Engine;
     use crate::parse::directory::parse_directory;
+    use libeulix::utils::file_walker::ChecksumFormat;
     use std::fs;
     use tempfile::TempDir;
 
@@ -65,6 +66,7 @@ mod tests {
             out.path(),
             &engine,
             false,
+            ChecksumFormat::default(),
         )
         .unwrap();
 

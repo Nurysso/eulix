@@ -12,6 +12,7 @@
 
 - **New dependencies:** `flatbuffers` and `flexbuffers`, both 25.12.19.
 - **`--emit-json`.** Also writes a JSON copy of every `.fb` output, `checksum.json` and `parse_cache/index.json`, decoded from the binary data, for inspecting changes. Without it, stale copies are deleted.
+- **`--checksum fb|json|none`.** Picks the checksum baseline: `fb` (default) writes `checksum.fb.zst`, `json` writes the pre-FlatBuffers `checksum.json.zst`, and `none` skips hashing and writes nothing (the knowledge base's `project_hash` is then empty). The baseline of the other format is removed. The `--emit-json` copy `checksum.json` is only written for `fb`.
 
 ## Eulix_parser v0.9.0 - 2026-11-17
 

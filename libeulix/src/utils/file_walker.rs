@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result};
 use ignore::{WalkBuilder, WalkState};
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,10 +13,97 @@ use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use xxhash_rust::xxh3::{xxh3_64, Xxh3};
 
+#[cfg(feature = "flatbuffers")]
 use crate::fb_io;
 
-/// Name of the checksum baseline in the output directory.
+/// Name of the FlatBuffers checksum baseline in the output directory.
 pub const CHECKSUM_FILE: &str = "checksum.fb.zst";
+/// Name of the JSON checksum baseline in the output directory.
+pub const CHECKSUM_JSON_FILE: &str = "checksum.json.zst";
+
+/// What `walk_and_project_hash*` leaves behind as the checksum baseline.
+/// Whatever the choice, the baseline file of the other format is removed so
+/// no reader finds one that no longer matches the tree. The default is
+/// `FlatBuffers`, or `Json` when the `flatbuffers` feature is off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChecksumFormat {
+    /// `checksum.fb.zst`: a zstd-compressed FlatBuffer (schema/checksum.fbs),
+    /// the file eulix-cli reads. Needs the `flatbuffers` feature.
+    #[cfg(feature = "flatbuffers")]
+    FlatBuffers,
+    /// `checksum.json.zst`: zstd-compressed JSON, the layout eulix wrote
+    /// before the FlatBuffers move.
+    Json,
+    /// No baseline and no hashing: files are not even stat'ed, and the
+    /// returned project hash is empty.
+    None,
+}
+
+impl Default for ChecksumFormat {
+    fn default() -> Self {
+        #[cfg(feature = "flatbuffers")]
+        return Self::FlatBuffers;
+        #[cfg(not(feature = "flatbuffers"))]
+        return Self::Json;
+    }
+}
+
+impl ChecksumFormat {
+    /// The baseline's file name, or `None` when nothing is written.
+    pub fn file_name(self) -> Option<&'static str> {
+        match self {
+            #[cfg(feature = "flatbuffers")]
+            Self::FlatBuffers => Some(CHECKSUM_FILE),
+            Self::Json => Some(CHECKSUM_JSON_FILE),
+            Self::None => None,
+        }
+    }
+}
+
+impl std::str::FromStr for ChecksumFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            #[cfg(feature = "flatbuffers")]
+            "fb" | "flatbuffers" => Ok(Self::FlatBuffers),
+            #[cfg(not(feature = "flatbuffers"))]
+            "fb" | "flatbuffers" => Err("checksum format 'fb' needs libeulix's flatbuffers feature".into()),
+            "json" => Ok(Self::Json),
+            "none" | "off" => Ok(Self::None),
+            other => Err(format!(
+                "unknown checksum format '{other}' (expected fb, json or none)"
+            )),
+        }
+    }
+}
+
+/// `checksum.json.zst`, field for field as eulix wrote it before FlatBuffers.
+#[derive(Serialize)]
+struct JsonChecksum<'a> {
+    project_path: &'a str,
+    total_files: usize,
+    hash: &'a str,
+    files: BTreeMap<&'a str, JsonFileEntry<'a>>,
+    dirs: BTreeMap<String, JsonDirEntry>, // left empty, Go does a full walk
+    last_analyzed: &'a str,               // RFC3339, parses into Go time.Time
+    analysis_version: &'a str,
+}
+
+#[derive(Serialize)]
+struct JsonFileEntry<'a> {
+    hash: &'a str,
+    size: i64,
+    mod_time: i64,
+}
+
+#[derive(Serialize)]
+struct JsonDirEntry {
+    hash: String,
+    mod_time: i64,
+    files: Vec<String>,
+    dirs: Vec<String>,
+}
 
 pub type Failed = Vec<(PathBuf, anyhow::Error)>;
 
@@ -52,6 +140,8 @@ pub struct FileWalker {
     /// Optional path to a custom .euignore file (overrides the default ``<root>``/.euignore)
     euignore_path: Option<PathBuf>,
     threads: usize,
+    /// Baseline written by `walk_and_project_hash*`.
+    checksum: ChecksumFormat,
 }
 
 impl FileWalker {
@@ -62,6 +152,7 @@ impl FileWalker {
             threads: std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(4),
+            checksum: ChecksumFormat::default(),
         }
     }
 
@@ -72,6 +163,13 @@ impl FileWalker {
 
     pub fn with_euignore(mut self, path: PathBuf) -> Self {
         self.euignore_path = Some(path);
+        self
+    }
+
+    /// Picks the checksum baseline `walk_and_project_hash*` writes
+    /// (FlatBuffers by default). `ChecksumFormat::None` also skips hashing.
+    pub fn with_checksum(mut self, format: ChecksumFormat) -> Self {
+        self.checksum = format;
         self
     }
 
@@ -273,6 +371,8 @@ impl FileWalker {
     }
 
     /// Same as `walk_and_project_hash`, but also returns walk statistics.
+    /// With `ChecksumFormat::None` the project hash is empty and no file
+    /// is stat'ed, so every match is returned.
     pub fn walk_and_project_hash_with_stats<F>(
         &self,
         filter: F,
@@ -281,6 +381,11 @@ impl FileWalker {
     where
         F: Fn(&Path) -> bool + Sync,
     {
+        if self.checksum == ChecksumFormat::None {
+            remove_stale_baselines(write_dir, None)?;
+            let (paths, stats) = self.walk_paths(filter)?;
+            return Ok((paths, String::new(), stats));
+        }
         let (mut files, failed, stats) = self.walk_and_hash(filter)?;
         let hash = Self::hash_files(&mut files);
         self.write_checksum(&files, &hash, write_dir)?;
@@ -293,49 +398,99 @@ impl FileWalker {
         Ok((paths, hash, stats))
     }
 
-    /// Writes `checksum.fb.zst`: a zstd-compressed FlatBuffer (schema/checksum.fbs)
-    /// with every walked file's size and mtime, read back by eulix-cli. The file
-    /// is replaced by rename, so a reader never sees a half-written baseline.
+    /// Writes the baseline picked by `with_checksum` with every walked
+    /// file's size and mtime, read back by eulix-cli. The file is replaced by rename, so a
+    /// reader never sees a half-written baseline.
     fn write_checksum(
         &self,
         files: &[WalkedFile],
         root_hash: &str,
         write_dir: &Path,
     ) -> Result<()> {
-        let rows: BTreeMap<String, (String, i64, i64)> = files
+        let Some(name) = self.checksum.file_name() else {
+            return remove_stale_baselines(write_dir, None);
+        };
+        let mut rows: Vec<(String, String, i64, i64)> = files
             .iter()
             .map(|f| {
                 (
                     f.rel.to_string_lossy().to_string(),
-                    (format!("{:016x}", f.meta_hash), f.size, f.mod_time),
+                    format!("{:016x}", f.meta_hash),
+                    f.size,
+                    f.mod_time,
                 )
             })
             .collect();
-        let entries: Vec<fb_io::ChecksumEntry<'_>> = rows
-            .iter()
-            .map(|(path, (hash, size, mod_time))| fb_io::ChecksumEntry {
-                path,
-                hash,
-                size: *size,
-                mod_time: *mod_time,
-            })
-            .collect();
-        let buf = fb_io::encode_checksum(
-            &self.root.to_string_lossy(),
-            root_hash,
-            &entries,
-            &chrono::Utc::now().to_rfc3339(),
-            env!("CARGO_PKG_VERSION"),
-        )?;
+        // By path string, which the FlatBuffer's key lookup needs (not the
+        // component order `hash_files` sorted `files` in).
+        rows.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let project_path = self.root.to_string_lossy();
+        let last_analyzed = chrono::Utc::now().to_rfc3339();
+        let version = env!("CARGO_PKG_VERSION");
+
+        let raw = match self.checksum {
+            #[cfg(feature = "flatbuffers")]
+            ChecksumFormat::FlatBuffers => {
+                let entries: Vec<fb_io::ChecksumEntry<'_>> = rows
+                    .iter()
+                    .map(|(path, hash, size, mod_time)| fb_io::ChecksumEntry {
+                        path,
+                        hash,
+                        size: *size,
+                        mod_time: *mod_time,
+                    })
+                    .collect();
+                fb_io::encode_checksum(&project_path, root_hash, &entries, &last_analyzed, version)?
+            }
+            ChecksumFormat::Json => {
+                let files: BTreeMap<&str, JsonFileEntry<'_>> = rows
+                    .iter()
+                    .map(|(path, hash, size, mod_time)| {
+                        let entry = JsonFileEntry {
+                            hash,
+                            size: *size,
+                            mod_time: *mod_time,
+                        };
+                        (path.as_str(), entry)
+                    })
+                    .collect();
+                serde_json::to_vec(&JsonChecksum {
+                    project_path: &project_path,
+                    total_files: files.len(),
+                    hash: root_hash,
+                    files,
+                    dirs: BTreeMap::new(),
+                    last_analyzed: &last_analyzed,
+                    analysis_version: version,
+                })?
+            }
+            ChecksumFormat::None => unreachable!("handled above"),
+        };
 
         fs::create_dir_all(write_dir).context("failed to create .eulix directory")?;
-        let compressed = zstd::encode_all(&buf[..], 3)?;
-        let path = write_dir.join(CHECKSUM_FILE);
-        let tmp = write_dir.join(format!("{CHECKSUM_FILE}.tmp"));
+        let compressed = zstd::encode_all(&raw[..], 3)?;
+        let path = write_dir.join(name);
+        let tmp = write_dir.join(format!("{name}.tmp"));
         fs::write(&tmp, compressed).context("failed to write checksum file")?;
         fs::rename(&tmp, &path).context("failed to replace checksum file")?;
-        Ok(())
+        remove_stale_baselines(write_dir, Some(name))
     }
+}
+
+/// Removes every checksum baseline in `dir` except `keep`.
+fn remove_stale_baselines(dir: &Path, keep: Option<&str>) -> Result<()> {
+    for name in [CHECKSUM_FILE, CHECKSUM_JSON_FILE] {
+        if Some(name) == keep {
+            continue;
+        }
+        match fs::remove_file(dir.join(name)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("failed to remove stale {name}"));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -434,6 +589,88 @@ mod tests {
         assert_eq!(walker.threads, 2);
         assert!(distinct.len() <= 2, "used {} threads", distinct.len());
         Ok(())
+    }
+
+    fn walk_with(
+        format: ChecksumFormat,
+        root: &Path,
+        out: &Path,
+    ) -> Result<(Vec<PathBuf>, String)> {
+        FileWalker::new(root.to_path_buf())
+            .with_checksum(format)
+            .walk_and_project_hash(|p| p.extension().is_some_and(|e| e == "rs"), out)
+    }
+
+    #[cfg(feature = "flatbuffers")]
+    #[test]
+    fn test_checksum_formats() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let root = temp_dir.path();
+        fs::create_dir_all(root.join("a"))?;
+        fs::write(root.join("a/b.rs"), "")?;
+        fs::write(root.join("a.b.rs"), "")?;
+        let out = root.join(".eulix");
+
+        // FlatBuffers: entries in path-string order ("a.b.rs" < "a/b.rs").
+        let (_, fb_hash) = walk_with(ChecksumFormat::FlatBuffers, root, &out)?;
+        let buf = zstd::decode_all(&fs::read(out.join(CHECKSUM_FILE))?[..])?;
+        let v = fb_io::checksum_json(&buf)?;
+        assert_eq!(v["hash"], fb_hash.as_str());
+        let paths: Vec<_> = v["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["path"].clone())
+            .collect();
+        assert_eq!(paths, ["a.b.rs", "a/b.rs"]);
+
+        // JSON: the pre-FlatBuffers layout; the .fb baseline is gone.
+        let (_, json_hash) = walk_with(ChecksumFormat::Json, root, &out)?;
+        assert_eq!(json_hash, fb_hash);
+        assert!(!out.join(CHECKSUM_FILE).exists());
+        let raw = zstd::decode_all(&fs::read(out.join(CHECKSUM_JSON_FILE))?[..])?;
+        let v: serde_json::Value = serde_json::from_slice(&raw)?;
+        assert_eq!(v["hash"], json_hash.as_str());
+        assert_eq!(v["total_files"], 2);
+        assert_eq!(v["files"]["a/b.rs"]["size"], 0);
+        assert!(v["files"]["a/b.rs"]["hash"].as_str().unwrap().len() == 16);
+        assert_eq!(v["dirs"], serde_json::json!({}));
+        assert!(v["last_analyzed"].is_string() && v["analysis_version"].is_string());
+
+        // None: no hash, no baseline, still every match.
+        let (files, none_hash) = walk_with(ChecksumFormat::None, root, &out)?;
+        assert_eq!(files.len(), 2);
+        assert!(none_hash.is_empty());
+        assert!(!out.join(CHECKSUM_FILE).exists() && !out.join(CHECKSUM_JSON_FILE).exists());
+        Ok(())
+    }
+
+    #[cfg(not(feature = "flatbuffers"))]
+    #[test]
+    fn test_checksum_without_flatbuffers() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let root = temp_dir.path();
+        fs::write(root.join("a.rs"), "")?;
+        let out = root.join(".eulix");
+        assert_eq!(ChecksumFormat::default(), ChecksumFormat::Json);
+        assert!("fb".parse::<ChecksumFormat>().is_err());
+        let (_, hash) = walk_with(ChecksumFormat::default(), root, &out)?;
+        let raw = zstd::decode_all(&fs::read(out.join(CHECKSUM_JSON_FILE))?[..])?;
+        let v: serde_json::Value = serde_json::from_slice(&raw)?;
+        assert_eq!(v["hash"], hash.as_str());
+        Ok(())
+    }
+
+    #[test]
+    fn test_checksum_format_from_str() {
+        #[cfg(feature = "flatbuffers")]
+        {
+            assert_eq!("fb".parse(), Ok(ChecksumFormat::FlatBuffers));
+            assert_eq!("FlatBuffers".parse(), Ok(ChecksumFormat::FlatBuffers));
+        }
+        assert_eq!("json".parse(), Ok(ChecksumFormat::Json));
+        assert_eq!("none".parse(), Ok(ChecksumFormat::None));
+        assert!("xml".parse::<ChecksumFormat>().is_err());
     }
 
     #[test]
