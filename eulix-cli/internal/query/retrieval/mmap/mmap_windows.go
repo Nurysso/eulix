@@ -11,13 +11,13 @@ Windows mmap implementation.
 	FILE_FLAG_SEQUENTIAL_SCAN at file-open time: a read-ahead hint for
 	the cache manager, which serves ReadFile. Page faults on a mapped
 	view don't go through the cache manager's read-ahead, so this does
-	little for DecodeViaMmap. It is kept because it is harmless and
+	little for mapFile. It is kept because it is harmless and
 	removing it hasn't been measured on Windows.
 
 	PrefetchVirtualMemory (Win 8+) after MapViewOfFile: asks Windows to
-	read the whole mapped range in large I/Os before sonic starts, so
-	the parse doesn't fault the file in page by page. DecodeViaMmap
-	parses every byte anyway, so prefetching all of it adds no memory.
+	read the whole mapped range in large I/Os before the reader starts,
+	so it doesn't fault the file in page by page. The kbfile readers
+	touch every record anyway, so prefetching all of it adds no memory.
 
 SEC_LARGE_PAGES on CreateFileMapping would enable 2 MB large
 pages, but it requires SeLockMemoryPrivilege (not granted to most
@@ -95,61 +95,6 @@ func viewBytes(addr uintptr, size int64) []byte {
 	return unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&addr))), size)
 }
 
-// DecodeViaMmap maps path read-only via the Windows file-mapping API and
-// decodes JSON directly from the view. size comes from the caller's os.Stat;
-// the open handle is re-stat'd, and the live size is what gets mapped.
-func DecodeViaMmap(path string, size int64, v any) error {
-	if SizeOverflows(size) {
-		return ErrFileTooLargeForPath(path, size)
-	}
-
-	f, err := openSequentialWindows(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-
-	// Close the stat-then mmap TOCTOU windows
-	fi, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	size = fi.Size()
-	if SizeOverflows(size) {
-		return ErrFileTooLargeForPath(path, size)
-	}
-	if size == 0 {
-		return fmt.Errorf("empty file:%s", path)
-	}
-
-	h, err := windows.CreateFileMapping(
-		windows.Handle(f.Fd()),
-		nil,
-		windows.PAGE_READONLY,
-		0, 0, // map the whole file
-		nil,
-	)
-	if err != nil {
-		return fmt.Errorf("CreateFileMapping: %w", err)
-	}
-	defer windows.CloseHandle(h)
-
-	addr, err := windows.MapViewOfFile(h, windows.FILE_MAP_READ, 0, 0, 0)
-	if err != nil {
-		return fmt.Errorf("MapViewOfFile: %w", err)
-	}
-	defer windows.UnmapViewOfFile(addr)
-
-	data := viewBytes(addr, size)
-
-	memRange := memoryRangeEntry{
-		VirtualAddress: addr,
-		NumberOfBytes:  uintptr(size),
-	}
-	_ = prefetchVirtualMemory(windows.CurrentProcess(), 1, &memRange, 0)
-	return SonicCopy.Unmarshal(data, v)
-}
-
 func AllocEmbeddingMatrix(n, dim int) [][]float32 {
 	flat := make([]float32, n*dim)
 	rows := make([][]float32, n)
@@ -157,4 +102,45 @@ func AllocEmbeddingMatrix(n, dim int) [][]float32 {
 		rows[i] = flat[i*dim : (i+1)*dim]
 	}
 	return rows
+}
+
+// mapFile maps path read-only for WithFileBytes.
+func mapFile(path string) ([]byte, func(), error) {
+	f, err := openSequentialWindows(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	size := fi.Size()
+	if SizeOverflows(size) {
+		_ = f.Close()
+		return nil, nil, ErrFileTooLargeForPath(path, size)
+	}
+	if size == 0 {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("empty file: %s", path)
+	}
+	h, err := windows.CreateFileMapping(windows.Handle(f.Fd()), nil, windows.PAGE_READONLY, 0, 0, nil)
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("CreateFileMapping: %w", err)
+	}
+	addr, err := windows.MapViewOfFile(h, windows.FILE_MAP_READ, 0, 0, 0)
+	if err != nil {
+		_ = windows.CloseHandle(h)
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("MapViewOfFile: %w", err)
+	}
+	memRange := memoryRangeEntry{VirtualAddress: addr, NumberOfBytes: uintptr(size)}
+	_ = prefetchVirtualMemory(windows.CurrentProcess(), 1, &memRange, 0)
+	release := func() {
+		_ = windows.UnmapViewOfFile(addr)
+		_ = windows.CloseHandle(h)
+		_ = f.Close()
+	}
+	return viewBytes(addr, size), release, nil
 }

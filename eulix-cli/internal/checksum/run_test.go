@@ -5,6 +5,8 @@ package checksum
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,15 +85,16 @@ func TestLoadErrors(t *testing.T) {
 		t.Fatalf("corrupt zstd: got %v, want decompress error", err)
 	}
 
-	bad, err := compressZstd([]byte("{not json"))
+	// An older release's zstd-compressed JSON baseline is not a checksum file.
+	bad, err := compressZstd([]byte(`{"files":{}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, bad, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Load(); err == nil || !strings.Contains(err.Error(), "invalid json") {
-		t.Fatalf("bad json: got %v, want invalid json error", err)
+	if _, err := d.Load(); !errors.Is(err, errNotChecksum) {
+		t.Fatalf("old JSON baseline: got %v, want errNotChecksum", err)
 	}
 }
 
@@ -271,4 +274,59 @@ func TestIgnoreMatcherConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// testdata/checksum.fb.zst was written by eulix_parser --emit-json over a
+// two-file fixture; checksum.json is its JSON copy.
+func TestLoadReadsParserBaseline(t *testing.T) {
+	d := &Detector{checksumDir: "testdata"}
+	got, err := d.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", "checksum.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want struct {
+		ProjectPath string `json:"project_path"`
+		TotalFiles  int    `json:"total_files"`
+		Hash        string `json:"hash"`
+		Files       []struct {
+			Path    string `json:"path"`
+			Hash    string `json:"hash"`
+			Size    int64  `json:"size"`
+			ModTime int64  `json:"mod_time"`
+		} `json:"files"`
+		LastAnalyzed string `json:"last_analyzed"`
+	}
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatal(err)
+	}
+	if got.ProjectPath != want.ProjectPath || got.TotalFiles != want.TotalFiles || got.Hash != want.Hash || got.LastAnalyzed.IsZero() {
+		t.Fatalf("got %+v", got)
+	}
+	if len(got.Files) != len(want.Files) || len(want.Files) == 0 {
+		t.Fatalf("got %d files, want %d", len(got.Files), len(want.Files))
+	}
+	for _, w := range want.Files {
+		if g := got.Files[w.Path]; g != (FileEntry{Hash: w.Hash, Size: w.Size, ModTime: w.ModTime}) {
+			t.Errorf("%s: got %+v, want %+v", w.Path, g, w)
+		}
+	}
+}
+
+func TestWriteBaselineRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	in := &Checksum{ProjectPath: root, Hash: "h", Files: map[string]FileEntry{"a.go": {Hash: "x", Size: 3, ModTime: 9}}}
+	if err := WriteBaseline(root, in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (&Detector{checksumDir: filepath.Join(root, utils.EulixDir)}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Hash != "h" || got.TotalFiles != 1 || got.Files["a.go"] != in.Files["a.go"] {
+		t.Fatalf("got %+v", got)
+	}
 }

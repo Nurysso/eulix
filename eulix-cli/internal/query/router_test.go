@@ -11,6 +11,7 @@ package query
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,6 +26,8 @@ import (
 	"time"
 
 	"eulix/internal/config"
+	"eulix/internal/kbfile"
+	"eulix/internal/kbfile/kbfiletest"
 	"eulix/internal/query/classifier"
 	"eulix/internal/query/retrieval"
 	"eulix/internal/utils"
@@ -133,6 +136,11 @@ func writeFile(t testing.TB, path, content string) {
 	}
 }
 
+func writeFB(t testing.TB, path string, buf []byte) {
+	t.Helper()
+	writeFile(t, path, string(buf))
+}
+
 func writeJSON(t testing.TB, path string, v any) {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -189,7 +197,7 @@ func newRouter(t testing.TB) *Router {
 	t.Helper()
 	dir := t.TempDir()
 	if externalDeps != nil {
-		writeJSON(t, filepath.Join(dir, "kb_external_deps.json"), &utils.ExternalDependencyRef{ExternalDependencies: externalDeps})
+		writeFB(t, filepath.Join(dir, kbfile.ExternalDepsFile), kbfiletest.EncodeExternalDeps(externalDeps))
 	}
 	cfg := &config.Config{}
 	fill(t, cfg, M{"Project": M{"Path": dir}, "RetrievalConfig": M{"CodeToAstRatio": 0.5}})
@@ -246,7 +254,7 @@ var externalDeps []utils.ExternalDependency
 
 func getExternalDeps() []utils.ExternalDependency { return externalDeps }
 func loadExternalDeps(path string) error {
-	deps, err := readExternalDeps(path)
+	deps, err := kbfile.ReadExternalDeps(path)
 	if err != nil {
 		return err
 	}
@@ -315,11 +323,11 @@ func TestBareID(t *testing.T) {
 
 func TestCallGraphShortName(t *testing.T) {
 	cases := map[string]string{
-		"func_x":                                  "x",
-		"method_Router_handle":                    "handle",
-		"method_A_b_c":                            "b_c",
-		"method_nounderscore":                     "nounderscore",
-		"func_outer.inner::a.rs":                  "inner",
+		"func_x":                 "x",
+		"method_Router_handle":   "handle",
+		"method_A_b_c":           "b_c",
+		"method_nounderscore":    "nounderscore",
+		"func_outer.inner::a.rs": "inner",
 		"method_PrinterPath_as_path.imp@42::u.rs": "imp",
 		"class_Foo::a.py":                         "Foo",
 		"func_Foo::bar::src/a.cpp":                "bar",
@@ -1497,8 +1505,8 @@ func TestLoadExternalDeps(t *testing.T) {
 		setDeps(t, nil)
 		ref := &utils.ExternalDependencyRef{}
 		fill(t, ref, M{"ExternalDependencies": S{M{"Name": "pkg", "Source": "pip", "ImportCount": 2, "UsedBy": S{"a.py"}}}})
-		path := filepath.Join(t.TempDir(), "deps.json")
-		writeJSON(t, path, ref)
+		path := filepath.Join(t.TempDir(), kbfile.ExternalDepsFile)
+		writeFB(t, path, kbfiletest.EncodeExternalDeps(ref.ExternalDependencies))
 		if err := loadExternalDeps(path); err != nil {
 			t.Fatal(err)
 		}
@@ -1508,17 +1516,17 @@ func TestLoadExternalDeps(t *testing.T) {
 	})
 	t.Run("missing file", func(t *testing.T) {
 		setDeps(t, nil)
-		err := loadExternalDeps(filepath.Join(t.TempDir(), "nope.json"))
-		if err == nil || !strings.Contains(err.Error(), "failed to read deps file") {
+		err := loadExternalDeps(filepath.Join(t.TempDir(), kbfile.ExternalDepsFile))
+		if err == nil || !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("err = %v", err)
 		}
 	})
-	t.Run("invalid JSON leaves previous deps intact", func(t *testing.T) {
+	t.Run("invalid file leaves previous deps intact", func(t *testing.T) {
 		setDeps(t, sampleDeps())
-		path := filepath.Join(t.TempDir(), "bad.json")
+		path := filepath.Join(t.TempDir(), kbfile.ExternalDepsFile)
 		writeFile(t, path, "{not json")
 		err := loadExternalDeps(path)
-		if err == nil || !strings.Contains(err.Error(), "failed to unmarshal JSON") {
+		if err == nil || !errors.Is(err, kbfile.ErrStale) {
 			t.Errorf("err = %v", err)
 		}
 		if len(getExternalDeps()) != 3 {
@@ -1601,13 +1609,13 @@ func TestHandleDependency(t *testing.T) {
 			}
 		}
 	})
-	t.Run("loads kb_external_deps.json from the router directory", func(t *testing.T) {
+	t.Run("loads kb_external_deps.fb from the router directory", func(t *testing.T) {
 		setDeps(t, nil)
 		ref := &utils.ExternalDependencyRef{}
 		fill(t, ref, M{"ExternalDependencies": S{M{"Name": "lazydep", "Source": "pip", "ImportCount": 1}}})
 		dir := t.TempDir()
 		r := newRouter(t)
-		writeJSON(t, filepath.Join(r.eulixDir, "kb_external_deps.json"), ref)
+		writeFB(t, filepath.Join(r.eulixDir, kbfile.ExternalDepsFile), kbfiletest.EncodeExternalDeps(ref.ExternalDependencies))
 		chdir(t, dir)
 		got, err := r.handleDependency("who imports lazydep", nil)
 		if err != nil || !strings.Contains(got, "lazydep") {
@@ -1641,7 +1649,7 @@ func writeMetrics(t *testing.T, r *Router, nFuncs int) {
 		},
 		"TopComplexFunctions": fns,
 	})
-	writeJSON(t, filepath.Join(r.projectPath(), ".eulix", "kb_metrics.json"), rep)
+	writeFB(t, filepath.Join(r.projectPath(), ".eulix", kbfile.MetricsFile), kbfiletest.EncodeMetrics(rep))
 }
 
 func TestHandleMetrics(t *testing.T) {
@@ -1715,15 +1723,15 @@ func TestHandleMetrics(t *testing.T) {
 	t.Run("missing file", func(t *testing.T) {
 		r := newRouter(t)
 		_, err := r.handleMetrics("x", cls(classifier.QueryTypeMetrics, "fn01"))
-		if err == nil || !strings.Contains(err.Error(), "failed to read metrics file") {
+		if err == nil || !strings.Contains(err.Error(), "failed to load metrics") {
 			t.Errorf("err = %v", err)
 		}
 	})
 	t.Run("corrupt file", func(t *testing.T) {
 		r := newRouter(t)
-		writeFile(t, filepath.Join(r.projectPath(), ".eulix", "kb_metrics.json"), "{oops")
+		writeFile(t, filepath.Join(r.projectPath(), ".eulix", kbfile.MetricsFile), "{oops")
 		_, err := r.handleMetrics("x", cls(classifier.QueryTypeMetrics, "fn01"))
-		if err == nil || !strings.Contains(err.Error(), "failed to parse metrics JSON") {
+		if err == nil || !strings.Contains(err.Error(), "failed to load metrics") || !errors.Is(err, kbfile.ErrStale) {
 			t.Errorf("err = %v", err)
 		}
 	})
@@ -1733,7 +1741,7 @@ func TestHandleEntryPoints(t *testing.T) {
 	writeEPs := func(t *testing.T, r *Router, eps S) {
 		ref := &utils.EntryPointsRef{}
 		fill(t, ref, M{"EntryPoints": eps})
-		writeJSON(t, filepath.Join(r.projectPath(), ".eulix", "kb_entry_points.json"), ref)
+		writeFB(t, filepath.Join(r.projectPath(), ".eulix", kbfile.EntryPointsFile), kbfiletest.EncodeEntryPoints(ref.EntryPoints))
 	}
 	httpEP := M{"EntryType": "http", "Path": "/users", "Methods": S{"GET", "POST"}, "Handler": "handleUsers", "File": "api.go", "Line": 10}
 	mainEP := M{"EntryType": "main", "Handler": "main", "File": "main.go", "Line": 5}
@@ -1793,11 +1801,11 @@ func TestHandleEntryPoints(t *testing.T) {
 	})
 	t.Run("missing and corrupt files", func(t *testing.T) {
 		r := newRouter(t)
-		if _, err := r.handleEntryPoints("", nil); err == nil || !strings.Contains(err.Error(), "failed to read entry points") {
+		if _, err := r.handleEntryPoints("", nil); err == nil || !strings.Contains(err.Error(), "failed to load entry points") {
 			t.Errorf("err = %v", err)
 		}
-		writeFile(t, filepath.Join(r.projectPath(), ".eulix", "kb_entry_points.json"), "{")
-		if _, err := r.handleEntryPoints("", nil); err == nil || !strings.Contains(err.Error(), "failed to parse kb_entry_points.json") {
+		writeFile(t, filepath.Join(r.projectPath(), ".eulix", kbfile.EntryPointsFile), "{")
+		if _, err := r.handleEntryPoints("", nil); err == nil || !errors.Is(err, kbfile.ErrStale) {
 			t.Errorf("err = %v", err)
 		}
 	})
@@ -2000,10 +2008,10 @@ func TestQueryEngine_Routing(t *testing.T) {
 	})
 	t.Run("handler errors are returned, not swallowed", func(t *testing.T) {
 		r := newRouter(t)
-		if got, err := r.QueryEngine("entry points"); err == nil || got != "" || !strings.Contains(err.Error(), "failed to read entry points") {
+		if got, err := r.QueryEngine("entry points"); err == nil || got != "" || !strings.Contains(err.Error(), "failed to load entry points") {
 			t.Errorf("entry points: (%q, %v)", got, err)
 		}
-		if got, err := r.QueryEngine("complexity of foo"); err == nil || got != "" || !strings.Contains(err.Error(), "failed to read metrics file") {
+		if got, err := r.QueryEngine("complexity of foo"); err == nil || got != "" || !strings.Contains(err.Error(), "failed to load metrics") {
 			t.Errorf("metrics: (%q, %v)", got, err)
 		}
 	})
@@ -2051,7 +2059,7 @@ func TestPromptOrAnswer_Routing(t *testing.T) {
 			t.Errorf("codegen: (%q, %v)", got, err)
 		}
 		if _, err := r.PromptOrAnswer("entry points"); err == nil {
-			t.Error("entry points: expected error without kb_entry_points.json")
+			t.Error("entry points: expected error without kb_entry_points.fb")
 		}
 	})
 	t.Run("prompt-building types fail cleanly when the source root is missing", func(t *testing.T) {

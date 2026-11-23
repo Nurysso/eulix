@@ -27,6 +27,7 @@ import (
 	"eulix/internal/checksum"
 	"eulix/internal/config"
 	"eulix/internal/embeddings"
+	"eulix/internal/kbfile"
 	"eulix/internal/utils"
 )
 
@@ -102,7 +103,8 @@ func runAnalysisPipeline(projectPath string, cfg *config.Config) error {
 		fmt.Printf("Using embedded parser: %s\n", parserBin)
 	}
 
-	kbPath := filepath.Join(eulixDir, "kb.json")
+	// The parser writes kb.fb next to this path.
+	kbPath := filepath.Join(eulixDir, kbfile.KBFile)
 	parseArgs := []string{
 		"--root", projectPath,
 		"-o", kbPath,

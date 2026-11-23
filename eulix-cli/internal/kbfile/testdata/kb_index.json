@@ -1,0 +1,82 @@
+{
+  "format_version": 1,
+  "functions_by_name": [
+    {
+      "key": "helper",
+      "values": [
+        "app/tool.go:5"
+      ]
+    },
+    {
+      "key": "list_users",
+      "values": [
+        "app/server.py:9"
+      ]
+    },
+    {
+      "key": "main",
+      "values": [
+        "app/server.py:16",
+        "app/tool.go:15"
+      ]
+    }
+  ],
+  "functions_calling": [
+    {
+      "key": "Println",
+      "values": [
+        "func_main::app/tool.go"
+      ]
+    },
+    {
+      "key": "get",
+      "values": [
+        "func_list_users::app/server.py",
+        "func_list_users::app/server.py"
+      ]
+    },
+    {
+      "key": "helper",
+      "values": [
+        "func_main::app/tool.go"
+      ]
+    },
+    {
+      "key": "json",
+      "values": [
+        "func_list_users::app/server.py"
+      ]
+    },
+    {
+      "key": "run",
+      "values": [
+        "func_main::app/server.py"
+      ]
+    }
+  ],
+  "functions_by_tag": [
+    {
+      "key": "entry-point",
+      "values": [
+        "func_main::app/server.py",
+        "func_main::app/tool.go"
+      ]
+    },
+    {
+      "key": "utility",
+      "values": [
+        "func_helper::app/tool.go"
+      ]
+    }
+  ],
+  "types_by_name": [],
+  "files_by_category": [
+    {
+      "key": "Other",
+      "values": [
+        "app/server.py",
+        "app/tool.go"
+      ]
+    }
+  ]
+}

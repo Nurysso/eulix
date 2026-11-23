@@ -1,0 +1,22 @@
+{
+  "format_version": 1,
+  "project_path": "/tmp/claude-1000/-home-user-Sophmore-EulixClaude/a7f7984a-8fd6-496a-9bf7-55147c89e10b/scratchpad/fixture/src",
+  "total_files": 2,
+  "hash": "36599dfac69dff47",
+  "files": [
+    {
+      "path": "app/server.py",
+      "hash": "67795152ed7da9a9",
+      "size": 338,
+      "mod_time": 1795095747672048125
+    },
+    {
+      "path": "app/tool.go",
+      "hash": "a3bc45eb4bf70a7a",
+      "size": 185,
+      "mod_time": 1795095747675048184
+    }
+  ],
+  "last_analyzed": "2026-11-19T15:38:16.507800996+00:00",
+  "analysis_version": "0.9.0"
+}

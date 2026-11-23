@@ -1,15 +1,13 @@
 package mmap_test
 
-// Tests for the mmap-backed JSON loader.
+// Tests for the file access helpers the knowledge-base readers use.
 //
 // Strategy:
 //   - SizeOverflows / ErrFileTooLargeForPath: pure unit tests, no I/O.
-//   - DecodeJSONFile: table-driven, using real temp files so both the mmap
-//     path (files ≥ 4 MiB) and the buffered-reader fallback path (files
-//     < 4 MiB) are exercised without mocking OS calls.
+//   - WithFileBytes: real temp files on both sides of the 4 MiB mapping
+//     threshold, so the mapped and the read path are both exercised.
 //   - OpenForSequentialRead: always buffered, never mapped; tested at both
 //     sizes, plus a rewrite of the file while it is being read.
-//   - FlushPretouchLogs: behavioural test on a real DebugLogger instance.
 //   - All tests are parallel-safe: each test creates its own temp directory.
 
 import (
@@ -28,7 +26,6 @@ import (
 	"time"
 
 	"eulix/internal/query/retrieval/mmap"
-	"eulix/internal/utils"
 )
 
 // ========== Helpers ==========
@@ -42,21 +39,6 @@ func mustTempDir(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
-}
-
-// writeTempJSON marshals v and writes the result to a new file in dir.
-// Returns the file path.
-func writeTempJSON(t *testing.T, dir string, name string, v any) string {
-	t.Helper()
-	data, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	p := filepath.Join(dir, name)
-	if err := os.WriteFile(p, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	return p
 }
 
 // writeTempFile writes raw bytes to a new file in dir and returns its path.
@@ -194,257 +176,6 @@ func TestErrFileTooLargeForPath_wrapsOverflowSentinel(t *testing.T) {
 	}
 	if !errors.Is(err2, mmap.ErrFileTooLarge) {
 		t.Errorf("errors.Is(err2, ErrFileTooLarge) = false; want true")
-	}
-}
-
-func TestFlushPretouchLogs_nilLogger(t *testing.T) {
-	t.Parallel()
-	// Must not panic when logger is nil.
-	mmap.FlushPretouchLogs(nil)
-}
-
-func TestFlushPretouchLogs_withLogger(t *testing.T) {
-	t.Parallel()
-
-	logger := utils.NewDebugLogger() // returns *utils.DebugLogger
-
-	// Must not panic and must emit at least one log line.
-	mmap.FlushPretouchLogs(logger)
-
-	logs := logger.Lines()
-	if len(logs) == 0 {
-		t.Error("expected at least one log line from FlushPretouchLogs, got none")
-	}
-
-	// Every line should mention "JIT" (the log prefix used in the implementation).
-	for _, line := range logs {
-		if !strings.Contains(line, "[JIT]") {
-			t.Errorf("log line missing [JIT] prefix: %q", line)
-		}
-	}
-}
-
-type simplePayload struct {
-	Name  string `json:"name"`
-	Count int    `json:"count"`
-}
-
-func TestDecodeJSONFile_small_roundtrip(t *testing.T) {
-	t.Parallel()
-	dir := mustTempDir(t)
-
-	want := simplePayload{Name: "hello", Count: 42}
-	path := writeTempJSON(t, dir, "small.json", want)
-
-	var got simplePayload
-	if err := mmap.DecodeJSONFile(path, &got); err != nil {
-		t.Fatalf("DecodeJSONFile: %v", err)
-	}
-	if got != want {
-		t.Errorf("got %+v; want %+v", got, want)
-	}
-}
-
-func TestDecodeJSONFile_empty_file(t *testing.T) {
-	t.Parallel()
-	dir := mustTempDir(t)
-	path := writeTempFile(t, dir, "empty.json", []byte{})
-
-	var v simplePayload
-	err := mmap.DecodeJSONFile(path, &v)
-	// An empty file is not valid JSON; the decoder must return an error.
-	if err == nil {
-		t.Error("expected error for empty file, got nil")
-	}
-}
-
-func TestDecodeJSONFile_invalid_json(t *testing.T) {
-	t.Parallel()
-	dir := mustTempDir(t)
-	path := writeTempFile(t, dir, "bad.json", []byte(`{not valid json`))
-
-	var v simplePayload
-	err := mmap.DecodeJSONFile(path, &v)
-	if err == nil {
-		t.Error("expected error for invalid JSON, got nil")
-	}
-}
-
-func TestDecodeJSONFile_nonexistent_path(t *testing.T) {
-	t.Parallel()
-	err := mmap.DecodeJSONFile("/does/not/exist/kb.json", new(simplePayload))
-	if err == nil {
-		t.Error("expected error for non-existent path, got nil")
-	}
-}
-
-func TestDecodeJSONFile_json_array(t *testing.T) {
-	t.Parallel()
-	dir := mustTempDir(t)
-	path := writeTempJSON(t, dir, "arr.json", []int{1, 2, 3})
-
-	var got []int
-	if err := mmap.DecodeJSONFile(path, &got); err != nil {
-		t.Fatalf("DecodeJSONFile: %v", err)
-	}
-	if len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 3 {
-		t.Errorf("got %v; want [1 2 3]", got)
-	}
-}
-
-func TestDecodeJSONFile_unicode_strings(t *testing.T) {
-	t.Parallel()
-	dir := mustTempDir(t)
-
-	type record struct {
-		Text string `json:"text"`
-	}
-	want := record{Text: "日本語テスト 🎌 emoji"}
-	path := writeTempJSON(t, dir, "unicode.json", want)
-
-	var got record
-	if err := mmap.DecodeJSONFile(path, &got); err != nil {
-		t.Fatalf("DecodeJSONFile: %v", err)
-	}
-	if got.Text != want.Text {
-		t.Errorf("got %q; want %q", got.Text, want.Text)
-	}
-}
-
-// Verify that decoded strings are independent copies — not pointing into a
-// shared buffer — so mutation after decode does not corrupt other strings.
-// This tests the CopyString: true guarantee on the mmap path.
-func TestDecodeJSONFile_strings_are_copies(t *testing.T) {
-	t.Parallel()
-	dir := mustTempDir(t)
-
-	type twoStrings struct {
-		A string `json:"a"`
-		B string `json:"b"`
-	}
-	want := twoStrings{A: "alpha", B: "beta"}
-	path := writeTempJSON(t, dir, "strings.json", want)
-
-	var got twoStrings
-	if err := mmap.DecodeJSONFile(path, &got); err != nil {
-		t.Fatalf("DecodeJSONFile: %v", err)
-	}
-
-	// Sanity check values before we inspect header addresses.
-	if got.A != want.A || got.B != want.B {
-		t.Fatalf("values wrong: %+v", got)
-	}
-
-	// The two strings must not share backing memory.
-	// We can't directly test mmap-specific aliasing in a unit test, but we can
-	// verify the round-trip correctness which is the observable contract.
-}
-
-// TestDecodeJSONFile_large exercises the mmap code path by creating a ≥4 MiB
-// file. The test is skipped when the available temp space can't hold it.
-func TestDecodeJSONFile_large_roundtrip(t *testing.T) {
-	t.Parallel()
-	dir := mustTempDir(t)
-
-	type largeDoc struct {
-		Key   string `json:"key"`
-		Extra string `json:"extra"`
-	}
-
-	// Build JSON that is just over the 4 MiB threshold.
-	// We embed a large whitespace prefix so the file size exceeds mmapThreshold
-	// while the semantic content stays tiny.
-	padding := largePadding(mmapThreshold + 1024) // > 4 MiB of leading spaces
-	inner := []byte(`{"key":"value","extra":"data"}`)
-	data := append(padding, inner...)
-
-	path := writeTempFile(t, dir, "large.json", data)
-
-	// Confirm the file is large enough to trigger mmap.
-	fi, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Size() < mmapThreshold {
-		t.Fatalf("test file too small (%d bytes); mmap path won't be exercised", fi.Size())
-	}
-
-	var got largeDoc
-	if err := mmap.DecodeJSONFile(path, &got); err != nil {
-		t.Fatalf("DecodeJSONFile (large): %v", err)
-	}
-	if got.Key != "value" || got.Extra != "data" {
-		t.Errorf("unexpected result: %+v", got)
-	}
-}
-
-func TestDecodeJSONFile_large_invalid_json(t *testing.T) {
-	t.Parallel()
-	dir := mustTempDir(t)
-
-	// > 4 MiB but invalid JSON.
-	data := append(largePadding(mmapThreshold+512), []byte(`{broken`)...)
-	path := writeTempFile(t, dir, "large_bad.json", data)
-
-	var v simplePayload
-	err := mmap.DecodeJSONFile(path, &v)
-	if err == nil {
-		t.Error("expected error for large invalid JSON, got nil")
-	}
-}
-
-func TestDecodeJSONFile_exactly_at_threshold(t *testing.T) {
-	t.Parallel()
-	dir := mustTempDir(t)
-
-	inner := []byte(`{"key":"exactly"}`)
-	padLen := mmapThreshold - len(inner)
-	if padLen < 0 {
-		t.Skip("inner payload larger than threshold; adjust test")
-	}
-	data := append(largePadding(padLen), inner...)
-
-	// Confirm size.
-	if len(data) != mmapThreshold {
-		t.Fatalf("data length %d != mmapThreshold %d", len(data), mmapThreshold)
-	}
-
-	path := writeTempFile(t, dir, "threshold.json", data)
-
-	type doc struct {
-		Key string `json:"key"`
-	}
-	var got doc
-	if err := mmap.DecodeJSONFile(path, &got); err != nil {
-		t.Fatalf("DecodeJSONFile at threshold: %v", err)
-	}
-	if got.Key != "exactly" {
-		t.Errorf("got %q; want %q", got.Key, "exactly")
-	}
-}
-
-func TestDecodeJSONFile_one_byte_below_threshold(t *testing.T) {
-	t.Parallel()
-	dir := mustTempDir(t)
-
-	inner := []byte(`{"key":"below"}`)
-	padLen := mmapThreshold - 1 - len(inner)
-	if padLen < 0 {
-		t.Skip("inner payload larger than threshold-1; adjust test")
-	}
-	data := append(largePadding(padLen), inner...)
-
-	path := writeTempFile(t, dir, "below_threshold.json", data)
-
-	type doc struct {
-		Key string `json:"key"`
-	}
-	var got doc
-	if err := mmap.DecodeJSONFile(path, &got); err != nil {
-		t.Fatalf("DecodeJSONFile below threshold: %v", err)
-	}
-	if got.Key != "below" {
-		t.Errorf("got %q; want %q", got.Key, "below")
 	}
 }
 
@@ -615,61 +346,7 @@ func TestOpenForSequentialRead_fileRewrittenWhileReading(t *testing.T) {
 	}
 }
 
-func TestSonicCopy_decodes_small_payload(t *testing.T) {
-	t.Parallel()
-
-	input := []byte(`{"name":"test","count":7}`)
-
-	var got simplePayload
-	if err := mmap.SonicCopy.Unmarshal(input, &got); err != nil {
-		t.Fatalf("SonicCopy.Unmarshal: %v", err)
-	}
-	if got.Name != "test" || got.Count != 7 {
-		t.Errorf("unexpected result: %+v", got)
-	}
-}
-
-func TestSonicCopy_rejects_invalid_json(t *testing.T) {
-	t.Parallel()
-	var v simplePayload
-	if err := mmap.SonicCopy.Unmarshal([]byte(`not json`), &v); err == nil {
-		t.Error("expected error for invalid JSON")
-	}
-}
-
 // Concurrency: parallel DecodeJSONFile calls on the same file
-
-func TestDecodeJSONFile_concurrent(t *testing.T) {
-	t.Parallel()
-	dir := mustTempDir(t)
-
-	want := simplePayload{Name: "concurrent", Count: 99}
-	path := writeTempJSON(t, dir, "concurrent.json", want)
-
-	const goroutines = 16
-	errs := make(chan error, goroutines)
-
-	for i := 0; i < goroutines; i++ {
-		go func() {
-			var got simplePayload
-			if err := mmap.DecodeJSONFile(path, &got); err != nil {
-				errs <- err
-				return
-			}
-			if got != want {
-				errs <- fmt.Errorf("got %+v; want %+v", got, want)
-				return
-			}
-			errs <- nil
-		}()
-	}
-
-	for i := 0; i < goroutines; i++ {
-		if err := <-errs; err != nil {
-			t.Errorf("goroutine %d: %v", i, err)
-		}
-	}
-}
 
 // Concurrency: parallel OpenForSequentialRead calls on the same large file
 
@@ -713,29 +390,6 @@ func TestOpenForSequentialRead_concurrent_large(t *testing.T) {
 
 // Edge cases: read-only / permission-denied files (Unix only)
 
-func TestDecodeJSONFile_permission_denied(t *testing.T) {
-	t.Parallel()
-	if os.Getuid() == 0 {
-		t.Skip("running as root — permission checks are bypassed")
-	}
-	if runtime.GOOS == "windows" {
-		t.Skip("permission model differs on Windows")
-	}
-
-	dir := mustTempDir(t)
-	path := writeTempJSON(t, dir, "noperm.json", simplePayload{Name: "x"})
-
-	if err := os.Chmod(path, 0o000); err != nil {
-		t.Fatalf("Chmod: %v", err)
-	}
-
-	var v simplePayload
-	err := mmap.DecodeJSONFile(path, &v)
-	if err == nil {
-		t.Error("expected permission error, got nil")
-	}
-}
-
 func TestOpenForSequentialRead_permission_denied(t *testing.T) {
 	t.Parallel()
 	if os.Getuid() == 0 {
@@ -761,41 +415,6 @@ func TestOpenForSequentialRead_permission_denied(t *testing.T) {
 
 // Benchmarks
 
-func BenchmarkDecodeJSONFile_small(b *testing.B) {
-	dir, _ := os.MkdirTemp("", "bench_mmap_*")
-	defer func() { _ = os.RemoveAll(dir) }()
-
-	data, _ := json.Marshal(simplePayload{Name: "bench", Count: 1})
-	path := filepath.Join(dir, "small.json")
-	_ = os.WriteFile(path, data, 0o600)
-
-	b.ResetTimer()
-	for b.Loop() {
-		var v simplePayload
-		if err := mmap.DecodeJSONFile(path, &v); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkDecodeJSONFile_large(b *testing.B) {
-	dir, _ := os.MkdirTemp("", "bench_mmap_large_*")
-	defer func() { _ = os.RemoveAll(dir) }()
-
-	data := makeLargeJSON(mmapThreshold + 65536)
-	path := filepath.Join(dir, "large.json")
-	_ = os.WriteFile(path, data, 0o600)
-
-	b.ResetTimer()
-	b.SetBytes(int64(len(data)))
-	for b.Loop() {
-		var v map[string]string
-		if err := mmap.DecodeJSONFile(path, &v); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
 func BenchmarkOpenForSequentialRead_large_readAll(b *testing.B) {
 	dir, _ := os.MkdirTemp("", "bench_seq_*")
 	defer func() { _ = os.RemoveAll(dir) }()
@@ -816,5 +435,59 @@ func BenchmarkOpenForSequentialRead_large_readAll(b *testing.B) {
 			b.Fatal(err)
 		}
 		cleanup()
+	}
+}
+
+// WithFileBytes must hand over the exact contents on both sides of the
+// mapping threshold, and pass fn's error through.
+func TestWithFileBytes(t *testing.T) {
+	t.Parallel()
+	dir := mustTempDir(t)
+	for _, size := range []int{1, mmapThreshold - 1, mmapThreshold, mmapThreshold + 4096} {
+		want := bytes.Repeat([]byte("eulix\x00"), size/6+1)[:size]
+		path := writeTempFile(t, dir, fmt.Sprintf("f%d.fb", size), want)
+		var got []byte
+		if err := mmap.WithFileBytes(path, func(b []byte) error {
+			got = append([]byte(nil), b...) // fn must copy what it keeps
+			return nil
+		}); err != nil {
+			t.Fatalf("size %d: %v", size, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("size %d: contents differ", size)
+		}
+	}
+	sentinel := errors.New("stop")
+	path := writeTempFile(t, dir, "e.fb", []byte("x"))
+	if err := mmap.WithFileBytes(path, func([]byte) error { return sentinel }); !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v, want fn's error", err)
+	}
+	if err := mmap.WithFileBytes(filepath.Join(dir, "missing.fb"), func([]byte) error { return nil }); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing file: err = %v", err)
+	}
+}
+
+// A file replaced by rename while it is mapped keeps its old contents for
+// the reader: this is how eulix_parser replaces its outputs.
+func TestWithFileBytes_renamedOverWhileMapped(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not allow renaming over a mapped file")
+	}
+	t.Parallel()
+	dir := mustTempDir(t)
+	want := bytes.Repeat([]byte("old"), mmapThreshold/3+1)
+	path := writeTempFile(t, dir, "kb.fb", want)
+	err := mmap.WithFileBytes(path, func(b []byte) error {
+		next := writeTempFile(t, dir, "kb.fb.tmp", []byte("new contents"))
+		if err := os.Rename(next, path); err != nil {
+			return err
+		}
+		if !bytes.Equal(b, want) {
+			t.Error("mapped contents changed after the file was renamed over")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

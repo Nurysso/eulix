@@ -15,15 +15,12 @@ import (
 	"eulix/internal/config"
 	"eulix/internal/embeddings"
 	"eulix/internal/llm"
-	"eulix/internal/query/retrieval/mmap"
 	"eulix/internal/utils"
 )
 
 // ContextWindowCreator initializes ContextBuilder, loads index artifacts, and sets up search resources.
 // The caller keeps ownership of debugLogger and must close it; cb.Close does not.
 func ContextWindowCreator(eulixDir string, cfg *config.Config, llmClient *llm.Client, sourceRoot string, debugLogger *utils.DebugLogger) (*ContextBuilder, error) {
-	// Flush stored init pretouch results into context_debug.log immediately
-	mmap.FlushPretouchLogs(debugLogger)
 	cb := &ContextBuilder{
 		eulixDir:      eulixDir,
 		config:        cfg,

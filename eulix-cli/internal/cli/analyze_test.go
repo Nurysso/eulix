@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/klauspost/compress/zstd"
-
 	"eulix/internal/checksum"
 	"eulix/internal/config"
 	"eulix/internal/utils"
@@ -56,7 +54,7 @@ func (f *analysisFixture) configure(model, engine string, prism int) {
 func (f *analysisFixture) pipeline(_ string, cfg *config.Config) error {
 	f.t.Helper()
 	f.calls++
-	for _, name := range []string{"kb.json", "kb_index.json", "kb_call_graph.json"} {
+	for _, name := range []string{"kb.fb", "kb_index.fb", "kb_call_graph.fb"} {
 		f.write(filepath.Join(utils.EulixDir, name), "{\"complete\":true}\n")
 	}
 	info, err := os.Stat(filepath.Join(f.root, "app.go"))
@@ -66,16 +64,7 @@ func (f *analysisFixture) pipeline(_ string, cfg *config.Config) error {
 	baseline := checksum.Checksum{Files: map[string]checksum.FileEntry{
 		"app.go": {Hash: checksum.MetaHash(info.Size(), info.ModTime().UnixNano()), Size: info.Size(), ModTime: info.ModTime().UnixNano()},
 	}}
-	data, err := json.Marshal(baseline)
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	encoder, err := zstd.NewWriter(nil)
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	f.write(filepath.Join(utils.EulixDir, utils.ChecksumFileName), string(encoder.EncodeAll(data, nil)))
-	if err := encoder.Close(); err != nil {
+	if err := checksum.WriteBaseline(f.root, &baseline); err != nil {
 		f.t.Fatal(err)
 	}
 	if !needsEmbeddings(cfg) {
@@ -198,7 +187,7 @@ func TestAnalyzeEhnasSkipsEmbeddings(t *testing.T) {
 }
 
 func TestAnalyzeRerunsWithMissingOrTruncatedArtifacts(t *testing.T) {
-	for _, name := range []string{"kb.json", "kb_index.json", "kb_call_graph.json", "embeddings.bin", "vectors.bin"} {
+	for _, name := range []string{"kb.fb", "kb_index.fb", "kb_call_graph.fb", "embeddings.bin", "vectors.bin"} {
 		t.Run(name, func(t *testing.T) {
 			f := newAnalysisFixture(t)
 			if err := f.run(); err != nil {
@@ -268,5 +257,35 @@ func TestAnalyzeRerunsWithoutValidCompletionMarker(t *testing.T) {
 				t.Fatal("untrusted completion state must cause analysis")
 			}
 		})
+	}
+}
+
+func TestAnalyzeRerunsWhenKBFormatChanges(t *testing.T) {
+	f := newAnalysisFixture(t)
+	if err := f.run(); err != nil {
+		t.Fatal(err)
+	}
+	// Rewrite the marker as an older release would have: no kb_format field.
+	markerPath := filepath.Join(f.root, utils.EulixDir, analysisCompleteFile)
+	data, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marker map[string]map[string]any
+	if err := json.Unmarshal(data, &marker); err != nil {
+		t.Fatal(err)
+	}
+	delete(marker["settings"], "kb_format")
+	if data, err = json.Marshal(marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(markerPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.run(); err != nil {
+		t.Fatal(err)
+	}
+	if f.calls != 2 {
+		t.Fatalf("pipeline calls = %d, want re-analysis for an old kb format", f.calls)
 	}
 }

@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"eulix/internal/kbfile"
+	"eulix/internal/kbfile/kbfiletest"
 )
 
 // Retrieval builds its own copy of the call graph, so it needs the same filter
@@ -21,7 +24,7 @@ func TestLoadCallGraphDropsIgnoredFiles(t *testing.T) {
 		"edges":[
 			{"from":"func_total::app/billing.py","to":"func_secret::secrets.py","edge_type":"call"},
 			{"from":"func_total::app/billing.py","to":"print","edge_type":"call"}]}`
-	for name, content := range map[string]string{".euignore": "secrets.py\n", "kb_call_graph.json": graph} {
+	for name, content := range map[string]string{".euignore": "secrets.py\n", kbfile.CallGraphFile: string(kbfiletest.EncodeCallGraphJSON(graph))} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}

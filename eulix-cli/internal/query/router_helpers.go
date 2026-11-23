@@ -8,7 +8,6 @@ This file is responsible for Helpers used in Query routing.
 package query
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,9 +19,9 @@ import (
 	"unicode"
 
 	"eulix/internal/checksum"
+	"eulix/internal/kbfile"
 	"eulix/internal/query/classifier"
 	"eulix/internal/query/retrieval"
-	"eulix/internal/query/retrieval/mmap"
 	"eulix/internal/query/strip"
 	"eulix/internal/utils"
 )
@@ -933,18 +932,6 @@ const (
 	depIntentCount                    // how many deps total
 )
 
-func readExternalDeps(filePath string) ([]utils.ExternalDependency, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read deps file: %w", err)
-	}
-	var wrapper utils.ExternalDependencyRef
-	if err := json.Unmarshal(data, &wrapper); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
-	}
-	return wrapper.ExternalDependencies, nil
-}
-
 // nolint: unused
 var (
 	depCountPhrases = []string{"how many", "count", "total", "number of"}
@@ -1255,12 +1242,13 @@ func (r *Router) ensureKB() error {
 	if r.kb != nil {
 		return nil
 	}
-	var kb utils.KnowledgeBaseSimplifiedRef
-	if err := mmap.DecodeJSONFile(filepath.Join(r.eulixDir, "kb.json"), &kb); err != nil {
+	kbp, err := kbfile.ReadKB(filepath.Join(r.eulixDir, kbfile.KBFile))
+	if err != nil {
 		return err
 	}
+	kb := *kbp
 	if kb.Metadata == nil {
-		return fmt.Errorf("kb.json has no metadata")
+		return fmt.Errorf("%s has no metadata", kbfile.KBFile)
 	}
 	servable := checksum.ServableMatcher(r.config.Project.Path)
 	for path := range kb.Structure {

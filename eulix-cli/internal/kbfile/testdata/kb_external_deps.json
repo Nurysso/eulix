@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "external_dependencies": [
+    {
+      "name": "flask",
+      "source": "external",
+      "used_by": [
+        "app/server.py"
+      ],
+      "import_count": 1
+    },
+    {
+      "name": "fmt",
+      "source": "stdlib",
+      "used_by": [
+        "app/tool.go"
+      ],
+      "import_count": 1
+    },
+    {
+      "name": "os",
+      "source": "stdlib",
+      "used_by": [
+        "app/server.py"
+      ],
+      "import_count": 1
+    },
+    {
+      "name": "requests",
+      "source": "external",
+      "used_by": [
+        "app/server.py"
+      ],
+      "import_count": 1
+    }
+  ]
+}

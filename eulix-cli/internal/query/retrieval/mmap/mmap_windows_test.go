@@ -11,8 +11,8 @@ import (
 	"eulix/internal/query/retrieval/mmap"
 )
 
-// These call DecodeViaMmap directly. Through DecodeJSONFile a broken mapping
-// is invisible: it falls back to a plain read and still returns the right data.
+// These call mapFile (exported to tests as MapFile) directly. Through WithFileBytes a broken mapping is
+// invisible: it falls back to a plain read and still returns the right data.
 
 func writeLargeJSON(t *testing.T) (string, []byte) {
 	t.Helper()
@@ -24,15 +24,16 @@ func writeLargeJSON(t *testing.T) (string, []byte) {
 	return path, data
 }
 
-func TestDecodeViaMmap_windows(t *testing.T) {
+func TestMapFile_windows(t *testing.T) {
 	path, data := writeLargeJSON(t)
 
-	var got map[string]string
-	if err := mmap.DecodeViaMmap(path, int64(len(data)), &got); err != nil {
-		t.Fatalf("DecodeViaMmap: %v", err)
+	got, release, err := mmap.MapFile(path)
+	if err != nil {
+		t.Fatalf("MapFile: %v", err)
 	}
-	if got["key"] != "value" {
-		t.Fatalf("decoded %v, want key=value", got)
+	defer release()
+	if string(got) != string(data) {
+		t.Fatal("mapped contents differ from the file")
 	}
 }
 
@@ -52,8 +53,12 @@ func TestMmapOpensAlongsideOtherReaders_windows(t *testing.T) {
 	}
 	defer cleanup()
 
-	var got map[string]string
-	if err := mmap.DecodeViaMmap(path, int64(len(data)), &got); err != nil {
+	got, release, err := mmap.MapFile(path)
+	if err != nil {
 		t.Fatalf("mapping while two other readers are open: %v", err)
+	}
+	defer release()
+	if len(got) != len(data) {
+		t.Fatalf("mapped %d bytes, want %d", len(got), len(data))
 	}
 }

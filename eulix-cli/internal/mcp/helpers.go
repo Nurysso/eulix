@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"eulix/internal/config"
+	"eulix/internal/kbfile"
 	"eulix/internal/llm"
 	"eulix/internal/query"
 	"eulix/internal/utils"
@@ -65,7 +66,7 @@ func (s *Server) setRepoPathLocked(repoPath string) (string, error) {
 	}
 
 	eulixDir := filepath.Join(absPath, utils.EulixDir)
-	kbPath := filepath.Join(eulixDir, "kb.json")
+	kbPath := filepath.Join(eulixDir, kbfile.KBFile)
 	if _, err := os.Stat(kbPath); errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("project at %q is not initialized by Eulix (no knowledge base found at %s). "+
 			"Please run 'eulix analyze' in the project root in your terminal to generate it before querying",

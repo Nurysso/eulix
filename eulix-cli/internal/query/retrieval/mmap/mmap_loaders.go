@@ -4,15 +4,16 @@
 // Package mmap hold os specific mmap helper code.
 
 /*
-JSON loaders for the knowledge-base files, sized for 2-4GB kb.json
-on machines with 16gb RAM OS(win11/ linux kernel / darwin)
-Memory model:
-	raw file bytes parsed struct (heap)
-	os.ReadFile + Unmarshal 	in heap 	in heap		~2x file
-	mmap + Unmarshal (DecodeJSONFile)	page cache 		in heap		->~ file
-	buffered streaming Decode (OpenForSequentialRead)	1 MiB buffer 		built incrementally -> bounded
-Platform notes (DecodeViaMmap):
-	- Linux kernel(tested on 6.18 lts): MAP_SHARED + MADV_SEQUENTIAL + MADV_HUGEPAGE.
+File access for the knowledge-base readers (internal/kbfile), sized for
+multi-gigabyte outputs on 16 GB machines (Linux, Windows 11, macOS).
+
+	WithFileBytes          the whole file as one slice: memory-mapped from
+	                       4 MiB (pages come from the page cache), read below
+	OpenForSequentialRead  a 1 MiB buffered reader for one front-to-back pass
+	                       (kb.fb's record walk), never mapped
+
+Platform notes (mapFile):
+	- Linux kernel (tested on 6.18 LTS): MAP_SHARED + MADV_SEQUENTIAL + MADV_HUGEPAGE.
 	- Windows 11: FILE_FLAG_SEQUENTIAL_SCAN at file-open time +
 	  PrefetchVirtualMemory over the whole view after MapViewOfFile.
 	- macOS: MAP_PRIVATE + MADV_SEQUENTIAL.
@@ -26,19 +27,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"reflect"
-
-	"eulix/internal/utils"
-
-	"github.com/bytedance/sonic"
-	"github.com/bytedance/sonic/option"
 )
-
-// PretouchResult records the outcome of a JIT pretouch operation.
-type PretouchResult struct {
-	Target string
-	Err    error
-}
 
 const (
 	// mmapThreshold defines the minimum file size (4 MiB) to use memory mapping (mmap).
@@ -47,17 +36,13 @@ const (
 	// Smaller files fall back to standard buffered I/O.
 	mmapThreshold = 4 << 20
 
-	// jsonBufSize specifies the I/O read buffer size (1 MiB) for the buffered
-	// paths: decodeViaReader and OpenForSequentialRead.
+	// readBufSize is the read buffer (1 MiB) of OpenForSequentialRead.
 	// This balances minimal syscall frequency on large files against low heap allocation pressure.
-	jsonBufSize = 1 << 20
+	readBufSize = 1 << 20
 )
 
-// errFileTooLarge is returned when size would overflow int on 32 bits platform
+// ErrFileTooLarge is returned when size would overflow int on 32 bits platform
 var ErrFileTooLarge = errors.New("file size overflows int on this platform")
-
-// Stores results produced during package init()
-var initPretouchResults []PretouchResult
 
 // SizeOverflows returns true when size can't be represented as int.
 func SizeOverflows(size int64) bool {
@@ -70,111 +55,49 @@ func ErrFileTooLargeForPath(path string, size int64) error {
 	return fmt.Errorf("%w: %s is %d bytes", ErrFileTooLarge, path, size)
 }
 
-// SonicCopy is a sonic config that always copies strings out of the input
-// buffer. This is required on the mmap path: the mapped region is unmapped
-// before the caller uses the decoded value, so any decoded string that
-// references the raw bytes directly would become a dangling pointer.
-// CopyString: true adds a small allocation cost but is safe on all paths.
-var SonicCopy = sonic.Config{CopyString: true}.Froze()
-
-func init() {
-	targets := []struct {
-		name string
-		typ  reflect.Type
-	}{
-		{"knowledge Base", reflect.TypeOf(utils.KnowledgeBaseSimplifiedRef{})},
-		{"Index", reflect.TypeOf(utils.IndexDataRef{})},
-		{"CallGraphRef", reflect.TypeOf(utils.CallGraphRef{})},
-	}
-
-	for _, t := range targets {
-		err := sonic.Pretouch(
-			t.typ,
-			option.WithCompileRecursiveDepth(8),
-		)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[JIT] Failed to pretouch %s: %v\n", t.name, err)
-		}
-
-		// Collect execution status for deferred logging
-		initPretouchResults = append(initPretouchResults, PretouchResult{
-			Target: t.name,
-			Err:    err,
-		})
-	}
-}
-
-// FlushPretouchLogs passes the recorded init results into any DebugLogger instance.
-func FlushPretouchLogs(logger *utils.DebugLogger) {
-	if logger == nil {
-		return
-	}
-	logger.Log("[JIT] Initializing context: starting JIT pretouching for target Files...")
-	for _, res := range initPretouchResults {
-		if res.Err != nil {
-			logger.Log("[JIT] Pretouch failed for %s: %v", res.Target, res.Err)
-		} else {
-			logger.Log("[JIT] Pretouch succeeded for %s", res.Target)
-		}
-	}
-}
-
-// DecodeJSONFile decodes path into v using the fastest available strategy:
+// WithFileBytes calls fn with the whole contents of path. Files of
+// mmapThreshold or more are memory-mapped (read-only, released when fn
+// returns); smaller files, and any file whose mapping fails, are read into
+// memory. fn must not keep the slice or any sub-slice after it returns:
+// copy out what it needs (string(b) does). Used for the FlatBuffers outputs,
+// which are read in place without a parse step.
 //
-//	Files ≥ mmapThreshold: mmap + sonic.Unmarshal
-//	Files < mmapThreshold: buffered reader + sonic streaming decoder.
-//
-// Mmap failures fall back transparently to buffered reader. The
-// fallback s intentional and silent at this layer, same os.Open
-// will fail again in the fallback path, surfacing the real cause.
-// Any error falls back, decode errors included, so a corrupt file is parsed
-// twice. Intended: RET-12 in docs/Known-Issues/Retrieval-And-Query.md.
-func DecodeJSONFile(path string, v any) error {
+// The parser replaces outputs by rename, so a file mapped here keeps its old
+// contents even if `eulix analyze` runs meanwhile.
+func WithFileBytes(path string, fn func([]byte) error) error {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
-
-	size := fi.Size()
-
-	if size >= mmapThreshold && !SizeOverflows(size) {
-		if err := DecodeViaMmap(path, size, v); err == nil {
-			return nil
+	if size := fi.Size(); size >= mmapThreshold && !SizeOverflows(size) {
+		if data, release, err := mapFile(path); err == nil {
+			defer release()
+			return fn(data)
 		}
-		// mmap failed (sandbox, exotic FS, OOM on mapping) fall through.
+		// mapping failed (sandbox, exotic FS, platform without mmap): read instead.
 	}
-
-	return decodeViaReader(path, v)
-}
-
-// decodeViaReader is the non-mmap fallback. sonicCopy is used because
-// the bufio.Reader is heap-allocated and its buffer is reused across
-// reads, strings that span two reads would otherwise reference the wrong buffer.
-func decodeViaReader(path string, v any) error {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-	return SonicCopy.
-		NewDecoder(bufio.NewReaderSize(f, jsonBufSize)).
-		Decode(v)
+	return fn(data)
 }
 
 // OpenForSequentialRead returns a buffered reader over path for a single
 // front-to-back pass, and a cleanup func that closes the file. The caller must
 // always call cleanup once it is done with the reader.
 //
-// No mmap here, whatever the size. The streaming caller (json.Decoder in
-// loader.go) copies every byte into its own buffer anyway, so a mapping saves
-// no copy, and every page it passes stays resident until unmap: a 178 MB
-// kb.json peaked at 212 MB mapped and 31 MB read through this buffer, and the
-// buffered read was ~5% faster. Reading also can't SIGBUS if the file is
-// replaced or truncated underneath us; a short file just fails to decode.
+// No mmap here, whatever the size. The streaming caller (kbfile.WalkKB)
+// copies each record out anyway, so a mapping saves no copy, and every page it
+// passes stays resident until unmap: measured on the JSON knowledge base this
+// replaced, a 178 MB file peaked at 212 MB mapped and 31 MB read through this
+// buffer, and the buffered read was ~5% faster. Reading also can't SIGBUS if
+// the file is replaced or truncated underneath us; a short file just fails to
+// decode.
 func OpenForSequentialRead(path string) (r io.Reader, cleanup func(), err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	return bufio.NewReaderSize(f, jsonBufSize), func() { _ = f.Close() }, nil
+	return bufio.NewReaderSize(f, readBufSize), func() { _ = f.Close() }, nil
 }

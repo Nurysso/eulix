@@ -24,6 +24,8 @@ import (
 
 	"eulix/internal/cache"
 	"eulix/internal/config"
+	"eulix/internal/kbfile"
+	"eulix/internal/kbfile/kbfiletest"
 	"eulix/internal/utils"
 )
 
@@ -61,10 +63,10 @@ func newProject(t *testing.T, files map[string]string, funcs []fxFunc) string {
 	idx, _ := json.Marshal(utils.IndexDataRef{Indices: &utils.Indices{FunctionsByName: byName}})
 
 	all := map[string]string{
-		"eulix.toml":                "[project]\nengine = \"ehnas\"\n",
-		".eulix/kb.json":            string(kb),
-		".eulix/kb_index.json":      string(idx),
-		".eulix/kb_call_graph.json": `{"nodes":[],"edges":[]}`,
+		"eulix.toml":              "[project]\nengine = \"ehnas\"\n",
+		".eulix/kb.fb":            string(kbfiletest.EncodeKBJSON(string(kb))),
+		".eulix/kb_index.fb":      string(kbfiletest.EncodeIndexJSON(string(idx))),
+		".eulix/kb_call_graph.fb": string(kbfiletest.EncodeCallGraph(&utils.CallGraphRef{})),
 	}
 	for k, v := range files {
 		all[k] = v
@@ -282,15 +284,12 @@ func leakyProject(t *testing.T) string {
 		fxFunc{"config/eu/prod/secrets.py", "payment_config_eu", 1, 2},
 		fxFunc{"svc/payments/creds.py", "payment_creds", 1, 2},
 	)
-	indexPath := filepath.Join(repo, ".eulix", "kb_index.json")
-	var index utils.IndexDataRef
-	data, err := os.ReadFile(indexPath)
+	indexPath := filepath.Join(repo, ".eulix", kbfile.IndexFile)
+	idx, err := kbfile.ReadIndex(indexPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(data, &index); err != nil {
-		t.Fatal(err)
-	}
+	index := utils.IndexDataRef{Indices: idx}
 	index.Indices.TypesByName = map[string][]string{
 		"PaymentHiddenType": {"secrets.py:1"},
 	}
@@ -302,11 +301,7 @@ func leakyProject(t *testing.T) string {
 			"func_Vault::open::.hidden/b.cpp",
 		},
 	}
-	data, err = json.Marshal(index)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(indexPath, data, 0o600); err != nil {
+	if err := kbfiletest.WriteFile(indexPath, kbfiletest.EncodeIndex(index.Indices)); err != nil {
 		t.Fatal(err)
 	}
 	return repo
@@ -385,7 +380,7 @@ func TestE2EUsageQueryReadsOnlyInsideTheRepo(t *testing.T) {
 	idx, _ := json.Marshal(utils.IndexDataRef{Indices: &utils.Indices{FunctionsByName: map[string][]string{
 		"payment_total": {"app/billing.py:1", outside + ":1", filepath.ToSlash(rel) + ":1", ".env:1"},
 	}}})
-	writeTree(t, repo, map[string]string{".eulix/kb_index.json": string(idx)})
+	writeTree(t, repo, map[string]string{".eulix/kb_index.fb": string(kbfiletest.EncodeIndexJSON(string(idx)))})
 
 	cs := connect(t, newTestServer(t))
 	text, _ := call(t, cs, "query", map[string]any{"query": "usage of payment_total", "repo_path": repo})

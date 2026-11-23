@@ -18,6 +18,7 @@ import (
 	"eulix/internal/cache"
 	"eulix/internal/checksum"
 	"eulix/internal/config"
+	"eulix/internal/kbfile"
 	"eulix/internal/llm"
 	"eulix/internal/query"
 	"eulix/internal/tui"
@@ -52,11 +53,11 @@ func checkEmbeddingsFiles(eulixDir string) []string {
 	var missing []string
 
 	requiredFiles := map[string]string{
-		"kb.json":            "Knowledge base",
-		"kb_index.json":      "KB index",
-		"kb_call_graph.json": "Call graph",
-		"embeddings.bin":     "Embeddings (binary)",
-		"vectors.bin":        "vector index (binary)",
+		"kb.fb":            "Knowledge base",
+		"kb_index.fb":      "KB index",
+		"kb_call_graph.fb": "Call graph",
+		"embeddings.bin":   "Embeddings (binary)",
+		"vectors.bin":      "vector index (binary)",
 	}
 
 	for file, desc := range requiredFiles {
@@ -76,7 +77,7 @@ func startChat() error {
 	}
 
 	eulixDir := utils.EulixDir
-	kbPath := filepath.Join(eulixDir, "kb.json")
+	kbPath := filepath.Join(eulixDir, kbfile.KBFile)
 	if _, err := os.Stat(kbPath); os.IsNotExist(err) {
 		return fmt.Errorf("knowledge base not found. Run 'eulix analyze' first")
 	}
@@ -183,11 +184,10 @@ func startChat() error {
 }
 
 func printSystemDiagnostics(eulixDir string) {
-	kbPath := filepath.Join(eulixDir, "kb.json")
-	if data, err := os.ReadFile(kbPath); err == nil {
-		chunkCount := strings.Count(string(data), `"id":`)
-		if chunkCount > 0 {
-			fmt.Printf("Loaded %d code chunks\n", chunkCount)
+	if meta, err := kbfile.ReadKBMetadata(filepath.Join(eulixDir, kbfile.KBFile)); err == nil && meta != nil {
+		// Functions, classes and methods: the code chunks the knowledge base holds.
+		if n := meta.TotalFunctions + meta.TotalClasses + meta.TotalMethods; n > 0 {
+			fmt.Printf("Loaded %d code chunks\n", n)
 		}
 	}
 

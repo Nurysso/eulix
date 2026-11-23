@@ -12,6 +12,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"eulix/internal/kbfile"
+	"eulix/internal/kbfile/kbfiletest"
+	"eulix/internal/utils"
 )
 
 const victimBody = "IMPORTANT USER DATA\n"
@@ -60,7 +64,7 @@ func TestBindRefusesSymlinksInEulixDir(t *testing.T) {
 	for _, name := range []string{
 		filepath.Join("debug", "context_debug.log"),
 		filepath.Join("debug", "susbstemDebug.log"),
-		"kb_entry_points.json",
+		"kb_entry_points.fb",
 	} {
 		t.Run(name, func(t *testing.T) {
 			victim := newVictim(t)
@@ -165,19 +169,30 @@ func TestQueryRefusesReplacedRepoFolder(t *testing.T) {
 // can predate the ignore rules like the index and call graph can.
 func TestAnswersHideIgnoredFilesFromKBReports(t *testing.T) {
 	repo := leakyProject(t)
-	writeTree(t, repo, map[string]string{
-		".eulix/kb_entry_points.json": `{"entry_points":[
-			{"entry_type":"main","handler":"visible_main","file":"app/billing.py","line":1},
-			{"entry_type":"main","handler":"payment_secret","file":"secrets.py","line":1},
-			{"entry_type":"main","handler":"hidden_main","file":".config/payment.py","line":1}]}`,
-		".eulix/kb_metrics.json": `{"metadata":{"project_name":"p"},"top_complex_functions":[
-			{"name":"visible_fn","file":"app/billing.py","complexity":3},
-			{"name":"payment_secret","file":"secrets.py","complexity":9}]}`,
-		".eulix/kb_external_deps.json": `{"external_dependencies":[
-			{"name":"sharedlib","source":"external","used_by":["app/billing.py","secrets.py"],"import_count":2},
-			{"name":"secretlib","source":"external","used_by":["secrets.py"],"import_count":1},
-			{"name":"unlistedlib","source":"external","used_by":[],"import_count":0}]}`,
-	})
+	eulixDir := filepath.Join(repo, ".eulix")
+	writeKB := func(name string, buf []byte) {
+		t.Helper()
+		if err := kbfiletest.WriteFile(filepath.Join(eulixDir, name), buf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeKB(kbfile.EntryPointsFile, kbfiletest.EncodeEntryPoints([]utils.EntryPoint{
+		{EntryType: "main", Handler: "visible_main", File: "app/billing.py", Line: 1},
+		{EntryType: "main", Handler: "payment_secret", File: "secrets.py", Line: 1},
+		{EntryType: "main", Handler: "hidden_main", File: ".config/payment.py", Line: 1},
+	}))
+	writeKB(kbfile.MetricsFile, kbfiletest.EncodeMetrics(&utils.MetricsReport{
+		Metadata: &utils.Metadata{ProjectName: "p"},
+		TopComplexFunctions: []utils.FunctionMetric{
+			{Name: "visible_fn", File: "app/billing.py", Complexity: 3},
+			{Name: "payment_secret", File: "secrets.py", Complexity: 9},
+		},
+	}))
+	writeKB(kbfile.ExternalDepsFile, kbfiletest.EncodeExternalDeps([]utils.ExternalDependency{
+		{Name: "sharedlib", Source: "external", UsedBy: []string{"app/billing.py", "secrets.py"}, ImportCount: 2},
+		{Name: "secretlib", Source: "external", UsedBy: []string{"secrets.py"}, ImportCount: 1},
+		{Name: "unlistedlib", Source: "external", UsedBy: []string{}, ImportCount: 0},
+	}))
 
 	for _, tc := range []struct {
 		query     string
@@ -280,12 +295,12 @@ func TestQueryDoesNotFollowSymlinkToExcludedFile(t *testing.T) {
 // name that file or its functions.
 func TestCallGraphHidesIgnoredFiles(t *testing.T) {
 	repo := leakyProject(t)
-	writeTree(t, repo, map[string]string{".eulix/kb_call_graph.json": `{
+	writeTree(t, repo, map[string]string{".eulix/kb_call_graph.fb": string(kbfiletest.EncodeCallGraphJSON(`{
 		"nodes":[
 			{"id":"func_payment_secret::secrets.py","node_type":"function","file":"secrets.py"},
 			{"id":"func_payment_total::app/billing.py","node_type":"function","file":"app/billing.py"}],
 		"edges":[
-			{"from":"func_payment_total::app/billing.py","to":"func_payment_secret::secrets.py","edge_type":"call"}]}`})
+			{"from":"func_payment_total::app/billing.py","to":"func_payment_secret::secrets.py","edge_type":"call"}]}`))})
 	cs := connect(t, newTestServer(t))
 	if _, isErr := call(t, cs, "set_repo_path", map[string]any{"repo_path": repo}); isErr {
 		t.Fatal("bind failed")

@@ -13,7 +13,8 @@ package utils
 
 // ---------- Ref / report wrappers ----------
 
-// KnowledgeBaseSimplifiedRef is kb.json (output.rs write_kb_from_spill).
+// KnowledgeBaseSimplifiedRef is kb.fb in memory (kbfile.ReadKB): the
+// metadata and every file's record.
 type KnowledgeBaseSimplifiedRef struct {
 	Metadata  *Metadata           `json:"metadata"`
 	Structure map[string]FileData `json:"structure"`

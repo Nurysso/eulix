@@ -1,0 +1,53 @@
+{
+  "format_version": 1,
+  "metadata": {
+    "version": "0.9.0",
+    "git_hash": "0a78aa7",
+    "project_name": "src",
+    "project_hash": "36599dfac69dff47",
+    "parsed_at": "2026.11.19.153816",
+    "languages": [
+      "go",
+      "python"
+    ],
+    "total_files": 2,
+    "total_loc": 36,
+    "total_functions": 4,
+    "total_classes": 0,
+    "total_methods": 0
+  },
+  "top_complex_functions": [
+    {
+      "name": "helper",
+      "file": "app/tool.go",
+      "complexity": 3,
+      "importance_score": 0.5,
+      "line_start": 5,
+      "line_end": 13
+    },
+    {
+      "name": "list_users",
+      "file": "app/server.py",
+      "complexity": 2,
+      "importance_score": 0.7,
+      "line_start": 9,
+      "line_end": 13
+    },
+    {
+      "name": "main",
+      "file": "app/server.py",
+      "complexity": 1,
+      "importance_score": 0.8,
+      "line_start": 16,
+      "line_end": 17
+    },
+    {
+      "name": "main",
+      "file": "app/tool.go",
+      "complexity": 1,
+      "importance_score": 0.8,
+      "line_start": 15,
+      "line_end": 15
+    }
+  ]
+}

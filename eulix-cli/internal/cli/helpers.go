@@ -10,20 +10,18 @@ This file is have helpers for cli stuff
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
-	"maps"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"time"
 
 	a "eulix/internal/assets"
 	"eulix/internal/checksum"
+	"eulix/internal/kbfile"
 	"eulix/internal/utils"
 )
 
@@ -92,37 +90,15 @@ func openInBrowser(target string) error {
 	return nil
 }
 
-// servableCallGraphJSON returns a call graph without hidden or ignored files.
-// It keeps the JSON generic because the viewer reads fields the router does not.
-func servableCallGraphJSON(path, projectPath string) ([]byte, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+// viewerCallGraph returns the call graph vizEulize decodes in the browser. With
+// a projectPath, nodes from hidden or ignored files are left out (the KB cannot
+// be taken on trust); with "", the graph is kept whole (a file named with --graph).
+func viewerCallGraph(path, projectPath string) ([]byte, error) {
+	var keep func(string) bool
+	if projectPath != "" {
+		keep = checksum.ServableMatcher(projectPath)
 	}
-	var g struct {
-		Nodes          []map[string]any `json:"nodes"`
-		Edges          []map[string]any `json:"edges"`
-		Tags           map[string]any   `json:"tags"`
-		FileCategories map[string]any   `json:"file_categories"`
-	}
-	if err := json.Unmarshal(data, &g); err != nil {
-		return nil, err
-	}
-
-	servable := checksum.ServableMatcher(projectPath)
-	removed := make(map[any]bool)
-	g.Nodes = slices.DeleteFunc(g.Nodes, func(n map[string]any) bool {
-		file, _ := n["file"].(string)
-		if servable(file) {
-			return false
-		}
-		removed[n["id"]] = true
-		return true
-	})
-	g.Edges = slices.DeleteFunc(g.Edges, func(e map[string]any) bool { return removed[e["from"]] || removed[e["to"]] })
-	maps.DeleteFunc(g.Tags, func(id string, _ any) bool { return removed[id] })
-	maps.DeleteFunc(g.FileCategories, func(file string, _ any) bool { return !servable(file) })
-	return json.Marshal(g)
+	return kbfile.ViewerCallGraph(path, keep)
 }
 
 func writeQueryDebugLog(eulixDir, query, result string) error {
@@ -234,7 +210,7 @@ func getKnowledgeBasePath(root string) string {
 		cwd, _ := os.Getwd()
 		root = cwd
 	}
-	return filepath.Join(root, ".eulix", "kb.json")
+	return filepath.Join(root, ".eulix", kbfile.KBFile)
 }
 
 func hasKnowledgeBase(root string) bool {

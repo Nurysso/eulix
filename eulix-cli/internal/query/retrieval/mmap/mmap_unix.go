@@ -19,47 +19,29 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// decodeViaMmap maps path read-only and decodes JSON directly from mmaping
-// The caller passes size from an os.Stat; re-stat the open fd to close
-// the stat-then-mmap TOCTOU window without this a concurrent truncation produces
-// a mapping that extends past EOF and get SIGBUS on the first access.
-// Truncation after mapping (during the parse) still raises SIGBUS. Won't fix:
-// RET-10 in docs/Known-Issues/Retrieval-And-Query.md.
-func DecodeViaMmap(path string, size int64, v any) error {
-	if SizeOverflows(size) {
-		return ErrFileTooLargeForPath(path, size)
-	}
-
+// mapFile maps path read-only for WithFileBytes. The live size of the open
+// file is mapped, so a stat-then-open race cannot map past EOF.
+func mapFile(path string) ([]byte, func(), error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	defer func() { _ = f.Close() }()
-
-	// Close the stat-then-mmap TOCTOU race: re-stat the open fd and
-	// use the live size. If the file chanfed, retry with the new size.
 	fi, err := f.Stat()
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	size = fi.Size()
+	size := fi.Size()
 	if SizeOverflows(size) {
-		return ErrFileTooLargeForPath(path, size)
+		return nil, nil, ErrFileTooLargeForPath(path, size)
 	}
 	if size == 0 {
-		return fmt.Errorf("empty file: %s", path)
+		return nil, nil, fmt.Errorf("empty file: %s", path)
 	}
-
 	data, err := mmapPlatform(f, int(size))
 	if err != nil {
-		return fmt.Errorf("mmap: %w", err)
+		return nil, nil, fmt.Errorf("mmap: %w", err)
 	}
-	defer func() { _ = unix.Munmap(data) }()
-
 	mmapAdvisePlatform(data)
-
-	// sonicCopy copies all decoded strings out of data before we Munmap.
-	// Using sonic.ConfigDefault (CopyString: false) here would leave decoded
-	// string headers pointing into the now-unmapped region — use-after-free.
-	return SonicCopy.Unmarshal(data, v)
+	return data, func() { _ = unix.Munmap(data) }, nil
 }

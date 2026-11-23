@@ -1,0 +1,31 @@
+{
+  "format_version": 1,
+  "entry_points": [
+    {
+      "entry_type": "api_endpoint",
+      "path": "/users",
+      "function": "list_users",
+      "handler": "list_users",
+      "file": "app/server.py",
+      "line": 9,
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "entry_type": "main",
+      "function": "main",
+      "handler": "main",
+      "file": "app/server.py",
+      "line": 16
+    },
+    {
+      "entry_type": "main",
+      "function": "main",
+      "handler": "main",
+      "file": "app/tool.go",
+      "line": 15
+    }
+  ]
+}

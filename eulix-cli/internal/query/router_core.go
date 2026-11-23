@@ -21,10 +21,10 @@ import (
 
 	"eulix/internal/cache"
 	"eulix/internal/config"
+	"eulix/internal/kbfile"
 	"eulix/internal/llm"
 	"eulix/internal/query/classifier"
 	"eulix/internal/query/retrieval"
-	"eulix/internal/query/retrieval/mmap"
 	"eulix/internal/utils"
 )
 
@@ -72,23 +72,21 @@ func QueryTrafficController(
 	debugLogger := utils.NewDebugLogger(eulixDir)
 	debugLogger.StartAutoFlush(5 * time.Second) // once
 
-	classifier, err := classifier.QuerySheriff(filepath.Join(eulixDir, "kb_index.json"))
+	classifier, err := classifier.QuerySheriff(filepath.Join(eulixDir, kbfile.IndexFile))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create classifier: %w", err)
 	}
 
 	var kbIndex *utils.Indices
-	var indexRef utils.IndexDataRef
-	if err := mmap.DecodeJSONFile(filepath.Join(eulixDir, "kb_index.json"), &indexRef); err == nil {
-		kbIndex = indexRef.Indices
+	if idx, err := kbfile.ReadIndex(filepath.Join(eulixDir, kbfile.IndexFile)); err == nil {
+		kbIndex = idx
 		filterServableIndex(kbIndex, cfg.Project.Path)
 	}
 
 	var callGraphRef *utils.CallGraphRef
-	var cgRef utils.CallGraphRef
-	if err := mmap.DecodeJSONFile(filepath.Join(eulixDir, "kb_call_graph.json"), &cgRef); err == nil {
-		retrieval.FilterServableCallGraph(&cgRef, cfg.Project.Path)
-		callGraphRef = &cgRef
+	if cgRef, err := kbfile.ReadCallGraph(filepath.Join(eulixDir, kbfile.CallGraphFile)); err == nil {
+		retrieval.FilterServableCallGraph(cgRef, cfg.Project.Path)
+		callGraphRef = cgRef
 	}
 
 	return &Router{

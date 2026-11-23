@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"eulix/internal/cache"
 	"eulix/internal/config"
 	"eulix/internal/embeddings"
+	"eulix/internal/kbfile"
 	"eulix/internal/llm"
 	"eulix/internal/query"
 	"eulix/internal/utils"
@@ -150,26 +152,23 @@ var vizEulizeCMD = &cobra.Command{
 			return fmt.Errorf("could not find vizeulize.html at %s: %w", htmlPath, err)
 		}
 
-		// Fallback defaults to .eulix directory files if not specified via flags.
-		// A path named by flag is shown as given; the project's own graph is filtered.
-		var filteredGraph []byte
+		// Without --graph, the project's own graph is used and hidden or ignored
+		// files are left out; a graph named by flag is shown as given.
+		filterRoot := ""
 		if graphPath == "" {
-			graphPath = filepath.Join(utils.EulixDir, "kb_call_graph.json")
+			graphPath = filepath.Join(utils.EulixDir, kbfile.CallGraphFile)
 			if err := utils.CheckEulixDir(utils.EulixDir); err != nil {
 				return err
 			}
-			filteredGraph, err = servableCallGraphJSON(graphPath, ".")
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("could not read call graph: %w", err)
-			}
+			filterRoot = "."
 		}
-		if indexPath == "" {
-			indexPath = filepath.Join(utils.EulixDir, "kb_index.json")
+		// The page decodes kb_call_graph.fb itself.
+		viewerGraph, err := viewerCallGraph(graphPath, filterRoot)
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("call graph file missing: %w\nRun 'eulix analyze' first", err)
 		}
-
-		// Verify files exist
-		if _, err := os.Stat(graphPath); err != nil {
-			return fmt.Errorf("call graph file missing: %w (run 'eulix analyze' first)", err)
+		if err != nil {
+			return fmt.Errorf("could not read call graph: %w", err)
 		}
 
 		mux := http.NewServeMux()
@@ -181,13 +180,11 @@ var vizEulizeCMD = &cobra.Command{
 			http.ServeFile(w, r, htmlPath)
 		})
 
-		mux.HandleFunc("/data/call_graph.json", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			if filteredGraph != nil {
-				_, _ = w.Write(filteredGraph)
-				return
-			}
-			http.ServeFile(w, r, graphPath)
+		mux.HandleFunc("/data/call_graph.fb", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			// The page shows load progress from Content-Length.
+			w.Header().Set("Content-Length", strconv.Itoa(len(viewerGraph)))
+			_, _ = w.Write(viewerGraph)
 		})
 
 		// Bind local server port
@@ -368,29 +365,6 @@ var queryCmd = &cobra.Command{
 			}
 		}
 		fmt.Println(result)
-	},
-}
-
-// nolint:unused
-var glaDOSCmd = &cobra.Command{
-	Use:   "glados [directory]",
-	Short: "[Depriciated] Checks for errors in knowledge base and embeddings size",
-	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("OOPS!! \nThe glados command is depriciated :(")
-		return nil
-	},
-}
-
-// nolint:unused
-var aspirineCmd = &cobra.Command{
-	Use:   "aspirine [directory]",
-	Short: "[Depriciated] tries to fix embedings.bin and kb MEANT TO BE USED IN TEST",
-	Long:  "[Depriciated] Tries to fixes corrupted or mismatched embeddings by rebuilding the binary file from JSON",
-	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("OOPS!! \nThe aspirine command is depriciated :(")
-		return nil
 	},
 }
 
@@ -617,10 +591,6 @@ func setupInitSubcommands() {
 }
 
 func setupFlags() {
-	// aspirine flags
-	// aspirineCmd.Flags().Bool("no-backup", false, "Don't backup existing embeddings.bin")
-	// aspirineCmd.Flags().Bool("force", false, "Force rebuild even if validations fail")
-
 	// history flags
 	historyCmd.Flags().Bool("no-tui", false, "Use plain-text output instead of the TUI")
 }
@@ -653,8 +623,6 @@ func registerCommands() {
 		queryCmd,
 		mcpCmd,
 		configCmd,
-		// glaDOSCmd,
-		// aspirineCmd,
 		historyCmd,
 		cacheCmd,
 		embedCMD,
@@ -663,6 +631,6 @@ func registerCommands() {
 }
 
 func init() {
-	vizEulizeCMD.Flags().StringVar(&graphPath, "graph", "", "path to *_call_graph.json")
-	vizEulizeCMD.Flags().StringVar(&indexPath, "index", "", "path to *_index.json")
+	vizEulizeCMD.Flags().StringVar(&graphPath, "graph", "", "path to a kb_call_graph.fb")
+	vizEulizeCMD.Flags().StringVar(&indexPath, "index", "", "unused; accepted for older scripts")
 }

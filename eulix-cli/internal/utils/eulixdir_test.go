@@ -42,7 +42,7 @@ func TestCheckEulixDir(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "secret.json")
 	t.Run("file link", func(t *testing.T) {
 		dir := newDir(t)
-		mustSymlink(t, outside, filepath.Join(dir, "kb_metrics.json"))
+		mustSymlink(t, outside, filepath.Join(dir, "kb_metrics.fb"))
 		if CheckEulixDir(dir) == nil {
 			t.Error("link accepted")
 		}

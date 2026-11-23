@@ -23,6 +23,7 @@ type analysisSettings struct {
 	Model     string `json:"model"`
 	Engine    string `json:"engine"`
 	Prism     int    `json:"prism"`
+	KBFormat  int    `json:"kb_format"`
 }
 
 // needsEmbeddings reports whether the configured retrieval engine reads the
@@ -49,14 +50,14 @@ func pipelineSettings(cfg *config.Config) analysisSettings {
 	// Embedding settings only matter when embeddings are generated, so an
 	// ehnas project is not re-analyzed when the embedding model changes.
 	if !needsEmbeddings(cfg) {
-		return analysisSettings{Version: 2, Retrieval: "ehnas", Prism: cfg.Parser.PrismV}
+		return analysisSettings{Version: 2, Retrieval: "ehnas", Prism: cfg.Parser.PrismV, KBFormat: utils.KBFormatVersion}
 	}
-	return analysisSettings{Version: 2, Retrieval: "etiya", Model: cfg.Embeddings.Model, Engine: cfg.Embeddings.Engine, Prism: cfg.Parser.PrismV}
+	return analysisSettings{Version: 2, Retrieval: "etiya", Model: cfg.Embeddings.Model, Engine: cfg.Embeddings.Engine, Prism: cfg.Parser.PrismV, KBFormat: utils.KBFormatVersion}
 }
 
 func analysisArtifacts(dir string, cfg *config.Config) (map[string]analysisArtifact, error) {
 	// The parser's checksum and the files consumed by embedding/retrieval.
-	names := []string{utils.ChecksumFileName, "kb.json", "kb_index.json", "kb_call_graph.json"}
+	names := []string{utils.ChecksumFileName, "kb.fb", "kb_index.fb", "kb_call_graph.fb"}
 	if needsEmbeddings(cfg) {
 		names = append(names, "embeddings.bin", "vectors.bin")
 	}

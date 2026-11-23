@@ -14,7 +14,6 @@ package retrieval
 import (
 	"bufio"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -26,6 +25,7 @@ import (
 	"time"
 
 	"eulix/internal/checksum"
+	"eulix/internal/kbfile"
 	"eulix/internal/query/retrieval/mmap"
 	"eulix/internal/utils"
 )
@@ -42,11 +42,11 @@ const (
 	// 320k chunks), so a corrupt metadata block can't reserve gigabytes.
 	// Larger corpora still load: append grows the slice past it.
 	maxChunkPrealloc = 320_000
-	// minChunkPrealloc is used when kb.json has no usable metadata totals.
+	// minChunkPrealloc is used when kb.fb has no usable metadata totals.
 	minChunkPrealloc = 1_024
 )
 
-// chunkCapacity sizes cb.chunks from kb.json's own totals. Each function,
+// chunkCapacity sizes cb.chunks from kb.fb's own totals. Each function,
 // class and class method becomes one chunk (addChunksFromFile), so their sum
 // is an upper bound; files the servable filter drops only make it looser.
 // The old fixed 320k reservation cost ~46 MB per builder however small the
@@ -99,8 +99,8 @@ func (cb *ContextBuilder) logFileLoad(name string) func(error) {
 // they benefit from the same mmap-backed streaming-decode behaviour
 // as the ContextBuilder loaders below.
 
-// loadChunks is the primary loader: streams kb_index.json and
-// kb.json, builds the chunk slice, and populates all derived
+// loadChunks is the primary loader: reads kb_index.fb, streams
+// kb.fb, builds the chunk slice, and populates all derived
 // indices (boilerplate detector, symbol index, inverted index).
 //
 // Replaces the previous loadKnowledgeBase + loadChunksFromKB pair,
@@ -116,15 +116,14 @@ func (cb *ContextBuilder) logFileLoad(name string) func(error) {
 // always carry their Content inline, which is the right tradeoff
 // for search use cases.
 func (cb *ContextBuilder) loadChunks() error {
-	done := cb.logFileLoad("kb_index.json")
-	var ref utils.IndexDataRef
-	err := mmap.DecodeJSONFile(filepath.Join(cb.eulixDir, "kb_index.json"), &ref)
+	done := cb.logFileLoad(kbfile.IndexFile)
+	idx, err := kbfile.ReadIndex(filepath.Join(cb.eulixDir, kbfile.IndexFile))
 	done(err)
 	if err != nil {
-		return fmt.Errorf("kb_index.json: %w", err)
+		return fmt.Errorf("%s: %w", kbfile.IndexFile, err)
 	}
 
-	cb.kbIdx = ref.Indices
+	cb.kbIdx = idx
 	cb.debugLog.Log("kbIdx FunctionsByName len=%d", len(cb.kbIdx.FunctionsByName))
 
 	// lazyContent must be set BEFORE streamKBChunks so addChunksFromFile
@@ -132,7 +131,7 @@ func (cb *ContextBuilder) loadChunks() error {
 	cb.lazyContent = false
 
 	if err := cb.streamKBChunks(); err != nil {
-		return fmt.Errorf("kb.json: %w", err)
+		return fmt.Errorf("%s: %w", kbfile.KBFile, err)
 	}
 
 	cb.buildDerivedIndices()
@@ -150,100 +149,30 @@ func (cb *ContextBuilder) loadChunks() error {
 	return nil
 }
 
-// streamKBChunks opens kb.json with a buffered reader and walks the
-// JSON token-by-token, building chunks as each FileData is decoded.
-// The full utils.KnowledgeBaseRef struct is never materialised:
-// FileData is decoded, passed to addChunksFromFile, and goes out of
-// scope at the end of each iteration. cleanup closes the file.
-//
-// Why a hybrid (encoding/json + sonic)?
-//
-//   - json.NewDecoder is used for the outer token walk because
-//     sonic's streaming decoder doesn't expose Token()/More().
-//   - The inner FileData is decoded with sonicCopy.Unmarshal for
-//     JIT-speed field access (3-5× faster than encoding/json on
-//     large structs).
-//
-// Why a buffered reader + json.NewDecoder (and not os.ReadFile,
-// or mmap)?
-//
-//   - For a 4 GB file, os.ReadFile allocates 4 GB of heap for the
-//     raw bytes. json.NewDecoder reads one FileData at a time, so
-//     only the parsed chunks stay on the heap.
-//   - json.NewDecoder copies every byte into its own buffer, so a
-//     mapping saves no copy, and every mapped page it passes stays
-//     resident until unmap. On a 178 MB kb.json, mmap peaked at
-//     212 MB and the buffered read at 31 MB (see OpenForSequentialRead).
+// streamKBChunks walks kb.fb front to back (kbfile.WalkKB), building
+// chunks as each file's record is decoded. The whole knowledge base is never
+// materialised: one record is decoded, passed to addChunksFromFile, and goes
+// out of scope. The file is read through a buffered reader, not mapped:
+// every mapped page the walk passed would stay resident until unmap (on a
+// 178 MB kb.json the mapped walk peaked at 212 MB and the buffered one at 31 MB;
+// see mmap.OpenForSequentialRead).
 func (cb *ContextBuilder) streamKBChunks() error {
-	path := filepath.Join(cb.eulixDir, "kb.json")
-
-	r, cleanup, err := mmap.OpenForSequentialRead(path)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	// encoding/json required here: sonic's decoder doesn't
-	// implement Token()/More() streaming. using stdlib for the
-	// token walk and sonic only for the inner FileData decode.
-	dec := json.NewDecoder(r)
-
-	// The parser writes "metadata" before "structure"; its totals size the
-	// chunk slice. If it is missing or unreadable, start small and let
-	// append grow.
-	var meta *utils.Metadata
-	if err := jsonSkipToKey(dec, "structure", func(key string, raw json.RawMessage) {
-		if key != "metadata" {
-			return
-		}
-		var m utils.Metadata
-		if json.Unmarshal(raw, &m) == nil {
-			meta = &m
-		}
-	}); err != nil {
-		return fmt.Errorf("finding 'structure' key: %w", err)
-	}
-	if _, err := dec.Token(); err != nil {
-		return fmt.Errorf("reading structure opening brace: %w", err)
-	}
-
-	cb.chunks = make([]Chunk, 0, chunkCapacity(meta))
-	cb.debugLog.Log("[LOAD] chunk slice preallocated for %d chunks", cap(cb.chunks))
+	path := filepath.Join(cb.eulixDir, kbfile.KBFile)
 	servable := checksum.ServableMatcher(cb.sourceRoot)
-
-	for dec.More() {
-		tok, err := dec.Token()
-		if err != nil {
-			return fmt.Errorf("reading file path token: %w", err)
-		}
-		filePath, ok := tok.(string)
-		if !ok {
-			return fmt.Errorf("expected string key, got %T", tok)
-		}
-
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			return fmt.Errorf("reading FileData for %s: %w", filePath, err)
-		}
-		if !servable(filePath) {
-			cb.debugLog.Log("[LOAD] skipping %s: hidden, .euignore'd or outside the source root", filePath)
-			continue
-		}
-
-		// Decode the FileData with sonic for JIT-speed field
-		// access. The raw byte slice is a sub-slice of the
-		// decoder's internal buffer; sonicCopy copies all
-		// decoded strings out before we move to the next
-		// iteration, so the source can be safely reused.
-		var fs utils.FileData
-		if err := mmap.SonicCopy.Unmarshal(raw, &fs); err != nil {
-			return fmt.Errorf("decoding FileData for %s: %w ", filePath, err)
-		}
-		cb.addChunksFromFile(filePath, &fs)
-		fs = utils.FileData{}
-	}
-
-	return nil
+	return kbfile.WalkKB(path,
+		func(meta *utils.Metadata) {
+			// The header's totals size the chunk slice.
+			cb.chunks = make([]Chunk, 0, chunkCapacity(meta))
+			cb.debugLog.Log("[LOAD] chunk slice preallocated for %d chunks", cap(cb.chunks))
+		},
+		func(filePath string, fd *utils.FileData) error {
+			if !servable(filePath) {
+				cb.debugLog.Log("[LOAD] skipping %s: hidden, .euignore'd or outside the source root", filePath)
+				return nil
+			}
+			cb.addChunksFromFile(filePath, fd)
+			return nil
+		})
 }
 
 // buildDerivedIndices populates the boilerplate detector, symbol
@@ -389,13 +318,12 @@ func FilterServableCallGraph(ref *utils.CallGraphRef, projectPath string) {
 	ref.Edges = edges
 }
 
-// loadAndIndexCallGraph loads kb_call_graph.json and builds the
+// loadAndIndexCallGraph loads kb_call_graph.fb and builds the
 // inter-procedural call graph used by call graph expansion during
 // retrieval. Gracefully skips if the file is absent or malformed.
 func (cb *ContextBuilder) loadAndIndexCallGraph() {
-	done := cb.logFileLoad("kb_call_graph.json")
-	var cg utils.CallGraphRef
-	err := mmap.DecodeJSONFile(filepath.Join(cb.eulixDir, "kb_call_graph.json"), &cg)
+	done := cb.logFileLoad(kbfile.CallGraphFile)
+	ref, err := kbfile.ReadCallGraph(filepath.Join(cb.eulixDir, kbfile.CallGraphFile))
 	done(err)
 	if err != nil {
 		cb.hasCallGraph = false
@@ -403,6 +331,7 @@ func (cb *ContextBuilder) loadAndIndexCallGraph() {
 		return
 	}
 
+	cg := *ref
 	FilterServableCallGraph(&cg, cb.sourceRoot)
 	cb.cgRef = &cg
 

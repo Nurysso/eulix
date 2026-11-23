@@ -9,7 +9,7 @@ This file is responsible for handling/Generating Prompts with CoT.
 package query
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"eulix/internal/checksum"
+	"eulix/internal/kbfile"
 	c "eulix/internal/query/classifier"
 	"eulix/internal/utils"
 )
@@ -303,7 +304,7 @@ func (r *Router) handleDependency(query string, _ *c.Classification) (string, er
 		return "Could not identify an entity for dependency analysis.", nil
 	}
 
-	deps, err := readExternalDeps(filepath.Join(r.eulixDir, "kb_external_deps.json"))
+	deps, err := kbfile.ReadExternalDeps(filepath.Join(r.eulixDir, kbfile.ExternalDepsFile))
 	if err != nil {
 		return "", fmt.Errorf("could not load external deps: %w", err)
 	}
@@ -442,16 +443,10 @@ var projectMetricsKwRegex = regexp.MustCompile(`(?i)\b(project|overall|summary|t
 
 // handleMetrics for project-wide summary and per-symbol lookup.
 func (r *Router) handleMetrics(query string, class *c.Classification) (string, error) {
-	metricsPath := filepath.Join(r.config.Project.Path, utils.EulixDir, "kb_metrics.json")
-
-	data, err := os.ReadFile(metricsPath)
+	metricsPath := filepath.Join(r.config.Project.Path, utils.EulixDir, kbfile.MetricsFile)
+	ref, err := kbfile.ReadMetrics(metricsPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read metrics file at %s: %w", metricsPath, err)
-	}
-
-	var ref utils.MetricsReport
-	if err := json.Unmarshal(data, &ref); err != nil {
-		return "", fmt.Errorf("failed to parse metrics JSON: %w", err)
+		return "", fmt.Errorf("failed to load metrics: %w", err)
 	}
 
 	servable := checksum.ServableMatcher(r.config.Project.Path)
@@ -500,15 +495,10 @@ func (r *Router) handleMetrics(query string, class *c.Classification) (string, e
 }
 
 func (r *Router) handleEntryPoints(_ string, _ *c.Classification) (string, error) {
-	entryPath := filepath.Join(r.config.Project.Path, utils.EulixDir, "kb_entry_points.json")
-	data, err := os.ReadFile(entryPath)
+	entryPath := filepath.Join(r.config.Project.Path, utils.EulixDir, kbfile.EntryPointsFile)
+	entryPoints, err := kbfile.ReadEntryPoints(entryPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read entry points at %s: %w", entryPath, err)
-	}
-
-	var ref utils.EntryPointsRef
-	if err := json.Unmarshal(data, &ref); err != nil {
-		return "", fmt.Errorf("failed to parse kb_entry_points.json: %w", err)
+		return "", fmt.Errorf("failed to load entry points: %w", err)
 	}
 
 	var b strings.Builder
@@ -516,7 +506,7 @@ func (r *Router) handleEntryPoints(_ string, _ *c.Classification) (string, error
 
 	servable := checksum.ServableMatcher(r.config.Project.Path)
 	byType := make(map[string][]utils.EntryPoint)
-	for _, ep := range slices.DeleteFunc(ref.EntryPoints, func(ep utils.EntryPoint) bool { return !servable(ep.File) }) {
+	for _, ep := range slices.DeleteFunc(entryPoints, func(ep utils.EntryPoint) bool { return !servable(ep.File) }) {
 		byType[ep.EntryType] = append(byType[ep.EntryType], ep)
 	}
 
@@ -553,8 +543,8 @@ func (r *Router) handleEntryPoints(_ string, _ *c.Classification) (string, error
 
 func (r *Router) handleFileStructure(query string) (string, error) {
 	if err := r.ensureKB(); err != nil {
-		if os.IsNotExist(err) {
-			return "Full KB (kb.json) not loaded — file structure query requires it.", nil
+		if errors.Is(err, os.ErrNotExist) {
+			return "Full KB (kb.fb) not loaded — file structure query requires it.", nil
 		}
 		return "", fmt.Errorf("could not load full KB: %w", err)
 	}
@@ -593,8 +583,8 @@ func (r *Router) handleFileStructure(query string) (string, error) {
 
 func (r *Router) handleTodosQuery(_ string, _ *c.Classification) (string, error) {
 	if err := r.ensureKB(); err != nil {
-		if os.IsNotExist(err) {
-			return "Full KB (kb.json) not loaded — TODO query requires it.", nil
+		if errors.Is(err, os.ErrNotExist) {
+			return "Full KB (kb.fb) not loaded — TODO query requires it.", nil
 		}
 		return "", fmt.Errorf("could not load full KB: %w", err)
 	}

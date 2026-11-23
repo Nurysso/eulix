@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"eulix/internal/kbfile"
 	"eulix/internal/mcp"
 	"eulix/internal/utils"
 
@@ -51,7 +52,7 @@ Communication modes:
 		} else if targetRepo == "" {
 			// If cwd is an initialized eulix project, default to it
 			if cwd, err := os.Getwd(); err == nil {
-				kbPath := filepath.Join(cwd, utils.EulixDir, "kb.json")
+				kbPath := filepath.Join(cwd, utils.EulixDir, kbfile.KBFile)
 				if _, err := os.Stat(kbPath); err == nil {
 					targetRepo = cwd
 				}

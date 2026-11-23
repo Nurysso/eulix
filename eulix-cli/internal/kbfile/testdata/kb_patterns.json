@@ -1,0 +1,7 @@
+{
+  "format_version": 1,
+  "patterns": {
+    "naming_convention": "snake_case",
+    "structure_type": "Flat"
+  }
+}
