@@ -27,10 +27,12 @@ env:
 jobs:
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       cli: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.cli == 'true' }}
       embed: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.embed == 'true' }}
       viz: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.viz == 'true' }}
+      schema: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.schema == 'true' }}
       # JSON list of the Rust crates to test, e.g. ["libeulix","eulix-parser"].
       rust: ${{ github.event_name == 'workflow_dispatch' && '["libeulix","eulix-parser","eulix-lsp"]' || steps.rust.outputs.changes }}
     steps:
@@ -51,6 +53,18 @@ jobs:
             viz:
               - *workflow
               - 'vizEulize/**'
+              # fb.test.mjs decodes the parser's fixture against the schema
+              - 'schema/call_graph.fbs'
+              - 'eulix-cli/internal/kbfile/testdata/kb_call_graph.*'
+            schema:
+              - *workflow
+              - 'schema/**'
+              - 'scripts/gen_flatbuffers.sh'
+              - 'scripts/check_fb_json.py'
+              - 'libeulix/**'
+              - 'eulix-parser/**'
+              - 'eulix-cli/internal/fb/**'
+              - 'eulix-embed/fb/**'
       # Filter names are the crate folders, so `changes` is the matrix list.
       # eulix-parser and eulix-lsp depend on libeulix, so its changes test all three.
       - uses: dorny/paths-filter@v3
@@ -70,11 +84,47 @@ jobs:
               - 'libeulix/**'
               - 'eulix-lsp/**'
 
+  # FlatBuffers: the committed generated code must match schema/*.fbs, and every
+  # --emit-json copy must equal flatc's decoding of its .fb file.
+  schema:
+    needs: changes
+    if: needs.changes.outputs.schema == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FLATC_VERSION: '25.12.19' # keep in step with scripts/gen_flatbuffers.sh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Install flatc
+        run: |
+          curl -fsSL -o flatc.zip "https://github.com/google/flatbuffers/releases/download/v${FLATC_VERSION}/Linux.flatc.binary.g%2B%2B-13.zip"
+          mkdir -p "$HOME/.local/bin" && unzip -q flatc.zip -d "$HOME/.local/bin"
+          chmod +x "$HOME/.local/bin/flatc"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Generated code is up to date
+        run: scripts/gen_flatbuffers.sh --check
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: eulix-parser
+      - name: JSON copies match the binary files
+        run: |
+          cd eulix-parser && cargo build --release
+          out="$RUNNER_TEMP/kb"
+          mkdir -p "$out"
+          ./target/release/eulix_parser -r .. -o "$out/kb.json" -t 4 -p 2 --emit-json
+          python3 ../scripts/check_fb_json.py "$out"
+
   eulix-cli:
     name: eulix-cli (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.cli == 'true'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -114,6 +164,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust != '[]'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -144,6 +195,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.embed == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -167,6 +219,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.viz == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -184,3 +237,23 @@ jobs:
             exit 0
           fi
           node --test "${tests[@]}"
+
+  # One check that sums up the run: green only when every job that ran passed.
+  # Jobs skipped because their files didn't change count as OK, so this is the
+  # single status to require in branch protection and to show in the README badge.
+  # It runs even when upstream jobs are skipped (`if: always()`) and fails only on
+  # a real failure or cancellation.
+  ci:
+    name: CI
+    if: always()
+    needs: [changes, schema, eulix-cli, rust, eulix-embed, vizEulize]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every test job to have passed or been skipped
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "A required job failed or was cancelled:"
+          echo '${{ toJSON(needs) }}'
+          exit 1
+      - run: echo "All affected test jobs passed."

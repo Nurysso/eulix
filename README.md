@@ -9,6 +9,7 @@
 
 Ask *who calls this* or *how does A reach B* and get one complete answer from the call graph, on your machine, with no build step or GPU.
 
+[![CI](https://img.shields.io/github/actions/workflow/status/Nurysso/eulix/Test.yaml?branch=main&style=for-the-badge&labelColor=1A2030&label=CI)](https://github.com/Nurysso/eulix/actions/workflows/Test.yaml)
 [![Version](https://img.shields.io/badge/version-v0.9.0-A78BFA?style=for-the-badge&labelColor=1A2030)](changelog.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-5EEAD4?style=for-the-badge&labelColor=1A2030)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio_server-A78BFA?style=for-the-badge&labelColor=1A2030)](docs/eulix-cli/mcp/Overview.md)
