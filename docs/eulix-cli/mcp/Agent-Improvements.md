@@ -111,7 +111,7 @@ That's about 120 tokens instead of ~5,600, and the agent has nothing to re-check
 | explain a concept | ~1,500 |
 | trace a flow | ~2,000 |
 
-Measured points: with the budgets above (`max_tokens = 8192`, typed tools), Opus 4.8 on all 15 bifrost tasks cost 22% less than plain. Earlier, replies of ~2,200 tokens (`max_tokens = 4200`) on Opus deep traces cut the Eulix overhead on the tasks it didn't win to about +10% tokens, from +40% in the Sonnet runs. That run changed other things too (see the use-cases doc).
+Measured points: with the budgets above (`max_tokens = 8192`, typed tools), Opus 4.8 on all 15 bifrost tasks cost 22% less than plain, and Opus 5.5 (2–3 sessions per task) cost 10% less and took 10% less time, with or without the hint ([run](../../../bench/results/agent/2026-11-23-opus55-bifrost/SUMMARY.md)). Earlier, replies of ~2,200 tokens (`max_tokens = 4200`) on Opus deep traces cut the Eulix overhead on the tasks it didn't win to about +10% tokens, from +40% in the Sonnet runs. That run changed other things too (see the use-cases doc).
 
 **E. Chunk by symbol, and send skeletons before bodies.**
 - Never return a chunk larger than one function or method. A class becomes its signature plus a list of its methods.

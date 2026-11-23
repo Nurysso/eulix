@@ -111,6 +111,6 @@ A call through a struct field (`h.client.ChatCompletionRequest(...)`), a gorouti
 - The first version cost more than grep. Say so when comparing with older numbers.
 
 ## Data
-- Per-run reports, every answer and the grading rubric: `bench/results/agent/2026-11-20-sonnet/`, `…-sonnet-bifrost/`, `…-sonnet-low-bifrost/`, `…-opus48-deep-t4200/`, `…-sonnet55-low-mcp2/`, `…-bifrost-chain-medium/`, `…-opus48-bifrost/`
+- Per-run summaries: [`2026-11-23-opus55-bifrost`](../../bench/results/agent/2026-11-23-opus55-bifrost/SUMMARY.md), [`…-opus48-bifrost`](../../bench/results/agent/2026-11-20-opus48-bifrost/SUMMARY.md), [`…-bifrost-chain-medium`](../../bench/results/agent/2026-11-20-bifrost-chain-medium/SUMMARY.md), [`…-sonnet55-low-mcp2`](../../bench/results/agent/2026-11-20-sonnet55-low-mcp2/SUMMARY.md)
 - Tasks and ground truth: [`bench/agent/tasks.toml`](../../bench/agent/tasks.toml)
 - Harness: [`bench/agent/agent_bench.py`](../../bench/agent/agent_bench.py)

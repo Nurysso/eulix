@@ -99,8 +99,6 @@ Placeholders: `config` prints "coming soon", and `checksum` is deprecated and pr
 | `embed` | `[args...]` | Pass-through to `eulix_embed` inside the managed environment. |
 | `parser` | `[args...]` | Pass-through to the embedded `eulix_parser`. |
 
-The `glados` and `aspirine` repair commands were removed from the command list. Their code remains in `internal/fixers` but is not connected.
-
 ## Configuration
 
 `eulix init` writes `eulix.toml`. Every key is optional; missing values take the defaults shown, and numbers outside their valid range are clamped silently. API keys should come from environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` and so on, or `LLM_API_KEY`) or from a `.env` file in the project, not from this file. Full reference: [Config](../docs/eulix-cli/Config.md).

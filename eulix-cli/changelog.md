@@ -12,6 +12,10 @@
 
 ### Changed
 
+- **Every knowledge-base file is read as FlatBuffers.** The knowledge base (`kb.fb`, streamed one record at a time by `kbfile.WalkKB`), entry points, metrics, external dependencies, the index and the call graph come from the new `.fb` outputs through `internal/kbfile` (large files are memory-mapped with the new `mmap.WithFileBytes`), which checks the file identifier and format version and reports a corrupt or old file as "run 'eulix analyze'" instead of panicking.
+- **`eulix vizeulize` serves `kb_call_graph.fb`** at `/data/call_graph.fb`, and the page decodes it. The JSON route is gone. Nodes from hidden or `.euignore`d files are still left out: when there are any, the CLI writes a trimmed FlatBuffer (`kbfile.ViewerCallGraph`), otherwise it sends the file's bytes unchanged. `--graph` now takes a `.fb` file.
+- **The checksum baseline is `checksum.fb.zst`.** The detector decodes the FlatBuffer; an older zstd-JSON baseline counts as a first run.
+- **The analysis marker records the knowledge-base format** (`kb_format`), so an `.eulix/` folder from an older version makes `eulix analyze` run again.
 - "What calls X?", "where is X used", "X is called by", "callers of X" and "what does X call" are classified as call-graph questions. `usage of X` lists X's call sites instead of its definition.
 - The MCP `query` tool answers callers and definition questions from the index before ranked retrieval, and its quality gate rejects a callers answer that lists no call sites.
 - The MCP lexical fallback lists one line per hit with its enclosing function (5 per file), capped at ~2,000 tokens instead of 24 KB of 7-line windows.
@@ -19,6 +23,11 @@
 - `query_with_cot` / `query_without_cot` are deprecated; they keep their old output for the retrieval benchmark. Use `search` (`format: "cot"`).
 - Interface-method nodes (`ifacemethod_`) are named like other symbols in call-graph output.
 - `install.sh` and `install.ps1` no longer ask which build to install. They install the NVIDIA build when they find an NVIDIA GPU with its driver (`nvidia-smi`, the loaded kernel module, or on Windows an NVIDIA display adapter) and the CPU build otherwise. An NVIDIA GPU without a driver gets the CPU build and a warning. `EULIX_GPU=cpu|nvidia` skips detection.
+
+### Removed
+
+- **`internal/fixers` and the `glados` and `aspirine` commands**, which were deprecated, unregistered and read files that no longer exist.
+- **The JSON knowledge-base decoder.** `DecodeJSONFile`, `DecodeViaMmap`, the Sonic pre-compilation and `FlushPretouchLogs` are gone, and with them the `bytedance/sonic` dependency and its five indirect dependencies. The `mmap` package now also builds on Plan 9.
 
 ## Eulix CLI 0.9.0 - 2026-11-17
 

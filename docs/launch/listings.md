@@ -164,7 +164,7 @@ Smithery's old docs (`smithery.ai/docs`) return 404, and the site now says *"Smi
 
 ## A note on the token-savings claim
 
-The first agent benchmark (`bench/agent/`, run `2026-11-20-sonnet`: 10 tasks on Flask, Django and ripgrep, Claude Sonnet 5.5, 5 reps per setup) found **no token saving**: with a "query Eulix first" hint the agent made 31% fewer tool calls but cost 18% more. That was the single `query` tool with ~5,700-token replies.
+The first agent benchmark (`bench/agent/`: 10 tasks on Flask, Django and ripgrep, Claude Sonnet 5.5, 5 reps per setup) found **no token saving**: with a "query Eulix first" hint the agent made 31% fewer tool calls but cost 18% more. That was the single `query` tool with ~5,700-token replies.
 
 After the typed tools (`callers`, `callees`, `definition`, `trace`, `search`) and reply budgets, Claude Code on bifrost (a 1.6M-line Go repo newer than the model's training data) cost less with Eulix and the `eulix mcp install` hint:
 - **Opus 4.8**, one session per task, 15 tasks: **−22% cost** ($8.67 to $6.78), 14/15 correct against 13/15 (`2026-11-20-opus48-bifrost`).
