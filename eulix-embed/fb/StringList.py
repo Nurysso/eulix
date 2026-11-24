@@ -75,12 +75,6 @@ def StringListStartValuesVector(builder, numElems):
 def StartValuesVector(builder, numElems):
     return StringListStartValuesVector(builder, numElems)
 
-def StringListCreateValuesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateValuesVector(builder, data):
-    StringListCreateValuesVector(builder, data)
-
 def StringListEnd(builder):
     return builder.EndObject()
 

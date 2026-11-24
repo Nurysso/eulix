@@ -184,12 +184,6 @@ def IndicesStartFunctionsByNameVector(builder, numElems):
 def StartFunctionsByNameVector(builder, numElems):
     return IndicesStartFunctionsByNameVector(builder, numElems)
 
-def IndicesCreateFunctionsByNameVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateFunctionsByNameVector(builder, data):
-    IndicesCreateFunctionsByNameVector(builder, data)
-
 def IndicesAddFunctionsCalling(builder, functionsCalling):
     builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(functionsCalling), 0)
 
@@ -201,12 +195,6 @@ def IndicesStartFunctionsCallingVector(builder, numElems):
 
 def StartFunctionsCallingVector(builder, numElems):
     return IndicesStartFunctionsCallingVector(builder, numElems)
-
-def IndicesCreateFunctionsCallingVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateFunctionsCallingVector(builder, data):
-    IndicesCreateFunctionsCallingVector(builder, data)
 
 def IndicesAddFunctionsByTag(builder, functionsByTag):
     builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(functionsByTag), 0)
@@ -220,12 +208,6 @@ def IndicesStartFunctionsByTagVector(builder, numElems):
 def StartFunctionsByTagVector(builder, numElems):
     return IndicesStartFunctionsByTagVector(builder, numElems)
 
-def IndicesCreateFunctionsByTagVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateFunctionsByTagVector(builder, data):
-    IndicesCreateFunctionsByTagVector(builder, data)
-
 def IndicesAddTypesByName(builder, typesByName):
     builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(typesByName), 0)
 
@@ -238,12 +220,6 @@ def IndicesStartTypesByNameVector(builder, numElems):
 def StartTypesByNameVector(builder, numElems):
     return IndicesStartTypesByNameVector(builder, numElems)
 
-def IndicesCreateTypesByNameVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateTypesByNameVector(builder, data):
-    IndicesCreateTypesByNameVector(builder, data)
-
 def IndicesAddFilesByCategory(builder, filesByCategory):
     builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(filesByCategory), 0)
 
@@ -255,12 +231,6 @@ def IndicesStartFilesByCategoryVector(builder, numElems):
 
 def StartFilesByCategoryVector(builder, numElems):
     return IndicesStartFilesByCategoryVector(builder, numElems)
-
-def IndicesCreateFilesByCategoryVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateFilesByCategoryVector(builder, data):
-    IndicesCreateFilesByCategoryVector(builder, data)
 
 def IndicesEnd(builder):
     return builder.EndObject()

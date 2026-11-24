@@ -84,12 +84,6 @@ def ExternalDepsStartExternalDependenciesVector(builder, numElems):
 def StartExternalDependenciesVector(builder, numElems):
     return ExternalDepsStartExternalDependenciesVector(builder, numElems)
 
-def ExternalDepsCreateExternalDependenciesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateExternalDependenciesVector(builder, data):
-    ExternalDepsCreateExternalDependenciesVector(builder, data)
-
 def ExternalDepsEnd(builder):
     return builder.EndObject()
 

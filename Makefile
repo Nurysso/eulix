@@ -380,7 +380,7 @@ kb-diff:
 kb-field-usage:
 	$(RUN_IN_CALLER) uv run $(SCRIPTS_DIR)/kb_field_usage.py $(ARGS)
 
-# FlatBuffers code generation (needs flatc 25.12.19). schema-check fails when
+# FlatBuffers code generation (the script fetches flatc 25.12.19). schema-check fails when
 # the committed generated code is out of date.
 schema:
 	bash $(SCRIPTS_DIR)/gen_flatbuffers.sh

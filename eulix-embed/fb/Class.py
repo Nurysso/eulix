@@ -183,12 +183,6 @@ def ClassStartBasesVector(builder, numElems):
 def StartBasesVector(builder, numElems):
     return ClassStartBasesVector(builder, numElems)
 
-def ClassCreateBasesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateBasesVector(builder, data):
-    ClassCreateBasesVector(builder, data)
-
 def ClassAddDocstring(builder, docstring):
     builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(docstring), 0)
 
@@ -219,12 +213,6 @@ def ClassStartMethodsVector(builder, numElems):
 def StartMethodsVector(builder, numElems):
     return ClassStartMethodsVector(builder, numElems)
 
-def ClassCreateMethodsVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateMethodsVector(builder, data):
-    ClassCreateMethodsVector(builder, data)
-
 def ClassAddAttributes(builder, attributes):
     builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(attributes), 0)
 
@@ -237,12 +225,6 @@ def ClassStartAttributesVector(builder, numElems):
 def StartAttributesVector(builder, numElems):
     return ClassStartAttributesVector(builder, numElems)
 
-def ClassCreateAttributesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateAttributesVector(builder, data):
-    ClassCreateAttributesVector(builder, data)
-
 def ClassAddDecorators(builder, decorators):
     builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(decorators), 0)
 
@@ -254,12 +236,6 @@ def ClassStartDecoratorsVector(builder, numElems):
 
 def StartDecoratorsVector(builder, numElems):
     return ClassStartDecoratorsVector(builder, numElems)
-
-def ClassCreateDecoratorsVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateDecoratorsVector(builder, data):
-    ClassCreateDecoratorsVector(builder, data)
 
 def ClassEnd(builder):
     return builder.EndObject()

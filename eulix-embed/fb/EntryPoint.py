@@ -144,12 +144,6 @@ def EntryPointStartMethodsVector(builder, numElems):
 def StartMethodsVector(builder, numElems):
     return EntryPointStartMethodsVector(builder, numElems)
 
-def EntryPointCreateMethodsVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateMethodsVector(builder, data):
-    EntryPointCreateMethodsVector(builder, data)
-
 def EntryPointEnd(builder):
     return builder.EndObject()
 

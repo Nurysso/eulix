@@ -101,12 +101,6 @@ def MetricsStartTopComplexFunctionsVector(builder, numElems):
 def StartTopComplexFunctionsVector(builder, numElems):
     return MetricsStartTopComplexFunctionsVector(builder, numElems)
 
-def MetricsCreateTopComplexFunctionsVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateTopComplexFunctionsVector(builder, data):
-    MetricsCreateTopComplexFunctionsVector(builder, data)
-
 def MetricsEnd(builder):
     return builder.EndObject()
 

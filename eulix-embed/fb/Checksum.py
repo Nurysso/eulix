@@ -137,12 +137,6 @@ def ChecksumStartFilesVector(builder, numElems):
 def StartFilesVector(builder, numElems):
     return ChecksumStartFilesVector(builder, numElems)
 
-def ChecksumCreateFilesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateFilesVector(builder, data):
-    ChecksumCreateFilesVector(builder, data)
-
 def ChecksumAddLastAnalyzed(builder, lastAnalyzed):
     builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(lastAnalyzed), 0)
 

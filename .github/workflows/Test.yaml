@@ -91,20 +91,13 @@ jobs:
     if: needs.changes.outputs.schema == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      FLATC_VERSION: '25.12.19' # keep in step with scripts/gen_flatbuffers.sh
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
-      - name: Install flatc
-        run: |
-          curl -fsSL -o flatc.zip "https://github.com/google/flatbuffers/releases/download/v${FLATC_VERSION}/Linux.flatc.binary.g%2B%2B-13.zip"
-          mkdir -p "$HOME/.local/bin" && unzip -q flatc.zip -d "$HOME/.local/bin"
-          chmod +x "$HOME/.local/bin/flatc"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # The script downloads Google's pinned flatc release binary itself.
       - name: Generated code is up to date
         run: scripts/gen_flatbuffers.sh --check
       - uses: dtolnay/rust-toolchain@stable

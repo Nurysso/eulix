@@ -20,15 +20,35 @@ RUST_OUT="$ROOT/libeulix/src/fb"
 GO_OUT="$ROOT/eulix-cli/internal/fb"
 PY_OUT="$ROOT/eulix-embed/fb"
 
-if ! command -v flatc >/dev/null 2>&1; then
-    echo "flatc not found; install flatbuffers $FLATC_VERSION (Arch: pacman -S flatbuffers)" >&2
-    exit 1
+# Always use Google's release binary, downloaded once into a cache dir. A distro
+# flatc can report the same version yet generate different code (Arch's
+# 25.12.19-4 adds Python Create*Vector helpers), which breaks --check in CI.
+# FLATC=/path/to/flatc overrides this, e.g. offline.
+if [[ -z "${FLATC:-}" ]]; then
+    case "$(uname -s)-$(uname -m)" in
+        Linux-x86_64) asset="Linux.flatc.binary.g++-13.zip" ;;
+        Darwin-arm64) asset="Mac.flatc.binary.zip" ;;
+        Darwin-x86_64) asset="MacIntel.flatc.binary.zip" ;;
+        *) echo "no flatc $FLATC_VERSION release binary for $(uname -sm); set FLATC" >&2; exit 1 ;;
+    esac
+    cache="${XDG_CACHE_HOME:-$HOME/.cache}/eulix/flatc-$FLATC_VERSION"
+    FLATC="$cache/flatc"
+    if [[ ! -x "$FLATC" ]]; then
+        echo "downloading flatc $FLATC_VERSION ($asset)" >&2
+        mkdir -p "$cache"
+        curl -fsSL -o "$cache/flatc.zip" \
+            "https://github.com/google/flatbuffers/releases/download/v$FLATC_VERSION/${asset//+/%2B}"
+        unzip -oq "$cache/flatc.zip" -d "$cache"
+        rm -f "$cache/flatc.zip"
+        chmod +x "$FLATC"
+    fi
 fi
-have="$(flatc --version | awk '{print $3}')"
+have="$("$FLATC" --version | awk '{print $3}')"
 if [[ "$have" != "$FLATC_VERSION" ]]; then
-    echo "flatc $have found, but the generated code is pinned to $FLATC_VERSION" >&2
+    echo "$FLATC is version $have, but the generated code is pinned to $FLATC_VERSION" >&2
     exit 1
 fi
+flatc() { "$FLATC" "$@"; }
 
 check=0
 [[ "${1:-}" == "--check" ]] && check=1

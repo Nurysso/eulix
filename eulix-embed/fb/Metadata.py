@@ -162,12 +162,6 @@ def MetadataStartLanguagesVector(builder, numElems):
 def StartLanguagesVector(builder, numElems):
     return MetadataStartLanguagesVector(builder, numElems)
 
-def MetadataCreateLanguagesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateLanguagesVector(builder, data):
-    MetadataCreateLanguagesVector(builder, data)
-
 def MetadataAddTotalFiles(builder, totalFiles):
     builder.PrependUint64Slot(6, totalFiles, 0)
 

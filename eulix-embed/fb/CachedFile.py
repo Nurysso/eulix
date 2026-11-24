@@ -203,12 +203,6 @@ def CachedFileStartRawImportsVector(builder, numElems):
 def StartRawImportsVector(builder, numElems):
     return CachedFileStartRawImportsVector(builder, numElems)
 
-def CachedFileCreateRawImportsVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateRawImportsVector(builder, data):
-    CachedFileCreateRawImportsVector(builder, data)
-
 def CachedFileAddEmitOffset(builder, emitOffset):
     builder.PrependUint64Slot(9, emitOffset, 0)
 

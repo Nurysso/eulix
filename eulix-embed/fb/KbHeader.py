@@ -101,12 +101,6 @@ def KbHeaderStartFilesVector(builder, numElems):
 def StartFilesVector(builder, numElems):
     return KbHeaderStartFilesVector(builder, numElems)
 
-def KbHeaderCreateFilesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateFilesVector(builder, data):
-    KbHeaderCreateFilesVector(builder, data)
-
 def KbHeaderEnd(builder):
     return builder.EndObject()
 

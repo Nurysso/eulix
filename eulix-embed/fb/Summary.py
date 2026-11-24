@@ -205,12 +205,6 @@ def SummaryStartLanguagesVector(builder, numElems):
 def StartLanguagesVector(builder, numElems):
     return SummaryStartLanguagesVector(builder, numElems)
 
-def SummaryCreateLanguagesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateLanguagesVector(builder, data):
-    SummaryCreateLanguagesVector(builder, data)
-
 def SummaryAddCategories(builder, categories):
     builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(categories), 0)
 
@@ -222,12 +216,6 @@ def SummaryStartCategoriesVector(builder, numElems):
 
 def StartCategoriesVector(builder, numElems):
     return SummaryStartCategoriesVector(builder, numElems)
-
-def SummaryCreateCategoriesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateCategoriesVector(builder, data):
-    SummaryCreateCategoriesVector(builder, data)
 
 def SummaryAddKeyFeatures(builder, keyFeatures):
     builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(keyFeatures), 0)
@@ -241,12 +229,6 @@ def SummaryStartKeyFeaturesVector(builder, numElems):
 def StartKeyFeaturesVector(builder, numElems):
     return SummaryStartKeyFeaturesVector(builder, numElems)
 
-def SummaryCreateKeyFeaturesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateKeyFeaturesVector(builder, data):
-    SummaryCreateKeyFeaturesVector(builder, data)
-
 def SummaryAddEntryPoints(builder, entryPoints):
     builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(entryPoints), 0)
 
@@ -258,12 +240,6 @@ def SummaryStartEntryPointsVector(builder, numElems):
 
 def StartEntryPointsVector(builder, numElems):
     return SummaryStartEntryPointsVector(builder, numElems)
-
-def SummaryCreateEntryPointsVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateEntryPointsVector(builder, data):
-    SummaryCreateEntryPointsVector(builder, data)
 
 def SummaryAddDependencies(builder, dependencies):
     builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(dependencies), 0)

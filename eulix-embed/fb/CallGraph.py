@@ -159,12 +159,6 @@ def CallGraphStartNodesVector(builder, numElems):
 def StartNodesVector(builder, numElems):
     return CallGraphStartNodesVector(builder, numElems)
 
-def CallGraphCreateNodesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateNodesVector(builder, data):
-    CallGraphCreateNodesVector(builder, data)
-
 def CallGraphAddEdges(builder, edges):
     builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(edges), 0)
 
@@ -176,12 +170,6 @@ def CallGraphStartEdgesVector(builder, numElems):
 
 def StartEdgesVector(builder, numElems):
     return CallGraphStartEdgesVector(builder, numElems)
-
-def CallGraphCreateEdgesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateEdgesVector(builder, data):
-    CallGraphCreateEdgesVector(builder, data)
 
 def CallGraphAddTags(builder, tags):
     builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(tags), 0)
@@ -195,12 +183,6 @@ def CallGraphStartTagsVector(builder, numElems):
 def StartTagsVector(builder, numElems):
     return CallGraphStartTagsVector(builder, numElems)
 
-def CallGraphCreateTagsVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateTagsVector(builder, data):
-    CallGraphCreateTagsVector(builder, data)
-
 def CallGraphAddFileCategories(builder, fileCategories):
     builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(fileCategories), 0)
 
@@ -212,12 +194,6 @@ def CallGraphStartFileCategoriesVector(builder, numElems):
 
 def StartFileCategoriesVector(builder, numElems):
     return CallGraphStartFileCategoriesVector(builder, numElems)
-
-def CallGraphCreateFileCategoriesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateFileCategoriesVector(builder, data):
-    CallGraphCreateFileCategoriesVector(builder, data)
 
 def CallGraphEnd(builder):
     return builder.EndObject()

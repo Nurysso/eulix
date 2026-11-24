@@ -86,12 +86,6 @@ def DependencyInfoStartStdlibVector(builder, numElems):
 def StartStdlibVector(builder, numElems):
     return DependencyInfoStartStdlibVector(builder, numElems)
 
-def DependencyInfoCreateStdlibVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateStdlibVector(builder, data):
-    DependencyInfoCreateStdlibVector(builder, data)
-
 def DependencyInfoAddThirdParty(builder, thirdParty):
     builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(thirdParty), 0)
 
@@ -103,12 +97,6 @@ def DependencyInfoStartThirdPartyVector(builder, numElems):
 
 def StartThirdPartyVector(builder, numElems):
     return DependencyInfoStartThirdPartyVector(builder, numElems)
-
-def DependencyInfoCreateThirdPartyVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateThirdPartyVector(builder, data):
-    DependencyInfoCreateThirdPartyVector(builder, data)
 
 def DependencyInfoEnd(builder):
     return builder.EndObject()

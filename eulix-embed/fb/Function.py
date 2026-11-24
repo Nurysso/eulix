@@ -138,12 +138,6 @@ def FunctionStartParamsVector(builder, numElems):
 def StartParamsVector(builder, numElems):
     return FunctionStartParamsVector(builder, numElems)
 
-def FunctionCreateParamsVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateParamsVector(builder, data):
-    FunctionCreateParamsVector(builder, data)
-
 def FunctionAddReturnType(builder, returnType):
     builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(returnType), 0)
 

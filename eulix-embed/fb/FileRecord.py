@@ -147,12 +147,6 @@ def FileRecordStartFunctionsVector(builder, numElems):
 def StartFunctionsVector(builder, numElems):
     return FileRecordStartFunctionsVector(builder, numElems)
 
-def FileRecordCreateFunctionsVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateFunctionsVector(builder, data):
-    FileRecordCreateFunctionsVector(builder, data)
-
 def FileRecordAddClasses(builder, classes):
     builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(classes), 0)
 
@@ -165,12 +159,6 @@ def FileRecordStartClassesVector(builder, numElems):
 def StartClassesVector(builder, numElems):
     return FileRecordStartClassesVector(builder, numElems)
 
-def FileRecordCreateClassesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateClassesVector(builder, data):
-    FileRecordCreateClassesVector(builder, data)
-
 def FileRecordAddTodos(builder, todos):
     builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(todos), 0)
 
@@ -182,12 +170,6 @@ def FileRecordStartTodosVector(builder, numElems):
 
 def StartTodosVector(builder, numElems):
     return FileRecordStartTodosVector(builder, numElems)
-
-def FileRecordCreateTodosVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateTodosVector(builder, data):
-    FileRecordCreateTodosVector(builder, data)
 
 def FileRecordEnd(builder):
     return builder.EndObject()

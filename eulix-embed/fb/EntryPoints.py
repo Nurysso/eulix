@@ -84,12 +84,6 @@ def EntryPointsStartEntryPointsVector(builder, numElems):
 def StartEntryPointsVector(builder, numElems):
     return EntryPointsStartEntryPointsVector(builder, numElems)
 
-def EntryPointsCreateEntryPointsVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateEntryPointsVector(builder, data):
-    EntryPointsCreateEntryPointsVector(builder, data)
-
 def EntryPointsEnd(builder):
     return builder.EndObject()
 

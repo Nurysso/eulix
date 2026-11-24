@@ -112,12 +112,6 @@ def ExternalDependencyStartUsedByVector(builder, numElems):
 def StartUsedByVector(builder, numElems):
     return ExternalDependencyStartUsedByVector(builder, numElems)
 
-def ExternalDependencyCreateUsedByVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateUsedByVector(builder, data):
-    ExternalDependencyCreateUsedByVector(builder, data)
-
 def ExternalDependencyAddImportCount(builder, importCount):
     builder.PrependUint64Slot(4, importCount, 0)
 

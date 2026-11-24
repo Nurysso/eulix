@@ -110,12 +110,6 @@ def ParseCacheIndexStartFilesVector(builder, numElems):
 def StartFilesVector(builder, numElems):
     return ParseCacheIndexStartFilesVector(builder, numElems)
 
-def ParseCacheIndexCreateFilesVector(builder, data):
-    return builder.CreateVectorOfTables(data)
-
-def CreateFilesVector(builder, data):
-    ParseCacheIndexCreateFilesVector(builder, data)
-
 def ParseCacheIndexEnd(builder):
     return builder.EndObject()
 
