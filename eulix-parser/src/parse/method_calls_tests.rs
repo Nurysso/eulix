@@ -130,6 +130,24 @@ fn slimming_keeps_what_go_receivers_need() {
     );
 }
 
+// A local declared from a call is typed by the callee's declared result
+// (`pipe := e.getPipe()`); both must outlive slimming.
+#[test]
+fn slimming_keeps_what_typed_locals_need() {
+    let structure = slimmed(&[(
+        "main.go",
+        "package main\n\ntype Pipe struct{}\n\nfunc (p *Pipe) Run() {}\n\ntype Engine struct{}\n\nfunc (e *Engine) getPipe() (*Pipe, error) { return nil, nil }\n\nfunc (e *Engine) Handle() {\n\tpipe, _ := e.getPipe()\n\tpipe.Run()\n}\n",
+    )]);
+    assert_eq!(
+        call_targets(
+            &structure,
+            &Default::default(),
+            "method_Engine_Handle::main.go"
+        ),
+        ["method_Engine_getPipe::main.go", "method_Pipe_Run::main.go"]
+    );
+}
+
 #[test]
 fn slimming_keeps_what_java_receivers_need() {
     let structure = slimmed(&[
@@ -176,7 +194,11 @@ fn slimming_keeps_nothing_else_for_go_and_java() {
             }
             for f in &class.methods {
                 assert!(f.signature.is_empty(), "{file}: signature");
-                assert!(f.return_type.is_empty(), "{file}: return type");
+                // A Go result types the locals declared from a call to it.
+                assert!(
+                    f.return_type.is_empty() || file.ends_with(".go"),
+                    "{file}: return type"
+                );
                 assert!(f.control_flow.branches.is_empty(), "{file}: control flow");
                 assert!(f.params.iter().all(|p| p.type_annotation.is_empty()));
                 for v in &f.variables {
@@ -198,4 +220,46 @@ fn slimming_keeps_nothing_else_for_go_and_java() {
     // Other languages keep no variables at all.
     let other = slimmed(&[("app.py", "def run(a):\n    b = a\n    return b\n")]);
     assert!(other["app.py"].functions[0].variables.is_empty());
+}
+
+// Agent-Improvements J: a send on a field channel links to the goroutine that
+// receives from it (bifrost: tryRequest -> pq.queue -> requestWorker), as an
+// inferred "async" edge that survives slimming. Local channels and fields
+// nobody sends on make no edge.
+#[test]
+fn go_field_channels_become_async_edges() {
+    let src = "package core\n\n\
+type Msg struct{}\n\
+type Queue struct {\n\tqueue chan Msg\n\titems []Msg\n}\n\
+type Bifrost struct{}\n\n\
+func (b *Bifrost) tryRequest(pq *Queue, m Msg) {\n\tselect {\n\tcase pq.queue <- m:\n\tdefault:\n\t}\n}\n\n\
+func (b *Bifrost) requestWorker(pq *Queue) {\n\tfor msg := range pq.queue {\n\t\t_ = msg\n\t}\n}\n\n\
+func drain(pq *Queue) {\n\t<-pq.queue\n}\n\n\
+func walkItems(pq *Queue) {\n\tfor _, it := range pq.items {\n\t\t_ = it\n\t}\n}\n\n\
+func local() {\n\tch := make(chan int)\n\tgo func() { ch <- 1 }()\n\t<-ch\n}\n";
+    let structure = slimmed(&[("core/bifrost.go", src)]);
+    let graph = build_call_graph_v2(&structure);
+    let mut asyncs: Vec<(String, String, usize)> = graph
+        .edges
+        .iter()
+        .filter(|e| e.edge_type == "async")
+        .map(|e| (e.from.clone(), e.to.clone(), e.call_site_line))
+        .collect();
+    asyncs.sort();
+    let ids: Vec<(&str, &str)> = asyncs
+        .iter()
+        .map(|(f, t, _)| (f.as_str(), t.as_str()))
+        .collect();
+    assert_eq!(ids.len(), 2, "{asyncs:?}");
+    assert!(
+        ids.iter().all(|(f, _)| f.contains("tryRequest")),
+        "{asyncs:?}"
+    );
+    assert!(
+        ids.iter().any(|(_, t)| t.contains("requestWorker")),
+        "{asyncs:?}"
+    );
+    assert!(ids.iter().any(|(_, t)| t.contains("drain")), "{asyncs:?}");
+    // The edge points at the send.
+    assert!(asyncs.iter().all(|(_, _, line)| *line == 12), "{asyncs:?}");
 }

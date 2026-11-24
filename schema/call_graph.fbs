@@ -20,7 +20,7 @@ table CallGraphNode {
 table CallGraphEdge {
   from:string;
   to:string;
-  edge_type:string;      // "call", "inherits", "uses"
+  edge_type:string;      // "call", "inheritance"; inferred (Go): "async", "dispatch", "inferred"
   conditional:bool;
   call_site_line:ulong;
 }
