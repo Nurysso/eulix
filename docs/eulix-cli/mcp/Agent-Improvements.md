@@ -103,5 +103,5 @@ The harness in `bench/agent/` measures all of this. Baselines are in `bench/resu
 - [Cutting agent cost](Agent-Cost-Savings.md): the later round (items N–S) and its data.
 - Benchmark method and limits: [`bench/agent/README.md`](../../../bench/agent/README.md).
 - Runs: [Sonnet 5.5 low](../../../bench/results/agent/2026-11-20-sonnet55-low-mcp2/SUMMARY.md), [Opus 4.8 bifrost](../../../bench/results/agent/2026-11-20-opus48-bifrost/SUMMARY.md), [Opus 5.5 bifrost](../../../bench/results/agent/2026-11-23-opus55-bifrost/SUMMARY.md).
-- What the runs say about use cases: [`docs/launch/eulix-use-cases.md`](../../launch/eulix-use-cases.md).
+- What the runs say about use cases: [`docs/use-case.md`](../../use-case.md).
 - How the cascade works: [Retrieval-Cascade.md](Retrieval-Cascade.md), [Anchors-And-Scoring.md](Anchors-And-Scoring.md).

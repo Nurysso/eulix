@@ -10,7 +10,6 @@ Package query implements query routing, intent classification, and LLM prompt as
 package query
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -139,15 +138,6 @@ func writeFile(t testing.TB, path, content string) {
 func writeFB(t testing.TB, path string, buf []byte) {
 	t.Helper()
 	writeFile(t, path, string(buf))
-}
-
-func writeJSON(t testing.TB, path string, v any) {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, path, string(b))
 }
 
 func chdir(t testing.TB, dir string) {

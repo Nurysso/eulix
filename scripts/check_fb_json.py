@@ -15,6 +15,7 @@ Exit status 1 on any mismatch or missing schema.
 
 import json
 import math
+import os
 import subprocess
 import sys
 import tempfile
@@ -41,7 +42,20 @@ CHECKSUM_FILE = "checksum.fb.zst"
 # (schema/kb_header.fbs), so it is decoded in pieces.
 KB_IDENTIFIER = b"EUKB"
 KB_ALIGN = 8
-FLATC = ["flatc", "--json", "--strict-json", "--defaults-json", "--raw-binary"]
+
+
+def flatc_bin() -> str:
+    """$FLATC, else the release binary scripts/gen_flatbuffers.sh caches, else PATH."""
+    if os.environ.get("FLATC"):
+        return os.environ["FLATC"]
+    gen = (ROOT / "scripts" / "gen_flatbuffers.sh").read_text()
+    version = gen.split('FLATC_VERSION="', 1)[1].split('"', 1)[0]
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    cached = cache / "eulix" / f"flatc-{version}" / "flatc"
+    return str(cached) if cached.is_file() else "flatc"
+
+
+FLATC = [flatc_bin(), "--json", "--strict-json", "--defaults-json", "--raw-binary"]
 
 
 def schema_for(fb: Path) -> Path | None:
@@ -151,8 +165,7 @@ def main() -> int:
                 failed += 1
                 continue
             subprocess.run(
-                ["flatc", "--json", "--strict-json", "--defaults-json", "--raw-binary",
-                 "-o", tmp, str(schema), "--", str(fb)],
+                FLATC + ["-o", tmp, str(schema), "--", str(fb)],
                 check=True,
             )
             ref = json.loads((Path(tmp) / copy.name).read_text())
