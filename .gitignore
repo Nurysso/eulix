@@ -30,6 +30,9 @@ eulix-cli/internal/assets/bins/eulix_parser_linux
 eulix-cli/internal/assets/bins/eulix_parser_windows.exe
 eulix-cli/internal/assets/bins/eulix_parser_macos_arm
 eulix-lsp/bench/results/
+# agent bench runs: keep only the hand-written SUMMARY.md per run
+bench/results/agent/*/*
+!bench/results/agent/*/SUMMARY.md
 *eulix-embed.zip*
 eulix-cli/*json
 # script output

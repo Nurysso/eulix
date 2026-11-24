@@ -385,6 +385,8 @@ impl GoParser {
         let type_params = self.extract_type_params(node);
         let type_constraints = self.extract_type_constraints(node);
 
+        let (chan_sends, chan_recvs) = self.extract_chan_ops(&body);
+        let local_calls = self.extract_local_calls(&body);
         let go_info = GoInfo {
             is_exported: name.chars().next().is_some_and(|c| c.is_uppercase()),
             receiver_type: recv_type.map(|t| {
@@ -422,6 +424,9 @@ impl GoParser {
             has_embedded_types: false,
             is_pointer_receiver,
             type_kind: None,
+            chan_sends,
+            chan_recvs,
+            local_calls,
         };
 
         // eprintln!(
@@ -496,6 +501,187 @@ impl GoParser {
     }
 
     /// True if the body sends to or receives from a channel (`<-` operator).
+    /// Sends and receives on field channels (`x.f <- v`, `<-x.f`,
+    /// `range x.f`), including those inside closures and goroutines started
+    /// here: they belong to the function that starts them. A `range` over a
+    /// field is recorded even though it may be a slice or map; it only becomes
+    /// an edge when some function also sends on a field of that name.
+    fn extract_chan_ops(&self, body: &Node) -> (Vec<ChanOp>, Vec<ChanOp>) {
+        let (mut sends, mut recvs) = (Vec::new(), Vec::new());
+        walk(*body, (), |node, _| {
+            let line = node.start_position().row + 1;
+            match node.kind() {
+                "send_statement" => {
+                    if let Some(f) = node
+                        .child_by_field_name("channel")
+                        .and_then(|c| self.selector_field(&c))
+                    {
+                        sends.push(ChanOp { field: f, line });
+                    }
+                }
+                "unary_expression" => {
+                    let op = node
+                        .child_by_field_name("operator")
+                        .or_else(|| node.child(0));
+                    if op.is_some_and(|o| self.get_node_text(&o) == "<-") {
+                        if let Some(f) = node
+                            .child_by_field_name("operand")
+                            .and_then(|c| self.selector_field(&c))
+                        {
+                            recvs.push(ChanOp { field: f, line });
+                        }
+                    }
+                }
+                "range_clause" => {
+                    if let Some(f) = node
+                        .child_by_field_name("right")
+                        .and_then(|c| self.selector_field(&c))
+                    {
+                        recvs.push(ChanOp { field: f, line });
+                    }
+                }
+                _ => {}
+            }
+            Some(())
+        });
+        for v in [&mut sends, &mut recvs] {
+            v.sort_by(|a, b| (&a.field, a.line).cmp(&(&b.field, b.line)));
+            v.dedup_by(|a, b| a.field == b.field);
+        }
+        (sends, recvs)
+    }
+
+    /// Locals declared without a type from a call (`p := b.getPipe()`,
+    /// `p, err := newPipe()`, `var p = newPipe()`), for the call graph to
+    /// type from the callee's declared result. A name declared more than
+    /// once in different ways is left out: which declaration a later call
+    /// sees depends on scopes the call graph does not track.
+    fn extract_local_calls(&self, body: &Node) -> Vec<LocalCall> {
+        // name -> the one call it is declared from; None once declared another way.
+        let mut seen: BTreeMap<String, Option<LocalCall>> = BTreeMap::new();
+        let mut declare = |name: String, call: Option<LocalCall>| {
+            if name == "_" {
+                return;
+            }
+            match seen.get(&name) {
+                None => {
+                    seen.insert(name, call);
+                }
+                Some(prev) if *prev != call => {
+                    seen.insert(name, None);
+                }
+                Some(_) => {}
+            }
+        };
+        walk(*body, (), |node, _| {
+            let (names, values) = match node.kind() {
+                "short_var_declaration" => {
+                    let Some(left) = node.child_by_field_name("left") else {
+                        return Some(());
+                    };
+                    let names: Vec<String> = self
+                        .identifier_children(&left)
+                        .iter()
+                        .map(|n| self.get_node_text(n))
+                        .collect();
+                    (names, node.child_by_field_name("right"))
+                }
+                "var_spec" if node.child_by_field_name("type").is_none() => (
+                    self.collect_spec_names(&node),
+                    node.child_by_field_name("value"),
+                ),
+                // Declared from something other than a call.
+                "range_clause" | "type_switch_statement" | "receive_statement" | "func_literal" => {
+                    let mut names = Vec::new();
+                    for field in ["left", "alias"] {
+                        if let Some(left) = node.child_by_field_name(field) {
+                            if left.kind() == "identifier" {
+                                names.push(self.get_node_text(&left));
+                            } else {
+                                names.extend(
+                                    self.identifier_children(&left)
+                                        .iter()
+                                        .map(|n| self.get_node_text(n)),
+                                );
+                            }
+                        }
+                    }
+                    for p in self
+                        .extract_parameters(&node)
+                        .into_iter()
+                        .filter(|_| node.kind() == "func_literal")
+                    {
+                        names.push(p.name);
+                    }
+                    for name in names {
+                        declare(name, None);
+                    }
+                    return Some(());
+                }
+                _ => return Some(()),
+            };
+            let exprs: Vec<Node> = match values {
+                Some(v) if v.kind() == "expression_list" => {
+                    let mut cursor = v.walk();
+                    v.named_children(&mut cursor).collect()
+                }
+                Some(v) => vec![v],
+                None => Vec::new(),
+            };
+            let count = names.len();
+            for (i, name) in names.into_iter().enumerate() {
+                // `a, b := f()` takes the results of one call in order;
+                // `a, b := f(), g()` pairs names with expressions.
+                let (expr, index) = if exprs.len() == 1 {
+                    (exprs.first(), i)
+                } else if exprs.len() == count {
+                    (exprs.get(i), 0)
+                } else {
+                    (None, 0)
+                };
+                let call = expr.and_then(|e| self.local_call(e, &name, index));
+                declare(name, call);
+            }
+            Some(())
+        });
+        seen.into_values().flatten().collect()
+    }
+
+    /// `receiver.callee(...)` or `callee(...)` as the `index`-th result
+    /// assigned to `name`. `new(T)` and conversions spell their type and are
+    /// typed by the variable table instead.
+    fn local_call(&self, expr: &Node, name: &str, index: usize) -> Option<LocalCall> {
+        if expr.kind() != "call_expression" || self.literal_type(expr).is_some() {
+            return None;
+        }
+        let function = expr.child_by_field_name("function")?;
+        let (receiver, callee) = match function.kind() {
+            "identifier" => (None, self.get_node_text(&function)),
+            "selector_expression" => (
+                Some(self.get_node_text(&function.child_by_field_name("operand")?)),
+                self.get_node_text(&function.child_by_field_name("field")?),
+            ),
+            _ => return None,
+        };
+        Some(LocalCall {
+            name: name.to_string(),
+            receiver,
+            callee,
+            index,
+        })
+    }
+
+    /// The field name of a selector (`pq.queue` → "queue"), through parens.
+    fn selector_field(&self, node: &Node) -> Option<String> {
+        match node.kind() {
+            "selector_expression" => node
+                .child_by_field_name("field")
+                .map(|f| self.get_node_text(&f).to_string()),
+            "parenthesized_expression" => node.named_child(0).and_then(|c| self.selector_field(&c)),
+            _ => None,
+        }
+    }
+
     fn body_contains_channel_ops(&self, node: &Node) -> bool {
         let mut found = false;
         walk(*node, (), |node, _| {

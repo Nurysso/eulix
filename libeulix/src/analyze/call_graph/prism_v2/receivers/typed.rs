@@ -41,6 +41,62 @@ pub(in super::super) struct Typed<'a> {
     decls: Map<u32, &'a Class>,
     /// Java: nested class -> the class it is declared in.
     outer: Map<u32, u32>,
+    /// Go function or method -> (its declared result, its file), to type the
+    /// locals declared from a call to it.
+    go_returns: Map<u32, (&'a str, u32)>,
+    /// Go method names declared by exactly one concrete method in the
+    /// project, for calls whose receiver type is unknown (see `go_unique`).
+    go_unique: Map<&'a str, u32>,
+}
+
+/// A method name distinctive enough that a call by that name, on a receiver
+/// of unknown type, most likely runs the project's only method of that name:
+/// six characters or more with an inner capital or an underscore
+/// (`RunLLMPreHooks`), never a common verb (`Close`, `Run`, `Get`).
+fn distinctive(name: &str) -> bool {
+    name.len() >= 6
+        && (name.trim_matches('_').contains('_')
+            || name.chars().skip(1).any(|c| c.is_ascii_uppercase()))
+}
+
+/// Locals typed from a call are followed this many calls deep
+/// (`a := f(); b := a.g(); b.h()`).
+const MAX_LOCAL_DEPTH: usize = 3;
+
+/// The `index`-th type of a Go result list: `*Pipe`, `(*Pipe, error)`,
+/// `(p *Pipe, err error)`. A channel, slice, map or function type has no
+/// methods of its own, so it is left out.
+fn go_result(results: &str, index: usize) -> Option<&str> {
+    let r = results.trim();
+    let inner = r
+        .strip_prefix('(')
+        .and_then(|x| x.strip_suffix(')'))
+        .unwrap_or(r);
+    let mut depth = 0i32;
+    let mut start = 0;
+    let mut parts = Vec::new();
+    for (i, c) in inner.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&inner[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&inner[start..]);
+    let part = parts.get(index)?.trim();
+    // A named result: `p *Pipe`.
+    let ty = part.rsplit_once(' ').map_or(part, |(_, t)| t).trim();
+    let bare = ty.trim_start_matches('*');
+    (!bare.is_empty()
+        && !part.contains("chan ")
+        && !bare.starts_with("[]")
+        && !bare.starts_with("map[")
+        && !bare.starts_with("func"))
+    .then_some(ty)
 }
 
 /// `method_{Type}_{name}::{path}` -> `Type`, without type arguments. The Go
@@ -79,6 +135,19 @@ impl<'a> Typed<'a> {
                     .or_insert(i as u32);
             }
         }
+        let mut counts: Map<&'a str, (u32, usize)> = Map::new();
+        for (i, n) in nodes.iter().enumerate() {
+            if n.kind == Kind::Method && lang(n.file) == "go" && !n.id.starts_with("ifacemethod_") {
+                if let Cow::Borrowed(name) = n.name {
+                    counts.entry(name).or_insert((i as u32, 0)).1 += 1;
+                }
+            }
+        }
+        typed.go_unique = counts
+            .into_iter()
+            .filter(|(name, (_, n))| *n == 1 && distinctive(name))
+            .map(|(name, (i, _))| (name, i))
+            .collect();
         let mut next = nodes.len() as u32;
         for (i, n) in nodes.iter().enumerate() {
             if n.kind != Kind::Method || n.owner.is_some() || lang(n.file) != "go" {
@@ -94,6 +163,19 @@ impl<'a> Typed<'a> {
             methods.push((owner, *name, i as u32));
         }
         for (f, (_, fd)) in files.iter().enumerate() {
+            if fd.language == "go" {
+                let fns = fd
+                    .functions
+                    .iter()
+                    .chain(fd.classes.iter().flat_map(|c| c.methods.iter()));
+                for func in fns.filter(|func| !func.return_type.is_empty()) {
+                    if let Some(&i) = node_map.get(func.id.as_str()) {
+                        typed
+                            .go_returns
+                            .insert(i, (func.return_type.as_str(), f as u32));
+                    }
+                }
+            }
             if !matches!(fd.language.as_str(), "go" | "java") {
                 continue;
             }
@@ -157,6 +239,27 @@ impl<'a> GoPackages<'a> {
             .max_by_key(|(root, _)| root.len())
     }
 
+    /// The project module an import path belongs to, as (its directory, the
+    /// rest of the path): the longest module path that is the import or a
+    /// parent of it. A repository may hold several modules (`core`,
+    /// `transports`, each with its own `go.mod`) that import one another.
+    fn module_for_import<'i>(&self, import: &'i str) -> Option<(&'a str, &'i str)> {
+        self.modules
+            .iter()
+            .filter_map(|(root, module)| {
+                let rest = import.strip_prefix(module.as_str())?;
+                (rest.is_empty() || rest.starts_with('/')).then(|| {
+                    (
+                        clean_path(root).trim_end_matches('/'),
+                        rest.trim_matches('/'),
+                        module.len(),
+                    )
+                })
+            })
+            .max_by_key(|&(_, _, len)| len)
+            .map(|(root, rest, _)| (root, rest))
+    }
+
     /// The files directly in `dir`.
     fn dir(&self, dir: &str) -> Target<'a> {
         let lo = self.paths.partition_point(|p| dir_of(p) < dir);
@@ -193,18 +296,15 @@ pub(super) fn go_imports<'a>(
             }
         };
         let target = match module {
-            Some((root, name)) => imp
-                .module
-                .strip_prefix(name)
-                .filter(|rest| rest.is_empty() || rest.starts_with('/'))
-                .and_then(|rest| {
-                    let rest = rest.trim_matches('/');
-                    match (root.is_empty(), rest.is_empty()) {
-                        (true, _) => go.dir(rest),
-                        (false, true) => go.dir(root),
-                        (false, false) => go.dir(&format!("{root}/{rest}")),
-                    }
-                }),
+            // Any module of the project, not only the file's own: an import
+            // of a sibling module is project code too.
+            Some(_) => go.module_for_import(&imp.module).and_then(|(root, rest)| {
+                match (root.is_empty(), rest.is_empty()) {
+                    (true, _) => go.dir(rest),
+                    (false, true) => go.dir(root),
+                    (false, false) => go.dir(&format!("{root}/{rest}")),
+                }
+            }),
             // Without a `go.mod`, a path of several segments may still name
             // a project directory; a single segment is the standard library.
             None if imp.import_type == "stdlib" || !imp.module.contains('/') => None,
@@ -350,9 +450,109 @@ impl Resolver<'_> {
         file: u32,
         func: &Function,
     ) -> Option<u32> {
-        let name = call.callee.as_str();
+        self.go_resolve(call.receiver.as_deref(), &call.callee, file, func, 0)
+    }
+
+    /// The project's only method named like a call whose receiver has no
+    /// known type: a local the resolver could not type, a package variable,
+    /// a call result (`x.f().Name()`). The edge is labelled "inferred".
+    /// A receiver whose type is known (the method's own receiver, a declared
+    /// or project type, an imported package) is never guessed: its method is
+    /// that type's, maybe promoted from an embedded type outside the project.
+    pub(in super::super) fn go_unique(
+        &self,
+        call: &FunctionCall,
+        file: u32,
+        func: &Function,
+    ) -> Option<u32> {
+        let receiver = call.receiver.as_deref()?.trim();
+        let &target = self.typed.go_unique.get(call.callee.as_str())?;
+        let root = receiver
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            .filter(|r| !r.is_empty())?;
+        let own = func
+            .lang_info
+            .go
+            .as_deref()
+            .is_some_and(|go| go.receiver_name.as_deref() == Some(root));
+        if own || self.imports[file as usize].namespaces.contains_key(root) {
+            return None;
+        }
+        if let Some(v) = func.variables.iter().find(|v| v.name == root) {
+            if v.var_type.is_some() {
+                return None;
+            }
+        }
+        // A local from a package's function (`c := fasthttp.Acquire()`) or
+        // from a project call that resolves has a type: when that type has no
+        // such method, it comes from outside the project.
+        let init = func
+            .lang_info
+            .go
+            .as_deref()
+            .and_then(|go| go.local_calls.iter().find(|c| c.name == root));
+        if let Some(init) = init {
+            let package = init
+                .receiver
+                .as_deref()
+                .and_then(|r| r.split('.').next())
+                .is_some_and(|r| self.imports[file as usize].namespaces.contains_key(r));
+            if package
+                || self
+                    .go_resolve(init.receiver.as_deref(), &init.callee, file, func, 1)
+                    .is_some()
+            {
+                return None;
+            }
+        }
+        (target
+            != self
+                .node_map
+                .get(func.id.as_str())
+                .copied()
+                .unwrap_or(u32::MAX))
+        .then_some(target)
+    }
+
+    /// The type of a local declared from a call (`p := b.getPipe()`): the
+    /// callee's declared result at that position, read in the callee's file.
+    fn go_local_type(&self, local: &str, file: u32, func: &Function, depth: usize) -> Option<u32> {
+        if depth >= MAX_LOCAL_DEPTH {
+            return None;
+        }
+        let init = func
+            .lang_info
+            .go
+            .as_deref()?
+            .local_calls
+            .iter()
+            .find(|c| c.name == local)?;
+        // `x := x.Next()` would only find itself.
+        if init.receiver.as_deref().and_then(|r| r.split('.').next()) == Some(local) {
+            return None;
+        }
+        let callee = self.go_resolve(
+            init.receiver.as_deref(),
+            &init.callee,
+            file,
+            func,
+            depth + 1,
+        )?;
+        let &(results, callee_file) = self.typed.go_returns.get(&callee)?;
+        self.go_type(go_result(results, init.index)?, callee_file)
+    }
+
+    fn go_resolve(
+        &self,
+        receiver: Option<&str>,
+        name: &str,
+        file: u32,
+        func: &Function,
+        depth: usize,
+    ) -> Option<u32> {
         let variable = |name: &str| func.variables.iter().find(|v| v.name == name);
-        let Some(receiver) = call.receiver.as_deref() else {
+        let Some(receiver) = receiver else {
             // A local (a closure, a function value) hides a package function.
             if variable(name).is_some() {
                 return None;
@@ -386,7 +586,10 @@ impl Resolver<'_> {
                 }
                 owner
             }
-            (None, Some(v)) => self.go_type(v.var_type.as_deref()?, file)?,
+            (None, Some(v)) => match v.var_type.as_deref() {
+                Some(t) => self.go_type(t, file)?,
+                None => self.go_local_type(root, file, func, depth)?,
+            },
             (None, None) => {
                 // `pkg.Func()`, or `pkg.Type.Method(x)`. Any other root is a
                 // package-level variable, whose type is not recorded.

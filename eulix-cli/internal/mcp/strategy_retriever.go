@@ -65,7 +65,7 @@ func (r routerRetriever) retrieve(q string, cot bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	o := renderOpts{answer: r.answer, maxLines: r.maxLines, sent: r.sent}
+	o := renderOpts{answer: r.answer, maxLines: r.maxLines, sent: r.sent, focus: focusTerms(q)}
 	if o.answer == "" {
 		o.answer = "search"
 	}

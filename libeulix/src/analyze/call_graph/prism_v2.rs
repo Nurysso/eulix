@@ -38,6 +38,8 @@ use std::collections::hash_map::Entry;
 use std::collections::VecDeque;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+mod channels;
+mod dispatch;
 mod php;
 mod receivers;
 use crate::grammar_files::php::FALLBACK_TAG;
@@ -60,6 +62,13 @@ const SELF_NAMES: [&str; 6] = ["self", "this", "cls", "_self", "self_", "myself"
 const MAX_CHAIN: usize = 64;
 const EDGE_CALL: u8 = 0;
 const EDGE_INHERIT: u8 = 1;
+/// Inferred: a send on a Go field channel to the goroutine receiving it.
+const EDGE_ASYNC: u8 = 2;
+/// Inferred: a call on a Go interface method to an implementing method.
+const EDGE_DISPATCH: u8 = 3;
+/// Inferred: a Go call on a receiver of unknown type to the project's only
+/// method of that (distinctive) name.
+const EDGE_INFERRED: u8 = 4;
 
 #[derive(Clone, Debug)]
 pub struct CallGraphOptions {
@@ -452,6 +461,8 @@ fn flush_edges(out: &mut Vec<RawEdge>, buf: &mut Vec<RawEdge>) {
         for e in it {
             if (e.from, e.to) == (cur.from, cur.to) {
                 cur.conditional &= e.conditional;
+                // A resolved call outranks the same edge inferred elsewhere.
+                cur.kind = cur.kind.min(e.kind);
             } else {
                 out.push(cur);
                 cur = e;
@@ -1245,12 +1256,17 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                             r.nested_in(&func.id, &call.callee)
                                 .or_else(|| r.resolve_call(&call.callee, f, None, false))
                         };
-                        if let Some(to) = to {
+                        let edge = to.map(|to| (to, EDGE_CALL)).or_else(|| {
+                            go.then(|| r.go_unique(call, f, func))
+                                .flatten()
+                                .map(|to| (to, EDGE_INFERRED))
+                        });
+                        if let Some((to, kind)) = edge {
                             buf.push(RawEdge {
                                 from,
                                 to,
                                 line: call.line as u32,
-                                kind: EDGE_CALL,
+                                kind,
                                 conditional: call.is_conditional,
                             });
                         }
@@ -1281,11 +1297,15 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                             {
                                 continue;
                             }
+                            let mut inferred = None;
                             let to = if php {
                                 let ns = php_namespace(&m.lang_info);
                                 r.resolve_php_call(&call.callee, f, Some(cidx), ns)
                             } else if go {
-                                r.go_call(call, f, m)
+                                r.go_call(call, f, m).or_else(|| {
+                                    inferred = r.go_unique(call, f, m);
+                                    None
+                                })
                             } else if java {
                                 r.java_call(call, f, cidx, m)
                             } else if receivers::enabled(&fd.language) {
@@ -1295,12 +1315,15 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
                                     r.resolve_call(&call.callee, f, Some(cidx), has_self)
                                 })
                             };
-                            if let Some(to) = to {
+                            let edge = to
+                                .map(|to| (to, EDGE_CALL))
+                                .or_else(|| inferred.take().map(|to| (to, EDGE_INFERRED)));
+                            if let Some((to, kind)) = edge {
                                 buf.push(RawEdge {
                                     from,
                                     to,
                                     line: call.line as u32,
-                                    kind: EDGE_CALL,
+                                    kind,
                                     conditional: call.is_conditional,
                                 });
                             }
@@ -1313,13 +1336,18 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
         })
         .collect();
 
+    // 4b. Inferred async edges (Go channels), see `channels`, and dispatch
+    // edges from Go interface methods to their implementers, see `dispatch`.
+    let async_edges = channels::edges(&files, &file_dir, &|id| node_map.get(id).copied());
+    let dispatch_edges = dispatch::edges(&r, &call_edges);
+
     // 5. Materialise output.
     //
     // `call_count_estimate` is the number of *resolved* call edges that
     // point at the node. It ignores inheritance edges on purpose — for
     // "hot spot" queries what matters is callers, not subclasses.
     let mut in_calls = vec![0u32; nodes.len()];
-    for e in &call_edges {
+    for e in call_edges.iter().filter(|e| e.kind == EDGE_CALL) {
         in_calls[e.to as usize] += 1;
     }
     let out_nodes: Vec<CallGraphNode> = nodes
@@ -1341,13 +1369,17 @@ pub fn build_with(structure: &BTreeMap<String, FileData>, opts: &CallGraphOption
     let out_edges: Vec<CallGraphEdge> = inherit
         .par_iter()
         .chain(call_edges.par_iter())
+        .chain(async_edges.par_iter())
+        .chain(dispatch_edges.par_iter())
         .map(|e| CallGraphEdge {
             from: nodes[e.from as usize].id.to_string(),
             to: nodes[e.to as usize].id.to_string(),
-            edge_type: if e.kind == EDGE_INHERIT {
-                "inheritance"
-            } else {
-                "call"
+            edge_type: match e.kind {
+                EDGE_INHERIT => "inheritance",
+                EDGE_ASYNC => "async",
+                EDGE_DISPATCH => "dispatch",
+                EDGE_INFERRED => "inferred",
+                _ => "call",
             }
             .to_string(),
             conditional: e.conditional,

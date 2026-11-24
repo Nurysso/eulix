@@ -104,12 +104,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: eulix-parser
+      # The runner's system Python may refuse pip installs (PEP 668).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: JSON copies match the binary files
         run: |
           cd eulix-parser && cargo build --release
           out="$RUNNER_TEMP/kb"
           mkdir -p "$out"
           ./target/release/eulix_parser -r .. -o "$out/kb.json" -t 4 -p 2 --emit-json
+          python3 -m pip install -r ../bench/requirements.txt
           python3 ../scripts/check_fb_json.py "$out"
 
   eulix-cli:

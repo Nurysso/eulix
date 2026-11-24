@@ -91,6 +91,8 @@ fn go_call_on_a_variable_of_a_known_struct_type_links_to_the_method() {
 #[test]
 fn go_call_on_a_variable_of_unknown_type_gets_no_edge() {
     // `Save` is the only method of that name in the project: still no edge.
+    // (`m := factory()` is typed from factory's declared result, see
+    // go_local_typed_from_the_callees_result.)
     let g = graph(&[
         ("store.go", GO_STORE),
         (
@@ -98,7 +100,12 @@ fn go_call_on_a_variable_of_unknown_type_gets_no_edge() {
             "package demo\n\nfunc factory() *Store { return nil }\nfunc inferred() {\n\tm := factory()\n\tm.Save()\n}\nfunc untyped(m interface{ Save() }) { m.Save() }\nfunc chained() { factory().Save() }\nfunc ranged(ms []*Store) {\n\tfor _, m := range ms {\n\t\tm.Save()\n\t}\n}\n",
         ),
     ]);
-    for caller in ["inferred", "untyped", "chained", "ranged"] {
+    assert!(edge(
+        &g,
+        "func_inferred::use.go",
+        "method_Store_Save::store.go"
+    ));
+    for caller in ["untyped", "chained", "ranged"] {
         assert!(
             !edge(
                 &g,

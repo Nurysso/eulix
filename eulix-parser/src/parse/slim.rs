@@ -31,10 +31,20 @@ fn strip_lang_info(info: &mut LanguageSpecificInfo) {
     let go = info
         .go
         .take()
-        .filter(|g| g.receiver_name.is_some())
+        .filter(|g| {
+            g.receiver_name.is_some()
+                || !g.chan_sends.is_empty()
+                || !g.chan_recvs.is_empty()
+                || !g.local_calls.is_empty()
+        })
         .map(|g| GoInfo {
             receiver_name: g.receiver_name,
             receiver_type: g.receiver_type,
+            // Channel ops become inferred async edges in the call graph.
+            chan_sends: g.chan_sends,
+            chan_recvs: g.chan_recvs,
+            // Locals typed from the callee's declared result.
+            local_calls: g.local_calls,
             ..Default::default()
         });
     *info = LanguageSpecificInfo::default();
@@ -58,9 +68,13 @@ pub fn strip_fn(f: &mut Function) {
 
 pub fn strip_emitted(fd: &mut FileData) {
     let typed = typed_receivers(&fd.language);
+    let go = fd.language == "go";
     let strip_fn = |f: &mut Function| {
         f.signature = String::new();
-        f.return_type = String::new();
+        // A Go result type types the locals declared from a call to it.
+        if !go {
+            f.return_type = String::new();
+        }
         if typed {
             // Every declared name stays, typed or not: a local of unknown
             // type still hides a field, a package or a class of that name.

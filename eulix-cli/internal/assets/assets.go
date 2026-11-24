@@ -671,6 +671,29 @@ func InstallEmbedDeps(root string) error {
 	return nil
 }
 
+// EnsureEmbedEnv prepares the Python side used by ETIYA embeddings: it checks
+// for uv and ~/.Eulix/.venv and installs eulix_embed's dependencies once,
+// then writes the .initialized marker. It is a no-op after the first success.
+// Commands that never embed (EHNAS analyze, query, mcp) do not call it.
+func EnsureEmbedEnv(root string) error {
+	if IsInitialized() {
+		return nil
+	}
+	if err := CheckUv(); err != nil {
+		return err
+	}
+	if err := CheckVenv(root); err != nil {
+		return err
+	}
+	if err := InstallEmbedDeps(root); err != nil {
+		return err
+	}
+	if err := GlobalInitialized(root); err != nil {
+		return fmt.Errorf("failed to write .initialized file: %w", err)
+	}
+	return nil
+}
+
 func IsInitialized() bool {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {

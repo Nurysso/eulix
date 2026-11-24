@@ -19,7 +19,7 @@ import (
 const agentHint = "This repository is indexed by Eulix (MCP server `eulix`). For who calls what, use its " +
 	"`callers` / `callees` tools; for where a symbol is defined, `definition`; for how one function reaches " +
 	"another across files, `trace`; for how a feature works, `search` (pass exact symbol names in " +
-	"known_symbols). Each reply starts with a `complete: yes|no` line: when it says yes, do not re-check " +
+	"known_symbols). Each reply starts with a `complete:` line: when it says yes, do not re-check " +
 	"with grep. Use grep for literal strings, config values and log messages."
 
 const (
@@ -85,7 +85,7 @@ answers better than grep. Both steps are idempotent; re-running updates them.
 			return fmt.Errorf("unknown agent %q: use claude, cursor or cline", args[0])
 		}
 		if _, err := os.Stat(filepath.Join(abs, ".eulix")); errors.Is(err, os.ErrNotExist) {
-			_, _ = fmt.Fprintln(out, "Note: this project is not indexed yet; run 'eulix analyze' in it before the agent queries.")
+			_, _ = fmt.Fprintln(out, "Note: this project is not indexed yet; run 'eulix init --yes --engine ehnas --analyze' in it before the agent queries.")
 		}
 		return nil
 	},

@@ -11,6 +11,7 @@ Usage: kb_id_name_check.py [path/to/kb.fb] [--show N]
 Exit code: 0 all consistent, 1 mismatches found.
 """
 import collections
+import re
 import sys
 from pathlib import Path
 
@@ -33,6 +34,7 @@ PREFIXES = ("func_", "method_", "ifacemethod_")
 
 def split(node_id):
     body, _, path = node_id.rpartition("::")
+    body = re.sub(r"@\d+$", "", body)  # drop the @line suffix that disambiguates duplicate nested names
     for p in PREFIXES:
         if body.startswith(p):
             return p, body[len(p):], path

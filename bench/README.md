@@ -10,6 +10,8 @@ make bench-list                                    # what has been measured
 make bench-test                                    # harness unit tests
 ```
 
+The harness needs one package, the FlatBuffers runtime: `pip install -r bench/requirements.txt` (the `scripts/` that read `.fb` files need it too).
+
 To time just the parser binary you have built, with no comparison and no embedding, use `scripts/parser_perf.sh -t 12 -p 2 <repo> [<repo>...]` (three cold runs per repo by default). The parser numbers in the READMEs come from it.
 
 Results are saved in `~/.Eulix/bench`, keyed by commit, so a version is measured once. Reports go to `~/.Eulix/bench/reports/`.
@@ -22,6 +24,7 @@ Results are saved in `~/.Eulix/bench`, keyed by commit, so a version is measured
 | `suite/corpora.toml` | The frozen corpora, pinned to commits |
 | `suite/questions/` | Retrieval questions (`eulix.toml`) and latency-only questions per outside corpus |
 | `suite/eulix.toml.tmpl` | The eulix config every version runs with |
+| `requirements.txt` | The one package the harness and `scripts/` need (`flatbuffers`, pinned to the `flatc` version) |
 | `suite/venv-cpu.txt` | CPU-only additions to the embedder's Python requirements |
 | `tests/` | Unit tests (standard library `unittest`) |
 | `agent/` | Agent token-savings benchmark: Claude Code with and without Eulix on the same tasks ([README](agent/README.md)) |

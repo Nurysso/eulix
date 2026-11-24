@@ -23,6 +23,7 @@ var (
 	mcpIdleTimeout time.Duration
 	mcpDefaultCoT  bool
 	mcpRepoPath    string
+	mcpLegacyTools bool
 )
 
 var mcpCmd = &cobra.Command{
@@ -32,9 +33,10 @@ var mcpCmd = &cobra.Command{
 AI code editors (Cursor, Windsurf, Claude Desktop, VS Code Cline) can connect to this
 server to query codebases efficiently.
 
-The MCP server can run globally across multiple repositories. You can specify a repository
-path via argument or flag, or the connected AI agent can specify/switch repositories dynamically
-using the 'set_repo_path' tool or the 'repo_path' argument in queries.
+The MCP server can run globally across multiple repositories. Started without a repository,
+it lists a 'set_repo_path' tool the agent uses to choose one. Started on a repository (an
+argument or --repo), it does not list that tool; the 'repo_path' argument of each tool can
+still switch.
 
 Unlike the one-off 'query' command, the MCP server keeps the knowledge base and
 ContextBuilder cached in memory across queries for near-instant responses, releasing
@@ -45,10 +47,12 @@ Tools:
   - definition: location, signature, docstring and a short body of a symbol
   - trace: the call path from one function to another, then the code for it
   - search: ranked code for a concept, within a token budget ([mcp] reply_tokens)
-  - query: free-text alias kept for older clients (include_cot replaces the
-    removed query_with_cot / query_without_cot tools)
 
-Every reply starts with "answer: ... · complete: yes|no". Use
+--legacy-tools (or EULIX_MCP_LEGACY_TOOLS=1) also lists the free-text tools of
+earlier releases, query, query_with_cot and query_without_cot, which the
+retrieval benchmark uses. Every listed tool costs the agent tokens on every turn.
+
+Every reply starts with "answer: ... · complete: yes|no|n/a". Use
 'eulix mcp install claude|cursor|cline' to register the server with an agent.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -74,6 +78,7 @@ Every reply starts with "answer: ... · complete: yes|no". Use
 			mcp.WithInitialRepo(targetRepo),
 			mcp.WithIdleTimeout(mcpIdleTimeout),
 			mcp.WithDefaultCoT(mcpDefaultCoT),
+			mcp.WithLegacyTools(mcpLegacyTools || os.Getenv(mcp.LegacyToolsEnv) == "1"),
 		)
 
 		return srv.Serve(ctx)
@@ -84,4 +89,6 @@ func init() {
 	mcpCmd.Flags().StringVar(&mcpRepoPath, "repo", "", "Initial repository path to query (optional; can also be set dynamically by AI agents)")
 	mcpCmd.Flags().DurationVar(&mcpIdleTimeout, "timeout", mcp.DefaultIdleTimeout, "Idle timeout before releasing context builder from memory (e.g. 5m, 10m)")
 	mcpCmd.Flags().BoolVar(&mcpDefaultCoT, "cot", false, "Default to Chain-of-Thought headers when 'include_cot' is not specified")
+	mcpCmd.Flags().BoolVar(&mcpLegacyTools, "legacy-tools", false,
+		"Also list the legacy free-text tools (query, query_with_cot, query_without_cot); same as "+mcp.LegacyToolsEnv+"=1")
 }

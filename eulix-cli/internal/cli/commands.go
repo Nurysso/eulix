@@ -394,11 +394,21 @@ var chatCmd = &cobra.Command{
 	},
 }
 
+// initFlags holds `eulix init` flags; they are persistent so `init fix` and
+// `init force` accept them too.
+var initFlags initOptions
+
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize eulix in the current directory",
+	Long: `Creates eulix.toml, .euignore and .eulix/ in the current directory.
+
+Without flags it runs an interactive wizard. For scripts and AI agents:
+
+  eulix init --yes                         # defaults, no prompts
+  eulix init --yes --engine ehnas --analyze  # and build the index (no Python needed)`,
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := initializeProject(false, nil); err != nil {
+		if err := initializeProject(false, nil, initFlags); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -423,7 +433,7 @@ var initFixCmd = &cobra.Command{
 			return
 		}
 
-		if err := initializeProject(false, targets); err != nil {
+		if err := initializeProject(false, targets, initFlags); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -440,7 +450,7 @@ var initForceCmd = &cobra.Command{
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := initializeProject(true, nil); err != nil {
+		if err := initializeProject(true, nil, initFlags); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -591,6 +601,10 @@ func setupInitSubcommands() {
 }
 
 func setupFlags() {
+	// init flags (non-interactive setup for agents and scripts)
+	initCmd.PersistentFlags().BoolVarP(&initFlags.Yes, "yes", "y", false, "Skip the wizard and write defaults")
+	initCmd.PersistentFlags().StringVar(&initFlags.Engine, "engine", "", "Retrieval engine: ehnas (no embeddings, no Python) or etiya")
+	initCmd.PersistentFlags().BoolVar(&initFlags.Analyze, "analyze", false, "Run 'eulix analyze' after init (with --yes)")
 	// history flags
 	historyCmd.Flags().Bool("no-tui", false, "Use plain-text output instead of the TUI")
 }

@@ -52,7 +52,7 @@ The input to the call-graph functions is `&BTreeMap<String, FileData>`, which is
 
 `parse_source` returns a `String` error, not a typed error. The most common reasons are an unsupported language (`"Unsupported language: ..."`) and, for `.inc` files, a missing PHP opening tag (`"not PHP: a .inc file without a PHP opening tag"`).
 
-The call-graph builders return a `CallGraph` with `nodes` and `edges`. Nodes carry an id, a type (`function`, `method` or `class`), the file, an entry-point flag and a call-count estimate. Edges carry the caller id, the callee id, an `edge_type` (`call` or `inheritance`), a `conditional` flag and the line of the call site. See [Knowledge Base Schema](Knowledge-Base-Schema.md).
+The call-graph builders return a `CallGraph` with `nodes` and `edges`. Nodes carry an id, a type (`function`, `method` or `class`), the file, an entry-point flag and a call-count estimate. Edges carry the caller id, the callee id, an `edge_type` (`call`, `inheritance`, or one of the inferred Go types `async`, `dispatch` and `inferred`), a `conditional` flag and the line of the call site. See [Knowledge Base Schema](Knowledge-Base-Schema.md).
 
 ## Key Algorithms
 
