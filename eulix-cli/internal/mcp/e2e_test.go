@@ -119,7 +119,9 @@ func connectWith(t *testing.T, s *Server, version string, roots ...string) *mcps
 }
 
 // newTestServer returns a server with no repository bound, isolated from the
-// developer's real ~/.Eulix. It is closed when the test ends: otherwise its
+// developer's real ~/.Eulix, with the legacy free-text tools listed (many
+// tests exercise them; pass WithLegacyTools(false) for the agent default).
+// It is closed when the test ends: otherwise its
 // idle timer keeps the router and a loaded context builder (~46 MB of
 // preallocated chunks) alive for minutes, and -count=N piles them up.
 func newTestServer(t *testing.T, opts ...Option) *Server {
@@ -127,7 +129,7 @@ func newTestServer(t *testing.T, opts ...Option) *Server {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads this on Windows
-	s := NewServer(nil, nil, "", append([]Option{testLogger(t)}, opts...)...)
+	s := NewServer(nil, nil, "", append([]Option{testLogger(t), WithLegacyTools(true)}, opts...)...)
 	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
@@ -214,7 +216,7 @@ func TestE2ESetRepoPathRejectsBadPaths(t *testing.T) {
 		"empty":           {"   ", "cannot be empty"},
 		"missing":         {filepath.Join(t.TempDir(), "nope"), "does not exist"},
 		"a file":          {file, "not a directory"},
-		"not initialized": {t.TempDir(), "eulix analyze"},
+		"not initialized": {t.TempDir(), "eulix init --yes"},
 	} {
 		if text, isErr := call(t, cs, "set_repo_path", map[string]any{"repo_path": tc.path}); !isErr || !strings.Contains(text, tc.want) {
 			t.Errorf("%s: got isError=%v %q, want an error containing %q", name, isErr, text, tc.want)

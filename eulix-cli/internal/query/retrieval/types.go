@@ -30,6 +30,12 @@ type CallGraphIdx struct {
 	// Sites holds the call-site lines of each edge, keyed by SiteKey(from, to).
 	// The line is in the caller's file. Nil when the index was built without it.
 	Sites map[string][]int
+	// Inferred holds the kind of each edge the parser inferred rather than
+	// resolved, keyed by SiteKey(from, to): "async" (a channel send to the
+	// goroutine receiving it), "dispatch" (an interface method to an
+	// implementing method) or "inferred" (a receiver of unknown type, matched
+	// by a unique method name). Resolved calls are absent.
+	Inferred map[string]string
 }
 
 // SiteKey is the CallGraphIdx.Sites key for the edge from → to.

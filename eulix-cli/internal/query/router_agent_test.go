@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"eulix/internal/query/retrieval"
 	"eulix/internal/utils"
 )
 
@@ -283,5 +284,79 @@ func TestEnclosingSymbol(t *testing.T) {
 	}
 	if got := r.EnclosingSymbol("worker.go", 4); got != "Worker.run" {
 		t.Errorf("method: %q", got)
+	}
+}
+
+// Agent-Improvements J: inferred channel edges ("async") are walked by the
+// agent tools and labelled, so a trace crosses pq.queue to requestWorker.
+func TestAsyncEdgesAreIndexedAndLabelled(t *testing.T) {
+	send := "method_Bifrost_tryRequest::core/bifrost.go"
+	worker := "method_Bifrost_requestWorker::core/bifrost.go"
+	other := "func_helper::core/bifrost.go"
+	idx := BuildCallGraphIndex(&utils.CallGraphRef{
+		Nodes: []utils.CallGraphNode{{ID: send, File: "core/bifrost.go"}, {ID: worker, File: "core/bifrost.go"}, {ID: other, File: "core/bifrost.go"}},
+		Edges: []utils.CallGraphEdge{
+			{From: send, To: worker, EdgeType: "async", CallSiteLine: 12},
+			{From: send, To: other, EdgeType: "call", CallSiteLine: 10},
+			{From: other, To: send, EdgeType: "inheritance"},
+		},
+	})
+	if got := idx.CalledBy[worker]; len(got) != 1 || got[0] != send {
+		t.Fatalf("CalledBy[worker] = %v, want [%s]", got, send)
+	}
+	if idx.Inferred[retrieval.SiteKey(send, worker)] != "async" || idx.Inferred[retrieval.SiteKey(send, other)] != "" {
+		t.Fatalf("Inferred = %v", idx.Inferred)
+	}
+	if len(idx.CalledBy[send]) != 0 {
+		t.Fatalf("inheritance edge indexed as a call: %v", idx.CalledBy[send])
+	}
+
+	rep := &CallReport{Symbol: "Bifrost.requestWorker", Found: true, Depth: 1, Sites: []CallSite{
+		{Name: "Bifrost.tryRequest", File: "core/bifrost.go", Line: 12, Depth: 1, Edge: "async"},
+	}}
+	if out := FormatCallReport(rep); !strings.Contains(out, asyncLabel) {
+		t.Errorf("callers report lacks async label:\n%s", out)
+	}
+	tr := &TraceResult{From: "Bifrost.tryRequest", To: "Bifrost.requestWorker", Found: true,
+		Hops:      []Hop{{Caller: "Bifrost.tryRequest", Callee: "Bifrost.requestWorker", File: "core/bifrost.go", Line: 12, Edge: "async"}},
+		Locations: map[string]string{}}
+	if out := FormatTrace(tr); !strings.Contains(out, asyncLabel) {
+		t.Errorf("trace lacks async label:\n%s", out)
+	}
+}
+
+// Dispatch and unique-name edges from PRISM v2 are walked and labelled like
+// async ones; a resolved call between the same two functions wins.
+func TestInferredEdgesAreLabelled(t *testing.T) {
+	run := "method_Svc_Run::svc.go"
+	save := "method_DB_Save::db.go"
+	hook := "method_Hooks_RunPreHooks::hooks.go"
+	direct := "method_DB_Load::db.go"
+	idx := BuildCallGraphIndex(&utils.CallGraphRef{
+		Nodes: []utils.CallGraphNode{{ID: run, File: "svc.go"}, {ID: save, File: "db.go"}, {ID: hook, File: "hooks.go"}, {ID: direct, File: "db.go"}},
+		Edges: []utils.CallGraphEdge{
+			{From: run, To: save, EdgeType: "dispatch", CallSiteLine: 3},
+			{From: run, To: hook, EdgeType: "inferred", CallSiteLine: 4},
+			{From: run, To: direct, EdgeType: "dispatch", CallSiteLine: 5},
+			{From: run, To: direct, EdgeType: "call", CallSiteLine: 6},
+		},
+	})
+	for to, want := range map[string]string{save: "dispatch", hook: "inferred", direct: ""} {
+		if got := idx.Inferred[retrieval.SiteKey(run, to)]; got != want {
+			t.Errorf("Inferred[%s] = %q, want %q", to, got, want)
+		}
+	}
+	if got := idx.CalledBy[direct]; len(got) != 1 {
+		t.Errorf("one caller expected, got %v", got)
+	}
+	rep := &CallReport{Symbol: "DB.Save", Found: true, Depth: 1, Sites: []CallSite{
+		{Name: "Svc.Run", File: "svc.go", Line: 3, Depth: 1, Edge: "dispatch"},
+		{Name: "Svc.Run", File: "svc.go", Line: 4, Depth: 1, Edge: "inferred"},
+	}}
+	out := FormatCallReport(rep)
+	for _, want := range []string{edgeLabels["dispatch"], edgeLabels["inferred"]} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
 	}
 }

@@ -855,6 +855,15 @@ func (r *Router) resolveCallGraphEntity(name string) (string, *utils.CallGraphNo
 	return "", nil, false, nil
 }
 
+// inferredEdges are the edge types PRISM v2 infers rather than resolves:
+// a send on a field channel to the goroutine receiving it, a call on an
+// interface method to an implementing method, and a call on a receiver of
+// unknown type to the project's only method of that name.
+var inferredEdges = map[string]bool{"async": true, "dispatch": true, "inferred": true}
+
+// BuildCallGraphIndex indexes call edges and inferred async edges for the
+// agent tools (callers, callees, trace); inferred edges are flagged in
+// Inferred.
 func BuildCallGraphIndex(ref *utils.CallGraphRef) *retrieval.CallGraphIdx {
 	if ref == nil {
 		return &retrieval.CallGraphIdx{
@@ -877,8 +886,24 @@ func BuildCallGraphIndex(ref *utils.CallGraphRef) *retrieval.CallGraphIdx {
 		idx.Nodes[n.ID] = n
 	}
 
+	// A resolved call between two functions outranks an inferred edge
+	// between the same two (a direct call next to one through an interface).
+	resolved := make(map[string]bool, len(ref.Edges))
 	for _, e := range ref.Edges {
 		if e.EdgeType == "call" {
+			resolved[retrieval.SiteKey(e.From, e.To)] = true
+		}
+	}
+	for _, e := range ref.Edges {
+		if e.EdgeType == "call" || inferredEdges[e.EdgeType] {
+			if k := retrieval.SiteKey(e.From, e.To); inferredEdges[e.EdgeType] && !resolved[k] {
+				if idx.Inferred == nil {
+					idx.Inferred = make(map[string]string)
+				}
+				if idx.Inferred[k] == "" {
+					idx.Inferred[k] = e.EdgeType
+				}
+			}
 			idx.Calls[e.From] = append(idx.Calls[e.From], e.To)
 			idx.CalledBy[e.To] = append(idx.CalledBy[e.To], e.From)
 			if e.CallSiteLine > 0 {

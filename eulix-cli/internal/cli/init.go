@@ -20,6 +20,7 @@ import (
 
 	"eulix/internal/cli/setup"
 	"eulix/internal/config"
+	"eulix/internal/query/retrieval"
 	"eulix/internal/utils"
 
 	"github.com/BurntSushi/toml"
@@ -76,12 +77,42 @@ func (s initState) missingDescriptions() []string {
 	return m
 }
 
+// initOptions are the non-interactive flags of `eulix init`.
+type initOptions struct {
+	// Yes skips both wizards and writes defaults, so an agent or a script
+	// can set up a repo without a terminal.
+	Yes bool
+	// Engine overrides [project] engine ("ehnas" or "etiya"); empty keeps
+	// the default.
+	Engine string
+	// Analyze runs `eulix analyze` right after init (used with Yes).
+	Analyze bool
+}
+
 // initializeProject accepts a force boolean and an optional list of specific
 // components to create (nil = create all missing). Once files are written it
 // walks the user through the interactive wizard for whichever of
 // .euignore / eulix.toml were just (re)created.
-func initializeProject(force bool, targets []string) error {
+func initializeProject(force bool, targets []string, opts initOptions) error {
+	if opts.Engine != "" {
+		eng, err := retrieval.ResolveEngine(opts.Engine)
+		if err != nil {
+			return err
+		}
+		opts.Engine = string(eng)
+	}
 	state := checkInitState()
+
+	if state.fullyInitialized() && !force && opts.Yes {
+		fmt.Println("Eulix is already initialized.")
+		return finishNonInteractive(nil, false, nil, false, opts)
+	}
+	if opts.Yes && !force && targets == nil {
+		// Non-interactive on a partly set-up repo: create only what is missing.
+		if missing := state.missingTargets(); len(missing) > 0 && len(missing) < 3 {
+			targets = missing
+		}
+	}
 
 	if state.fullyInitialized() && !force {
 		fmt.Println("Eulix is already initialized.")
@@ -146,11 +177,17 @@ func initializeProject(force bool, targets []string) error {
 	var cfg *config.Config
 	if (shouldWrite("config") || !state.hasConfig) && (!state.hasConfig || force) {
 		cfg = config.DefaultConfig()
+		if opts.Engine != "" {
+			cfg.Project.Engine = opts.Engine
+		}
 		configWritten = true
 	}
 
 	// Interactive wizard for whatever was just (re)created
 	env := setup.LoadEnvFile(utils.EnvPath)
+	if opts.Yes {
+		return finishNonInteractive(cfg, configWritten, created, force, opts)
+	}
 	if euignoreWritten {
 		fmt.Println()
 		_, err := setup.RunWizard(setup.BuildEuignoreSteps(utils.EuignorePath), cfg, env)
@@ -211,6 +248,41 @@ func initializeProject(force bool, targets []string) error {
 		fmt.Println("  3. Run 'eulix chat' to start querying")
 	}
 
+	return nil
+}
+
+// finishNonInteractive writes the default config (no wizard) and optionally
+// runs analysis. It prints plain lines only, so an agent can read the result.
+func finishNonInteractive(cfg *config.Config, configWritten bool, created []string, force bool, opts initOptions) error {
+	if configWritten {
+		if err := writeConfig(cfg, utils.ConfigPath); err != nil {
+			return fmt.Errorf("failed to create config: %w", err)
+		}
+		created = append(created, fmt.Sprintf("  - %-20s (configuration)", utils.ConfigPath))
+	}
+	if force {
+		fmt.Println("Eulix configuration has been reset (defaults, no wizard).")
+	} else {
+		fmt.Println("Eulix initialized with defaults (no wizard).")
+	}
+	for _, c := range created {
+		fmt.Println(c)
+	}
+	if !opts.Analyze {
+		fmt.Println("Next: run 'eulix analyze' to build the index.")
+		return nil
+	}
+	if cfg == nil {
+		loaded, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("load %s: %w", utils.ConfigPath, err)
+		}
+		cfg = loaded
+	}
+	fmt.Println("Running codebase analysis...")
+	if err := analyzeProject(cfg.Project.Path); err != nil {
+		return fmt.Errorf("analysis failed: %w", err)
+	}
 	return nil
 }
 

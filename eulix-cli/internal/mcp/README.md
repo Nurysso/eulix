@@ -17,8 +17,10 @@ Eulix keeps a knowledge base and context builder cached in memory between
 queries, so an agent can ask many questions against the same repository without
 paying the analysis cost each time. The MCP server exposes that capability as
 typed tools for structural questions (answered from the call graph and index),
-budgeted ranked search, and two prompts. Every reply starts with a
-`answer: ... · complete: yes|no` line.
+budgeted ranked search, and two prompts. Every reply starts with an
+`answer: ... · complete: yes|no|n/a` line: `yes` means the question is answered
+and that was checked, `n/a` marks ranked search, and a `more:` field names what
+was left out.
 
 Unlike the one-off `eulix query` command, the MCP server:
 
@@ -45,8 +47,9 @@ that command.
 If `--repo` and the path argument are both omitted, the server uses the current
 directory when it contains `.eulix/kb.fb`. If neither applies, it asks the
 client for its open workspace folders ("roots") after connecting, and binds the
-first usable one. The repository can also be chosen with `set_repo_path` or the
-`repo_path` argument of a query.
+first usable one. The repository can also be chosen with `set_repo_path` (listed
+only when no repository was given at start-up) or the `repo_path` argument of a
+tool.
 
 ### Example client config (generic stdio)
 
@@ -69,19 +72,20 @@ The binary is `eulix`; the `mcp` subcommand is required.
 
 | Tool         | Answers                                   | Source                       |
 | ------------ | ----------------------------------------- | ---------------------------- |
-| `callers`    | who calls X (one line per call site)      | call graph, exact            |
+| `callers`    | who calls X (one line per call site)      | call graph, exact; uses the graph missed found by name |
 | `callees`    | what X calls                              | call graph, exact            |
 | `definition` | where X is defined: signature, doc, body  | symbol index, exact          |
 | `trace`      | how A reaches B: ordered hops, then code  | call graph + ranked code     |
 | `search`     | concepts and open questions               | ranked code, within a budget |
-| `query`      | free text (older clients); routes callers and definition questions like the typed tools | either |
 
 `callers` / `callees` take `symbol`, `depth` (1–4) and `limit`; `definition`
-takes `symbol` and `body_lines`; `trace` takes `from`, `to` and/or `question`;
+takes `symbol` and `body_lines`. For those three, `symbol` may list several
+names, comma-separated (at most 8), answered in one reply; `trace` takes `from`, `to` and/or `question`;
 `search` takes `question`, `known_symbols`, `max_tokens`, `format`
-(`plain`/`cot`) and `fresh`. All take an optional `repo_path`.
+(`plain`/`cot`), `fresh` and `bodies` (the best match comes in full, the other
+long matches one line each, unless `bodies: true`). All take an optional `repo_path`.
 
-`known_symbols` is still the important argument for `search`/`query`: it
+`known_symbols` is still the important argument for `search`: it
 enables multi-hop retrieval — see _How retrieval works_ below.
 
 Replies are budgeted: `[mcp] reply_tokens` in `eulix.toml` (default 1800) for
@@ -89,14 +93,18 @@ search, less for narrow questions, `max_tokens` per call. Chunks already sent in
 the session come back as one-line references. Details:
 [docs/eulix-cli/mcp/Server-And-Tools.md](../../../docs/eulix-cli/mcp/Server-And-Tools.md).
 
-### `query_with_cot` / `query_without_cot` (deprecated)
+### `query`, `query_with_cot`, `query_without_cot` (legacy)
 
-The pre-budget output, unchanged, kept because the retrieval benchmark compares
-releases on `query_without_cot`. Use `search` (with `format: "cot"` if needed).
+Listed only with `--legacy-tools` or `EULIX_MCP_LEGACY_TOOLS=1`: every listed
+tool's definition is sent to the model on every turn. `query` is the free-text
+tool of earlier releases; the other two return the pre-budget output, unchanged,
+because the retrieval benchmark compares releases on `query_without_cot`. Use
+the typed tools and `search` (with `format: "cot"` if needed).
 
 ### `set_repo_path`
 
-Switches the active repository.
+Switches the active repository. Listed only when the server was started without
+a repository.
 
 | Argument    | Type   | Required | Purpose                                 |
 | ----------- | ------ | -------- | --------------------------------------- |
@@ -193,8 +201,10 @@ what the calling agent knows.
 eulix mcp [path] [flags]
 
   --cot                Default to CoT when 'include_cot' is not specified
+  --legacy-tools       Also list query, query_with_cot and query_without_cot
+                       (same as EULIX_MCP_LEGACY_TOOLS=1)
   --repo string        Initial repository (or pass it as the positional argument;
-                       can also be set via set_repo_path or the client's roots)
+                       otherwise set via set_repo_path or the client's roots)
   --timeout duration   Idle timeout before releasing memory (default 5m)
 ```
 
@@ -204,7 +214,8 @@ eulix mcp [path] [flags]
 | ----------------------- | ------------------------------------------------- |
 | `WithIdleTimeout(d)`    | Idle timeout before freeing the context builder   |
 | `WithDefaultCoT(bool)`  | Default CoT behavior for the generic `query` tool |
-| `WithInitialRepo(path)` | Bind a repository at startup                      |
+| `WithInitialRepo(path)` | Bind a repository at startup; set_repo_path is then not listed |
+| `WithLegacyTools(bool)` | Also list the legacy free-text tools              |
 | `WithIO(in, out)`       | Custom streams (tests)                            |
 | `WithLogger(l)`         | Custom `slog.Logger` (default: stderr)            |
 | `WithStrategy(cfg)`     | Tune the retrieval cascade                        |
@@ -317,7 +328,7 @@ send({"jsonrpc":"2.0","method":"notifications/initialized"})
 time.sleep(0.3)
 
 send({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
-    "name":"query","arguments":{"query": sys.argv[1]}}})
+    "name":"search","arguments":{"question": sys.argv[1]}}})
 print(json.dumps(recv(), indent=2))
 
 p.terminate()

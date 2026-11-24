@@ -209,6 +209,9 @@ type CallSite struct {
 	// Via is the symbol this edge attaches to when Depth > 1.
 	Via  string
 	Test bool
+	// Edge is "" for a resolved call, else how the edge was inferred:
+	// "async", "dispatch" or "inferred" (see CallGraphIdx.Inferred).
+	Edge string
 }
 
 // CallReport answers "who calls X" or "what does X call" from the call graph.
@@ -223,13 +226,37 @@ type CallReport struct {
 	Others    []string // other symbols the name also matched
 	Found     bool
 	Suggested []string // closest names when not found
+
+	// Name scan (direct callers of a specific name, see scanName): the uses
+	// the call graph has no edge for.
+	Scanned     bool
+	ByName      []NameUse // calls whose receiver the graph could not resolve
+	AsValue     []NameUse // the name passed as a value: a handler, callback or goroutine target
+	NameOmitted int       // name uses left out by the limit
+	// Twins are other definitions with the same name: a name use may be theirs.
+	Twins []string
 }
 
-// Complete reports whether the report lists every edge the call graph has.
-// An empty report is never complete: a static graph misses calls it could not
-// resolve (through a variable, an interface, a closure), so "no callers" is
-// a claim to verify, not a fact.
-func (c *CallReport) Complete() bool { return c.Found && c.Omitted == 0 && len(c.Sites) > 0 }
+// Complete reports whether the report answers "who calls X" in full.
+//
+// Without a name scan, an empty report is never complete: a static graph
+// misses calls it could not resolve (through a field, an interface, a
+// closure), so "no callers" is a claim to verify, not a fact. With a scan,
+// every use of the name in the indexed code is listed, and the report is
+// complete unless a use could belong to another definition of the same name.
+func (c *CallReport) Complete() bool {
+	if !c.Found || c.Omitted > 0 || c.NameOmitted > 0 {
+		return false
+	}
+	if c.Scanned {
+		if len(c.ByName)+len(c.AsValue) == 0 {
+			return true
+		}
+		// Name uses are direct; deeper levels were not walked for them.
+		return len(c.Twins) == 0 && c.Depth <= 1
+	}
+	return len(c.Sites) > 0
+}
 
 // DirectCount counts depth-1 sites, split into non-test and test.
 func (c *CallReport) DirectCount() (code, tests int) {
@@ -375,6 +402,12 @@ func (r *Router) resolveForAgent(symbol string) (string, *utils.CallGraphNode, [
 			!strings.EqualFold(bareID(key), normalizeSymbol(name)) {
 			continue
 		}
+		// Prefer a node spelled exactly as asked ("UpdateProvider" is not the
+		// busier handler updateProvider), and pick among several the same way
+		// every time (the scan above runs in map order).
+		if k := r.bestSpelled(append([]string{key}, amb...), name); k != "" {
+			key, node = k, r.cgBuild.Nodes[k]
+		}
 		var others []string
 		for _, k := range amb {
 			if k != key && (strings.EqualFold(bareID(k), name) || strings.EqualFold(callGraphShortName(k), name)) {
@@ -385,6 +418,53 @@ func (r *Router) resolveForAgent(symbol string) (string, *utils.CallGraphNode, [
 		return key, node, others, true
 	}
 	return "", nil, nil, false
+}
+
+// bestSpelled picks, among call-graph keys, the best one spelled exactly as
+// name, or "" when none is: production code before tests, a concrete
+// function or method before an interface declaration or another node, then
+// the most called, then by key, so the answer does not depend on map order.
+func (r *Router) bestSpelled(keys []string, name string) string {
+	best := ""
+	var bestNode *utils.CallGraphNode
+	better := func(k string, n *utils.CallGraphNode) bool {
+		if best == "" {
+			return true
+		}
+		if t1, t2 := isTestPath(r.fileOfID(k)), isTestPath(r.fileOfID(best)); t1 != t2 {
+			return !t1
+		}
+		concrete := func(k string, n *utils.CallGraphNode) bool {
+			return (n.NodeType == "function" || n.NodeType == "method") && !strings.HasPrefix(k, "ifacemethod_")
+		}
+		f1, f2 := concrete(k, n), concrete(best, bestNode)
+		if f1 != f2 {
+			return f1
+		}
+		if n.CallCountEstimate != bestNode.CallCountEstimate {
+			return n.CallCountEstimate > bestNode.CallCountEstimate
+		}
+		if c1, c2 := len(r.cgBuild.CalledBy[k]), len(r.cgBuild.CalledBy[best]); c1 != c2 {
+			return c1 > c2
+		}
+		return k < best
+	}
+	for _, k := range keys {
+		n := r.cgBuild.Nodes[k]
+		if n == nil || !spelledAs(k, name) {
+			continue
+		}
+		if better(k, n) {
+			best, bestNode = k, n
+		}
+	}
+	return best
+}
+
+// spelledAs reports whether a call-graph key names exactly name (same case),
+// as its bare ID ("Bifrost.run") or its short name ("run").
+func spelledAs(key, name string) bool {
+	return bareID(key) == name || callGraphShortName(key) == name || bareID(key) == normalizeSymbol(name)
 }
 
 // defLocation returns "file:line" for a call-graph node, falling back to the
@@ -480,6 +560,7 @@ func (r *Router) Calls(symbol string, callees bool, depth, limit int) (*CallRepo
 					s := CallSite{
 						Name: displayName(other), ID: other, File: file, Line: ln,
 						Depth: d, Test: isTestPath(file),
+						Edge: r.cgBuild.Inferred[retrieval.SiteKey(from, to)],
 					}
 					if ln > 0 {
 						s.Text = clipText(lr.line(file, ln), maxCallSiteText)
@@ -513,7 +594,99 @@ func (r *Router) Calls(symbol string, callees bool, depth, limit int) (*CallRepo
 		}
 		return a.Line < b.Line
 	})
+	if code, tests := rep.DirectCount(); !callees && (depth == 1 || code+tests == 0) {
+		r.scanCallers(rep, key, lr, limit)
+	}
 	return rep, nil
+}
+
+// maxTwinsListed caps the other same-name definitions named in a report.
+const maxTwinsListed = 3
+
+// scanCallers adds to a callers report the uses of the symbol's name that the
+// call graph has no edge for (see scanName). Common names are not scanned:
+// their matches would mostly be other types' methods.
+func (r *Router) scanCallers(rep *CallReport, key string, lr *lineReader, limit int) {
+	name := lastSegment(rep.Symbol)
+	if !nameIsSpecific(name) {
+		return
+	}
+	t, err := r.ensureSymTable()
+	if err != nil {
+		return
+	}
+	rep.Scanned = true
+	rep.Twins = r.twinsOf(t, rep.Symbol, key, name)
+
+	// Sites the graph already lists, by line, or by enclosing function when
+	// the edge has no line; and sites it resolved to another definition of
+	// the same name (`s.Save()` on a different type is not a use of this one).
+	known := r.sitesOfTwins(key, name)
+	for _, s := range rep.Sites {
+		if s.Depth != 1 {
+			continue
+		}
+		if s.Line > 0 {
+			known[fmt.Sprintf("%s:%d", s.File, s.Line)] = true
+		} else {
+			known[s.File+"|"+lastSegment(bareID(s.ID))] = true
+		}
+	}
+	limit = min(limit, maxNameUses)
+	uses := r.scanName(lr, name, strings.Contains(rep.Symbol, "."))
+	if len(uses) >= maxNameScanUses {
+		rep.NameOmitted++ // the scan stopped early; more may exist
+	}
+	for _, u := range uses {
+		if known[fmt.Sprintf("%s:%d", u.File, u.Line)] || known[u.File+"|"+lastSegment(u.Enclosing)] {
+			continue
+		}
+		if len(rep.ByName)+len(rep.AsValue) >= limit {
+			rep.NameOmitted++
+			continue
+		}
+		if u.Call {
+			rep.ByName = append(rep.ByName, u)
+		} else {
+			rep.AsValue = append(rep.AsValue, u)
+		}
+	}
+}
+
+// sitesOfTwins returns, as "file:line", the call sites the graph resolved to
+// another node with the same short name as key.
+func (r *Router) sitesOfTwins(key, name string) map[string]bool {
+	out := map[string]bool{}
+	for k := range r.cgBuild.Nodes {
+		if k == key || callGraphShortName(k) != name {
+			continue
+		}
+		for _, caller := range r.cgBuild.CalledBy[k] {
+			file := r.fileOfID(caller)
+			for _, ln := range r.cgBuild.Sites[retrieval.SiteKey(caller, k)] {
+				out[fmt.Sprintf("%s:%d", file, ln)] = true
+			}
+		}
+	}
+	return out
+}
+
+// twinsOf lists the other definitions sharing a symbol's bare name, as
+// "Qualified (file:line)". A same-named method on the same type is the
+// symbol itself; a same-named function in another file is a twin.
+func (r *Router) twinsOf(t *symTable, symbol, key, name string) []string {
+	file := r.fileOfID(key)
+	var out []string
+	for _, d := range t.definitionsNamed(name) {
+		if d.Qualified == symbol && (d.Kind == "method" || d.File == file) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s (%s)", d.Qualified, d.Location()))
+	}
+	if len(out) > maxTwinsListed {
+		out = append(out[:maxTwinsListed], fmt.Sprintf("+%d more", len(out)-maxTwinsListed))
+	}
+	return out
 }
 
 // displayName is bareID plus a marker for interface methods, whose callee
@@ -658,6 +831,8 @@ type Hop struct {
 	File               string
 	Line               int
 	Text               string
+	// Edge is "" for a resolved call, else how the hop was inferred.
+	Edge string
 }
 
 // TraceResult is an ordered call path from From to To.
@@ -671,7 +846,22 @@ type TraceResult struct {
 	Reason     string // why no path, or why it stops where it does
 	Missing    []string
 	Locations  map[string]string // bare name -> definition "file:line"
+
+	// Upstream is the target's own chain when from → to has no static path:
+	// from the nearest entry point, or a function nothing calls, to To.
+	Upstream []Hop
+	// Start is the function a chain begins at when nothing calls it
+	// statically (and it is no entry point). StartUses are where its name is
+	// used instead: a handler registration, a goroutine start, a call through
+	// a field. StartScanned says the scan ran (specific names only).
+	Start        string
+	StartUses    []NameUse
+	StartTwins   []string
+	StartScanned bool
 }
+
+// maxStartUses caps the name uses listed for the start of a chain.
+const maxStartUses = 8
 
 // Trace finds the shortest call path from → to in the call graph. With from
 // empty, it walks callers back from to until it reaches an entry point (or a
@@ -694,6 +884,12 @@ func (r *Router) Trace(from, to string, maxHops int) (*TraceResult, error) {
 	res.To, res.ToID = bareID(toKey), toKey
 	res.Locations[res.To] = r.defLocation(toKey, toNode)
 
+	lr, err := r.newLineReader()
+	if err != nil {
+		return nil, err
+	}
+	defer lr.Close()
+
 	var path []string // node IDs, from start to toKey
 	if strings.TrimSpace(from) != "" {
 		fromKey, fromNode, _, ok := r.resolveForAgent(from)
@@ -709,7 +905,13 @@ func (r *Router) Trace(from, to string, maxHops int) (*TraceResult, error) {
 			res.Reason = fmt.Sprintf("no static call path from %s to %s within %d hops. "+
 				"The chain may cross an async boundary (goroutine, channel, callback, event, queue) "+
 				"that a syntax-based call graph cannot see", res.From, res.To, maxHops)
-			// Say where the chain does stop: the callers of the target.
+			// Say where the target's own chain begins, so the agent knows
+			// which function's start to look for.
+			up := r.pathFromEntry(toKey, maxHops)
+			res.Upstream = r.hopsAlong(lr, up, res.Locations)
+			if n := r.cgBuild.Nodes[up[0]]; n == nil || !n.IsEntryPoint {
+				r.scanStart(res, lr, up[0])
+			}
 			return res, nil
 		}
 	} else {
@@ -720,22 +922,7 @@ func (r *Router) Trace(from, to string, maxHops int) (*TraceResult, error) {
 		}
 	}
 
-	lr, err := r.newLineReader()
-	if err != nil {
-		return nil, err
-	}
-	defer lr.Close()
-
-	for i := 0; i+1 < len(path); i++ {
-		a, b := path[i], path[i+1]
-		h := Hop{Caller: bareID(a), Callee: bareID(b), CallerID: a, CalleeID: b, File: r.fileOfID(a)}
-		if lines := dedupInts(r.cgBuild.Sites[retrieval.SiteKey(a, b)]); len(lines) > 0 {
-			h.Line = lines[0]
-			h.Text = clipText(lr.line(h.File, h.Line), maxCallSiteText)
-		}
-		res.Hops = append(res.Hops, h)
-		res.Locations[h.Caller] = r.defLocation(a, r.cgBuild.Nodes[a])
-	}
+	res.Hops = r.hopsAlong(lr, path, res.Locations)
 	res.Found = len(res.Hops) > 0
 	if len(path) > 0 {
 		if n := r.cgBuild.Nodes[path[0]]; n != nil && n.IsEntryPoint {
@@ -745,12 +932,56 @@ func (r *Router) Trace(from, to string, maxHops int) (*TraceResult, error) {
 	if !res.Found {
 		res.Reason = fmt.Sprintf("%s has no callers in the call graph: it is an entry point, exported API, "+
 			"or reached only through an async boundary (goroutine, channel, callback) the graph cannot see", res.To)
+		r.scanStart(res, lr, toKey)
 	} else if strings.TrimSpace(from) == "" && !res.EntryPoint {
 		res.Reason = fmt.Sprintf("the chain stops at %s, which has no static callers in this repository: it is "+
 			"called by a framework or runtime (a handler, a dunder or interface method), or started as a "+
 			"goroutine, thread, callback or event handler; look for where it is registered", res.From)
+		r.scanStart(res, lr, path[0])
 	}
 	return res, nil
+}
+
+// hopsAlong turns a path of node IDs into hops with call-site lines, and
+// records each caller's definition in locs.
+func (r *Router) hopsAlong(lr *lineReader, path []string, locs map[string]string) []Hop {
+	var hops []Hop
+	for i := 0; i+1 < len(path); i++ {
+		a, b := path[i], path[i+1]
+		h := Hop{Caller: bareID(a), Callee: bareID(b), CallerID: a, CalleeID: b, File: r.fileOfID(a),
+			Edge: r.cgBuild.Inferred[retrieval.SiteKey(a, b)]}
+		if lines := dedupInts(r.cgBuild.Sites[retrieval.SiteKey(a, b)]); len(lines) > 0 {
+			h.Line = lines[0]
+			h.Text = clipText(lr.line(h.File, h.Line), maxCallSiteText)
+		}
+		hops = append(hops, h)
+		locs[h.Caller] = r.defLocation(a, r.cgBuild.Nodes[a])
+	}
+	return hops
+}
+
+// scanStart records where the name of a chain's first function is used,
+// when nothing calls it statically: that is where the chain really starts (a
+// route registration, "go worker()", a call through a field). Test code is
+// left out: a test is not how production code reaches it.
+func (r *Router) scanStart(res *TraceResult, lr *lineReader, id string) {
+	res.Start = bareID(id)
+	name := lastSegment(res.Start)
+	if !nameIsSpecific(name) {
+		return
+	}
+	t, err := r.ensureSymTable()
+	if err != nil {
+		return
+	}
+	res.StartScanned = true
+	res.StartTwins = r.twinsOf(t, res.Start, id, name)
+	for _, u := range r.scanName(lr, name, strings.Contains(res.Start, ".")) {
+		if u.Test || len(res.StartUses) >= maxStartUses {
+			continue
+		}
+		res.StartUses = append(res.StartUses, u)
+	}
 }
 
 // bfsPath returns the shortest path of node IDs from → to over call edges.

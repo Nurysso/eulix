@@ -12,6 +12,18 @@ import (
 // line; the rest are only counted.
 const maxTestSitesListed = 4
 
+// edgeLabels mark the edges the parser inferred rather than resolved, so an
+// agent can tell a guess from a fact.
+var edgeLabels = map[string]string{
+	"async":    asyncLabel,
+	"dispatch": "[interface dispatch: an implementation of the method called, inferred]",
+	"inferred": "[receiver type unknown; the only method of that name, inferred]",
+}
+
+// asyncLabel marks an edge inferred across a Go channel: the caller sends on
+// a field channel and the callee is a goroutine receiving from that field.
+const asyncLabel = "[async: channel send → receiver, inferred]"
+
 // FormatCallReport renders a call report compactly: one summary line, then
 // one line per call site with the enclosing function and the calling line.
 // It is written for an agent (every line carries file:line) but reads fine in
@@ -36,6 +48,22 @@ func FormatCallReport(rep *CallReport) string {
 	loc := ""
 	if rep.Location != "" {
 		loc = " (" + rep.Location + ")"
+	}
+	if code+tests == 0 && rep.Scanned {
+		if len(rep.ByName)+len(rep.AsValue) == 0 {
+			fmt.Fprintf(&b, "%s %s%s: none. Its name is not called or used anywhere else in the indexed code: "+
+				"it is an entry point, or called from outside the repository (a framework, the runtime, reflection).\n",
+				dir, rep.Symbol, loc)
+		} else {
+			found := "found " + nameCounts(rep)
+			if found == "found " {
+				found = "only tests use the name"
+			}
+			fmt.Fprintf(&b, "%s %s%s: none in the static call graph; %s:\n", dir, rep.Symbol, loc, found)
+			writeNameUses(&b, rep, 0)
+		}
+		writeOthers(&b, rep)
+		return b.String()
 	}
 	if code+tests == 0 {
 		name := rep.Symbol[strings.LastIndex(rep.Symbol, ".")+1:]
@@ -63,13 +91,19 @@ func FormatCallReport(rep *CallReport) string {
 	if tests > 0 {
 		fmt.Fprintf(&b, " + %d in tests", tests)
 	}
+	if c := nameCounts(rep); c != "" {
+		b.WriteString(" + " + c)
+	}
 	if rep.Depth > 1 {
 		fmt.Fprintf(&b, " (depth 1), walked to depth %d", rep.Depth)
 	}
-	if rep.Complete() {
+	switch {
+	case rep.Complete():
 		b.WriteString(", complete\n")
-	} else {
-		fmt.Fprintf(&b, ", %d more not shown\n", rep.Omitted)
+	case rep.Omitted+rep.NameOmitted > 0:
+		fmt.Fprintf(&b, ", %d more not shown\n", rep.Omitted+rep.NameOmitted)
+	default:
+		b.WriteString("\n")
 	}
 
 	// Column width for the enclosing-function name.
@@ -77,6 +111,11 @@ func FormatCallReport(rep *CallReport) string {
 	for _, s := range rep.Sites {
 		if !s.Test && len(s.Name) > w {
 			w = len(s.Name)
+		}
+	}
+	for _, u := range append(append([]NameUse(nil), rep.ByName...), rep.AsValue...) {
+		if !u.Test && len(u.Enclosing) > w {
+			w = len(u.Enclosing)
 		}
 	}
 	if w > 40 {
@@ -106,6 +145,9 @@ func FormatCallReport(rep *CallReport) string {
 		if s.Text != "" {
 			fmt.Fprintf(&b, "  %s", s.Text)
 		}
+		if l := edgeLabels[s.Edge]; l != "" {
+			b.WriteString("  " + l)
+		}
 		b.WriteString("\n")
 	}
 	if len(testSites) > 0 {
@@ -115,8 +157,92 @@ func FormatCallReport(rep *CallReport) string {
 		}
 		fmt.Fprintf(&b, "  (tests: %s%s)\n", strings.Join(testSites, ", "), more)
 	}
+	writeNameUses(&b, rep, w)
 	writeOthers(&b, rep)
 	return b.String()
+}
+
+// nameCounts summarizes a report's name uses outside tests, "3 calls by
+// name + 1 use as a value", or "" when there are none.
+func nameCounts(rep *CallReport) string {
+	var parts []string
+	if n := countNonTest(rep.ByName); n > 0 {
+		parts = append(parts, plural(n, "call", "calls")+" by name")
+	}
+	if n := countNonTest(rep.AsValue); n > 0 {
+		parts = append(parts, plural(n, "use", "uses")+" as a value")
+	}
+	return strings.Join(parts, " + ")
+}
+
+func countNonTest(uses []NameUse) int {
+	n := 0
+	for _, u := range uses {
+		if !u.Test {
+			n++
+		}
+	}
+	return n
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+// writeNameUses lists the name scan's finds under the static sites: calls the
+// graph could not resolve, then uses as a value, tests counted apart.
+func writeNameUses(b *strings.Builder, rep *CallReport, w int) {
+	if len(rep.ByName)+len(rep.AsValue) == 0 {
+		if rep.NameOmitted > 0 {
+			fmt.Fprintf(b, "  +%d more uses of the name not shown\n", rep.NameOmitted)
+		}
+		return
+	}
+	if w == 0 {
+		for _, u := range append(append([]NameUse(nil), rep.ByName...), rep.AsValue...) {
+			w = max(w, min(len(u.Enclosing), 40))
+		}
+	}
+	var tests []string
+	section := func(title string, uses []NameUse) {
+		first := true
+		for _, u := range uses {
+			at := fmt.Sprintf("%s:%d", u.File, u.Line)
+			if u.Test {
+				tests = append(tests, at)
+				continue
+			}
+			if first {
+				b.WriteString(title)
+				first = false
+			}
+			enc := u.Enclosing
+			if enc == "" {
+				enc = "(top level)"
+			}
+			fmt.Fprintf(b, "  %s  %-*s  %s\n", at, w, enc, u.Text)
+		}
+	}
+	section("  by name (the call graph could not resolve the receiver):\n", rep.ByName)
+	section("  used as a value (handler, callback or goroutine target):\n", rep.AsValue)
+	if len(tests) > 0 {
+		more := ""
+		if len(tests) > maxTestSitesListed {
+			more = fmt.Sprintf(" +%d more", len(tests)-maxTestSitesListed)
+			tests = tests[:maxTestSitesListed]
+		}
+		fmt.Fprintf(b, "  (tests, by name: %s%s)\n", strings.Join(tests, ", "), more)
+	}
+	if rep.NameOmitted > 0 {
+		fmt.Fprintf(b, "  +%d more uses of the name not shown\n", rep.NameOmitted)
+	}
+	if len(rep.Twins) > 0 {
+		fmt.Fprintf(b, "  note: %s is also defined as %s; a use by name may be one of those.\n",
+			lastSegment(rep.Symbol), strings.Join(rep.Twins, ", "))
+	}
 }
 
 func countTests(rep *CallReport) int {
@@ -199,6 +325,11 @@ func FormatTrace(t *TraceResult) string {
 		return b.String()
 	case !t.Found:
 		fmt.Fprintf(&b, "trace to %s (%s): %s.\n", t.To, t.Locations[t.To], t.Reason)
+		if len(t.Upstream) > 0 {
+			fmt.Fprintf(&b, "%s is reached by this chain instead, %d hops (static call graph):\n", t.To, len(t.Upstream))
+			writeHops(&b, t.Upstream)
+		}
+		writeStartUses(&b, t)
 		return b.String()
 	}
 	start := t.From
@@ -206,22 +337,59 @@ func FormatTrace(t *TraceResult) string {
 		start += " [entry point]"
 	}
 	fmt.Fprintf(&b, "call path %s → %s, %d hops (static call graph):\n", start, t.To, len(t.Hops))
-	for i, h := range t.Hops {
-		at := h.File
-		if h.Line > 0 {
-			at = fmt.Sprintf("%s:%d", h.File, h.Line)
-		}
-		fmt.Fprintf(&b, "  %d. %s → %s  at %s", i+1, h.Caller, h.Callee, at)
-		if h.Text != "" {
-			fmt.Fprintf(&b, "  %s", h.Text)
-		}
-		b.WriteString("\n")
-	}
+	writeHops(&b, t.Hops)
 	if loc := t.Locations[t.To]; loc != "" {
 		fmt.Fprintf(&b, "  target %s defined at %s\n", t.To, loc)
 	}
 	if t.Reason != "" {
 		fmt.Fprintf(&b, "  note: %s.\n", t.Reason)
 	}
+	writeStartUses(&b, t)
 	return b.String()
+}
+
+func writeHops(b *strings.Builder, hops []Hop) {
+	for i, h := range hops {
+		at := h.File
+		if h.Line > 0 {
+			at = fmt.Sprintf("%s:%d", h.File, h.Line)
+		}
+		fmt.Fprintf(b, "  %d. %s → %s  at %s", i+1, h.Caller, h.Callee, at)
+		if h.Text != "" {
+			fmt.Fprintf(b, "  %s", h.Text)
+		}
+		if l := edgeLabels[h.Edge]; l != "" {
+			b.WriteString("  " + l)
+		}
+		b.WriteString("\n")
+	}
+}
+
+// writeStartUses says where the chain's first function is used by name when
+// nothing calls it statically: that is where the chain starts.
+func writeStartUses(b *strings.Builder, t *TraceResult) {
+	if t.Start == "" || !t.StartScanned {
+		return
+	}
+	if len(t.StartUses) == 0 {
+		fmt.Fprintf(b, "  %s is not called or used by name anywhere else in the indexed code outside tests: "+
+			"it is called from outside the repository (a framework, the runtime, reflection).\n", t.Start)
+		return
+	}
+	fmt.Fprintf(b, "  %s is used by name here (where the chain starts):\n", t.Start)
+	for _, u := range t.StartUses {
+		enc := u.Enclosing
+		if enc == "" {
+			enc = "(top level)"
+		}
+		how := "calls it"
+		if !u.Call {
+			how = "passes it as a value"
+		}
+		fmt.Fprintf(b, "    %s:%d  %s %s  %s\n", u.File, u.Line, enc, how, u.Text)
+	}
+	if len(t.StartTwins) > 0 {
+		fmt.Fprintf(b, "    note: %s is also defined as %s; a use by name may be one of those.\n",
+			lastSegment(t.Start), strings.Join(t.StartTwins, ", "))
+	}
 }

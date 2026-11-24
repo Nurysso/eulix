@@ -130,6 +130,11 @@ func runAnalysisPipeline(projectPath string, cfg *config.Config) error {
 	}
 
 	fmt.Println("Generating embeddings...")
+	if root, err := a.EulixRoot(); err != nil {
+		return fmt.Errorf("eulix: %w", err)
+	} else if err := a.EnsureEmbedEnv(root); err != nil {
+		return fmt.Errorf("embedding setup (engine etiya needs uv and ~/.Eulix/.venv; set [project] engine = \"ehnas\" to skip): %w", err)
+	}
 	venvPath := filepath.Join(homeDir, ".Eulix", ".venv")
 	pythonPath, venvEnv, err := embeddings.GetVenvPython(venvPath)
 	if err != nil {

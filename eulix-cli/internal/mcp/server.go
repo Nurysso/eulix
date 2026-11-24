@@ -10,12 +10,14 @@ It exposes the same retrieval as 'eulix chat/query', keeping the knowledge base 
 builder warm in memory between queries and releasing them after a period of inactivity.
 
 Features:
-  - Dynamic repository selection via the 'set_repo_path' tool, the 'repo_path' argument
-    on queries, or automatically from the client's MCP "roots".
+  - Dynamic repository selection via the 'set_repo_path' tool (listed only when the server
+    was not started on a repository), the 'repo_path' argument on tools, or automatically
+    from the client's MCP "roots".
   - Helpful guidance if a project has not been initialized with 'eulix analyze'.
   - Typed tools for structural questions (callers, callees, definition, trace) answered
-    from the call graph and index, plus budgeted ranked search ('search', and 'query' for
-    older clients). Every reply starts with a line saying whether it is complete.
+    from the call graph and index, plus budgeted ranked search ('search'). The free-text
+    tools of earlier releases are listed only with WithLegacyTools. Every reply starts
+    with a line saying whether it answers the question.
 
 Protocol concerns (JSON-RPC framing, initialize handshake, capability negotiation,
 schema generation and validation, ping, cancellation) are all handled by the SDK.
@@ -49,13 +51,21 @@ const (
 	ServerName = "eulix"
 
 	// instructions tell the agent when Eulix beats grep. Without them agents
-	// rarely call it (5 of 50 sessions in the agent benchmark).
-	instructions = "Eulix answers structural questions about an indexed codebase from its call graph and symbol index. " +
-		"Use 'callers' / 'callees' for who calls what (exact call sites, complete list), 'definition' for where a " +
-		"symbol is defined, 'trace' for how one function reaches another across files, and 'search' for concepts " +
-		"and open questions. Prefer grep for literal strings, config values and log messages. " +
-		"Every reply starts with 'answer: ... · complete: yes|no'; when it says complete: yes, do not re-check with grep. " +
-		"Choose the repository with 'set_repo_path' or 'repo_path'; it must have been indexed with 'eulix analyze'."
+	// rarely call it (5 of 50 sessions in the agent benchmark). They are sent
+	// on every turn, so they stay short.
+	instructions = "Eulix answers structural questions about this codebase from its call graph and symbol index: " +
+		"'callers' / 'callees' (who calls what), 'definition' (where a symbol is defined), 'trace' (how one " +
+		"function reaches another) and 'search' (concepts, open questions). Use grep for literal strings and " +
+		"config values. Each reply starts with 'answer: … · complete: yes|no|n/a'. yes: answered and checked, " +
+		"do not re-check with grep. n/a: ranked search, judge the code. 'more:' says what was left out and how to get it."
+
+	// repoInstructions is added when the agent chooses the repository.
+	repoInstructions = " Choose the repository with 'set_repo_path' or 'repo_path'; it must be indexed with 'eulix analyze'."
+
+	// LegacyToolsEnv set to 1 registers the legacy free-text tools, like
+	// WithLegacyTools. An environment variable, unlike a flag, is ignored by
+	// older releases, so a benchmark can set it for every version it compares.
+	LegacyToolsEnv = "EULIX_MCP_LEGACY_TOOLS"
 
 	rootsTimeout = 5 * time.Second
 )
@@ -65,6 +75,8 @@ type Server struct {
 	idleTimeout time.Duration
 	defaultCoT  bool
 	initialRepo string
+	legacyTools bool // register query / query_with_cot / query_without_cot
+	pinned      bool // started on a repository (--repo): set_repo_path is not listed
 	in          io.Reader
 	out         io.Writer
 	log         *slog.Logger
@@ -105,7 +117,17 @@ func WithDefaultCoT(enable bool) Option {
 	return func(s *Server) { s.defaultCoT = enable }
 }
 
-// WithInitialRepo configures a repository to bind at startup.
+// WithLegacyTools also registers the free-text tools of earlier releases:
+// query, query_with_cot and query_without_cot. The retrieval benchmark needs
+// them (it compares releases on query_without_cot); agents never call them,
+// and every listed tool is paid for on every turn.
+func WithLegacyTools(enable bool) Option {
+	return func(s *Server) { s.legacyTools = enable }
+}
+
+// WithInitialRepo configures a repository to bind at startup. When it binds,
+// set_repo_path is not listed: the agent works in that repository (a tool's
+// repo_path argument can still switch).
 func WithInitialRepo(path string) Option {
 	return func(s *Server) { s.initialRepo = path }
 }
@@ -170,6 +192,7 @@ func NewServer(router *query.Router, cfg *config.Config, eulixDir string, opts .
 		if msg, err := s.SetRepoPath(s.initialRepo); err != nil {
 			s.log.Warn("initial repository not bound", "err", err)
 		} else {
+			s.pinned = true
 			s.log.Info(msg)
 		}
 	}
@@ -204,23 +227,38 @@ type fixedCoTArgs struct {
 }
 
 func (s *Server) buildMCPServer() *mcpsdk.Server {
+	instr := instructions
+	if !s.pinned {
+		instr += repoInstructions
+	}
 	srv := mcpsdk.NewServer(
 		&mcpsdk.Implementation{Name: ServerName, Version: utils.AppVersion},
 		&mcpsdk.ServerOptions{
-			Instructions:       instructions,
+			Instructions:       instr,
 			Logger:             s.log,
 			InitializedHandler: s.onInitialized,
 		},
 	)
 
-	mcpsdk.AddTool(srv, &mcpsdk.Tool{
-		Name: "set_repo_path",
-		Description: "Set or switch the active codebase repository for Eulix queries. " +
-			"The repository must have been analyzed with 'eulix analyze'.",
-		Annotations: &mcpsdk.ToolAnnotations{Title: "Set repository", IdempotentHint: true},
-	}, s.handleSetRepo)
+	if !s.pinned {
+		mcpsdk.AddTool(srv, &mcpsdk.Tool{
+			Name:        "set_repo_path",
+			Description: "Set or switch the active repository. It must be indexed with 'eulix analyze'.",
+			Annotations: &mcpsdk.ToolAnnotations{Title: "Set repository", IdempotentHint: true},
+		}, s.handleSetRepo)
+	}
 
 	s.addTypedTools(srv)
+	if s.legacyTools {
+		s.addLegacyTools(srv)
+	}
+	s.addPrompts(srv)
+	return srv
+}
+
+// addLegacyTools registers the free-text tools of earlier releases (see
+// WithLegacyTools).
+func (s *Server) addLegacyTools(srv *mcpsdk.Server) {
 
 	// 'query' is the free-text tool of earlier releases, kept as an alias. It
 	// routes callers / definition questions to the index first, like the typed
@@ -272,6 +310,11 @@ func (s *Server) buildMCPServer() *mcpsdk.Server {
 		})
 	}
 
+}
+
+// addPrompts registers the prompts an editor can offer the user directly.
+// Prompts are not sent to the model, so they cost nothing per turn.
+func (s *Server) addPrompts(srv *mcpsdk.Server) {
 	promptArgs := []*mcpsdk.PromptArgument{
 		{Name: "query", Description: "Question or search query about the codebase", Required: true},
 		{Name: "repo_path", Description: "Optional path to the project repository"},
@@ -287,8 +330,6 @@ func (s *Server) buildMCPServer() *mcpsdk.Server {
 		Description: "Build prompt with retrieved codebase context only (no Chain-of-Thought headers)",
 		Arguments:   promptArgs,
 	}, s.promptHandler(false))
-
-	return srv
 }
 
 // onInitialized binds a repository from the client's MCP roots when none is active yet.

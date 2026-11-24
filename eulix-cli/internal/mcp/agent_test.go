@@ -135,7 +135,7 @@ func TestAgentDefinitionTool(t *testing.T) {
 	repo := shop(t)
 	cs := connect(t, newTestServer(t))
 	text, _ := call(t, cs, "definition", map[string]any{"symbol": "big_report", "repo_path": repo})
-	if !strings.Contains(text, "complete: no — body cut") || !strings.Contains(text, "read app/big.py:41-150") {
+	if !strings.Contains(text, "complete: yes · more: body cut; read app/big.py lines 41-150") || !strings.Contains(text, "read app/big.py:41-150") {
 		t.Errorf("long body should be cut with a pointer to the rest:\n%s", text)
 	}
 	if n := strings.Count(text, "big_report body"); n != 39 {
@@ -235,7 +235,7 @@ func TestRenderContextReferencesRepeats(t *testing.T) {
 	}
 
 	ac.Budget, ac.Window.TotalTokens = 100, 95
-	if got := renderContext(ac, renderOpts{answer: "search", maxLines: 60}); !strings.Contains(got, "complete: no — budget hit") {
+	if got := renderContext(ac, renderOpts{answer: "search", maxLines: 60}); !strings.Contains(got, "complete: n/a (ranked) · more: lower-ranked chunks dropped") {
 		t.Errorf("a full budget must be reported:\n%s", got)
 	}
 }
@@ -305,5 +305,63 @@ func TestCapChunkSqueezesBlankRuns(t *testing.T) {
 	got, cut := capChunk(c, 60)
 	if cut || strings.Contains(got, "\n\n\n") {
 		t.Errorf("blank runs should collapse to one line:\n%q", got)
+	}
+}
+
+func TestFocusTerms(t *testing.T) {
+	got := focusTerms("how does the request reach shouldTryFallbacks via pq.queue and run_hooks?", "Bifrost.handleRequest")
+	want := []string{"shouldTryFallbacks", "queue", "run_hooks", "handleRequest"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("focusTerms = %v, want %v", got, want)
+	}
+}
+
+func TestSkeletonChunkKeepsSignatureAndFocusLines(t *testing.T) {
+	var body []string
+	body = append(body, "```go", "func (b *Bifrost) handleRequest(ctx context.Context) error {", "\t// handleRequest runs one request.")
+	for i := 0; i < 30; i++ {
+		body = append(body, fmt.Sprintf("\tx%d := step(%d)", i, i))
+	}
+	body = append(body, "\tif b.shouldTryFallbacks(ctx) {", "\t\treturn nil", "\t}")
+	for i := 0; i < 30; i++ {
+		body = append(body, fmt.Sprintf("\ty%d := step(%d)", i, i))
+	}
+	body = append(body, "}", "```")
+	c := utils.ContextChunk{File: "core/bifrost.go", StartLine: 100, EndLine: 165, Content: strings.Join(body, "\n")}
+
+	got, cut := skeletonChunk(c, 20, []string{"shouldTryFallbacks"})
+	if !cut {
+		t.Fatal("expected the chunk to be cut")
+	}
+	for _, want := range []string{
+		"func (b *Bifrost) handleRequest",
+		"// handleRequest runs one request.",
+		"if b.shouldTryFallbacks(ctx) {",
+		"skeleton: 4 of 66 lines shown (read core/bifrost.go:100-165",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skeleton missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "x5 :=") || strings.Contains(got, "y5 :=") {
+		t.Errorf("skeleton kept unrelated body lines:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "```") {
+		t.Errorf("fence not closed:\n%s", got)
+	}
+
+	// No focus line in the chunk: plain head cut, as before.
+	got, _ = skeletonChunk(c, 20, []string{"notThere"})
+	if !strings.Contains(got, "more lines cut") {
+		t.Errorf("want capChunk fallback, got:\n%s", got)
+	}
+}
+
+func TestMentionsAnyWholeWord(t *testing.T) {
+	if mentionsAny("runtime.Gosched()", []string{"run"}) {
+		t.Error("matched inside a longer identifier")
+	}
+	if !mentionsAny("\trun(ctx)", []string{"run"}) {
+		t.Error("missed a whole-word match")
 	}
 }

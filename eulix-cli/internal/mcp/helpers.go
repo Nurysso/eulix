@@ -69,7 +69,7 @@ func (s *Server) setRepoPathLocked(repoPath string) (string, error) {
 	kbPath := filepath.Join(eulixDir, kbfile.KBFile)
 	if _, err := os.Stat(kbPath); errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("project at %q is not initialized by Eulix (no knowledge base found at %s). "+
-			"Please run 'eulix analyze' in the project root in your terminal to generate it before querying",
+			"To index it (no prompts, no Python), run in the project root: eulix init --yes --engine ehnas --analyze",
 			absPath, kbPath)
 	}
 
@@ -129,6 +129,9 @@ type queryOpts struct {
 	// legacy reproduces the pre-budget output exactly (router-sized context,
 	// no routing, no header): the retrieval benchmark compares versions on it.
 	legacy bool
+	// lean sends the best chunk in full and the others one line each (see
+	// leanSearch). The cascade still scores the full rendering.
+	lean bool
 }
 
 // executeQuery is the body of 'query' and 'search'. With route set, a
@@ -158,7 +161,11 @@ func (s *Server) executeQuery(ctx context.Context, repoPath, queryText string, k
 		if err != nil {
 			return err
 		}
+		if o.lean {
+			result = leanSearch(result, focusTerms(queryText))
+		}
 		if !o.legacy {
+			// Only chunks sent in full count as sent.
 			s.markSentLocked(result)
 		}
 		s.log.Info("query served", "repo", s.activeRepo, "retrieval", trace.String())
@@ -209,7 +216,7 @@ func (s *Server) withRepo(ctx context.Context, repoPath string, fn func() error)
 	if s.router == nil {
 		return errors.New("repository path is not set. Provide the absolute path to your repository " +
 			"via the 'repo_path' argument or the 'set_repo_path' tool. The project must be initialized " +
-			"by running 'eulix analyze' in the project root in your terminal")
+			"in its root with: eulix init --yes --engine ehnas --analyze")
 	}
 
 	// A replaced folder would serve another repository's files against this index.
