@@ -75,7 +75,7 @@ The copy is for people. No Eulix component reads it, with one temporary exceptio
 
 ### Safe replacement
 
-The parser writes each file under a temporary name and renames it into place when it is complete. A reader that still has the old file open keeps reading the old contents, instead of crashing because the file changed underneath it. This matters more with a binary format, because readers keep the mapping open while they work, and it also removes the cause of [RET-10](../Known-Issues/Retrieval-And-Query.md#ret-10-rewriting-kbjson-while-eulix-reads-it-can-crash-the-reader).
+The parser writes each file under a temporary name and renames it into place when it is complete. A reader that still has the old file open keeps reading the old contents, instead of crashing because the file changed underneath it. This matters more with a binary format, because readers keep the mapping open while they work, and it also removes the cause of [RET-10](../Known-Issues/Retrieval-And-Query.md#ret-10-on-windows-eulix-analyze-can-fail-while-eulix-reads-the-same-knowledge-base).
 
 ### No backward compatibility
 

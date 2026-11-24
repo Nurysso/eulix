@@ -220,5 +220,5 @@ Each target is set relative to a measured baseline in `bench/results/agent/`. No
 
 - Benchmark method and limits: [`bench/agent/README.md`](../../../bench/agent/README.md)
 - Run results: `bench/results/agent/2026-11-20-*`
-- What the runs say about use cases: [`docs/launch/eulix-use-cases.md`](../../launch/eulix-use-cases.md)
+- What the runs say about use cases: [`docs/use-case.md](../../use-case.md)
 - How the cascade works today: [Retrieval-Cascade.md](Retrieval-Cascade.md), [Anchors-And-Scoring.md](Anchors-And-Scoring.md)

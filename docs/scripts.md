@@ -19,6 +19,10 @@ make repro-prism PARSER_BIN=/other/eulix_parser
 
 Scripts need no arguments when run from the repo: input files default to `.eulix/kb.fb`, `.eulix/kb_call_graph.fb` and `.eulix/embeddings.bin`, the parser defaults to `eulix-parser/target/release/eulix_parser`, and `check_embed_*.py` use the repo's `eulix-embed/` (override with `EULIX_EMBED_DIR`). Anything a script writes goes to `script-test-dump/` at the repo root, which is in `.gitignore` and `.euignore`. `kb_diff.py` has no default because it needs two files. When you pass a path through `make`, use `ARGS=`, for example `make script SCRIPT=call_graph_id_patterns.py ARGS=other.fb`. The FlatBuffers files are read through `bench/lib/kbfb.py` and its vendored runtime, so the scripts still need only the standard library.
 
+## Docs checks
+
+`scripts/check_docs.py` runs the same checks as the Docs workflow (`.github/workflows/Docs.yaml`): dead links with lychee, then spelling with codespell. Run it before pushing a change to `docs/`. `--offline` skips external URLs, and `--links` or `--spelling` runs only one check. It needs `lychee` (`pacman -S lychee`, `brew install lychee` or `cargo install lychee`) and `uv` or `codespell`.
+
 ## Bug-repro scripts (run these before a release)
 
 These find and confirm bugs. Each one prints a result that shows whether the bug is present, so a fixed bug that comes back is caught by re-running it. Build the parser first: `cd eulix-parser && cargo build --release`.
