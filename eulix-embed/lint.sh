@@ -123,7 +123,7 @@ print_header "📝  Type Checking"
 if command_exists mypy; then
     run_linter "mypy" "mypy ${DIRS} \
         --python-version=${PYTHON_VERSION} \
-        --exclude '(\.venv|venv)' \
+        --exclude '(\.venv|venv|^fb/)' \
         --warn-return-any \
         --warn-unused-configs \
         --warn-redundant-casts \

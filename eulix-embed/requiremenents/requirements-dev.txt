@@ -3,3 +3,4 @@ radon>=6.0.0
 mypy>=1.8.0
 bandit>=1.7.0
 codespell>=2.2.0
+pytest>=9.2.0

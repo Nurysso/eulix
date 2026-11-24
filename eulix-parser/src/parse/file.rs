@@ -13,13 +13,13 @@ use crate::cache::{self, Cached, ParseCache};
 use crate::os_io;
 use crate::parse::slim::{slim, strip_emitted};
 use crate::spill::Spill;
-use crate::views::FileDataSimpleView;
 
+use libeulix::fb_io;
 use libeulix::grammar_files;
 use libeulix::grammar_files::language::Language;
 use libeulix::grammar_files::php;
 use libeulix::struc::kb_struct::FileData;
-use libeulix::utils::file_walker::FileWalker;
+use libeulix::utils::file_walker::{ChecksumFormat, FileWalker};
 use xxhash_rust::xxh3::xxh3_128;
 
 /// The `bool` is true when the file came from the cache instead of a parse.
@@ -80,13 +80,9 @@ pub fn parse_file(
         syntax.first_error_line = Some(syntax.first_error_line.map_or(line, |l| l.min(line)));
     }
 
-    // Spill the rich view first. Phase 2 reads this back, so this has to
-    // happen before we slim or strip anything.
-    let loc = {
-        let mut frag = Vec::with_capacity(8 * 1024);
-        serde_json::to_writer(&mut frag, &FileDataSimpleView(&result))?;
-        spill.append(&relative_path, &frag)?
-    };
+    // Spill this file's kb.fb record first (language, loc, functions, classes, todos).
+    // It needs the full data, so it has to happen before we slim or strip anything.
+    let loc = spill.append(&relative_path, &fb_io::encode_file_record(&result))?;
 
     // Extract imports BEFORE slim() clears them
     let raw_imports: Vec<(String, String, String)> = result
@@ -128,7 +124,7 @@ pub fn parse_file(
         syntax: result.syntax,
         raw_imports,
         emit: loc,
-        slim: slim_spill.append(&relative_path, &serde_json::to_vec(&result)?)?,
+        slim: slim_spill.append(&relative_path, &cache::encode_slim(&result)?)?,
     };
     Ok((relative_path, result, cached, false))
 }
@@ -140,6 +136,7 @@ pub fn collect_source_files_and_hash(
     verbose: bool,
     write_dir: &Path,
     threads: usize,
+    checksum: ChecksumFormat,
 ) -> Result<(Vec<PathBuf>, String), Box<dyn std::error::Error>> {
     // Turn the comma-separated CLI value into Language enums.
     // `all` is just a shortcut; otherwise we parse each token and ignore
@@ -197,10 +194,11 @@ pub fn collect_source_files_and_hash(
     } else {
         FileWalker::new(root.to_path_buf())
     }
-    .with_threads(threads);
+    .with_threads(threads)
+    .with_checksum(checksum);
 
     // Walk the tree, keep files whose extension matches, and compute the
-    // project hash while we're at it.
+    // project hash while we're at it (empty with ChecksumFormat::None).
     let (mut all_files, project_hash) = walker.walk_and_project_hash(
         |path| {
             let ext = path
@@ -272,6 +270,7 @@ mod tests {
     use crate::parse::directory::parse_directory;
     use crate::stats::ParseStats;
     use libeulix::struc::kb_struct::KnowledgeBase;
+    use libeulix::utils::file_walker::ChecksumFormat;
     use std::fs;
     use tempfile::TempDir;
 
@@ -287,6 +286,8 @@ mod tests {
             "test",
             out.path(),
             &engine,
+            false,
+            ChecksumFormat::default(),
         )
         .unwrap();
 
@@ -327,6 +328,8 @@ mod tests {
             "test",
             out.path(),
             &engine,
+            false,
+            ChecksumFormat::default(),
         )
         .unwrap();
         let kb = analyze_and_build(kb, false, 2, repo.path());
@@ -368,6 +371,8 @@ mod tests {
             "test",
             out.path(),
             &engine,
+            false,
+            ChecksumFormat::default(),
         )
         .unwrap();
 
@@ -411,6 +416,8 @@ mod tests {
             "test",
             out.path(),
             &engine,
+            false,
+            ChecksumFormat::default(),
         )
         .unwrap();
 

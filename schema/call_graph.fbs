@@ -1,0 +1,43 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+// kb_call_graph.fb: call-graph nodes and edges, plus each node's tags and each
+// file's category. Node ids, files and edge endpoints repeat heavily, so the
+// writer stores each distinct string once (shared strings).
+
+include "common.fbs";
+
+namespace eulix.fb;
+
+table CallGraphNode {
+  id:string;
+  node_type:string;      // "function", "method", "class"
+  file:string;
+  is_entry_point:bool;
+  call_count_estimate:ulong;
+}
+
+table CallGraphEdge {
+  from:string;
+  to:string;
+  edge_type:string;      // "call", "inherits", "uses"
+  conditional:bool;
+  call_site_line:ulong;
+}
+
+table FileCategory {
+  key:string (key);      // file path
+  category:string;
+}
+
+table CallGraph {
+  format_version:uint;
+  nodes:[CallGraphNode];
+  edges:[CallGraphEdge];
+  tags:[StringList];               // node id -> tags, sorted by id
+  file_categories:[FileCategory];  // file -> category, sorted by file
+}
+
+root_type CallGraph;
+file_identifier "EUCG";
+file_extension "fb";

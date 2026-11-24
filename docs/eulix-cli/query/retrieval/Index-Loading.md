@@ -9,7 +9,7 @@ This page explains how the retrieval engine turns the files in `.eulix/` into in
 
 ## Overview
 
-When the retrieval engine starts, it reads `kb.json`, `kb_call_graph.json` and, for ETIYA, `embeddings.bin` and `vectors.bin`. From these it builds the structures every search uses: a flat list of **chunks**, a symbol index, an inverted keyword index, a boilerplate detector, a directory tree, a call-graph lookup, and (ETIYA) a matrix of vectors. This happens once per process.
+When the retrieval engine starts, it reads `kb_index.fb`, `kb.fb`, `kb_call_graph.fb` and, for ETIYA, `embeddings.bin` and `vectors.bin`. From these it builds the structures every search uses: a flat list of **chunks**, a symbol index, an inverted keyword index, a boilerplate detector, a directory tree, a call-graph lookup, and (ETIYA) a matrix of vectors. This happens once per process.
 
 ## Why It Exists
 
@@ -21,13 +21,13 @@ Searching needs random access to every chunk and its words. Building the right i
 
 A **chunk** is the unit of retrieval: one function, one method, or one class. For each, `addChunksFromFile` builds a `Chunk` with an ID, name, file, line range, importance, a list of symbols (names it defines and calls), and a readable text made from the signature, docstring and call relationships. A class chunk also lists its methods and has importance 0.95, a little above functions, because of its structural weight.
 
-### Streaming load of `kb.json`
+### Streaming load of `kb.fb`
 
 The knowledge base can be several gigabytes. The old design decoded it fully into a large structure and then copied it into chunks, which could need 8 to 12 GB for a 4 GB source tree and run out of memory on 16 GB machines. The current design (`streamKBChunks`) never builds the whole structure:
 
 - It reads the file through a 1 MiB buffer, without memory-mapping it: a mapping would keep every page the walk passes in memory until the end ([Mmap](Mmap.md#why-the-streaming-reader-doesnt-map)).
-- It walks the JSON token by token with the standard decoder, which supports streaming.
-- For each file entry, it decodes just that entry with the fast Sonic decoder, turns it into chunks, and lets the decoded data be freed before the next one.
+- `kbfile.WalkKB` reads the header (metadata and each file's offset and length) and sizes the chunk slice from the metadata totals.
+- It then reads each file's record in order into one reused buffer, copies its fields out, turns it into chunks, and lets the decoded data be freed before the next one.
 
 The comment records an estimated peak of 6 to 8 GB for the same case, down from 8 to 12. Because the streaming path does not keep the source structure, chunk text is always held in memory (lazy text loading is turned off).
 
@@ -44,7 +44,7 @@ The subsystem tree ([Search Pipeline](Search-Pipeline.md)) and the noise-path li
 
 ### Call graph
 
-`loadAndIndexCallGraph` decodes `kb_call_graph.json` and keeps only edges of type `call`. Each edge becomes two relationships: `calls` on the caller and `called_by` on the callee, both with distance 1. If the file is missing, the engine still works but without expansion, and logs it.
+`loadAndIndexCallGraph` reads `kb_call_graph.fb` through `kbfile.ReadCallGraph` (memory-mapped above 4 MiB, strings copied out and interned, since ids repeat across nodes and edges) and keeps only edges of type `call`. Each edge becomes two relationships: `calls` on the caller and `called_by` on the callee, both with distance 1. If the file is missing, the engine still works but without expansion, and logs it.
 
 ### Vectors (ETIYA only)
 
@@ -60,7 +60,7 @@ A missing `embeddings.bin` makes ETIYA fall back to keyword-only retrieval and l
 
 | Item | Responsibility |
 | --- | --- |
-| `loadChunks`, `streamKBChunks` | Read `kb.json` into chunks. |
+| `loadChunks`, `streamKBChunks` | Read `kb.fb` into chunks (through `kbfile.WalkKB`). |
 | `addChunksFromFile`, `buildChunkFromKBFunction`, `buildChunkFromKBClass` | Build chunks. |
 | `buildDerivedIndices`, `buildInvertedIndex` | Indices. |
 | `loadAndIndexCallGraph` | Call-graph lookup. |

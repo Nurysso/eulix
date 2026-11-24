@@ -9,6 +9,7 @@
 
 Ask *who calls this* or *how does A reach B* and get one complete answer from the call graph, on your machine, with no build step or GPU.
 
+[![CI](https://img.shields.io/github/actions/workflow/status/Nurysso/eulix/Test.yaml?branch=main&style=for-the-badge&labelColor=1A2030&label=CI)](https://github.com/Nurysso/eulix/actions/workflows/Test.yaml)
 [![Version](https://img.shields.io/badge/version-v0.9.0-A78BFA?style=for-the-badge&labelColor=1A2030)](changelog.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-5EEAD4?style=for-the-badge&labelColor=1A2030)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio_server-A78BFA?style=for-the-badge&labelColor=1A2030)](docs/eulix-cli/mcp/Overview.md)
@@ -41,11 +42,11 @@ Ask *who calls this* or *how does A reach B* and get one complete answer from th
 
 <br>
 
-|              💸 −6%              |        📦 1.6M lines         |          🎯 98.6%           |      ⚡ < 20 ms      |              🐧 53.9 s              |
+|              💸 −22%             |        📦 1.6M lines         |          🎯 98.6%           |      ⚡ < 20 ms      |              🐧 53.9 s              |
 | :------------------------------: | :--------------------------: | :-------------------------: | :------------------: | :---------------------------------: |
-| agent cost, with the same 13/13 correct answers | of bifrost indexed in 5.7 s | of call-graph edges are right | per warm query (p50) | to parse the Linux kernel (37.3M lines) |
+| agent cost on a 1.6M-line repo (Opus 4.8) | of bifrost indexed in 5.7 s | of call-graph edges are right | per warm query (p50) | to parse the Linux kernel (37.3M lines) |
 
-<sub>Agent figures: Claude Code with Claude Sonnet 5.5 (medium effort), 13 questions on bifrost, with and without Eulix. Call-graph figure: eight open-source projects, one per language, checked against each language's own compiler tooling. Query figure: v0.9.0 with no embeddings on five open-source repos, Ryzen 5 5600X. Kernel figure: 12 threads. Details in [Benchmarks](#-benchmarks).</sub>
+<sub>Agent figures: Claude Code with Claude Opus 4.8, 15 questions on bifrost, one session each, with and without Eulix (14/15 correct with, 13/15 without). Opus 5.5 reads less on its own and saved 10% ([why](docs/Architecture/Agent-Benchmark.md#why-opus-48-saved-more-than-opus-55)). Call-graph figure: eight open-source projects, one per language, checked against each language's own compiler tooling. Query figure: v0.9.0 with no embeddings on five open-source repos, Ryzen 5 5600X. Kernel figure: 12 threads. Details in [Benchmarks](#-benchmarks).</sub>
 
 ---
 
@@ -53,17 +54,19 @@ Ask *who calls this* or *how does A reach B* and get one complete answer from th
 
 On a repository you know, you remember where things are. On one you don't (a new job, a dependency you have to debug, a codebase newer than your model's training data), every question starts with a search. Grep matches strings. It can't tell you who calls a function, which of five `validate()` methods a call means, or whether you have found every caller. Eulix answers those from structure: it parses the repository once into symbols, scopes and a call graph, then answers from that index on your own machine.
 
-**For AI agents.** An agent on unfamiliar code greps, opens a file, greps again and backs out of dead ends. Every step is a model turn, and every result stays in context for the rest of the session. With Eulix it asks the question as a tool call and gets a short, complete answer: a `callers` reply is about 110 tokens, one line per call site, and ends with `complete: yes`, so the agent doesn't re-check with grep. Measured with Claude Code (Claude Sonnet 5.5) on bifrost, a Go codebase from November 2026 with 1.6 million lines in 3,242 files:
+**For AI agents.** An agent on unfamiliar code greps, opens a file, greps again and backs out of dead ends. Every step is a model turn, and every result stays in context for the rest of the session. With Eulix it asks the question as a tool call and gets a short, complete answer: a `callers` reply is about 110 tokens, one line per call site, and ends with `complete: yes`, so the agent doesn't re-check with grep. Measured with Claude Code (Claude Opus 4.8) on bifrost, a Go codebase from November 2026 with 1.6 million lines in 3,242 files:
 
-| 13 questions on bifrost | Cost (list price) | Output tokens | Time | Correct |
+| 15 questions on bifrost | Input tokens | Cost (list price) | Time | Correct |
 | :-- | --: | --: | --: | :-: |
-| Grep and file reads only | $7.34 | 186k | 298 s | 13/13 |
-| With Eulix | $6.92 (**−6%**) | 150k (−20%) | 284 s | 13/13 |
+| Grep and file reads only | 5.16M | $8.67 | 828 s | 13/15 |
+| With Eulix | 3.75M (−27%) | $6.78 (**−22%**) | 800 s | 14/15 |
 
-- Eulix was cheaper on 11 of the 13 questions. Its index of the whole repository took 5.7 s to build.
-- The questions about structure gain most. In a separate run on four repos, *what calls X* questions cost **27% less**. *Where is X* questions were about even, since grep is already good at finding a name.
-- Agents rarely call Eulix unless told to. `eulix mcp install` registers the server and adds the one-line hint that the numbers above use.
-- One session per setup, so a few percent either way per question is noise. A call through a struct field, goroutine or callback has no edge in the call graph yet, and the first version of these tools cost 18–40% *more* than grep. [Every run, the method and its limits ↓](#agent-token-use-claude-code-with-and-without-eulix)
+- Eulix was cheaper on 9 of the 15 questions. The largest savings were on traces (−39%) and long multi-file questions (−22%), where the agent would otherwise read the most. Its index of the whole repository took 5.8 s to build.
+- **On Opus 5.5 the saving is 10%**, in both cost and time, with 35/35 correct against 33/35. Opus 5.5 reads much less on its own (3.0M input tokens against 5.2M for Opus 4.8), so there is less reading for Eulix to replace. [Why the two models differ](docs/Architecture/Agent-Benchmark.md#why-opus-48-saved-more-than-opus-55).
+- The questions about structure gain most on both models: on Opus 5.5, *what calls X* questions cost **24–33% less** and traces 28–32% less. *Where is X* questions were about even, since grep is already good at finding a name.
+- Longer sessions and bigger repos should give Eulix more reading to replace, but that hasn't been measured yet: a multi-hour session per setup is beyond the token budget of these runs.
+- `eulix mcp install` registers the server and adds a one-line hint. Opus 5.5 used Eulix even without the hint and saved as much; with the older single-tool server, agents rarely called it unprompted.
+- One to three sessions per question, so a few percent either way per question is noise. A call through a struct field, goroutine or callback has no edge in the call graph yet, and the first version of these tools cost 18–40% *more* than grep. [Every run, the method and its limits ↓](#agent-token-use-claude-code-with-and-without-eulix)
 
 **For people.** The same index answers you directly. `eulix vizeulize` opens the call graph in your browser, searchable and served from `127.0.0.1`. `eulix chat` answers questions in the terminal with a local model (Ollama, LM Studio, vLLM) or a hosted one. [`eulix-lsp`](eulix-lsp/README.md) (beta) brings definitions, references and call hierarchy into your editor without a build.
 
@@ -308,7 +311,7 @@ It also stays inside the repository you point it at. MCP and retrieval skip hidd
 
 Eulix is three programs in three languages, each picked for its job and shipped as one binary. `eulix analyze` runs the first two; every query runs through the third.
 
-- **Rust · `eulix-parser` on `libeulix`.** Parses every source file with Tree-sitter grammars for nine languages, extracts functions, classes, methods, imports and call sites, and resolves calls with PRISM v2. A spill-to-disk writer keeps peak memory near 3.7 GB on the full kernel, and a parse cache makes re-runs incremental. It writes eight JSON files to `.eulix/`, among them `kb.json` (symbols), `kb_index.json` (lookup indexes), `kb_call_graph.json` (the call graph) and `kb_summary.json` (the project summary).
+- **Rust · `eulix-parser` on `libeulix`.** Parses every source file with Tree-sitter grammars for nine languages, extracts functions, classes, methods, imports and call sites, and resolves calls with PRISM v2. A spill-to-disk writer keeps peak memory near 3.7 GB on the full kernel, and a parse cache makes re-runs incremental. It writes eight FlatBuffers files to `.eulix/`, among them `kb.fb` (symbols), `kb_index.fb` (lookup indexes), `kb_call_graph.fb` (the call graph) and `kb_summary.fb` (the project summary); `--emit-json` adds a one-to-one JSON copy of each for inspection.
 - **Python · `eulix-embed`.** Runs only when the retrieval engine is ETIYA. It chunks the knowledge base, embeds the chunks with ONNX Runtime (default) or PyTorch on GPU or CPU, and writes SQ8-quantized vectors to `embeddings.bin` and `vectors.bin`.
 - **Go · `eulix-cli`.** The `eulix` binary you install. It carries the parser and the embedder inside it, unpacks them on first run and checks the parser against a hash compiled into the build. It routes each question, runs the ETIYA or EHNAS engine, and serves `eulix mcp`, `eulix chat` and `eulix vizeulize` from the same index.
 - **MCP server · `eulix mcp`.** Speaks the Model Context Protocol over stdio. Agents get typed tools (`callers`, `callees`, `definition`, `trace`, `search`), the routed `query` tool and `set_repo_path`, plus two prompts. Every reply starts with a `complete: yes|no` line and fits a per-question budget. It keeps the index warm between calls and never calls a model itself.
@@ -321,7 +324,7 @@ Eulix is three programs in three languages, each picked for its job and shipped 
         │
         ▼
  eulix_parser   Rust · libeulix · Tree-sitter · PRISM v2
-        │       symbols, scopes, call graph       →  .eulix/kb*.json
+        │       symbols, scopes, call graph       →  .eulix/kb*.fb
         ▼
  eulix_embed    Python · ONNX Runtime (default) or PyTorch · ETIYA only
         │       SQ8 vectors                       →  .eulix/embeddings.bin
@@ -372,9 +375,31 @@ max_tokens = 8192                 # replies are sized to fit this budget
 
 ### Agent token use: Claude Code with and without Eulix
 
-Questions a developer might ask about an unfamiliar repo (*what calls X*, *where is X*, *trace a flow*, a config lookup, and longer multi-file questions), asked of Claude Code (Claude Sonnet 5.5) with grep alone and with Eulix plus the one-line hint that `eulix mcp install` writes. Method, every run and its limits: [Agent Benchmark](docs/Architecture/Agent-Benchmark.md).
+Questions a developer might ask about an unfamiliar repo (*what calls X*, *where is X*, *trace a flow*, a config lookup, and longer multi-file questions), asked of Claude Code (Claude Opus 5.5, Opus 4.8 and Sonnet 5.5) with grep alone and with Eulix plus the one-line hint that `eulix mcp install` writes. Method, every run and its limits: [Agent Benchmark](docs/Architecture/Agent-Benchmark.md).
 
-**Current MCP tools, on bifrost.** [Bifrost](https://github.com/maximhq/bifrost) at a commit from 2026-11-19 is a Go codebase of 1.6M lines (3,242 files, indexed in 5.7 s) newer than the model's training data, so the agent has to read the code instead of answering from memory. 13 questions were asked in one long session per setup (10 regular, 3 deep), at medium effort:
+**Current MCP tools, on bifrost.** [Bifrost](https://github.com/maximhq/bifrost) at a commit from 2026-11-19 is a Go codebase of 1.6M lines (3,242 files, indexed in 5.8 s) newer than the model's training data, so the agent has to read the code instead of answering from memory.
+
+**Opus 4.8**, all 15 questions (10 regular, 5 deep), one session per question:
+
+| Setup | Input tokens | Output tokens | Cost (list price) | Time | Correct answers |
+| :-- | --: | --: | --: | --: | :-: |
+| No Eulix | 5.16M | 60k | $8.67 | 828 s | 13/15 |
+| Eulix + hint | 3.75M (−27%) | 59k (−3%) | $6.78 (**−22%**) | 800 s | 14/15 |
+
+- **22% cheaper.** Savings were largest on traces and deep questions (−22% to −48% each) and nil on small lookups. Without Eulix, Opus 4.8 read 1.49M input tokens on a single trace question; with it, 0.63M. [Run summary](bench/results/agent/2026-11-20-opus48-bifrost/SUMMARY.md).
+
+**Opus 5.5**, all 15 questions (10 regular, 5 deep), one session per question, each asked 2–3 times in each setup. Figures are sums of per-question medians:
+
+| Setup | Input tokens | Output tokens | Cost (list price) | Time | Correct answers |
+| :-- | --: | --: | --: | --: | :-: |
+| No Eulix | 3.00M | 59k | $4.80 | 555 s | 33/35 |
+| Eulix, no hint | 3.01M (+0%) | 52k (−11%) | $4.37 (**−9%**) | 502 s (−10%) | 35/35 |
+| Eulix + hint | 3.02M (+1%) | 52k (−12%) | $4.34 (**−10%**) | 505 s (−9%) | 35/35 |
+
+- **About 10% cheaper and 10% faster** in both Eulix setups, on 12 of 15 questions. With 2–3 sessions per question the exact size is uncertain: leaving out any one question gives a saving between 2% and 19%. Input tokens don't change: the saving comes from fewer turns, so the agent writes less. Opus 5.5 reads far less than Opus 4.8 without help, which is why the saving is smaller ([why](docs/Architecture/Agent-Benchmark.md#why-opus-48-saved-more-than-opus-55)).
+- **Structure gains most:** callers questions −24% to −33%, traces −28% to −32%, *where is X* about even. One deep question (`deep-stream-chunks`) cost 37–56% more. Every Eulix answer was correct; without Eulix the agent missed one question both times. [Run summary](bench/results/agent/2026-11-23-opus55-bifrost/SUMMARY.md).
+
+**Sonnet 5.5, chained.** 13 questions were asked in one long session per setup (10 regular, 3 deep), at medium effort:
 
 | Setup | Input tokens | Output tokens | Cost (list price) | Time | Correct answers |
 | :-- | --: | --: | --: | --: | :-: |
@@ -383,8 +408,7 @@ Questions a developer might ask about an unfamiliar repo (*what calls X*, *where
 
 - **Cheaper on 11 of 13 questions**, by 4–16%, at the same accuracy. The saving comes from the agent reasoning and writing less. Input tokens are about the same, because both sessions carry the same growing conversation.
 - **Structural questions gain most.** In a separate low-effort run with one session per question on all four repos (19 questions), callers questions cost 27% less with Eulix, and all questions together cost 5% less. A `callers` reply is about 110 tokens, one line per call site, ending in `complete: yes` so the agent doesn't re-check with grep. "Where is X" questions were about even (+3%).
-- **Opus 4.8 on bifrost.** One session per question, all 15 questions (10 regular, 5 deep): **$6.78 with Eulix against $8.67 without (−22%)**, 14/15 correct against 13/15. Savings were largest on traces and deep questions (−22% to −48% each) and nil on small lookups. [Run summary](bench/results/agent/2026-11-20-opus48-bifrost/SUMMARY.md).
-- **Limits.** A call through a struct field, goroutine or callback has no edge in the call graph. At low effort that sent one trace answer down the wrong path. Most figures come from one session per question, so per-question differences of a few percent are noise. Results: [bifrost, Opus 4.8](bench/results/agent/2026-11-20-opus48-bifrost/SUMMARY.md) · [bifrost, chained](bench/results/agent/2026-11-20-bifrost-chain-medium/SUMMARY.md) · [four repos, low effort](bench/results/agent/2026-11-20-sonnet55-low-mcp2/SUMMARY.md).
+- **Limits.** A call through a struct field, goroutine or callback has no edge in the call graph. At low effort that sent one trace answer down the wrong path. Most figures come from one to three sessions per question, so per-question differences of a few percent are noise. Long multi-hour sessions on large repos, where Eulix should save most, haven't been measured. Results: [bifrost, Opus 5.5](bench/results/agent/2026-11-23-opus55-bifrost/SUMMARY.md) · [bifrost, Opus 4.8](bench/results/agent/2026-11-20-opus48-bifrost/SUMMARY.md) · [bifrost, chained](bench/results/agent/2026-11-20-bifrost-chain-medium/SUMMARY.md) · [four repos, low effort](bench/results/agent/2026-11-20-sonnet55-low-mcp2/SUMMARY.md).
 
 **Before the typed tools (v0.9.0 MCP, one `query` tool).** Ten questions on Flask 3.1.3, Django 6.1.3 and ripgrep 15.2.0, each asked five times in each of three setups: no Eulix; Eulix added with `claude mcp add` and nothing else; and Eulix plus one line telling the agent to query it first. Figures are sums of per-task medians.
 
@@ -398,9 +422,9 @@ Questions a developer might ask about an unfamiliar repo (*what calls X*, *where
 - **Unprompted, the agent rarely uses Eulix.** With Eulix installed and no hint, Claude called it in 5 of 50 sessions and grepped in the rest. A CLAUDE.md line is needed for the agent to use it.
 - **Replies are large.** The median Eulix reply was about 5,600 tokens. With the hint, Claude queried Eulix in 40 of 50 sessions and answered from that reply alone in 12. In the rest it made a median of 3 more tool calls to check.
 - **Where it helped.** Cost went down on four tasks with the hint. The clearest case: on *trace how ripgrep turns its arguments and config file into HiArgs*, Eulix cut input tokens by 43% and cost by 18%, answering in one call instead of five.
-- **A repo the model knows less well shows the same pattern.** On [bifrost](https://github.com/maximhq/bifrost) at a commit from 2026-11-19 (a large Go codebase), ten more questions gave the same result. With the hint, input tokens rose 40–41% and cost 32–40%, in a partial default-effort run (54 sessions, cut short by a usage limit) and a low-effort run (20 sessions). Eulix replies there were again about 5,700 tokens. Those runs have only 1–2 sessions per task, so per-task differences are noise. Results: [default effort](bench/results/agent/2026-11-20-sonnet-bifrost/report.md), [low effort](bench/results/agent/2026-11-20-sonnet-low-bifrost/report.md).
+- **A repo the model knows less well shows the same pattern.** On [bifrost](https://github.com/maximhq/bifrost) at a commit from 2026-11-19 (a large Go codebase), ten more questions gave the same result. With the hint, input tokens rose 40–41% and cost 32–40%, in a partial default-effort run (54 sessions, cut short by a usage limit) and a low-effort run (20 sessions). Eulix replies there were again about 5,700 tokens. Those runs have only 1–2 sessions per task, so per-task differences are noise.
 
-<sub>Run `2026-11-20-sonnet`: Claude Code 2.1.328, Eulix v0.9.0 with no embeddings, five reps per task and setup, isolated sessions (no user settings, plugins or other MCP servers). Per-task table, every answer and the grading rubric: [report](bench/results/agent/2026-11-20-sonnet/report.md) · method and limits: [bench/agent](bench/agent/README.md).</sub>
+<sub>v0.9.0 `query`-tool runs: Claude Code 2.1.328, Eulix v0.9.0 with no embeddings, five reps per task and setup, isolated sessions (no user settings, plugins or other MCP servers). These runs are not kept in-repo; method and limits: [bench/agent](bench/agent/README.md).</sub>
 
 ### Call-graph accuracy (PRISM v2)
 

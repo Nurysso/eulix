@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Parser output statistics in constant memory (the kernel's call graph is ~360 MB).
 
-kb_call_graph.json is {"nodes":[...],"edges":[...],"tags":{...},"file_categories":{...}}
+kb_call_graph.fb (or kb_call_graph.json from parsers before FlatBuffers) holds
+{"nodes":[...],"edges":[...],"tags":{...},"file_categories":{...}}
 (nodes: id, node_type, file; edges: from, to, edge_type). The counting mirrors
 scripts/known_issues/method_edge_coverage.py and cross_language_edges.py.
 """
 import collections
 import hashlib
 import json
+import re
 import os
 
 CHUNK = 4 << 20
@@ -20,7 +22,14 @@ METADATA_IGNORED = ("parsed_at", "project_hash", "git_hash")  # as scripts/kb_di
 
 
 def iter_arrays(path, keys=("nodes", "edges")):
-    """Yield (key, object) for each element of the named top-level arrays, in file order."""
+    """Yield (key, object) for each element of the named top-level arrays, in file order.
+
+    A .fb call graph yields the same dicts the JSON file did, so stats and the
+    semantic hash compare across the format change."""
+    if str(path).endswith(".fb"):
+        from . import kbfb
+        yield from kbfb.iter_call_graph(path, keys)
+        return
     dec = json.JSONDecoder()
     with open(path, encoding="utf-8") as f:
         buf, pos = "", 0
@@ -172,16 +181,31 @@ def file_hash(path) -> str:
     return h.hexdigest()
 
 
+_METADATA_HEAD = re.compile(r'\{\s*(?:"format_version"\s*:\s*\d+\s*,\s*)?"metadata"')
+
+# FlatBuffers outputs that embed Metadata (run-specific timestamps and hashes),
+# so their bytes differ between identical runs. Their --emit-json copies are
+# hashed instead, without those fields.
+FB_WITH_METADATA = ("kb.fb", "kb_metrics.fb")
+
+
 def starts_with_metadata(path) -> bool:
+    """True for kb.json-style files and --emit-json copies, which open with a
+    metadata object (optionally after "format_version")."""
     with open(path, "rb") as f:
         head = f.read(256).decode("utf-8", errors="ignore").lstrip()
-    return head.startswith("{") and head[1:].lstrip().startswith('"metadata"')
+    return bool(_METADATA_HEAD.match(head))
 
 
 def output_hashes(eulix_dir) -> dict:
     """Hashes of every parser output. Files that open with a metadata block (kb.json,
-    kb_metrics.json) are hashed without its run-specific fields (parsed_at, ...)."""
+    kb_metrics.json and its --emit-json copy) are hashed without its run-specific
+    fields (parsed_at, ...). Binary .fb outputs are hashed as bytes, except those in
+    FB_WITH_METADATA, which their JSON copies cover."""
     out = {}
     for p in sorted(eulix_dir.glob("kb*.json")):
         out[p.name] = kb_hash(p) if starts_with_metadata(p) else file_hash(p)
+    for p in sorted(eulix_dir.glob("kb*.fb")):
+        if p.name not in FB_WITH_METADATA:
+            out[p.name] = file_hash(p)
     return out

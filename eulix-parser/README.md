@@ -104,7 +104,7 @@ All files are written into the directory that contains the `--output` path, and 
 | `knowledge_base_entry_points.json` | Application entry points with route and command metadata |
 | `knowledge_base_external_deps.json` | External package and dependency information |
 | `knowledge_base_patterns.json` | Detected structural and architectural patterns |
-| `checksum.json.zst` | Checksum of the parsed files |
+| `checksum.fb.zst` | Checksum of the parsed files (zstd-compressed FlatBuffers) |
 | `parse_cache/` | Private cache that makes repeat runs fast (see [Incremental runs](#incremental-runs)) |
 
 With `--no-analyze`, only the main knowledge base is written. See [Output Files](../docs/eulix-parser/Output-Files.md) for what each file holds.

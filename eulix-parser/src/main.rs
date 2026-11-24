@@ -101,10 +101,12 @@ use std::time::Instant;
 use crate::analysis_pipeline::analyze_and_build;
 use crate::engine::Engine;
 use crate::memory::{default_thread_count, max_rss_mb};
-use crate::output::{output_dir, write_json_streaming, write_kb_from_spill};
+use crate::output::{output_dir, write_checksum_copy, write_fb_output, write_kb_fb};
 use crate::parse::directory::parse_directory;
 use crate::report::{field_report, print_final_summary, write_parse_report};
-use crate::views::{CallGraphRef, EntryPointsRef, ExternalDepsRef, IndexViewRef, PatternsRef};
+use crate::views::CallGraphRef;
+use libeulix::fb_io;
+use libeulix::utils::file_walker::ChecksumFormat;
 
 use libeulix::analyze;
 
@@ -153,6 +155,18 @@ pub struct Args {
     /// Write a TSV report listing every partial and failed file (useful for diffing runs)
     #[arg(short = 'P', long)]
     parse_report: Option<String>,
+
+    /// Also write a JSON copy of every FlatBuffers output, read back from the
+    /// binary file, for inspecting changes. Off by default; when off, stale
+    /// copies from an earlier run are removed.
+    #[arg(long)]
+    emit_json: bool,
+
+    /// Checksum baseline eulix-cli uses to spot changes: fb (checksum.fb.zst),
+    /// json (checksum.json.zst) or none (no hashing, no file). The baseline
+    /// of the other format is removed.
+    #[arg(long, default_value = "fb")]
+    checksum: ChecksumFormat,
 }
 
 pub fn validate_prism_input(val: &str) -> Result<u8, String> {
@@ -243,6 +257,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         bin_hash,
         &write_dir,
         &engine,
+        args.emit_json,
+        args.checksum,
+    )?;
+    write_checksum_copy(
+        &write_dir,
+        args.emit_json && args.checksum == ChecksumFormat::FlatBuffers,
     )?;
     if std::env::var_os("EULIX_FIELD_REPORT").is_some() {
         field_report(&kb);
@@ -323,6 +343,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let output_path = Path::new(&args.output);
+        // The knowledge base is <stem>.fb next to --output, whatever its extension.
+        let kb_path = output_path.with_extension("fb");
         let output_dir = &write_dir;
         fs::create_dir_all(output_dir)?;
 
@@ -330,70 +352,102 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("kb");
-        let index_path = output_dir.join(format!("{}_index.json", base_name));
-        let summary_path = output_dir.join(format!("{}_summary.json", base_name));
-        let callgraph_path = output_dir.join(format!("{}_call_graph.json", base_name));
-        let metrics_path = output_dir.join(format!("{}_metrics.json", base_name));
-        let ep_path = output_dir.join(format!("{}_entry_points.json", base_name));
-        let deps_path = output_dir.join(format!("{}_external_deps.json", base_name));
-        let patterns_path = output_dir.join(format!("{}_patterns.json", base_name));
+        let index_path = output_dir.join(format!("{}_index.fb", base_name));
+        let summary_path = output_dir.join(format!("{}_summary.fb", base_name));
+        let callgraph_path = output_dir.join(format!("{}_call_graph.fb", base_name));
+        let metrics_path = output_dir.join(format!("{}_metrics.fb", base_name));
+        let ep_path = output_dir.join(format!("{}_entry_points.fb", base_name));
+        let deps_path = output_dir.join(format!("{}_external_deps.fb", base_name));
+        let patterns_path = output_dir.join(format!("{}_patterns.fb", base_name));
 
         let indices = analyze::indices::generate_indices_view(&kb);
-        let index_ref = IndexViewRef { indices: &indices };
         let cg_ref = CallGraphRef::new(&kb, &indices);
-        let ep_ref = EntryPointsRef {
-            entry_points: &kb.entry_points,
-        };
-        let deps_ref = ExternalDepsRef {
-            external_dependencies: &kb.external_dependencies,
-        };
-        let pat_ref = PatternsRef {
-            patterns: &kb.patterns,
-        };
 
         if args.verbose {
             println!("   Writing knowledge base...");
         }
-        write_kb_from_spill(output_path, &kb.metadata, &spill)?;
+        write_kb_fb(&kb_path, &kb.metadata, &spill, args.emit_json)?;
 
         if args.verbose {
             println!("   Writing index...");
         }
-        write_json_streaming(&index_path, &index_ref, false)?;
+        let index_bytes = fb_io::encode_indices(&indices)?;
+        write_fb_output(
+            &index_path,
+            index_bytes,
+            fb_io::indices_json,
+            args.emit_json,
+        )?;
 
         if args.verbose {
             println!("   Writing summary...");
         }
-        write_json_streaming(&summary_path, &summary, true)?;
+        write_fb_output(
+            &summary_path,
+            fb_io::encode_summary(&summary),
+            fb_io::summary_json,
+            args.emit_json,
+        )?;
 
         if args.verbose {
             println!("   Writing call graph...");
         }
-        write_json_streaming(&callgraph_path, &cg_ref, false)?;
+        let cg_bytes = fb_io::encode_call_graph(
+            cg_ref.nodes,
+            cg_ref.edges,
+            &cg_ref.tags,
+            &cg_ref.file_categories,
+        )?;
+        write_fb_output(
+            &callgraph_path,
+            cg_bytes,
+            fb_io::call_graph_json,
+            args.emit_json,
+        )?;
 
         if args.verbose {
             println!("   Writing metrics...");
         }
-        write_json_streaming(&metrics_path, &metrics, true)?;
+        write_fb_output(
+            &metrics_path,
+            fb_io::encode_metrics(&metrics),
+            fb_io::metrics_json,
+            args.emit_json,
+        )?;
 
         if args.verbose {
             println!("   Writing entry points...");
         }
-        write_json_streaming(&ep_path, &ep_ref, true)?;
+        write_fb_output(
+            &ep_path,
+            fb_io::encode_entry_points(&kb.entry_points),
+            fb_io::entry_points_json,
+            args.emit_json,
+        )?;
 
         if args.verbose {
             println!("   Writing external deps...");
         }
-        write_json_streaming(&deps_path, &deps_ref, false)?;
+        write_fb_output(
+            &deps_path,
+            fb_io::encode_external_deps(&kb.external_dependencies),
+            fb_io::external_deps_json,
+            args.emit_json,
+        )?;
 
         if args.verbose {
             println!("   Writing patterns...");
         }
-        write_json_streaming(&patterns_path, &pat_ref, true)?;
+        write_fb_output(
+            &patterns_path,
+            fb_io::encode_patterns(&kb.patterns),
+            fb_io::patterns_json,
+            args.emit_json,
+        )?;
 
         if args.verbose {
             let files_to_check = [
-                (output_path, "knowledge base"),
+                (kb_path.as_path(), "knowledge base"),
                 (&index_path, "index"),
                 (&summary_path, "summary"),
                 (&callgraph_path, "call graph"),
@@ -424,7 +478,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 stats.failed.len(),
                 kb.metadata.total_loc,
                 start_time.elapsed().as_secs_f64(),
-                args.output
+                kb_path.display()
             );
         }
     } else {
@@ -437,13 +491,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        let kb_path = output_path.with_extension("fb");
 
-        write_kb_from_spill(output_path, &kb.metadata, &spill)?;
+        write_kb_fb(&kb_path, &kb.metadata, &spill, args.emit_json)?;
         let rss_after_write = max_rss_mb();
 
         if args.verbose {
-            let size = fs::metadata(output_path)?.len();
-            println!("   ✓ {} ({:.2} KB)", args.output, size as f64 / 1024.0);
+            let size = fs::metadata(&kb_path)?.len();
+            println!(
+                "   ✓ {} ({:.2} KB)",
+                kb_path.display(),
+                size as f64 / 1024.0
+            );
             println!("   Peak RSS:     {:.1} MB", rss_after_write);
             println!("{}", "═".repeat(64));
             print_final_summary(&metadata, &stats, start_time.elapsed().as_secs_f64());
@@ -456,7 +515,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 stats.failed.len(),
                 metadata.total_loc,
                 start_time.elapsed().as_secs_f64(),
-                args.output,
+                kb_path.display(),
             );
             println!("Peak RSS: {:.1} MB", rss_after_write);
         }

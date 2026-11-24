@@ -1,0 +1,17 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+// kb_patterns.fb: naming convention, structure type and architecture style.
+
+include "common.fbs";
+
+namespace eulix.fb;
+
+table Patterns {
+  format_version:uint;
+  patterns:PatternInfo;
+}
+
+root_type Patterns;
+file_identifier "EUPT";
+file_extension "fb";

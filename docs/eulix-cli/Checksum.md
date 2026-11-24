@@ -17,7 +17,7 @@ Re-parsing a repository to find out whether it changed would defeat the purpose.
 
 ## How It Works
 
-`Run()` loads the configuration, reads the baseline `.eulix/checksum.json.zst` (compressed with zstd), scans the project, and compares the two. If the baseline is missing or unreadable, it reports a first run with a change ratio of 1.0, meaning "everything changed".
+`Run()` loads the configuration, reads the baseline `.eulix/checksum.fb.zst` (a zstd-compressed FlatBuffer, `schema/checksum.fbs`, written by the parser), scans the project, and compares the two. If the baseline is missing or unreadable, it reports a first run with a change ratio of 1.0, meaning "everything changed".
 
 The scan walks the project, skips anything matched by `.euignore` and always skips `.eulix/`, and records each file's size and modification time. The file extensions to include are not hard-coded; they are taken from the baseline itself, so the scan looks at exactly the kinds of files the parser looked at.
 
@@ -37,7 +37,7 @@ The comparison counts files that are new, gone, or whose hash differs. The chang
 
 ### Data In, Data Out
 
-In: the project tree and `checksum.json.zst`. Out: a `Result`. The checksum file records the project path, the total files and lines, a combined hash and per-file entries.
+In: the project tree and `checksum.fb.zst`. Out: a `Result`. The checksum file records the project path, the total files, a combined hash and per-file entries. A baseline from an older release (zstd JSON) is unreadable, so it counts as a first run.
 
 ## Key Algorithms
 
@@ -76,4 +76,4 @@ The package is used internally by `analyze` and `chat`. The `eulix checksum` com
 
 - [Cli](Cli.md): how `analyze` and `chat` use the result.
 - [Public API](../libeulix/Public-API.md): the Rust file walker with the matching hash.
-- [Output Files](../eulix-parser/Output-Files.md): where `checksum.json.zst` is written.
+- [Output Files](../eulix-parser/Output-Files.md): where `checksum.fb.zst` is written.

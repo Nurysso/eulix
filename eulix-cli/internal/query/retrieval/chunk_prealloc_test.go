@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"eulix/internal/config"
+	"eulix/internal/kbfile"
+	"eulix/internal/kbfile/kbfiletest"
 	"eulix/internal/utils"
 )
 
@@ -33,19 +35,21 @@ func TestChunkCapacity(t *testing.T) {
 }
 
 // Every builder used to reserve 320k chunks (~46 MB) however small the
-// repository was. The slice is now sized from kb.json's metadata.
+// repository was. The slice is now sized from kb.fb's metadata.
 func TestStreamKBChunksSizesSliceFromMetadata(t *testing.T) {
 	for _, tc := range []struct {
-		name, kb string
-		want     int
+		name string
+		meta *utils.Metadata
+		want int
 	}{
-		{"metadata totals", `{"metadata":{"total_functions":3,"total_classes":1,"total_methods":2},"structure":{}}`, 6},
-		{"no metadata", `{"structure":{}}`, minChunkPrealloc},
-		{"unreadable metadata", `{"metadata":"not an object","structure":{}}`, minChunkPrealloc},
+		{"metadata totals", &utils.Metadata{TotalFunctions: 3, TotalClasses: 1, TotalMethods: 2}, 6},
+		{"no metadata", nil, minChunkPrealloc},
+		{"zero totals", &utils.Metadata{}, minChunkPrealloc},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, "kb.json"), []byte(tc.kb), 0o600); err != nil {
+			kb := kbfiletest.EncodeKB(&utils.KnowledgeBaseSimplifiedRef{Metadata: tc.meta})
+			if err := os.WriteFile(filepath.Join(dir, kbfile.KBFile), kb, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cb := NewTestContextBuilder(config.DefaultConfig(), dir, utils.NewDebugLogger())

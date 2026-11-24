@@ -1,6 +1,6 @@
 # vizEulize
 
-vizEulize is a browser-based explorer for the call graph that `eulix_parser` produces. It turns `kb_call_graph.json` into an interactive, searchable graph that you can click through.
+vizEulize is a browser-based explorer for the call graph that `eulix_parser` produces. It turns `kb_call_graph.fb` into an interactive, searchable graph that you can click through.
 
 > **Crate / path:** `vizEulize/vizeulize.html`, launched by `eulix-cli/internal/cli/commands.go`  
 > **Language:** HTML and JavaScript (the launcher is Go)  
@@ -26,11 +26,11 @@ The page is a single file on purpose. It can be shipped next to the binary, open
 When you run the launcher, it does four things:
 
 1. It looks for the page at `~/.Eulix/bin/vizeulize.html`.
-2. It checks that the call graph file exists. By default this is `.eulix/kb_call_graph.json` in the current project.
+2. It reads the call graph, by default `.eulix/kb_call_graph.fb` in the current project, and checks its file identifier and format version. For the project's own graph it also drops nodes from hidden files and files the current `.euignore` excludes, because the knowledge base can predate the rules or come inside a cloned repository. When nothing is dropped it serves the file's bytes unchanged; otherwise it writes a trimmed FlatBuffer without those nodes, their edges, their tags and the files' categories, so their names never reach the browser. A graph named with `--graph` is served whole. See [Binary Knowledge Base](../Architecture/Binary-Knowledge-Base.md) for the format.
 3. It starts an HTTP server on `127.0.0.1` with a random free port, and opens that address in your default browser.
 4. It keeps running until you press `Ctrl+C`.
 
-In the browser, the page downloads the call graph from the server, hands it to a background worker that parses it into a compact structure, and then draws the most-connected nodes. Everything after that happens in the page itself.
+In the browser, the page downloads the call graph from the server, hands it to a background worker that decodes the FlatBuffer into a compact structure, and then draws the most-connected nodes. Everything after that happens in the page itself.
 
 ### Main Components
 
@@ -39,6 +39,7 @@ In the browser, the page downloads the call graph from the server, hands it to a
 | `vizeulize.html` | `vizEulize/` | The whole interface: layout, worker, graph logic, drawing, shortcuts. |
 | `vizEulizeCMD` | `eulix-cli/internal/cli/commands.go` | The command that serves the page and the data and opens the browser. |
 | `pid.test.mjs` | `vizEulize/` | A Node test for the code that turns node ids into readable names. |
+| `fb.test.mjs` | `vizEulize/` | A Node test that decodes the parser-written fixture `kb_call_graph.fb` and compares it with the fixture's JSON copy. |
 
 ### Data In, Data Out
 
@@ -47,9 +48,9 @@ The only input is the call graph file written by `eulix_parser`. The launcher se
 | Route | Serves |
 | --- | --- |
 | `/` | `~/.Eulix/bin/vizeulize.html` (only the exact path `/`; anything else returns 404) |
-| `/data/call_graph.json` | The call graph file you chose |
+| `/data/call_graph.fb` | The call graph, as described above (`application/octet-stream`) |
 
-The page also tries `/data/kb_call_graph.json` as a second location. The built-in server does not serve that route, so it matters only if you host the files some other way.
+The page also tries `/data/kb_call_graph.fb` as a second location. The built-in server does not serve that route, so it matters only if you host the files some other way.
 
 The explorer has no output other than what it draws, and an optional PNG of the current view.
 
@@ -61,15 +62,15 @@ The explorer does not use a published graph-layout library. It has three small p
 
 | Setting | Where | Default | What it does and when to change it |
 | --- | --- | --- | --- |
-| `--graph <path>` | launcher flag | `.eulix/kb_call_graph.json` | Use a call graph from a different location, such as one made with a custom `--output` name. |
-| `--index <path>` | launcher flag | `.eulix/kb_index.json` | Accepted but unused. The explorer no longer reads the index file, because tags and categories now come from the call graph file. |
+| `--graph <path>` | launcher flag | `.eulix/kb_call_graph.fb` | Use a call graph from a different location, such as one made with a custom `--output` name. It is shown whole, without the `.euignore` filter. |
+| `--index <path>` | launcher flag | none | Accepted but unused. The explorer no longer reads the index file, because tags and categories now come from the call graph file. |
 | Node limit | in the page | 150 | How many nodes are laid out and drawn: 80, 150, 300 or 600. |
 | Theme | in the page | system | Light or dark. Your choice is remembered in the browser. |
 
 ## Usage Examples
 
 ```bash
-# 1. Produce the call graph (writes .eulix/kb_call_graph.json)
+# 1. Produce the call graph (.eulix/kb_call_graph.fb)
 eulix analyze
 
 # 2. Open the explorer
@@ -81,22 +82,32 @@ Expected result: the terminal prints `Launched vizEulize at http://127.0.0.1:<po
 To open a graph from another location:
 
 ```bash
-eulix vizeulize --graph out/kb_call_graph.json
+eulix vizeulize --graph out/kb_call_graph.fb
 ```
 
-If you cannot use the launcher, open `vizeulize.html` directly in a browser and use **Load JSON files**, or drag `kb_call_graph.json` onto the page. A page opened from a file cannot download the graph on its own, so it shows a message asking you to load one.
+If you cannot use the launcher, open `vizeulize.html` directly in a browser and use **Load call graph**, or drag `kb_call_graph.fb` onto the page. The parser's `--emit-json` copy, `kb_call_graph.json`, loads the same way. A page opened from a file cannot download the graph on its own, so it shows a message asking you to load one.
 
 > **A note on names.** The subsystem is called vizEulize, but the command and the HTML file are lowercase: `eulix vizeulize` and `vizeulize.html`. Command names in this CLI framework are case-sensitive, so use the lowercase form. I could not run the command here to confirm, because the installed `eulix` stopped at its parser integrity check first.
 
 ## Performance Notes
 
-The graph is parsed off the main thread, so the page stays responsive while a large file loads. It is then stored in typed arrays rather than objects, which keeps memory low. The README reports testing with a 411 MB call graph, which loaded and gave a usable default view. I did not repeat that test.
+The graph is decoded off the main thread, so the page stays responsive while a large file loads. It is then stored in typed arrays rather than objects, which keeps memory low. Measured in Firefox on the Linux kernel graph (985k nodes, 2.2M edges), the 160 MB `.fb` reached the first view in 3.6 s (1.3 s decoding, 1.4 s building the graph) against 5.6 s for the 591 MB JSON copy (2.1 s and 2.2 s). Chrome loads the same `.fb` with about 273 MB of JS heap in use but cannot open that JSON (next section); Firefox's `about:memory` shows about 550 MB for the tab, which also counts the worker, the canvas and the browser's own structures. The Kubernetes graph (119k nodes) loads from its 22 MB `.fb` in 0.65 s in Firefox.
+
+### Performance metrics in the console
+
+Open the browser's developer console to see where time and memory go:
+
+- After each load the page logs one `[vizEulize perf] loaded` line: the file and format, how long reading or downloading took (`readMs`), the worker round trip (`workerMs`, which covers decoding, `decodeMs`, and building the graph, `buildMs`, plus the transfers), `setGraphMs`, the first view (`firstViewMs`) and `totalMs`, along with the node and edge counts and memory.
+- `vizEulize.perf()` prints a snapshot at any time: node and edge counts, how many are on screen, the JS heap, the graph's memory (typed arrays exactly, id, name and file strings estimated at 2 bytes a character), the last load, and the layout and draw times of the last 120 drawn frames.
+- `vizEulize.perf.watch(2)` prints the snapshot every 2 seconds; `vizEulize.perf.stop()` ends it.
+
+The JS heap comes from `performance.memory`, which only Chrome and Edge have; other browsers show `n/a`. It covers the page's JavaScript heap, not the worker or the browser's own memory. In Firefox, open `about:memory` and click **Measure** to see the whole tab, worker included. In Firefox, the Kubernetes graph (119k nodes) loaded in 0.65 s: 0.17 s to download, 0.21 s to decode, 0.15 s to build.
 
 ## Limitations
 
 | Limitation | Why it happens | Workaround |
 | --- | --- | --- |
-| A call graph larger than about 500 MB fails with "Invalid string length". | The browser cannot build a single string longer than about 512 MB, and the file is decoded to one string. | Analyze a smaller part of the project, using `.euignore`. |
+| In Chrome and Edge, a JSON copy larger than about 500 MB fails with "Invalid string length". | Their JavaScript engine (V8) cannot build a string longer than about 512 MB, and JSON is decoded to one string. Firefox allows about 1 GB and opened Linux's 591 MB copy. The `.fb` file has no such limit. | Load `kb_call_graph.fb` instead. |
 | Focusing on a very connected function can be slow on huge graphs. | The layout compares every drawn node with every other one, so cost grows with the square of the node count. | Keep the node limit near 150 and the depth at 1 or 2 when exploring hubs. |
 | If you load several graph files at once, only the last one is kept. | Each file replaces the previous graph. | Load one call graph at a time. |
 | The page needs a modern browser. | It uses Web Workers and `ResizeObserver`. | Use a current Chrome, Firefox, Safari or Edge. |
@@ -106,5 +117,5 @@ The graph is parsed off the main thread, so the page stays responsive while a la
 
 - [Using the Explorer](Using-The-Explorer.md): views, filters, shortcuts.
 - [Internals](Internals.md): how the page works and how to change it.
-- [Output Files](../eulix-parser/Output-Files.md): where `kb_call_graph.json` comes from.
+- [Output Files](../eulix-parser/Output-Files.md): where `kb_call_graph.fb` comes from.
 - [PRISM v2](../libeulix/PRISM-V2.md): how the edges in the graph are decided, and why they are approximate.

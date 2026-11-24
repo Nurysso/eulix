@@ -97,7 +97,7 @@ kbd{font:inherit;font-size:11px;background:var(--bg3);border:1px solid var(--bd)
 <body><div id="app">
 <div id="top">
   <b>vizEulize</b><span id="ver" title="vizEulize version"></span>
-  <label class="btn">Load JSON files<input id="file" type="file" accept=".json,application/json" multiple hidden></label>
+  <label class="btn">Load call graph<input id="file" type="file" accept=".fb,.json,application/json" multiple hidden></label>
   <span id="status">Looking for the project's call graph…</span>
   <button id="png" title="Save current view as PNG (s)">PNG</button>
   <button id="theme" title="Toggle light / dark (t)">Theme</button>
@@ -153,15 +153,50 @@ const CAT=Object.assign(Object.create(null),{function:0,func:0,fn:0,method:1,cto
 const HIER=/^(inheritance|inherits?|extends|implements)$/i;
 const nest=(k,n)=>{const r=k==='method'?n.slice(n.indexOf('_')+1):n;return /^(func|function|fn|method)$/.test(k)&&r.includes('.')?r.slice(r.lastIndexOf('.')+1).replace(/@\d+$/,''):n;};
 const pid=s=>{let m=A.exec(s);if(m)return[m[1],nest(m[1],m[2]),m[3]];m=B.exec(s);return m?[m[1],nest(m[1],m[2]),'']:['',s,''];};
+// kb_call_graph.fb (schema/call_graph.fbs), read straight from the FlatBuffers
+// wire format. Field numbers follow the schema's field order. The file stores
+// each distinct string once, so strings are decoded once per offset.
+const FB_VERSION=1;
+const isFB=buf=>{const u=new Uint8Array(buf,0,Math.min(8,buf.byteLength));return u.length===8&&u[4]===69&&u[5]===85&&u[6]===67&&u[7]===71;}; // "EUCG"
+function decodeFB(buf){
+  const v=new DataView(buf),u8=new Uint8Array(buf),td=new TextDecoder(),seen=new Map();
+  const u32=p=>v.getUint32(p,true);
+  // absolute position of field f in the table at t, or 0 when it is absent
+  const fld=(t,f)=>{const vt=t-v.getInt32(t,true),o=4+2*f;return o<v.getUint16(vt,true)?(x=>x&&t+x)(v.getUint16(vt+o,true)):0;};
+  const strAt=p=>{p+=u32(p);let s=seen.get(p);if(s===undefined){const n=u32(p);if(p+4+n>u8.length)throw new RangeError('string past end of file');s=td.decode(u8.subarray(p+4,p+4+n));seen.set(p,s);}return s;};
+  const str=(t,f)=>{const p=fld(t,f);return p?strAt(p):'';};
+  const bool=(t,f)=>{const p=fld(t,f);return p?u8[p]!==0:false;};
+  // [first element position, length]; element i is at first+4*i
+  const vec=(t,f)=>{let p=fld(t,f);if(!p)return[0,0];p+=u32(p);return[p+4,u32(p)];};
+  const tab=e=>e+u32(e);
+  const root=u32(0),ver=(p=>p?u32(p):0)(fld(root,0));
+  if(ver!==FB_VERSION)throw new Error(`call graph has format version ${ver}, this page reads ${FB_VERSION}; re-run 'eulix analyze' with a matching eulix`);
+  const nodes=[],edges=[],tags={},file_categories={};
+  let[a,n]=vec(root,1);
+  for(let i=0;i<n;i++){const t=tab(a+4*i);nodes.push({id:str(t,0),node_type:str(t,1),file:str(t,2)});}
+  [a,n]=vec(root,2);
+  for(let i=0;i<n;i++){const t=tab(a+4*i);edges.push({from:str(t,0),to:str(t,1),edge_type:str(t,2),conditional:bool(t,3)});}
+  [a,n]=vec(root,3);
+  for(let i=0;i<n;i++){const t=tab(a+4*i),[va,vn]=vec(t,1),vals=new Array(vn);for(let j=0;j<vn;j++)vals[j]=strAt(va+4*j);tags[str(t,0)]=vals;}
+  [a,n]=vec(root,4);
+  for(let i=0;i<n;i++){const t=tab(a+4*i);file_categories[str(t,0)]=str(t,1);}
+  return{nodes,edges,tags,file_categories};
+}
 onmessage=e=>{
-  const{id,buf}=e.data;
+  const{id,buf}=e.data,t0=performance.now(),fb=isFB(buf);
   try{
-    const d=JSON.parse(new TextDecoder().decode(buf));
-    if(Array.isArray(d.nodes)||Array.isArray(d.edges))graph(d,id);
+    const d=fb?decodeFB(buf):JSON.parse(new TextDecoder().decode(buf));
+    // timings for vizEulize.perf(); the main thread adds its own
+    const pf={format:fb?'fb':'json',bytes:buf.byteLength,decodeMs:performance.now()-t0};
+    if(Array.isArray(d.nodes)||Array.isArray(d.edges))graph(d,id,pf);
     else postMessage({id,kind:'unknown'});
   }catch(err){postMessage({id,kind:'error',msg:err.message});}
 };
-function graph(d,id){
+function graph(d,id,pf={}){
+  const tb=performance.now();
+  // A loaded --emit-json copy stores these maps as sorted {key,...} lists.
+  if(Array.isArray(d.tags))d.tags=Object.fromEntries(d.tags.map(t=>[t.key,t.values]));
+  if(Array.isArray(d.file_categories))d.file_categories=Object.fromEntries(d.file_categories.map(c=>[c.key,c.category]));
   const idx=new Map(),ids=[],names=[],files=[],cat=[],kx=[],kn=[],kIx=new Map();
   const kid=s=>{let x=kIx.get(s);if(x===undefined){x=kn.length;kIx.set(s,x);kn.push(s);}return x;};
   const get=(k,ext)=>{let i=idx.get(k);if(i===undefined){i=ids.length;idx.set(k,i);ids.push(k);const p=pid(k);names.push(p[1]);files.push(p[2]);cat.push(ext?6:(CAT[p[0]]??6));kx.push(kid(p[0]));}return i;};
@@ -203,7 +238,7 @@ function graph(d,id){
     let x=cIx.get(cn);if(x===undefined){x=catNames.length;cIx.set(cn,x);catNames.push(cn);}
     fc[i]=x+1;
   }
-  postMessage({id,kind:'graph',n,m:k,ids,names,files,cat:ct,eF:F,eT:T,eY:Y,eC:C,tn,tk,ci,co,kn,kx:KX,oS,oE,iS,iE,tagNames,tg,catNames,fc},
+  postMessage({id,kind:'graph',perf:{...pf,buildMs:performance.now()-tb},n,m:k,ids,names,files,cat:ct,eF:F,eT:T,eY:Y,eC:C,tn,tk,ci,co,kn,kx:KX,oS,oE,iS,iE,tagNames,tg,catNames,fc},
     [ct.buffer,F.buffer,T.buffer,Y.buffer,C.buffer,tk.buffer,ci.buffer,co.buffer,KX.buffer,oS.buffer,oE.buffer,iS.buffer,iE.buffer,fc.buffer]);
 }
 </script>
@@ -215,7 +250,32 @@ const VERSION=document.querySelector('meta[name="version"]').content;
 document.title=`vizEulize v${VERSION} · Call Graph Explorer`;
 $('ver').textContent=$('hv').textContent='v'+VERSION;
 window.vizEulize={version:VERSION};
-console.info('vizEulize v'+VERSION);
+console.info(`vizEulize v${VERSION} · vizEulize.perf() prints memory and timings; vizEulize.perf.watch(2) repeats it every 2 s, vizEulize.perf.stop() ends that`);
+
+// perf metrics, printed with console.log. frames: [time, tickMs, drawMs] of the last 120 drawn frames
+const PF={load:null,frames:[],w:0};
+const r1=x=>Math.round(x*10)/10,MiB=b=>r1(b/1048576);
+// JS heap of this page (Chrome and Edge only; the worker's heap is not included)
+const heap=()=>{const m=performance.memory;return m?{usedMB:MiB(m.usedJSHeapSize),totalMB:MiB(m.totalJSHeapSize),limitMB:MiB(m.jsHeapSizeLimit)}:'n/a in this browser (performance.memory is Chrome and Edge only; in Firefox see about:memory)';};
+// what the loaded graph holds: typed arrays exactly, id/name/file strings estimated at 2 bytes a character
+function graphMem(){
+  if(!G)return null;let ta=0,ch=0;
+  for(const v of Object.values(G))if(ArrayBuffer.isView(v))ta+=v.byteLength;
+  for(const a of[G.ids,G.names,G.files])for(const x of a)ch+=x.length;
+  return{typedArraysMB:MiB(ta),stringsMBEstimate:MiB(ch*2)};
+}
+function frameStats(){
+  const f=PF.frames;if(!f.length)return null;let t=0,d=0,mx=0;
+  for(const x of f){t+=x[1];d+=x[2];mx=Math.max(mx,x[1]+x[2]);}
+  return{drawnFrames:f.length,avgLayoutMs:r1(t/f.length),avgDrawMs:r1(d/f.length),maxFrameMs:r1(mx)};
+}
+function perf(){
+  const s={nodes:G?G.n:0,edges:G?G.m:0,shownNodes:vis.length,shownEdges:visE.length,heap:heap(),graph:graphMem(),lastLoad:PF.load,frames:frameStats()};
+  console.log('[vizEulize perf]',s);return s;
+}
+perf.watch=(sec=2)=>{perf.stop();PF.w=setInterval(perf,sec*1000);};
+perf.stop=()=>{clearInterval(PF.w);PF.w=0;};
+window.vizEulize.perf=perf;
 
 const CATS=['function','method','type','file','module','package','external'];
 const COL={function:'#7F77DD',method:'#1D9E75',type:'#EF9F27',file:'#378ADD',module:'#378ADD',package:'#378ADD',external:'#888780'};
@@ -259,11 +319,15 @@ let tt;
 function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('on'),1500);}
 
 // worker: parse + build compact CSR graph off the main thread
-const WK=new Worker(URL.createObjectURL(new Blob([$('wk').textContent])));
-const pend=new Map();let jid=0;
-WK.onmessage=e=>{const m=e.data,p=pend.get(m.id);pend.delete(m.id);m.kind==='error'?p.rej(new Error(m.msg)):p.res(m);};
-WK.onerror=e=>status('Worker error: '+e.message);
-const parse=buf=>new Promise((res,rej)=>{const id=++jid;pend.set(id,{res,rej});WK.postMessage({id,buf},[buf]);});
+const WKURL=URL.createObjectURL(new Blob([$('wk').textContent]));
+// One worker per file, terminated once its graph arrives: a worker that stays
+// alive keeps its heap, about 800 MB after decoding the Linux kernel's graph.
+const parse=buf=>new Promise((res,rej)=>{
+  const w=new Worker(WKURL);
+  w.onmessage=e=>{w.terminate();const m=e.data;m.kind==='error'?rej(new Error(m.msg)):res(m);};
+  w.onerror=e=>{w.terminate();rej(new Error('Worker error: '+e.message));};
+  w.postMessage({id:1,buf},[buf]);
+});
 
 // loading
 function prog(name,got,tot){
@@ -272,33 +336,53 @@ function prog(name,got,tot){
 }
 async function fetchBuf(url){
   const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error(r.status);
-  const tot=+r.headers.get('Content-Length')||0,rd=r.body.getReader(),parts=[];let got=0;
-  for(;;){const{done,value}=await rd.read();if(done)break;parts.push(value);got+=value.length;prog(url.split('/').pop(),got,tot);}
-  const out=new Uint8Array(got);let o=0;for(const p of parts){out.set(p,o);o+=p.length;}
-  return out.buffer;
+  const tot=+r.headers.get('Content-Length')||0,rd=r.body.getReader();
+  // Write into one buffer of the announced size, so a large graph is not held
+  // twice. Content-Length can be wrong (a compressed response), so collect
+  // parts as before once the data outgrows it.
+  let out=tot?new Uint8Array(tot):null,parts=[],got=0;
+  for(;;){
+    const{done,value}=await rd.read();if(done)break;
+    if(out&&got+value.length<=tot)out.set(value,got);
+    else{if(out){parts.push(out.subarray(0,got));out=null;}parts.push(value);}
+    got+=value.length;prog(url.split('/').pop(),got,tot);
+  }
+  if(out)return got===tot?out.buffer:out.slice(0,got).buffer;
+  const all=new Uint8Array(got);let o=0;for(const p of parts){all.set(p,o);o+=p.length;}
+  return all.buffer;
 }
 async function auto(){
-  if(location.protocol==='file:'){status('Opened as a file. Select *_call_graph.json, or drop it here.');return;}
-  const get=async urls=>{for(const u of urls){try{return{name:u.split('/').pop(),buf:await fetchBuf(u)};}catch(e){}}return null;};
-  const g=await get(['/data/call_graph.json','/data/kb_call_graph.json']);
-  if(!g){status('No call graph served at /data/call_graph.json. Load files manually.');resetHint();return;}
+  if(location.protocol==='file:'){status('Opened as a file. Select kb_call_graph.fb, or drop it here.');return;}
+  const get=async urls=>{for(const u of urls){const t=performance.now();try{return{name:u.split('/').pop(),buf:await fetchBuf(u),ms:performance.now()-t};}catch(e){}}return null;};
+  const g=await get(['/data/call_graph.fb','/data/kb_call_graph.fb']);
+  if(!g){status('No call graph served at /data/call_graph.fb. Load files manually.');resetHint();return;}
   status('Parsing…');
   await ingest([g]);
 }
 async function loadFiles(files){
   const items=[];
-  for(const f of files){status(`Reading ${f.name} (${mb(f.size)} MB)…`);items.push({name:f.name,buf:await f.arrayBuffer()});}
+  for(const f of files){status(`Reading ${f.name} (${mb(f.size)} MB)…`);const t=performance.now();items.push({name:f.name,buf:await f.arrayBuffer(),ms:performance.now()-t});}
   status('Parsing…');await ingest(items);
 }
 async function ingest(items){
   $('hm').textContent='Parsing…';$('pb').hidden=true;
+  const t0=performance.now();
   const res=await Promise.all(items.map(it=>parse(it.buf).catch(e=>{status(`${it.name}: ${e.message}`);return null;})));
-  let ok=false,bad=false;
+  const t1=performance.now();
+  let ok=false,bad=false,last=-1;
   for(const m of res)if(m&&m.kind==='unknown')bad=true;
-  for(const m of res)if(m&&m.kind==='graph'){setGraph(m);ok=true;}
+  res.forEach((m,i)=>{if(m&&m.kind==='graph'){setGraph(m);ok=true;last=i;}});
+  const t2=performance.now();
   if(ok){focus=null;sel=null;hov=null;hist=[];nb=new Set();}
   if(G){$('hint').style.display='none';showDet(null);rebuild();status(`Loaded ${items.map(i=>i.name).join(' + ')}`);}
-  else{resetHint();if(bad)status('Unrecognized JSON: expected a call graph with nodes and edges.');}
+  if(ok){
+    const p=res[last].perf,it=items[last],t3=performance.now();
+    // workerMs covers decode and build plus the transfers to and from the worker
+    PF.load={file:it.name,format:p.format,sizeMB:MiB(p.bytes),readMs:r1(it.ms??0),workerMs:r1(t1-t0),decodeMs:r1(p.decodeMs),buildMs:r1(p.buildMs),
+      setGraphMs:r1(t2-t1),firstViewMs:r1(t3-t2),totalMs:r1((it.ms??0)+t3-t0)};
+    console.log('[vizEulize perf] loaded',PF.load,{nodes:G.n,edges:G.m,heap:heap(),graph:graphMem()});
+  }
+  else{resetHint();if(bad)status('Unrecognized file: expected kb_call_graph.fb or its JSON copy.');}
 }
 function setGraph(m){
   const n=m.n,deg=new Int32Array(n),order=new Int32Array(n);
@@ -484,8 +568,9 @@ function draw(){
   ctx.globalAlpha=1;
 }
 (function loop(){
-  if(alpha>0.01){tick();dirty=true;if(fitP&&alpha<0.3){fitP=false;fit();}}
-  if(dirty&&G){draw();dirty=false;}
+  const t0=performance.now();let lt=0;
+  if(alpha>0.01){tick();lt=performance.now()-t0;dirty=true;if(fitP&&alpha<0.3){fitP=false;fit();}}
+  if(dirty&&G){const t1=performance.now();draw();dirty=false;PF.frames.push([t1,lt,performance.now()-t1]);if(PF.frames.length>120)PF.frames.shift();}
   requestAnimationFrame(loop);
 })();
 

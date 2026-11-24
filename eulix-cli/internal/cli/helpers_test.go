@@ -68,7 +68,7 @@ func TestIsInitializedNeedsBothMarkers(t *testing.T) {
 	}
 	touch(t, getKnowledgeBasePath(root))
 	if !hasKnowledgeBase(root) {
-		t.Fatal("kb.json not detected")
+		t.Fatal("kb.fb not detected")
 	}
 }
 
@@ -99,7 +99,7 @@ func TestCheckEmbeddingsFiles(t *testing.T) {
 	if got := checkEmbeddingsFiles(dir); len(got) != 5 {
 		t.Fatalf("empty dir: want 5 missing, got %q", got)
 	}
-	for _, f := range []string{"kb.json", "kb_index.json", "kb_call_graph.json", "embeddings.bin"} {
+	for _, f := range []string{"kb.fb", "kb_index.fb", "kb_call_graph.fb", "embeddings.bin"} {
 		touch(t, filepath.Join(dir, f))
 	}
 	if got := checkEmbeddingsFiles(dir); len(got) != 1 || !strings.Contains(got[0], "vectors.bin") {

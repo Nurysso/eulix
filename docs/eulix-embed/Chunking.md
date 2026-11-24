@@ -1,6 +1,6 @@
 # Chunking
 
-This page explains how `kb.json` is cut into the text pieces that get embedded, and what those pieces actually contain today.
+This page explains how the knowledge base (`kb.fb`) is cut into the text pieces that get embedded, and what those pieces actually contain today.
 
 > **Crate / path:** `eulix-embed/chunking/` (`chunker.py`, `formatters.py`, `cleaners.py`)  
 > **Language:** Python  
@@ -55,7 +55,7 @@ A function card is designed to continue with parameters and return type, up to t
 I ran the chunker on real parser output (`--prism 2`) for a small Python file. Two things differ from the design above.
 
 1. **The cards have no line breaks.** The formatters write each line with a function that does not add a newline, so a whole card is one line: `// File: app/models.py// Function: helper// Lines: 10-11// Complexity: 0def helper()`. See [EMB-6](../Known-Issues/Embeddings.md#emb-6-embedded-text-has-no-line-breaks).
-2. **The cards are thin.** The parser's `kb.json` is a slim view ([Output Files](../eulix-parser/Output-Files.md)). It has no calls, callers, complexity, control flow, exceptions or imports, and the chunker has just removed the docstrings. What remains is the name, the line range, the signature, parameters, return type, class bases and, for a class, its method names. "Complexity: 0" is printed for every function. See [EMB-7](../Known-Issues/Embeddings.md#emb-7-cards-omit-calls-complexity-exceptions-imports-and-docstrings).
+2. **The cards are thin.** The parser's knowledge base is a slim view ([Output Files](../eulix-parser/Output-Files.md)). It has no calls, callers, complexity, control flow, exceptions or imports, and the chunker has just removed the docstrings. What remains is the name, the line range, the signature, parameters, return type, class bases and, for a class, its method names. "Complexity: 0" is printed for every function. See [EMB-7](../Known-Issues/Embeddings.md#emb-7-cards-omit-calls-complexity-exceptions-imports-and-docstrings).
 
 ### Main Components
 
@@ -91,6 +91,7 @@ To see the cards for a knowledge base:
 ```python
 from chunking.chunker import chunk_one_file
 import json
+# Run eulix_parser with --emit-json for the JSON copy; its records are under "files".
 kb = json.load(open(".eulix/kb.json"))
 for path, fs in kb["structure"].items():
     for c in chunk_one_file(path, fs, 2000, set()):
@@ -111,5 +112,5 @@ Run it from the `eulix-embed` folder with the Eulix virtual environment.
 ## Related Docs
 
 - [Pipeline](Pipeline.md): what happens to the chunks next.
-- [Output Files](../eulix-parser/Output-Files.md): why `kb.json` is slim.
+- [Output Files](../eulix-parser/Output-Files.md): why the knowledge base is slim.
 - [Index Loading](../eulix-cli/query/retrieval/Index-Loading.md): the retrieval side builds its *own* chunk text from the same file; the two are not the same text.

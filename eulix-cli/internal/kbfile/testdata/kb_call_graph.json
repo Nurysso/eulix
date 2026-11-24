@@ -1,0 +1,72 @@
+{
+  "format_version": 1,
+  "nodes": [
+    {
+      "id": "func_list_users::app/server.py",
+      "node_type": "function",
+      "file": "app/server.py",
+      "is_entry_point": false,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_main::app/server.py",
+      "node_type": "function",
+      "file": "app/server.py",
+      "is_entry_point": true,
+      "call_count_estimate": 0
+    },
+    {
+      "id": "func_helper::app/tool.go",
+      "node_type": "function",
+      "file": "app/tool.go",
+      "is_entry_point": false,
+      "call_count_estimate": 1
+    },
+    {
+      "id": "func_main::app/tool.go",
+      "node_type": "function",
+      "file": "app/tool.go",
+      "is_entry_point": true,
+      "call_count_estimate": 0
+    }
+  ],
+  "edges": [
+    {
+      "from": "func_main::app/tool.go",
+      "to": "func_helper::app/tool.go",
+      "edge_type": "call",
+      "conditional": false,
+      "call_site_line": 15
+    }
+  ],
+  "tags": [
+    {
+      "key": "func_helper::app/tool.go",
+      "values": [
+        "utility"
+      ]
+    },
+    {
+      "key": "func_main::app/server.py",
+      "values": [
+        "entry-point"
+      ]
+    },
+    {
+      "key": "func_main::app/tool.go",
+      "values": [
+        "entry-point"
+      ]
+    }
+  ],
+  "file_categories": [
+    {
+      "key": "app/server.py",
+      "category": "Other"
+    },
+    {
+      "key": "app/tool.go",
+      "category": "Other"
+    }
+  ]
+}

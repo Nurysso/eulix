@@ -1,0 +1,37 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+// kb.fb, the knowledge base. A single FlatBuffer cannot exceed 2 GiB, and a
+// large repository's knowledge base can, so the file is a header plus one
+// buffer per source file:
+//
+//   [u32 little-endian: header size N][header: KbHeader buffer, N bytes]
+//   [zero padding to the next multiple of 8]
+//   [records region: one FileRecord buffer (kb.fbs) per file, each starting
+//    at a multiple of 8 relative to the region start]
+//
+// The first 4 + N bytes are an ordinary size-prefixed FlatBuffer, so the file
+// starts "<N>EUKB". FileEntry.offset is relative to the start of the records
+// region, so the header can be built before its own size is known. Entries are
+// sorted by path and records appear in the same order, so a reader can walk
+// the file front to back without seeking.
+
+include "common.fbs";
+
+namespace eulix.fb;
+
+table FileEntry {
+  path:string (key);
+  offset:ulong;   // from the start of the records region
+  length:uint;    // bytes of the FileRecord buffer, without padding
+}
+
+table KbHeader {
+  format_version:uint;
+  metadata:Metadata;
+  files:[FileEntry];
+}
+
+root_type KbHeader;
+file_identifier "EUKB";
+file_extension "fb";

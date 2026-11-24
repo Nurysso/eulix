@@ -29,7 +29,7 @@ Routing cheaply and deterministically first keeps the model for the questions th
 
 ### Creating the router
 
-`QueryTrafficController(eulixDir, cfg, llmClient, cache)` builds a `Router`. It creates the classifier (which learns the project's real symbol names from `kb_index.json`), loads the index and the call graph with the memory-mapped decoder, and prepares caches. It does **not** build the retrieval engine yet. That is expensive, so `ensureContextBuilder` creates it on the first question that needs it, and `CloseContextBuilder` can release it later (the MCP server does this when idle).
+`QueryTrafficController(eulixDir, cfg, llmClient, cache)` builds a `Router`. It creates the classifier, loads the index (`kb_index.fb`) and the call graph (`kb_call_graph.fb`) through `internal/kbfile`, and prepares caches. It does **not** build the retrieval engine yet. That is expensive, so `ensureContextBuilder` creates it on the first question that needs it, and `CloseContextBuilder` can release it later (the MCP server does this when idle).
 
 ### Two entry points
 

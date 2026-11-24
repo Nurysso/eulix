@@ -1,0 +1,92 @@
+{
+  "format_version": 1,
+  "metadata": {
+    "version": "0.9.0",
+    "git_hash": "0a78aa7",
+    "project_name": "src",
+    "project_hash": "36599dfac69dff47",
+    "parsed_at": "2026.11.19.153816",
+    "languages": [
+      "go",
+      "python"
+    ],
+    "total_files": 2,
+    "total_loc": 36,
+    "total_functions": 4,
+    "total_classes": 0,
+    "total_methods": 0
+  },
+  "files": [
+    {
+      "path": "app/server.py",
+      "offset": 0,
+      "length": 416,
+      "record": {
+        "language": "python",
+        "loc": 21,
+        "functions": [
+          {
+            "id": "func_list_users::app/server.py",
+            "name": "list_users",
+            "signature": "def list_users()",
+            "params": [],
+            "return_type": "",
+            "docstring": "Return all users.",
+            "line_start": 9,
+            "line_end": 13
+          },
+          {
+            "id": "func_main::app/server.py",
+            "name": "main",
+            "signature": "def main()",
+            "params": [],
+            "return_type": "",
+            "docstring": "",
+            "line_start": 16,
+            "line_end": 17
+          }
+        ],
+        "classes": [],
+        "todos": []
+      }
+    },
+    {
+      "path": "app/tool.go",
+      "offset": 416,
+      "length": 408,
+      "record": {
+        "language": "go",
+        "loc": 15,
+        "functions": [
+          {
+            "id": "func_helper::app/tool.go",
+            "name": "helper",
+            "signature": "func helper(n int) int",
+            "params": [
+              {
+                "name": "n",
+                "type_annotation": "int"
+              }
+            ],
+            "return_type": "int",
+            "docstring": "",
+            "line_start": 5,
+            "line_end": 13
+          },
+          {
+            "id": "func_main::app/tool.go",
+            "name": "main",
+            "signature": "func main()",
+            "params": [],
+            "return_type": "",
+            "docstring": "",
+            "line_start": 15,
+            "line_end": 15
+          }
+        ],
+        "classes": [],
+        "todos": []
+      }
+    }
+  ]
+}

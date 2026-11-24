@@ -125,6 +125,30 @@ class KbStats(unittest.TestCase):
         self.assertTrue(kbstats.starts_with_metadata(a))
         a.write_text('{"nodes": [], "metadata": 1}')
         self.assertFalse(kbstats.starts_with_metadata(a))
+        a.write_text('{\n  "format_version": 1,\n  "metadata": {"parsed_at": "x"}, "top": []}')
+        self.assertTrue(kbstats.starts_with_metadata(a), "--emit-json copies open with format_version")
+
+    def test_callgraph_stats_same_for_fb_and_json(self):
+        """The .fb reader yields the dicts the JSON file had, so stats and the
+        semantic hash compare across the format change."""
+        data = Path(__file__).resolve().parents[2] / "eulix-cli" / "internal" / "kbfile" / "testdata"
+        fb = kbstats.callgraph_stats(data / "kb_call_graph.fb")
+        js = kbstats.callgraph_stats(data / "kb_call_graph.json")
+        self.assertEqual(fb, js)
+        self.assertGreater(fb["nodes"], 0)
+
+    def test_output_hashes_cover_fb_outputs(self):
+        d = self.tmp / "eulix"
+        d.mkdir()
+        (d / "kb_patterns.fb").write_bytes(b"\x10\x00EUPT")
+        (d / "kb_metrics.fb").write_bytes(b"run-specific bytes")
+        (d / "kb_metrics.json").write_text('{"format_version": 1, "metadata": {"parsed_at": "t1"}, "top": []}')
+        h = kbstats.output_hashes(d)
+        self.assertIn("kb_patterns.fb", h)
+        self.assertNotIn("kb_metrics.fb", h, "metadata-bearing .fb is covered by its JSON copy")
+        before = h["kb_metrics.json"]
+        (d / "kb_metrics.json").write_text('{"format_version": 1, "metadata": {"parsed_at": "t2"}, "top": []}')
+        self.assertEqual(kbstats.output_hashes(d)["kb_metrics.json"], before)
 
 
 class ConfigAndKeys(unittest.TestCase):

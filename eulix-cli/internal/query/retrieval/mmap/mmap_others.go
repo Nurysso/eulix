@@ -17,11 +17,6 @@ import (
 
 var errNoMmap = errors.New("mmap not supported on this platform")
 
-// DecodeJSONFile (mmap_loaders.go) falls back to a buffered reader on this error.
-func DecodeViaMmap(_ string, _ int64, _ any) error {
-	return errNoMmap
-}
-
 func AllocEmbeddingMatrix(n, dim int) [][]float32 {
 	flat := make([]float32, n*dim)
 	rows := make([][]float32, n)
@@ -29,4 +24,8 @@ func AllocEmbeddingMatrix(n, dim int) [][]float32 {
 		rows[i] = flat[i*dim : (i+1)*dim]
 	}
 	return rows
+}
+
+func mapFile(_ string) ([]byte, func(), error) {
+	return nil, nil, errNoMmap
 }

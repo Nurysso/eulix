@@ -1,6 +1,6 @@
 # Spill to Disk
 
-This page explains how `eulix-parser` keeps memory under control on very large repositories by writing each file's output to disk as soon as the file is parsed, and then assembling the final `kb.json` from those saved pieces.
+This page explains how `eulix-parser` keeps memory under control on very large repositories by writing each file's output to disk as soon as the file is parsed, and then assembling the final knowledge base, `kb.fb`, from those saved pieces.
 
 > **Crate / path:** `eulix-parser/src/spill.rs`, `eulix-parser/src/parse/file.rs`, `eulix-parser/src/parse/slim.rs`, `eulix-parser/src/output.rs`  
 > **Language:** Rust  
@@ -26,7 +26,7 @@ The key observation is that the output and the analysis need *different* data. T
 For every file, `parse_file` does the following, in this exact order. The order matters, as explained after the steps.
 
 1. **Parse the file** into a full `FileData`, using `libeulix`.
-2. **Write the detailed view to the "emit" spill.** The file's data is serialized with `FileDataSimpleView`, a view that borrows the full structure and writes only the fields that belong in `kb.json`. The resulting bytes are appended to the emit spill, and the parser remembers the position (offset and length) of that record.
+2. **Write the detailed view to the "emit" spill.** The file's data is encoded as a FlatBuffers `FileRecord` (`fb_io::encode_file_record`), which holds only the fields that belong in the knowledge base. The resulting bytes are appended to the emit spill, and the parser remembers the position (offset and length) of that record.
 3. **Collect the external imports.** The import list is copied out now, because the next step may clear it.
 4. **Slim the in-memory copy.** `slim` and `strip_emitted` remove everything that has already been written out, or that no later phase needs.
 5. **Write the slim view to the "slim" spill.** This copy is what the incremental cache uses on the next run (see [Incremental Parsing](Incremental-Parsing.md)).
@@ -34,7 +34,7 @@ For every file, `parse_file` does the following, in this exact order. The order 
 
 The order matters because step 2 must see the full data, so it has to run before anything is stripped. Step 3 has the same constraint for imports.
 
-At the end of the run, after analysis, `write_kb_from_spill` produces `kb.json`. It writes the metadata, then for each file in path order it writes the path and copies that file's saved bytes into the output. The saved bytes are already valid JSON, so nothing is parsed or re-serialized.
+At the end of the run, after analysis, `write_kb_fb` produces `kb.fb`. It writes a header with the metadata and each file's path, offset and length, then copies every file's saved record into place in path order, padded to 8 bytes. The saved bytes are already finished FlatBuffers, so nothing is parsed or re-encoded. With `--emit-json`, the JSON copy is written the same way, one record at a time.
 
 ### Main Components
 
@@ -42,9 +42,9 @@ At the end of the run, after analysis, `write_kb_from_spill` produces `kb.json`.
 | --- | --- | --- |
 | `Spill` | `spill.rs` | An append-only file of records, safe to write from many threads. Returns the location of each record. |
 | `SpillIndex` | `spill.rs` | The list of `(relative path, offset, length)` entries for the emit spill, kept in memory. |
-| `FileDataSimpleView` | `views.rs` | The borrowed view that decides which fields reach `kb.json`. |
+| `encode_file_record` | `libeulix/src/fb_io.rs` | Decides which fields reach the knowledge base. |
 | `slim`, `strip_emitted` | `parse/slim.rs` | Strip data that is already on disk or not needed later. |
-| `write_kb_from_spill` | `output.rs` | Builds `kb.json` by splicing saved records together. |
+| `write_kb_fb` | `output.rs` | Builds `kb.fb` by splicing saved records behind a header. |
 
 ### Data In, Data Out
 
@@ -53,7 +53,7 @@ At the end of the run, after analysis, `write_kb_from_spill` produces `kb.json`.
 | Version | Where it lives | Contains | Used for |
 | --- | --- | --- | --- |
 | Full `FileData` | memory, briefly | Everything the parser extracted. | Producing the other two. |
-| Emit record | emit spill on disk | Language, line count, functions (id, name, signature, params, return type, docstring, lines), classes (with methods and attributes), TODOs. No imports. | The final `kb.json`. |
+| Emit record | emit spill on disk | Language, line count, functions (id, name, signature, params, return type, docstring, lines), classes (with methods and attributes), TODOs. No imports. | The final `kb.fb`. |
 | Slim `FileData` | memory, and slim spill on disk | Ids, names, line ranges, call sites (callee, receiver, line, conditional flag), class bases, decorators, tags, complexity, importance, docstrings, parameter names. | Analysis (PRISM, entry points, indices, metrics, summary) and the incremental cache. |
 
 The slim view drops, among other things, variables, control flow, exception details, call arguments, signatures, return types and parameter type annotations, global variables, security notes, and most language-specific information. It deliberately keeps what PRISM v2 needs: PHP namespaces, base classes and `static` flags, Python `staticmethod` and `classmethod` flags, and the import lists of PHP, Python, TypeScript and Rust files, which receiver-aware resolution reads.
@@ -76,7 +76,7 @@ The slim view drops, among other things, variables, control flow, exception deta
 
 **Why this way.** The lock is held for a very short time, so contention stays low, and writing is sequential, which disks handle well. The cost is that record order in the file depends on which thread got there first. That is fine, because nothing relies on file order: the index records where each record is, and the output step sorts by path.
 
-### Assembling `kb.json` without re-serializing
+### Assembling `kb.fb` without re-encoding
 
 **The problem.** Serializing a whole knowledge base at the end is slow and needs the whole structure in memory.
 
@@ -86,7 +86,7 @@ The slim view drops, among other things, variables, control flow, exception deta
 
 ### Keeping the other artifacts separate
 
-`kb.json` is the only artifact built from spill records. The call graph, indices, summary, metrics, entry points, dependencies and patterns are all produced from the slim in-memory structures after analysis, and written with streaming serializers through borrowed views (`CallGraphRef`, `IndexViewRef`, and so on), so no second copy is built.
+`kb.fb` is the only artifact built from spill records. The call graph, indices, summary, metrics, entry points, dependencies and patterns are all produced from the slim in-memory structures after analysis, and written with streaming serializers through borrowed views (`CallGraphRef`, `IndexViewRef`, and so on), so no second copy is built.
 
 ## Configuration
 
@@ -103,7 +103,7 @@ The spill has no settings of its own. Its files live in `<output directory>/pars
 There is nothing to switch on. A normal run uses spill files automatically:
 
 ```bash
-eulix_parser --root ./my_project --prism 2 --output .eulix/kb.json --verbose
+eulix_parser --root ./my_project --prism 2 --output .eulix/kb.fb --verbose
 ls .eulix/parse_cache/
 ```
 
@@ -118,8 +118,8 @@ The changelog for v0.7.7 records the measured effect of trimming what `kb.json` 
 | Limitation | Why it happens | Workaround |
 | --- | --- | --- |
 | The in-memory slim structures still grow with repository size. | The analysis phase needs every file's slim data at once. | Use `--no-analyze` for the smallest footprint; it skips the call graph. |
-| The final `kb.json` write does not re-check record checksums. | `write_kb_from_spill` copies bytes from the current run's emit spill without calling the CRC check; the check is used only when reading a previous run's cache. | None needed in normal use. A failed disk write would surface as an I/O error. |
-| `kb.json` omits calls, `called_by`, control flow and exception data. | Those fields are not part of `FileDataSimpleView`. | Use `knowledge_base_call_graph.json` for call relationships. |
+| The final `kb.fb` write does not re-check record checksums. | `write_kb_fb` copies bytes from the current run's emit spill without calling the CRC check; the check is used only when reading a previous run's cache. | None needed in normal use. A failed disk write would surface as an I/O error. |
+| The knowledge base omits calls, `called_by`, control flow and exception data. | Those fields are not part of the file record. | Use `kb_call_graph.fb` for call relationships. |
 | Spill files use disk space. | They are the on-disk copy of every file's output. | They are cleaned up automatically, see [Incremental Parsing](Incremental-Parsing.md). |
 | A spill path longer than 65,535 bytes is rejected. | The path length is stored in a `u16`. | Not a practical limit. |
 

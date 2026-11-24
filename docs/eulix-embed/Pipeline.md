@@ -2,7 +2,7 @@
 
 This page walks through what `embed` does from the knowledge base to the two output files, and why it is built the way it is.
 
-> **Crate / path:** `eulix-embed/pipeline/`, `eulix-embed/data_io/json_stream.py`, `eulix-embed/utils/`  
+> **Crate / path:** `eulix-embed/pipeline/`, `eulix-embed/data_io/fb_stream.py`, `eulix-embed/utils/`  
 > **Language:** Python  
 > **Status:** beta  
 > **Last verified against:** `ad744e9`
@@ -19,7 +19,7 @@ Three costs dominate an embedding run: reading a huge JSON file, running a model
 
 **Before anything: disk check.** `_check_disk_space` estimates the output size from the dimension, the vector format and an estimated chunk count, with a 20% margin (50% more if JSON output were enabled). If free space is short it prints the shortfall and exits; if the margin is under 10% it warns. The chunk count is estimated by scanning the file for function, class and method ids, switching to about 25 chunks per megabyte of input if the file is large.
 
-**Steps 1 and 2: stream and chunk (one pass).** `stream_kb` reads `kb.json` once with `ijson`, which emits parse events instead of building the whole document. Small top-level keys (the metadata) are kept; the huge `structure` map is yielded one file entry at a time. Each file entry is handed to a thread pool (at most 4 workers) that drops docstrings and chunks the file ([Chunking](Chunking.md)). To bound memory, no more than 32 chunking jobs are in flight; when that limit is hit, half are collected before more are submitted. The old design read a 4.6 GB file twice and rebuilt the whole call graph in memory, which the comment says caused a ten- to twenty-fold blow-up over the file size.
+**Steps 1 and 2: stream and chunk (one pass).** `stream_kb_fb` (`data_io/fb_stream.py`) reads `kb.fb` once, front to back: the header first, then one file record at a time, decoded straight from the FlatBuffers wire format with `struct` (the generated accessors were 2.7x slower than the old JSON path; this decoder is about 1.8x faster than it on Kubernetes, and a test keeps it equal to the generated code). It yields the same events and dicts the old JSON reader (`stream_kb`, removed) did for `kb.json`, so the chunker did not change: the metadata first, then one file entry at a time. Each file entry is handed to a thread pool (at most 4 workers) that drops docstrings and chunks the file ([Chunking](Chunking.md)). To bound memory, no more than 32 chunking jobs are in flight; when that limit is hit, half are collected before more are submitted. The old design read a 4.6 GB file twice and rebuilt the whole call graph in memory, which the comment says caused a ten- to twenty-fold blow-up over the file size.
 
 **Steps 3 and 4: embed and write (one pass).** A generator yields `(id, vector)` pairs, and the writer consumes them directly, so only one batch of vectors exists at a time. Duplicate ids are skipped. If skipping makes the real count smaller than the planned one, the count field in the header is patched afterwards. `vectors.bin` is written last, from the ids in the exact order the vectors were written ([Binary Format](Binary-Format.md)).
 
@@ -46,13 +46,13 @@ Without bucketing (CPU), chunks are sorted longest first and cut into fixed-size
 | --- | --- |
 | `BaseEmbeddingPipeline` | The driver; `process()` runs everything and prints a summary. |
 | `OnnxPipeline`, `TorchPipeline` | Choose the embedder. |
-| `stream_kb` | Single-pass streaming JSON reader. |
+| `stream_kb_fb` | Single-pass reader for `kb.fb`, with the fast wire-format decoder. |
 | `snap_to_bucket`, `BUCKETS_STANDARD`, `BUCKETS_JINA` | Bucket sizes. |
 | `_check_disk_space` | Output-size estimate. |
 
 ### Data In, Data Out
 
-In: `kb.json`. Out: `embeddings.bin`, `vectors.bin`, and a printed summary of files, functions, classes, methods, chunks per type, time and speed.
+In: `kb.fb` (or a `kb.json` from an older parser). Out: `embeddings.bin`, `vectors.bin`, and a printed summary of files, functions, classes, methods, chunks per type, time and speed.
 
 ## Key Algorithms
 
@@ -70,14 +70,14 @@ Streaming and bucketing are described above.
 ## Usage Examples
 
 ```bash
-EULIX_TOKEN_DEBUG=1 python main.py embed -k .eulix/kb.json -o .eulix -e torch -d cuda
+EULIX_TOKEN_DEBUG=1 python main.py embed -k .eulix/kb.fb -o .eulix -e torch -d cuda
 ```
 
 Expected result: lines like `[tokens] total=… min=… max=… median=…`, then a progress bar that shows the current bucket and batch size.
 
 ## Performance Notes
 
-Install `libyajl2` (Debian or Ubuntu: `sudo apt install libyajl2`) so `ijson` uses its C backend; the README says this speeds up parsing by about ten times. `orjson` is used for JSON if present. The summary line reports which backends were found.
+Reading `kb.fb` needs no native library: the record decoder is plain Python over `struct`, and the `flatbuffers` package (pure Python) is used only for the header. On Kubernetes the whole knowledge base reads in about 0.7 s. `orjson` is used for JSON output if present, and the summary line reports it.
 
 ## Limitations
 

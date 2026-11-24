@@ -1,0 +1,39 @@
+{
+  "format_version": 1,
+  "project_name": "src",
+  "total_files": 2,
+  "total_loc": 36,
+  "languages": [
+    "go",
+    "python"
+  ],
+  "categories": [
+    {
+      "key": "Other",
+      "values": [
+        "app/server.py",
+        "app/tool.go"
+      ]
+    }
+  ],
+  "key_features": [],
+  "entry_points": [
+    "app/server.py:9",
+    "app/server.py:16",
+    "app/tool.go:15"
+  ],
+  "dependencies": {
+    "stdlib": [
+      "fmt",
+      "os"
+    ],
+    "third_party": [
+      "flask",
+      "requests"
+    ]
+  },
+  "patterns": {
+    "naming_convention": "snake_case",
+    "structure_type": "Flat"
+  }
+}

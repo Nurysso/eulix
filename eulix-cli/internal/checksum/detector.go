@@ -11,7 +11,8 @@ re-analysis is needed.
 Ignore rules are read from a .euignore file in the project root (same syntax
 as .gitignore). The .eulix/ output directory is always excluded automatically.
 
-Checksum state is persisted at <config.Project.Path>/.eulix/checksum.json.zst
+Checksum state is persisted at <config.Project.Path>/.eulix/checksum.fb.zst
+(a zstd-compressed FlatBuffer, see fbfile.go)
 Run() is the single entry point: it loads config itself, creates the
 checksum file on first run, or compares against the stored checksum on
 subsequent runs and reports the percentage of the codebase that changed.
@@ -20,7 +21,6 @@ package checksum
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -93,7 +93,7 @@ func newDetector(projectPath string) *Detector {
 }
 
 // Run is the high-level entry point. It loads config itself, so callers
-// don't pass a directory. If no checksum.json.zst exists yet, it creates one.
+// don't pass a directory. If no checksum.fb.zst exists yet, it creates one.
 // If one exists, it recalculates and compares against the stored version,
 // reporting what percentage of the codebase changed.
 func Run() (*Result, error) {
@@ -143,11 +143,7 @@ func (d *Detector) Load() (*Checksum, error) {
 	if err != nil {
 		return nil, fmt.Errorf("checksum: failed to decompress: %w", err)
 	}
-	var c Checksum
-	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, fmt.Errorf("checksum: invalid json: %w", err)
-	}
-	return &c, nil
+	return decodeChecksum(data)
 }
 
 // Track supported source extensions as well as those present in the baseline.
@@ -550,12 +546,7 @@ func (d *Detector) Save(checksum *Checksum) error {
 	}
 
 	checksumPath := filepath.Join(dir, utils.ChecksumFileName)
-	data, err := json.Marshal(checksum)
-	if err != nil {
-		return err
-	}
-
-	compressed, err := compressZstd(data)
+	compressed, err := compressZstd(encodeChecksum(checksum))
 	if err != nil {
 		return fmt.Errorf("checksum: failed to compress checksum data: %w", err)
 	}

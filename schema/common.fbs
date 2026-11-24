@@ -1,0 +1,41 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+// Types shared by every eulix-parser output. See
+// docs/Architecture/Binary-Knowledge-Base.md for the design.
+//
+// Conventions:
+// - Field names match the JSON keys of the pre-FlatBuffers outputs.
+// - Rust usize is stored as ulong.
+// - A JSON object keyed by string (Rust BTreeMap<String, Vec<String>>) is a
+//   vector of StringList entries sorted by key, so readers can binary-search.
+// - Every root table starts with format_version. Writers set it to
+//   FORMAT_VERSION (currently 1); readers reject any other value, which makes
+//   eulix ask for a fresh `eulix analyze` instead of misreading old data.
+
+namespace eulix.fb;
+
+table Metadata {
+  version:string;
+  git_hash:string;
+  project_name:string;
+  project_hash:string;
+  parsed_at:string;
+  languages:[string];
+  total_files:ulong;
+  total_loc:ulong;
+  total_functions:ulong;
+  total_classes:ulong;
+  total_methods:ulong;
+}
+
+table PatternInfo {
+  naming_convention:string;
+  structure_type:string;
+  architecture_style:string;
+}
+
+table StringList {
+  key:string (key);
+  values:[string];
+}

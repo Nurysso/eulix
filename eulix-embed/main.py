@@ -71,11 +71,11 @@ def check_engine_dependencies(engine: str) -> None:
             "sentence_transformers": "sentence-transformers",
             "tqdm": "tqdm",
             "numpy": "numpy",
-            "ijson": "ijson",
+            "flatbuffers": "flatbuffers",
             "huggingface_hub": "huggingface_hub",
         }
         engine_name = "PyTorch"
-        packages = "torch transformers sentence-transformers tqdm numpy huggingface_hub ijson"
+        packages = "torch transformers sentence-transformers tqdm numpy huggingface_hub flatbuffers"
 
     elif engine == "onnx":
         required_packages = {
@@ -84,10 +84,10 @@ def check_engine_dependencies(engine: str) -> None:
             "huggingface_hub": "huggingface_hub",
             "tqdm": "tqdm",
             "numpy": "numpy",
-            "ijson": "ijson",
+            "flatbuffers": "flatbuffers",
         }
         engine_name = "ONNX Runtime"
-        packages = "onnxruntime tokenizers huggingface_hub tqdm numpy ijson"
+        packages = "onnxruntime tokenizers huggingface_hub tqdm numpy flatbuffers"
     else:
         raise ValueError(f"Unknown engine: {engine}")
 
@@ -162,7 +162,7 @@ def main() -> None:
         print(f"{Version}")
         sys.exit(0)
 
-    known_commands = {"embed", "query", "server", "compare", "ijson-backend", "version"}
+    known_commands = {"embed", "query", "server", "compare", "version"}
 
     # If first arg isn't a known subcommand, assume it's meant for
     # `embed` and inject it.
@@ -191,19 +191,14 @@ def main() -> None:
             from cli.commands import cmd_compare
 
             cmd_compare(args)
-    elif args.command == "ijson-backend":
-        from cli.commands import ijson_check
-
-        ijson_check()
     elif args.command == "version":
-        from utils.constants import Version, ijson_backend
+        from utils.constants import Version
 
         if hasattr(args, "short") and args.short:
             print(Version)
         else:
             print(f"eulix-embed version {Version}")
             print(f"Python: {sys.version.split()[0]}")
-            print(f"ijson backend: {ijson_backend}")
     else:
         print_help(parser)
         sys.exit(1)

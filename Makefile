@@ -84,7 +84,7 @@ endif
         build-linux-amd build-linux-nvidia build-win-amd build-win-nvidia \
         build-single build-all clean \
         lint lint-rust lint-go lint-python \
-        test test-rust test-go test-python check \
+        test test-rust test-go test-python check schema schema-check \
         scripts-help script parser-release \
         repro-prism check-tsx perf-rust-workspace check-prism-v2 repro-all \
         eval-mcp kb-diff kb-field-usage kb-id-name-check vec-stats \
@@ -380,6 +380,14 @@ kb-diff:
 kb-field-usage:
 	$(RUN_IN_CALLER) uv run $(SCRIPTS_DIR)/kb_field_usage.py $(ARGS)
 
+# FlatBuffers code generation (the script fetches flatc 25.12.19). schema-check fails when
+# the committed generated code is out of date.
+schema:
+	bash $(SCRIPTS_DIR)/gen_flatbuffers.sh
+
+schema-check:
+	bash $(SCRIPTS_DIR)/gen_flatbuffers.sh --check
+
 kb-id-name-check:
 	$(RUN_IN_CALLER) $(PYTHON) $(SCRIPTS_DIR)/kb_id_name_check.py  $(ARGS)
 
@@ -417,7 +425,7 @@ bench-callgraph-micro: parser-release
 bench-callgraph-test:
 	python3 -m unittest discover -s $(ROOT_DIR)/bench/callgraph/tests
 
-# Generic runner: make script SCRIPT=known_issues/cross_language_edges.py ARGS=kb_call_graph.json
+# Generic runner: make script SCRIPT=known_issues/cross_language_edges.py ARGS=kb_call_graph.fb
 script:
 	@test -n "$(SCRIPT)" || { echo "usage: make script SCRIPT=<file in scripts/> ARGS='...'"; exit 2; }
 	$(RUN_IN_CALLER) case "$(SCRIPT)" in \

@@ -13,7 +13,7 @@ A package of shared odds and ends usually means "things that had nowhere better 
 
 ## Why It Exists
 
-Constants such as `.eulix` and `checksum.json.zst` appear in many places, and a typo in one of them is a hard bug to find. Keeping them in one file removes that risk. The data types are separate from the Rust ones because Go reads the parser's JSON; they must match the output, not the Rust source.
+Constants such as `.eulix` and `checksum.fb.zst` appear in many places, and a typo in one of them is a hard bug to find. Keeping them in one file removes that risk. The data types are separate from the Rust ones because Go reads the parser's JSON; they must match the output, not the Rust source.
 
 ## How It Works
 

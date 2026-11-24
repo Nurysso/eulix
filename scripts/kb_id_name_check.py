@@ -1,4 +1,4 @@
-"""Check that every function/method ID in kb.json agrees with its `name` and file.
+"""Check that every function/method ID in kb.fb agrees with its `name` and file.
 
 IDs look like `func_{name}::{path}` or `method_{Class}_{name}::{path}`
 (nested Python names use `.`: `method_C_f._inner::{path}`). A node passes when:
@@ -6,12 +6,11 @@ IDs look like `func_{name}::{path}` or `method_{Class}_{name}::{path}`
   - the body is `{name}` (func_, ifacemethod_; nested funcs end in `.{name}`), or ends with `_{name}` / `.{name}` (method_),
     and for methods listed under a class, equals `{class}_{name}` or ends with `.{name}`.
 
-Usage: kb_id_name_check.py [path/to/kb.json] [--show N]
-       (default: <repo>/.eulix/kb.json, 5 examples per bad group)
+Usage: kb_id_name_check.py [path/to/kb.fb] [--show N]
+       (default: <repo>/.eulix/kb.fb, 5 examples per bad group)
 Exit code: 0 all consistent, 1 mismatches found.
 """
 import collections
-import json
 import sys
 from pathlib import Path
 
@@ -19,9 +18,15 @@ args = [a for a in sys.argv[1:] if not a.startswith("--")]
 show = int(sys.argv[sys.argv.index("--show") + 1]) if "--show" in sys.argv else 5
 if "--show" in sys.argv:
     args = [a for a in args if a != sys.argv[sys.argv.index("--show") + 1]]
-kb_path = args[0] if args else Path(__file__).resolve().parent.parent / ".eulix" / "kb.json"
-st = json.load(open(kb_path))
-st = st.get("structure", st)
+kb_path = Path(args[0]) if args else Path(__file__).resolve().parent.parent / ".eulix" / "kb.fb"
+import importlib.util
+
+_spec = importlib.util.spec_from_file_location(
+    "eulix_bench_kbfb", Path(__file__).resolve().parent.parent / "bench" / "lib" / "kbfb.py"
+)
+_kbfb = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_kbfb)
+st = _kbfb.load_kb(kb_path)["structure"]
 
 PREFIXES = ("func_", "method_", "ifacemethod_")
 

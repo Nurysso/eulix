@@ -6,7 +6,7 @@
 | :-- | :-- | :-- | :-- |
 | HTML/JS (page), Go (command) | 0.2.0 | Stable | [docs/vizEulize](../docs/vizEulize/Overview.md) |
 
-`eulix vizeulize` loads `.eulix/kb_call_graph.json` and renders it as an interactive graph in your browser. That one file is all it needs. It comes in two small pieces:
+`eulix vizeulize` loads `.eulix/kb_call_graph.fb` and renders it as an interactive graph in your browser. That one file is all it needs. It comes in two small pieces:
 
 - **`vizeulize.html`**: a single self-contained web page (no build step, no dependencies, no network calls) that draws the call graph on a canvas.
 - **`vizeulize` command** (Go, cobra): starts a local HTTP server on `127.0.0.1` with a random free port, serves the page and the call graph, and opens your default browser.
@@ -20,11 +20,11 @@ The install script places the page at `~/.Eulix/bin/vizeulize.html`; the command
 ## Usage
 
 ```bash
-eulix analyze     # produces .eulix/kb_call_graph.json
+eulix analyze     # produces .eulix/kb_call_graph.fb
 eulix vizeulize   # opens the explorer
 ```
 
-By default the command reads `.eulix/kb_call_graph.json`; override it with `--graph <path>`. The index file (`kb_index.json`) is no longer used; `--index` is still accepted but has no effect.
+By default the command reads `.eulix/kb_call_graph.fb` and leaves out nodes from hidden or `.euignore`d files; override the file with `--graph <path>`, which is shown whole. The index file (`kb_index.json`) is no longer used; `--index` is still accepted but has no effect.
 
 The command must keep running while you use the explorer. Press `Ctrl+C` to stop the server.
 
@@ -33,13 +33,13 @@ The command must keep running while you use the explorer. Press `Ctrl+C` to stop
 | Route | Serves |
 | :-- | :-- |
 | `/` | `~/.Eulix/bin/vizeulize.html` |
-| `/data/call_graph.json` | The call graph file |
+| `/data/call_graph.fb` | The call graph (FlatBuffers) |
 
-The page also tries `/data/kb_call_graph.json` as a fallback.
+The page also tries `/data/kb_call_graph.fb` as a fallback.
 
 ### Manual loading
 
-Without the server (for example, opening the HTML file directly), use **Load JSON files** or drag and drop `kb_call_graph.json` onto the page.
+Without the server (for example, opening the HTML file directly), use **Load call graph** or drag and drop `kb_call_graph.fb` onto the page. The parser's `--emit-json` copy, `kb_call_graph.json`, also loads.
 
 ## Using the explorer
 
@@ -106,14 +106,16 @@ Graphs generated before tags and categories were added to the call graph file st
 
 ## Performance
 
-- JSON parsing and graph construction run in a Web Worker, so the page stays responsive on large files.
+- FlatBuffers decoding and graph construction run in a Web Worker, so the page stays responsive on large files.
 - The graph is stored in compact typed arrays (CSR adjacency), so memory use stays low.
 - Only a limited number of nodes are laid out and drawn at a time (80, 150, 300 or 600). Use search, filters and focus to reach the part of the graph you need.
 - Tags and categories live in the call graph file, so the large index file is never downloaded or parsed.
 
-Tested with a 411 MB `kb_call_graph.json` (loaded together with a 391 MB index, before the index was dropped). The call graph loads, and the default top-connections view stays usable.
+Measured in Firefox: the Linux kernel graph (985k nodes, 2.2M edges) reaches the first view in 3.6 s from its 160 MB `.fb` and 5.6 s from its 591 MB JSON copy; the Kubernetes graph (119k nodes) in 0.65 s from 22 MB. Chrome loads the Linux `.fb` with about 273 MB of JS heap in use; Firefox's `about:memory` shows about 550 MB for the whole tab. Earlier, a 411 MB `kb_call_graph.json` was tested in a browser and the default top-connections view stayed usable.
 
-- **File size:** a browser cannot build a single string longer than about 512 MB, so a call graph file over roughly 500 MB fails with "Invalid string length", whatever the available memory.
+In the browser console, `vizEulize.perf()` prints memory and timings and `vizEulize.perf.watch(2)` repeats it every 2 seconds (`vizEulize.perf.stop()` ends it); each load also logs its stage timings. See [Overview](../docs/vizEulize/Overview.md#performance-metrics-in-the-console).
+
+- **JSON size in Chrome and Edge:** their JavaScript engine cannot build a string longer than about 512 MB, so a JSON copy over roughly 500 MB (Linux's is 591 MB) fails with "Invalid string length", whatever the available memory. Firefox allows about 1 GB and opens it, in 5.6 s against 3.6 s for the `.fb`. The `.fb` file has no such limit.
 - **Focus on hub nodes:** focusing a node is slower on a graph this size. Expanding the neighborhood of a highly connected node can pull in many nodes, and the force layout cost grows with the square of the visible node count. Keep the node limit and focus depth low (limit 150, depth 1 to 2) when exploring hub functions.
 
 ## Requirements

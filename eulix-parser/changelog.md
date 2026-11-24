@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **The parse cache format is 4.** Cached `kb.fb` records replace the JSON fragments, the index is a FlatBuffer and the slim records are FlexBuffers (39% smaller than JSON, 20% lower peak memory on a cached Kubernetes re-run, which takes 0.16 s longer), so caches from earlier builds are discarded, and their files deleted, on the next run.
+- **Every output is FlatBuffers.** The knowledge base is `kb.fb`: a header (metadata, each file's path, offset and length) and one record per source file, so it can pass 2 GiB. It is always `<stem>.fb` next to `--output`, whatever extension `--output` has; `kb.json` is now only the `--emit-json` copy. `kb_index`, `kb_call_graph`, `kb_summary`, `kb_metrics`, `kb_entry_points`, `kb_external_deps` and `kb_patterns` are now written as `.fb` files (schemas in `schema/`). Both large files store each distinct string once and are about a third the size of the old compact JSON (Kubernetes: index 85 → 26 MB, call graph 66 → 21 MB) with the same write time. The checksum (`checksum.fb.zst`) and the parse-cache index (`parse_cache/index.<gen>.fb.zst`) are FlatBuffers too, both still zstd-compressed; see `docs/Architecture/Binary-Knowledge-Base.md`.
+- **Outputs are replaced atomically.** Every output is written under a `.tmp` name and renamed into place, so a reader with the old file open keeps the old contents and a failed run leaves the previous output intact (fixes RET-10 on Linux and macOS).
+
+### Added
+
+- **New dependencies:** `flatbuffers` and `flexbuffers`, both 25.12.19.
+- **`--emit-json`.** Also writes a JSON copy of every `.fb` output, `checksum.json` and `parse_cache/index.json`, decoded from the binary data, for inspecting changes. Without it, stale copies are deleted.
+- **`--checksum fb|json|none`.** Picks the checksum baseline: `fb` (default) writes `checksum.fb.zst`, `json` writes the pre-FlatBuffers `checksum.json.zst`, and `none` skips hashing and writes nothing (the knowledge base's `project_hash` is then empty). The baseline of the other format is removed. The `--emit-json` copy `checksum.json` is only written for `fb`.
+
 ## Eulix_parser v0.9.0 - 2026-11-17
 
 Changes since v0.8.1, the version that shipped with Eulix v0.8.3. Built on libeulix 0.9.0, so it also gets the PHP parser, the iterative tree walks and the call-graph fixes listed in [libeulix/changelog.md](../libeulix/changelog.md).

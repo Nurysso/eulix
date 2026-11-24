@@ -29,7 +29,7 @@ import (
 	"eulix/internal/utils"
 )
 
-// ========== Symbol definitions (from kb.json) ==========
+// ========== Symbol definitions (from kb.fb) ==========
 
 // symDef is one function, method or type definition from the knowledge base.
 type symDef struct {
@@ -60,7 +60,7 @@ type symTable struct {
 	byFile map[string][]*symDef // functions and methods per file
 }
 
-// ensureSymTable builds the definition table from kb.json once.
+// ensureSymTable builds the definition table from kb.fb once.
 func (r *Router) ensureSymTable() (*symTable, error) {
 	r.mu.RLock()
 	t := r.syms

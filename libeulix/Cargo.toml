@@ -28,9 +28,11 @@ name = "libeulix"
 path = "src/lib.rs"
 
 [dependencies]
+# Pinned to the flatc version in scripts/gen_flatbuffers.sh.
+flatbuffers = { version = "=25.12.19", optional = true }
 rayon = "1.10"
 serde = { version = "1.0", features = ["derive", "rc"] }
-serde_json = { version = "1.0", features = ["raw_value"] }
+serde_json = { version = "1.0", features = ["raw_value", "preserve_order"] }
 chrono = { version = "0.4", default-features = false, features = [
     "now",
     "serde",
@@ -63,8 +65,11 @@ secrecy = { version = "0.10", optional = true }
 tempfile = "3"
 
 [features]
-default = ["num_cpus"]
+default = ["num_cpus", "flatbuffers"]
 num_cpus = ["dep:num_cpus"]
+# The `fb` and `fb_io` modules and the `checksum.fb.zst` baseline. Without it,
+# `FileWalker` writes `checksum.json.zst` (or nothing) instead.
+flatbuffers = ["dep:flatbuffers"]
 secure = ["secrecy"]
 simd = ["ignore/simd-accel"]
 system = []

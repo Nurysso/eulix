@@ -41,6 +41,6 @@ It needs `claude` (logged in) and `eulix` on PATH. Results go to `bench/results/
 
 - **The model knows these repos.** Flask, Django and ripgrep are in every model's training data, so plain grep often goes straight to the right file in one or two calls. That favours the `plain` arm. Code the model has never seen (a private repo, a young project) is where Eulix should matter most, and this run doesn't measure it.
 - **The tasks are short.** Each is a single question in a fresh session. Savings that build up over long sessions (the README's "a file read at step two is still in context at step twenty") aren't measured.
-- **One model and one agent:** Claude Sonnet in Claude Code. Other agents (Cursor, Cline) and models may use the tools differently.
+- **One agent:** Claude Code, with Claude Sonnet 5.5, Opus 4.8 and Opus 5.5 (bifrost). Other agents (Cursor, Cline) and models may use the tools differently.
 - **Wall time is noisy:** it is mostly API latency, and four sessions share the account's rate limits.
 - **The rubric is regex-based** and was written by the person who wrote the tool. The answers and transcripts are published so others can re-grade them.

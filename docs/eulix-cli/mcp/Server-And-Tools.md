@@ -80,7 +80,7 @@ A tool reply stays in the agent's context and is re-read on every later turn, so
 The server can serve many repositories, one at a time. `setRepoPathLocked` does the following:
 
 1. Resolve the path to an absolute one and check that it exists and is a directory.
-2. Check that `.eulix/kb.json` exists; if not, return an error telling the user to run `eulix analyze`.
+2. Check that `.eulix/kb.fb` exists; if not, return an error telling the user to run `eulix analyze`.
 3. If this repository is already active, say so and stop.
 4. Load that project's `eulix.toml` (with `config.LoadFrom`), create the language-model client, and create the query router. The history database is **not** opened, because an open `history.db` stays locked and would break `eulix chat` and `eulix history` while the server runs.
 5. Only after all of that succeeds, close the previous router and switch. A failure leaves the old, working repository active.

@@ -43,7 +43,7 @@ waits for JSON-RPC on stdin. Logs go to standard error. Point any MCP client at
 that command.
 
 If `--repo` and the path argument are both omitted, the server uses the current
-directory when it contains `.eulix/kb.json`. If neither applies, it asks the
+directory when it contains `.eulix/kb.fb`. If neither applies, it asks the
 client for its open workspace folders ("roots") after connecting, and binds the
 first usable one. The repository can also be chosen with `set_repo_path` or the
 `repo_path` argument of a query.

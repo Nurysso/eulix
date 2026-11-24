@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Reads `kb.fb`.** `data_io/fb_stream.py` streams the FlatBuffers knowledge base one record at a time, decoding the wire format directly; on Kubernetes it reads in 0.7 s against 1.3 s for `kb.json` with ijson's C backend. The disk-space estimate uses the header's totals.
+- **New dependency:** `flatbuffers==25.12.19`, with the generated code in `fb/`.
+
+### Removed
+
+- **The `kb.json` reader.** `data_io/json_stream.py`, the `.json` input branch and the ijson disk-space estimate are gone; the embedder reads only `kb.fb`.
+- **The `ijson-backend` command** and the ijson backend detection, and `ijson` from the requirements.
+
 ## Eulix_embed v0.4.2 - 2026-11-17
 
 Changes since v0.4.1, the version that shipped with Eulix v0.8.3.

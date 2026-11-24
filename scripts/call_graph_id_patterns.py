@@ -6,10 +6,20 @@ from pathlib import Path
 from collections import Counter, defaultdict
 
 
+def load_call_graph(path):
+    """kb_call_graph.fb, read through bench/lib/kbfb.py."""
+    import importlib.util
+
+    kbfb_path = Path(__file__).resolve().parents[1] / "bench" / "lib" / "kbfb.py"
+    spec = importlib.util.spec_from_file_location("eulix_bench_kbfb", kbfb_path)
+    kbfb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kbfb)
+    return kbfb.load_call_graph(Path(path))
+
+
 def analyze_id_prefixes_and_patterns(json_file_path):
     try:
-        with open(json_file_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = load_call_graph(json_file_path)
     except FileNotFoundError:
         print(f"Error: File '{json_file_path}' not found.", file=sys.stderr)
         sys.exit(1)
@@ -82,8 +92,8 @@ def main():
     parser.add_argument(
         "json_file",
         nargs="?",
-        default=str(Path(__file__).resolve().parent.parent / ".eulix" / "kb_call_graph.json"),
-        help="JSON file to analyze (default: <repo>/.eulix/kb_call_graph.json)",
+        default=str(Path(__file__).resolve().parent.parent / ".eulix" / "kb_call_graph.fb"),
+        help="call graph to analyze (default: <repo>/.eulix/kb_call_graph.fb)",
     )
 
     args = parser.parse_args()

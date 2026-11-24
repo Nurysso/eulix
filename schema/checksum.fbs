@@ -1,0 +1,30 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+// checksum.fb.zst: the size and modification time of every source file at the
+// last parse, which `eulix analyze` and `eulix chat` compare against the
+// working tree. Written by libeulix's file walker during discovery and read by
+// eulix-cli's checksum detector. The FlatBuffer is zstd-compressed on disk.
+
+namespace eulix.fb;
+
+table ChecksumFile {
+  path:string (key);   // relative to project_path, '/'-separated
+  hash:string;         // hex of a hash of size and mtime
+  size:long;
+  mod_time:long;       // unix nanoseconds
+}
+
+table Checksum {
+  format_version:uint;
+  project_path:string;
+  total_files:ulong;
+  hash:string;         // project hash over every file
+  files:[ChecksumFile];   // sorted by path
+  last_analyzed:string;   // RFC 3339
+  analysis_version:string;
+}
+
+root_type Checksum;
+file_identifier "EUCS";
+file_extension "fb";

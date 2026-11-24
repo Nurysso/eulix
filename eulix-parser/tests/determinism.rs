@@ -5,7 +5,12 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-const VOLATILE: [&str; 3] = ["\"parsed_at\"", "\"project_hash\"", "\"git_hash\""];
+const VOLATILE: [&str; 4] = [
+    "\"parsed_at\"",
+    "\"project_hash\"",
+    "\"git_hash\"",
+    "\"last_analyzed\"",
+];
 
 fn write_fixture(root: &Path) {
     for i in 0..300 {
@@ -99,7 +104,7 @@ fn run_parser(root: &Path, out: &Path, threads: &str) -> String {
         .arg(root)
         .arg("-o")
         .arg(out.join("kb.json"))
-        .args(["-t", threads, "-p", "2", "-v"])
+        .args(["-t", threads, "-p", "2", "-v", "--emit-json"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -180,18 +185,79 @@ fn incremental_run_matches_a_fresh_full_parse() {
     assert_same_outputs(&inc, &full);
 }
 
-fn assert_same_outputs(a: &Path, b: &Path) {
-    let mut names: Vec<_> = fs::read_dir(a)
-        .unwrap()
-        .map(|e| e.unwrap().file_name().into_string().unwrap())
-        .filter(|n| n.ends_with(".json"))
-        .collect();
-    names.sort();
-    assert_eq!(names.len(), 8, "{names:?}");
+/// Binary outputs whose content has no run-specific fields, so the bytes
+/// themselves must match. The others (kb.fb, kb_metrics.fb) carry `Metadata`
+/// (timestamps, hashes) and are compared through their JSON copies with those
+/// values blanked.
+const STABLE_FB: [&str; 6] = [
+    "kb_call_graph.fb",
+    "kb_index.fb",
+    "kb_entry_points.fb",
+    "kb_external_deps.fb",
+    "kb_patterns.fb",
+    "kb_summary.fb",
+];
 
-    for name in names {
+fn assert_same_outputs(a: &Path, b: &Path) {
+    let list = |ext: &str| {
+        let mut names: Vec<_> = fs::read_dir(a)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| n.ends_with(ext))
+            .collect();
+        names.sort();
+        names
+    };
+    let json = list(".json");
+    assert_eq!(json.len(), 9, "{json:?}"); // 8 outputs and the checksum copy
+    let fbs = list(".fb");
+    assert_eq!(fbs.len(), 8, "{fbs:?}");
+
+    for name in json {
         let x = blank_volatile(fs::read_to_string(a.join(&name)).unwrap());
         let y = blank_volatile(fs::read_to_string(b.join(&name)).unwrap());
         assert!(x == y, "{name} differs between {a:?} and {b:?}");
+    }
+    for name in STABLE_FB {
+        assert!(
+            fs::read(a.join(name)).unwrap() == fs::read(b.join(name)).unwrap(),
+            "{name} bytes differ between {a:?} and {b:?}"
+        );
+    }
+}
+
+#[test]
+fn json_copies_are_removed_without_emit_json() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proj");
+    write_fixture(&root);
+    let out = tmp.path().join("out");
+    run_parser(&root, &out, "2");
+    assert!(out.join("kb_metrics.json").exists());
+
+    let status = Command::new(env!("CARGO_BIN_EXE_eulix_parser"))
+        .arg("-r")
+        .arg(&root)
+        .arg("-o")
+        .arg(out.join("kb.json"))
+        .args(["-t", "2", "-p", "2"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    for name in [
+        "kb_summary",
+        "kb_metrics",
+        "kb_entry_points",
+        "kb_external_deps",
+        "kb_patterns",
+        "kb_call_graph",
+        "kb_index",
+        "kb",
+    ] {
+        assert!(out.join(format!("{name}.fb")).exists(), "{name}.fb missing");
+        assert!(
+            !out.join(format!("{name}.json")).exists(),
+            "stale {name}.json left behind"
+        );
     }
 }

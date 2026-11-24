@@ -10,7 +10,6 @@ parsing, debug logging, and math operations used throughout the context builder.
 package retrieval
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -208,37 +207,6 @@ func (cb *ContextBuilder) writeContextToFile(ctx *utils.ContextWindow) error {
 	defer func() { _ = f.Close() }()
 	_, err = fmt.Fprintf(f, "%+v\n", ctx)
 	return err
-}
-
-// jsonSkipToKey advances dec to the value of the top-level key target.
-// The values of keys before it are skipped; if seen is non-nil, it gets each
-// skipped key and its raw value (streamKBChunks reads "metadata" this way).
-func jsonSkipToKey(dec *json.Decoder, target string, seen func(key string, raw json.RawMessage)) error {
-	// Consume the opening '{' of the top-level object
-	if _, err := dec.Token(); err != nil {
-		return err
-	}
-	for dec.More() {
-		tok, err := dec.Token()
-		if err != nil {
-			return err
-		}
-		key, ok := tok.(string)
-		if !ok {
-			return fmt.Errorf("expected string key, got %T", tok)
-		}
-		if key == target {
-			return nil
-		}
-		var skip json.RawMessage
-		if err := dec.Decode(&skip); err != nil {
-			return fmt.Errorf("skipping key %q: %w", key, err)
-		}
-		if seen != nil {
-			seen(key, skip)
-		}
-	}
-	return fmt.Errorf("key %q not found", target)
 }
 
 func ApplyPreMMRFloor(candidates []ScoredChunk, cfg *config.RetrievalConfig) []ScoredChunk {

@@ -52,7 +52,7 @@ The input is a repository root. The output is a set of files in the directory th
 
 The tool's own algorithms are about moving data efficiently, not about understanding code. Two of them have their own pages:
 
-- [Spill to Disk](../Architecture/Spill-To-Disk.md): why each file's detailed output is written to disk immediately, and how `kb.json` is assembled from those pieces without being serialized again.
+- [Spill to Disk](../Architecture/Spill-To-Disk.md): why each file's detailed output is written to disk immediately, and how `kb.fb` is assembled from those pieces without being encoded again.
 - [Incremental Parsing](../Architecture/Incremental-Parsing.md): how unchanged files are recognized and reused on later runs, and the safeguards that keep the result identical to a full parse.
 
 The call-graph engine that phase 2 uses is [PRISM](../libeulix/PRISM-V2.md), which is part of `libeulix`.
@@ -73,6 +73,7 @@ eulix_parser [OPTIONS] --root <ROOT> --prism <PRISM>
 | `--no-analyze` | `-n` | off | Parse only. Skips the call graph and every analysis file. Useful on very large repositories. |
 | `--euignore <PATH>` | `-e` | `<root>/.euignore` | Use a different ignore file. |
 | `--parse-report <FILE>` | `-P` | off | Write a TSV listing every partial and failed file, which is handy for comparing two runs. |
+| `--emit-json` | | off | Also write a JSON copy next to every FlatBuffers output, read back from the binary file, for inspecting changes in an editor. Without it, copies from an earlier run are removed. See [Binary Knowledge Base](../Architecture/Binary-Knowledge-Base.md). |
 | `--verbose` | `-v` | off | Print each phase, timings and peak memory. |
 | `--version` | `-V` | | Print the version. |
 
@@ -107,7 +108,7 @@ Parse only, with no analysis:
 eulix_parser --root /path/to/huge-repo --prism 1 --no-analyze --output out/kb.json
 ```
 
-Expected result: without `--verbose`, one summary line such as `✓ Parsed 363 files (363 clean, 0 partial, 0 failed; … LOC) in 1.20s → out/kb.json`.
+Expected result: without `--verbose`, one summary line such as `✓ Parsed 363 files (363 clean, 0 partial, 0 failed; … LOC) in 1.20s → out/kb.fb`.
 
 Build from source with `cargo build --release`. The binary is `target/release/eulix_parser`, and a C/C++ toolchain is needed because the Tree-sitter grammars compile C code.
 

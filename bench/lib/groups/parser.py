@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Parser quality: what the parser linked, what failed, and whether a second run agrees.
 
-Counts come from the fixture's kb_call_graph.json, the index `eulix analyze`
+Counts come from the fixture's call graph (kb_call_graph.fb, or .json for older parsers), the index `eulix analyze`
 built. Determinism runs the parser twice more the same way (analyze's flags, cold,
 into separate directories) and compares the two: `byte_identical` over every
 output file (minus run-specific metadata), and `semantic_identical` over the call
@@ -12,7 +12,7 @@ instead would mix in differences between how analyze and a direct call pass --ro
 """
 import shutil
 
-from .. import corpora, kbstats, proc, runner, sandbox, store
+from .. import corpora, kbfb, kbstats, proc, runner, sandbox, store
 from ..common import H, BenchError, say
 from . import indexing
 
@@ -34,7 +34,7 @@ def run(side, corpus, rerun: bool = False) -> dict:
     work = runner.ensure_fixture(side, corpus)
     eulix_dir = work / ".eulix"
     say(f"  {corpus.label}: parser stats")
-    stats = kbstats.callgraph_stats(eulix_dir / "kb_call_graph.json")
+    stats = kbstats.callgraph_stats(kbfb.call_graph_path(eulix_dir))
     counts = runner.fixture_counts(work)
     details = {"stats": stats, "counts": counts}
     deterministic = {}
@@ -51,7 +51,7 @@ def run(side, corpus, rerun: bool = False) -> dict:
                 if m.returncode != 0:
                     raise BenchError(f"parse {i} of {corpus.label} failed; see {log}")
             h1, h2 = (kbstats.output_hashes(d) for d in runs)
-            sem1, sem2 = (kbstats.callgraph_stats(d / "kb_call_graph.json")["semantic_hash"] for d in runs)
+            sem1, sem2 = (kbstats.callgraph_stats(kbfb.call_graph_path(d))["semantic_hash"] for d in runs)
         finally:
             for d in runs:
                 shutil.rmtree(d, ignore_errors=True)

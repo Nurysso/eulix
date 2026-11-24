@@ -47,12 +47,25 @@ def _walk(obj, file: str, out: dict[str, Node]):
             _walk(v, file, out)
 
 
+def _kbfb():
+    """bench/lib/kbfb.py, loaded by path: bench/callgraph has its own `lib` package."""
+    import importlib.util
+    path = Path(__file__).resolve().parents[2] / "lib" / "kbfb.py"
+    spec = importlib.util.spec_from_file_location("eulix_bench_kbfb", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def load(out: Path) -> tuple[dict[str, Node], list[tuple[str, str, int]]]:
-    kb = json.loads((out / "kb.json").read_text())
+    kbfb = _kbfb()
+    kb_file = kbfb.kb_path(out)
+    kb = kbfb.load_kb(kb_file) if kb_file.suffix == ".fb" else json.loads(kb_file.read_text())
     nodes: dict[str, Node] = {}
     for file, entry in kb.get("structure", {}).items():
         _walk(entry, file, nodes)
-    cg = json.loads((out / "kb_call_graph.json").read_text())
+    cg_path = kbfb.call_graph_path(out)
+    cg = kbfb.load_call_graph(cg_path) if cg_path.suffix == ".fb" else json.loads(cg_path.read_text())
     edges = [(e["from"], e["to"], int(e.get("call_site_line") or 0))
              for e in cg.get("edges", []) if e.get("edge_type") in ("call", "calls")]
     return nodes, edges

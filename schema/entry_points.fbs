@@ -1,0 +1,27 @@
+// Copyright 2025-2026 Dawood K. (Nurysso)
+// SPDX-License-Identifier: Apache-2.0
+//
+// kb_entry_points.fb: main functions, HTTP routes and CLI commands.
+
+include "common.fbs";
+
+namespace eulix.fb;
+
+table EntryPoint {
+  entry_type:string;   // "api_endpoint", "cli_command", "main"
+  path:string;         // API path or CLI command; absent when none
+  function:string;
+  handler:string;
+  file:string;
+  line:ulong;
+  methods:[string];    // HTTP methods; absent when none
+}
+
+table EntryPoints {
+  format_version:uint;
+  entry_points:[EntryPoint];
+}
+
+root_type EntryPoints;
+file_identifier "EUEP";
+file_extension "fb";

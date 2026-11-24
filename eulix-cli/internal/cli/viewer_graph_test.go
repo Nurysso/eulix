@@ -12,38 +12,32 @@ import (
 	"eulix/internal/utils"
 )
 
-func TestServableCallGraphJSON(t *testing.T) {
+func TestViewerCallGraphHonoursEuignore(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, ".euignore"), []byte("secrets.py\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".euignore"), []byte("server.py\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(root, "graph.json")
-	graph := `{
-		"nodes":[
-			{"id":"func_a::app/a.py","file":"app/a.py","node_type":"function"},
-			{"id":"func_payment_secret::secrets.py","file":"secrets.py","node_type":"function"}],
-		"edges":[
-			{"from":"func_a::app/a.py","to":"func_payment_secret::secrets.py","edge_type":"call"},
-			{"from":"func_a::app/a.py","to":"print","edge_type":"call","conditional":true}],
-		"tags":{"func_a::app/a.py":["testing"],"func_payment_secret::secrets.py":["database"]},
-		"file_categories":{"app/a.py":"Other","secrets.py":"Other"}}`
-	if err := os.WriteFile(path, []byte(graph), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// Written by eulix_parser; nodes in app/server.py and app/tool.go.
+	fixture := filepath.Join("..", "kbfile", "testdata", "kb_call_graph.fb")
 
-	data, err := servableCallGraphJSON(path, root)
+	data, err := viewerCallGraph(fixture, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := string(data)
-	if strings.Contains(got, "secrets.py") || strings.Contains(got, "payment_secret") {
-		t.Errorf("viewer data names an ignored file: %s", got)
+	if strings.Contains(string(data), "server.py") {
+		t.Error("viewer data names an ignored file")
 	}
-	// The viewer reads fields the router's own types leave out.
-	for _, want := range []string{`"app/a.py"`, `"print"`, `"conditional":true`, `"tags"`, `"file_categories"`, `"node_type"`} {
-		if !strings.Contains(got, want) {
-			t.Errorf("viewer data lost %s: %s", want, got)
-		}
+	if !strings.Contains(string(data), "func_helper::app/tool.go") {
+		t.Error("viewer data lost a node from a kept file")
+	}
+
+	// A graph named with --graph is shown whole.
+	all, err := viewerCallGraph(fixture, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(all), "server.py") {
+		t.Error("--graph data was filtered")
 	}
 }
 
@@ -55,7 +49,7 @@ func TestAnalyzeRefusesSymlinksInEulixDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.write(filepath.Join(utils.EulixDir, "placeholder"), "")
-	if err := os.Symlink(victim, filepath.Join(f.root, utils.EulixDir, "kb.json")); err != nil {
+	if err := os.Symlink(victim, filepath.Join(f.root, utils.EulixDir, "kb.fb")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if err := f.run(); err == nil || !strings.Contains(err.Error(), "symlink") {

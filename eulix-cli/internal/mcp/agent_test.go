@@ -4,12 +4,12 @@
 package mcp
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"eulix/internal/kbfile/kbfiletest"
 	"eulix/internal/query"
 	"eulix/internal/utils"
 )
@@ -41,35 +41,30 @@ func shop(t *testing.T) string {
 		{"app/big.py", "big_report", 1, 150},
 	})
 	id := func(file, name string) string { return "func_" + name + "::" + file }
-	type node struct {
-		ID       string `json:"id"`
-		NodeType string `json:"node_type"`
-		File     string `json:"file"`
-		Entry    bool   `json:"is_entry_point"`
+	fn := func(file, name string, entry bool) utils.CallGraphNode {
+		return utils.CallGraphNode{ID: id(file, name), NodeType: "function", File: file, IsEntryPoint: entry}
 	}
-	type edge struct {
-		From string `json:"from"`
-		To   string `json:"to"`
-		Type string `json:"edge_type"`
-		Line int    `json:"call_site_line"`
+	call := func(from, to string, line int) utils.CallGraphEdge {
+		return utils.CallGraphEdge{From: from, To: to, EdgeType: "call", CallSiteLine: line}
 	}
-	nodes := []node{
-		{id("app/main.py", "main"), "function", "app/main.py", true},
-		{id("app/shop.py", "checkout"), "function", "app/shop.py", false},
-		{id("app/shop.py", "charge"), "function", "app/shop.py", false},
-		{id("app/shop.py", "retry_charge"), "function", "app/shop.py", false},
-		{id("app/worker.py", "worker_loop"), "function", "app/worker.py", false},
-		{id("tests/test_shop.py", "test_checkout"), "function", "tests/test_shop.py", false},
+	cg := &utils.CallGraphRef{
+		Nodes: []utils.CallGraphNode{
+			fn("app/main.py", "main", true),
+			fn("app/shop.py", "checkout", false),
+			fn("app/shop.py", "charge", false),
+			fn("app/shop.py", "retry_charge", false),
+			fn("app/worker.py", "worker_loop", false),
+			fn("tests/test_shop.py", "test_checkout", false),
+		},
+		Edges: []utils.CallGraphEdge{
+			call(id("app/main.py", "main"), id("app/shop.py", "checkout"), 2),
+			call(id("app/shop.py", "checkout"), id("app/shop.py", "charge"), 3),
+			call(id("app/shop.py", "charge"), id("app/shop.py", "retry_charge"), 10),
+			call(id("app/worker.py", "worker_loop"), id("app/shop.py", "charge"), 2),
+			call(id("tests/test_shop.py", "test_checkout"), id("app/shop.py", "checkout"), 2),
+		},
 	}
-	edges := []edge{
-		{id("app/main.py", "main"), id("app/shop.py", "checkout"), "call", 2},
-		{id("app/shop.py", "checkout"), id("app/shop.py", "charge"), "call", 3},
-		{id("app/shop.py", "charge"), id("app/shop.py", "retry_charge"), "call", 10},
-		{id("app/worker.py", "worker_loop"), id("app/shop.py", "charge"), "call", 2},
-		{id("tests/test_shop.py", "test_checkout"), id("app/shop.py", "checkout"), "call", 2},
-	}
-	cg, _ := json.Marshal(map[string]any{"nodes": nodes, "edges": edges})
-	writeTree(t, root, map[string]string{".eulix/kb_call_graph.json": string(cg)})
+	writeTree(t, root, map[string]string{".eulix/kb_call_graph.fb": string(kbfiletest.EncodeCallGraph(cg))})
 	return root
 }
 

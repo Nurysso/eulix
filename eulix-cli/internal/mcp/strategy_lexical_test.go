@@ -5,7 +5,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -21,7 +20,7 @@ import (
 	"time"
 
 	"eulix/internal/config"
-	"eulix/internal/utils"
+	"eulix/internal/kbfile"
 )
 
 const secretMarker = "SYNTHETIC_SECRET"
@@ -332,12 +331,8 @@ func TestLexicalSearchNeverShowsWhatTheParserExcludes(t *testing.T) {
 	if msg, err := exec.Command(parser, "-r", root, "-o", out, "-p", "2", "-n").CombinedOutput(); err != nil {
 		t.Fatalf("parser: %v\n%s", err, msg)
 	}
-	data, err := os.ReadFile(out)
+	kb, err := kbfile.ReadKB(strings.TrimSuffix(out, ".json") + ".fb")
 	if err != nil {
-		t.Fatal(err)
-	}
-	var kb utils.KnowledgeBaseSimplifiedRef
-	if err := json.Unmarshal(data, &kb); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range lexicalFiles(t, root, "secret") {

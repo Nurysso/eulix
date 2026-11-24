@@ -7,8 +7,9 @@ skips analyze when its checksum is unchanged, HEAD also keeps a parse cache).
 Corpora with embed = false run the parser alone with analyze's exact flags.
 """
 import re
+import subprocess
 
-from .. import corpora, machine, proc, runner, sandbox, store
+from .. import corpora, kbfb, machine, proc, runner, sandbox, store
 from ..common import BenchError, say
 
 METHOD_VERSION = 1
@@ -58,8 +59,28 @@ def check_device(text: str, device: str, parsed: dict) -> None:
 
 
 def parser_cmd(side, work, out) -> list[str]:
-    """The parser step exactly as `eulix analyze` runs it (analyze.go), writing to `out`."""
-    return side.sandbox.cmd("parser", "--root", work, "-o", out, "--threads", "8", "--prism", "2", "--verbose")
+    """The parser step as `eulix analyze` runs it (analyze.go), writing to `out`.
+
+    Parsers that write FlatBuffers also get --emit-json, so the determinism check
+    can hash the JSON copies of outputs that embed run-specific metadata."""
+    args = ["parser", "--root", work, "-o", out, "--threads", "8", "--prism", "2", "--verbose"]
+    if _supports_emit_json(side):
+        args.append("--emit-json")
+    return side.sandbox.cmd(*args)
+
+
+_EMIT_JSON_SUPPORT: dict[str, bool] = {}
+
+
+def _supports_emit_json(side) -> bool:
+    key = str(side.sandbox.binary)
+    if key not in _EMIT_JSON_SUPPORT:
+        try:
+            r = side.sandbox.run("parser", "--help", capture_output=True, text=True, timeout=60)
+            _EMIT_JSON_SUPPORT[key] = "--emit-json" in (r.stdout + r.stderr)
+        except (OSError, subprocess.SubprocessError):
+            _EMIT_JSON_SUPPORT[key] = False
+    return _EMIT_JSON_SUPPORT[key]
 
 
 def index_cmd(side, corpus, work) -> list[str]:
@@ -81,7 +102,7 @@ def index_once(side, corpus, work, log):
         raise BenchError(f"indexing {corpus.label} went over {OOM_FRACTION:.0%} of RAM and was stopped; see {log}")
     if m.returncode != 0:
         raise BenchError(f"indexing {corpus.label} with {side.rev.label} failed (exit {m.returncode}); see {log}")
-    if "No changes detected" in text or not (eulix_dir / "kb.json").exists():
+    if "No changes detected" in text or not kbfb.kb_path(eulix_dir).exists():
         raise BenchError(f"indexing {corpus.label} did not run cold; see {log}")
     parsed = parse_output(text)
     if corpus.embed:
@@ -91,7 +112,7 @@ def index_once(side, corpus, work, log):
 
 def _sizes(eulix_dir) -> dict:
     index = sum(corpora.du(eulix_dir, p) for p in ("kb*.json", "*.bin"))
-    cache = corpora.size_tree(eulix_dir / "parse_cache") + corpora.du(eulix_dir, "checksum.json*")
+    cache = corpora.size_tree(eulix_dir / "parse_cache") + corpora.du(eulix_dir, "checksum.*")
     return {"index_bytes": index, "cache_bytes": cache}
 
 

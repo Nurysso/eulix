@@ -11,6 +11,7 @@ use crate::stats::ParseStats;
 use libeulix::struc::kb_struct::{
     CallGraph, DependencyGraph, ExternalDependency, Indices, KnowledgeBase, Metadata, PatternInfo,
 };
+use libeulix::utils::file_walker::ChecksumFormat;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -25,6 +26,8 @@ pub fn parse_directory(
     git_hash: &str,
     write_dir: &Path,
     engine: &crate::engine::Engine,
+    emit_json: bool,
+    checksum: ChecksumFormat,
 ) -> Result<(KnowledgeBase, ParseStats, SpillIndex), Box<dyn std::error::Error>> {
     let path = PathBuf::from(dir);
     let euignore = euignore_path.map(PathBuf::from).or_else(|| {
@@ -44,6 +47,7 @@ pub fn parse_directory(
         verbose,
         write_dir,
         engine.threads(),
+        checksum,
     )?;
 
     if verbose {
@@ -136,7 +140,7 @@ pub fn parse_directory(
         cache: cached,
         reused,
     } = acc;
-    cache.commit(cached.into_iter().collect())?;
+    cache.commit(cached.into_iter().collect(), emit_json)?;
 
     // Aggregate raw import tuples into ExternalDependency — mirrors the
     // logic in dependencies.rs but runs here so we don't need kb.structure

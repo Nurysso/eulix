@@ -13,7 +13,7 @@ Keyword search finds code that shares words with your question. Embeddings find 
 
 It has two jobs:
 
-1. **Indexing** (`embed` command, run by `eulix analyze`): read `kb.json`, cut it into *chunks*, embed each chunk, and write `embeddings.bin` and `vectors.bin`.
+1. **Indexing** (`embed` command, run by `eulix analyze`): read `kb.fb`, cut it into *chunks*, embed each chunk, and write `embeddings.bin` and `vectors.bin`.
 2. **Query embedding** (`server` command, started by `eulix chat` and `eulix mcp`): stay running with the model loaded, and turn each question into a vector in a few milliseconds.
 
 Only the default retrieval engine, ETIYA, uses these files. The EHNAS engine does not ([Engines](../eulix-cli/query/retrieval/Engines.md)).
@@ -35,11 +35,11 @@ Embedding models are Python libraries (ONNX Runtime, PyTorch, Hugging Face token
 ## How It Works
 
 ```text
-kb.json ──stream──► chunker ──► token-length buckets ──► embedder (ONNX or torch) ──► embeddings.bin
+kb.fb   ──stream──► chunker ──► token-length buckets ──► embedder (ONNX or torch) ──► embeddings.bin
  (parser)            (threads)       (batches)                 (CPU / GPU)             vectors.bin
 ```
 
-1. **Stream.** `kb.json` can be gigabytes, so it is read in a single pass with `ijson`, one file entry at a time ([Pipeline](Pipeline.md)).
+1. **Stream.** `kb.fb` can be gigabytes, so it is read front to back, one file record at a time ([Pipeline](Pipeline.md)).
 2. **Chunk.** Each file entry becomes chunks: one per function, class, method, and one summary per file ([Chunking](Chunking.md)).
 3. **Embed.** Chunks are grouped by token length so batches need little padding, then run through the model ([Embedders](Embedders.md)).
 4. **Write.** Vectors are written to disk as they are produced, so memory use is one batch, not the whole index ([Binary Format](Binary-Format.md)).
@@ -54,7 +54,6 @@ Run as `python main.py <command>`; if the first argument is not a known command,
 | `query -q "text"` | Embed one string and print it (`json`, or `binary`). |
 | `server` | Long-running daemon for query embedding ([Server](Server.md)). |
 | `compare <emb> <vec>` | Check the two binary files for consistency: duplicate ids, norms, dimension. |
-| `ijson-backend` | Report which JSON parsing backend is active. |
 | `version` | Print the version. |
 
 ### Main Components
@@ -72,7 +71,7 @@ Run as `python main.py <command>`; if the first argument is not a known command,
 
 ### Data In, Data Out
 
-In: `kb.json`. Out: `embeddings.bin` (the vectors) and `vectors.bin` (the chunk ids, in the same order). `eulix analyze` calls it as `embed -k .eulix/kb.json -o .eulix -m <model> --quantize -e <engine>`.
+In: `kb.fb`. Out: `embeddings.bin` (the vectors) and `vectors.bin` (the chunk ids, in the same order). `eulix analyze` calls it as `embed -k .eulix/kb.fb -o .eulix -m <model> --quantize -e <engine>`.
 
 ## Key Algorithms
 
@@ -100,7 +99,7 @@ Install the Python packages with `uv pip install -r requiremenents/<file>.txt` (
 ## Usage Examples
 
 ```bash
-python main.py embed -k .eulix/kb.json -o .eulix -m BAAI/bge-base-en-v1.5 -e onnx --quantize
+python main.py embed -k .eulix/kb.fb -o .eulix -m BAAI/bge-base-en-v1.5 -e onnx --quantize
 python main.py query -q "how does authentication middleware work" -e onnx
 python main.py compare .eulix/embeddings.bin .eulix/vectors.bin
 ```
