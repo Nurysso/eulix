@@ -5,7 +5,7 @@ This page describes the server object, the tools and prompts it exposes, and how
 > **Crate / path:** `eulix-cli/internal/mcp/server.go`, `agent_tools.go`, `agent_render.go`, `tools.go`, `helpers.go`, `lifecycle.go`  
 > **Language:** Go  
 > **Status:** beta  
-> **Last verified against:** `0a78aa7` + working tree (agent improvements)
+> **Last verified against:** `214b9b5` + working tree (agent cost savings, 2026-11-24)
 
 ## Overview
 
@@ -23,25 +23,69 @@ Structural questions have typed tools, answered from the call graph and the symb
 
 | Tool | Arguments | What it does |
 | --- | --- | --- |
-| `callers` | `symbol` (required), `depth` (1–4, default 1), `limit` (default 40), `repo_path` | One line per call site: `file:line`, the enclosing function and the calling line. Test call sites are counted on a separate line. |
+| `callers` | `symbol` (required), `depth` (1–4, default 1), `limit` (default 40), `repo_path` | One line per call site: `file:line`, the enclosing function and the calling line. Test call sites are counted on a separate line. For a distinctive name, the uses the call graph has no edge for are added, found by name (see below). |
 | `callees` | same as `callers` | The calls a function makes, in the same format. |
 | `definition` | `symbol` (required), `body_lines` (default 40, 0 = signature only), `repo_path` | Location, signature, the first docstring paragraph and a short body. A class comes back as its header and method list, never its whole body. |
-| `trace` | `from`, `to`, `question`, `max_tokens`, `repo_path` | The shortest static call path from `from` to `to` (or, with only `to`, back to an entry point), one hop per line with the calling line. Then ranked code for the hops, within the budget. |
-| `search` | `question` (required), `known_symbols`, `max_tokens`, `format` (`plain` or `cot`), `fresh`, `repo_path` | Ranked code for a concept or open question. |
-| `query` | `query` (required), `repo_path`, `include_cot`, `known_symbols`, `max_tokens` | The free-text tool of earlier releases. Callers and definition questions are answered from the index first, as by the typed tools; the rest runs like `search`. |
-| `query_without_cot`, `query_with_cot` | `query`, `repo_path`, `known_symbols` | Deprecated. They keep the pre-budget output unchanged, because the retrieval benchmark compares releases on `query_without_cot`. |
-| `set_repo_path` | `repo_path` (required) | Switches the active repository. Idempotent. |
+| `trace` | `from`, `to`, `question`, `max_tokens`, `repo_path` | The shortest static call path from `from` to `to` (or, with only `to`, back to an entry point), one hop per line with the calling line. Then ranked code for the hops, within the budget. Where the static chain breaks, it says where the chain starts instead (see below). |
+| `search` | `question` (required), `known_symbols`, `max_tokens`, `format` (`plain` or `cot`), `fresh`, `bodies`, `repo_path` | Ranked code for a concept or open question: the best match in full, every other long match as one line (see below). `bodies: true` sends every match's code. |
+| `set_repo_path` | `repo_path` (required) | Switches the active repository. Idempotent. **Listed only when the server was not started on a repository.** |
+| `query` | `query` (required), `repo_path`, `include_cot`, `known_symbols`, `max_tokens` | Legacy, listed only with `--legacy-tools`. The free-text tool of earlier releases. Callers and definition questions are answered from the index first, as by the typed tools; the rest runs like `search`. |
+| `query_without_cot`, `query_with_cot` | `query`, `repo_path`, `known_symbols` | Legacy, listed only with `--legacy-tools`. They keep the pre-budget output unchanged, because the retrieval benchmark compares releases on `query_without_cot`. |
 
-All query tools are marked read-only. The server instructions tell the agent which questions each tool answers better than grep, and to use grep for literal strings, config values and log messages.
+`callers`, `callees` and `definition` take several symbols at once, comma-separated (`"symbol": "Bifrost.handleRequest, Bifrost.tryRequest"`, at most 8). The reply starts with a summary line, `answer: callers for 2 symbols · complete: yes for all`, then each symbol's reply with its own header. Every call is a turn, and every turn re-reads the whole conversation, so one call for several symbols is cheaper than several calls.
 
-**Every reply starts with a completeness line**, for example:
+All tools are marked read-only. The server instructions tell the agent which questions each tool answers better than grep, and to use grep for literal strings, config values and log messages.
+
+**The tool list is kept short.** The tool definitions and the server instructions are sent to the model on every turn of every session, whether or not the agent calls Eulix. The legacy `query` tools are therefore listed only with `--legacy-tools` (or `EULIX_MCP_LEGACY_TOOLS=1`), and `set_repo_path` only when no repository was given at start-up. A server started with `--repo` lists the five typed tools: about 4.9 KB with the instructions, against 8.4 KB for the nine tools before (a test guards the size).
+
+**Every reply starts with a header line**, for example:
 
 ```text
-answer: callers · source: call graph (exact, static) · complete: yes
-answer: search · source: ranked code, 14 chunks, ~1700/1800 tokens · complete: no — budget hit (1800 tokens), lower-ranked chunks dropped; raise max_tokens or narrow with known_symbols for more
+answer: callers · source: call graph (exact, static) + name scan · complete: yes
+answer: trace · source: call graph (static) + ranked code · complete: yes · more: no code shown for Bifrost.tryRequest (definition takes several names, comma-separated)
+answer: definition · source: index (exact) · complete: yes · more: body cut; read core/bifrost.go lines 5884-5911 for the rest
+answer: search · source: ranked code, 14 chunks, ~1700/1800 tokens · complete: n/a (ranked) · more: lower-ranked chunks dropped at the 1800-token budget (raise max_tokens, or narrow with known_symbols)
 ```
 
-It says what the reply is, how it was produced, and whether anything was left out, so an agent does not re-check a complete answer with grep.
+`complete` says whether the reply **answers the question**, and is `yes` only when that was checked: a call path resolved end to end, or every use of a name listed. `no` carries the reason. `n/a` marks ranked code from `search`, which retrieval cannot check; the agent judges the code. `more` names what was left out and how to get it (a cut body with its exact lines, the hops that got no code), without making the answer incomplete. Earlier releases said `complete: no` whenever anything was trimmed: in the Opus 5.5 benchmark, all 24 `search` replies and all 10 `trace` replies said `no`, including a 7-hop trace whose path was fully resolved, and agents went on reading after them.
+
+**Uses found by name.** A static call graph has no edge for a call through a field, a variable or an interface value, and none for a function passed as a value (an HTTP handler, a callback). Earlier releases answered such a `callers` question with "none found statically, confirm with grep", and the agent spent two turns on grep and on finding the enclosing function of each hit. `callers` now does that itself for a distinctive name (at least six characters, with an inner capital or an underscore, not a dunder): it reads the indexed source files for whole-word uses of the name, skips the definition, comments, imports, strings, declarations and assignment targets, and lists what the graph missed, each with its enclosing function. For a method, only uses behind a receiver count (`x.name`, `x->name`, `T::name`). The reply is complete when no other definition shares the name; otherwise a note names the other definitions. Common names (`Close`, `run`) are not scanned. On bifrost the scan reads 2,684 Go files in about 0.2 s.
+
+```text
+answer: callers · source: call graph (exact, static) + name scan · complete: yes
+callers of PluginPipeline.RunLLMPreHooks (core/bifrost.go:9943): none in the static call graph; found 4 calls by name:
+  by name (the call graph could not resolve the receiver):
+  core/bifrost.go:5597  Bifrost.RunStreamPreHooks        preReq, shortCircuit, preCount := pipeline.RunLLMPreHooks(ctx, req)
+  core/bifrost.go:6576  Bifrost.tryRequest               preReq, shortCircuit, preCount := pipeline.RunLLMPreHooks(ctx, req)
+  …
+```
+
+**Where a chain starts.** When a trace's first function has no static callers (or `from` → `to` has no static path), the reply lists where that function's name is used: the route registration, the `go worker()` statement, the call through a field. With `from` given and no path, it also shows the target's own chain from its nearest entry point. A trace whose start is found this way, with no other definition of the name, is complete.
+
+**Lean search replies.** A `search` reply is re-read on every later turn, and agents read the files it points to anyway: in the Opus 5.5 benchmark the median reply was 2.4k tokens. By default the best match is sent in full and every other match longer than 8 lines as one line, with its rank, `file:lines`, score, signature and the question's identifiers it mentions:
+
+````text
+answer: search · source: ranked code, 17 chunks, ~2698/2500 tokens; 13 listed without code · complete: n/a (ranked) · more: listed matches carry no code (bodies: true sends it)
+[1] plugins/governance/main.go:1718-1857 (score 0.95)
+```go
+…
+```
+other matches, best first:
+  #4 plugins/governance/main.go:139-162 (0.95)  type BaseGovernancePlugin interface {  · mentions PostLLMHook
+  #14 core/schemas/plugin.go:415-436 (0.95)  type LLMPlugin interface {  · mentions PostLLMHook
+````
+
+The cascade picks its result from the full rendering, so the lean form does not change which stage answers; the reply is rewritten afterwards (`leanSearch`), and only the chunks sent in full are remembered as sent. Short matches stay whole because a line naming them would cost about as much. `bodies: true`, `format: "cot"` and the legacy tools send full replies. On bifrost a governance question went from 11.5k characters to 4.0k.
+
+**Inferred call-graph edges are labelled.** The parser infers three kinds of Go edges besides resolved calls ([Knowledge Base Schema](../../libeulix/Knowledge-Base-Schema.md)). `callers`, `callees` and `trace` follow them and mark each line, so an agent can tell a guess from a fact:
+
+| Edge | Label |
+| --- | --- |
+| `async` | `[async: channel send → receiver, inferred]` |
+| `dispatch` | `[interface dispatch: an implementation of the method called, inferred]` |
+| `inferred` | `[receiver type unknown; the only method of that name, inferred]` |
+
+**Symbol names are matched by exact spelling first.** `UpdateProvider` is `Bifrost.UpdateProvider`, not the busier handler `updateProvider`. Among several definitions spelled the same, production code comes before tests and a concrete method before an interface declaration, and the choice no longer depends on map order.
 
 A callers reply on bifrost, about 110 tokens:
 
@@ -53,7 +97,7 @@ callers of Bifrost.shouldTryFallbacks (core/bifrost.go:5874): 2 call sites + 1 i
   (tests: core/bifrost_test.go:8845)
 ```
 
-Two **prompts** exist with the same names as the CoT tools (`query_with_cot`, `query_without_cot`). A prompt is a template an editor can offer to the user directly; these take `query`, `repo_path` and a comma-separated `known_symbols` and return the context as a user message.
+Two **prompts** exist with the same names as the legacy CoT tools, always listed (a prompt is not sent to the model, so it costs nothing per turn) (`query_with_cot`, `query_without_cot`). A prompt is a template an editor can offer to the user directly; these take `query`, `repo_path` and a comma-separated `known_symbols` and return the context as a user message.
 
 *Chain of thought* (CoT) here means the reasoning instructions and honesty contract that the router normally adds to a prompt ([Prompts](../query/Prompts.md)). With CoT off, the reply is context only, suitable for an assistant that has its own instructions.
 
@@ -143,7 +187,8 @@ Server options:
 | --- | --- |
 | `WithIdleTimeout(d)` | Idle time before the index is freed (5 minutes by default). |
 | `WithDefaultCoT(bool)` | Default for the generic `query` tool. |
-| `WithInitialRepo(path)` | Repository to bind at start-up. |
+| `WithInitialRepo(path)` | Repository to bind at start-up. When it binds, `set_repo_path` is not listed and the instructions do not mention it; each tool's `repo_path` can still switch. |
+| `WithLegacyTools(bool)` | Also list `query`, `query_with_cot` and `query_without_cot`. `eulix mcp --legacy-tools` or `EULIX_MCP_LEGACY_TOOLS=1` sets it. The environment variable is what the retrieval benchmark sets, because older releases ignore it (they list the tools anyway) while an unknown flag would stop them. |
 | `WithIO(in, out)` | Custom streams, for tests. |
 | `WithLogger(l)` | Custom `slog.Logger`; the default writes to standard error. Logs must never go to standard output. |
 | `WithStrategy(cfg)` | Tune the cascade. |
@@ -175,7 +220,8 @@ An agent tracing a request across files:
 | Only one repository is loaded at once. | Switching closes the previous one. | Use `set_repo_path` between questions. |
 | When debugging is on, each query is appended to `.eulix/debug/mcp-query-debug.log`. | Logging is per repository. | Turn `DebugConfig` off in production. |
 | The "roots" feature the server relies on is marked deprecated in the SDK. | The code carries a lint suppression for it. | Use `--repo` or `set_repo_path` to avoid relying on it. |
-| `trace` and `callers` miss edges that cross an async boundary the parser does not record (channel sends, callbacks, event handlers). A `go f()` statement is recorded. | The call graph is built from syntax. | The reply says where the chain stops and why; follow it with `search`. |
+| `trace` and `callers` miss edges that cross an async boundary the parser does not record (callbacks, event handlers, channels in local variables). A `go f()` statement, a send on a field channel, a call through a Go interface and a Go local typed from a call are followed. | The call graph is built from syntax. | For a distinctive name, the name scan lists where the function is called or passed as a value. Otherwise the reply says where the chain stops and why; follow it with `search`. |
+| Uses found by name can be wrong: a same-named method of another type, a local variable named like the function. | The scan reads text, not types. | Only distinctive names are scanned; when another definition shares the name, the reply says so and is not complete. |
 | Callers of an interface method are listed against the interface (`Debug (interface)`), not each implementation. | Dispatch is resolved at run time. | Ask `callers` for the implementation's qualified name. |
 
 ## Related Docs

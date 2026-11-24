@@ -72,7 +72,13 @@ KnowledgeBase
 
 Which type prefix is used depends on the language and the declaration (Go and C use `struct_`, JavaScript uses `class_`, TypeScript and Java interfaces use `interface_`, Rust traits use `trait_`). Ids are how the call graph refers to nodes, so treat them as opaque strings and do not parse them in your own code. An `impl_` entry is not a type of its own: PRISM v2 gives its methods to the type that `{Type}` resolves to from that file, and never links a call to the entry itself.
 
-**Edges.** A `CallGraphEdge` has `edge_type` set to `call` or `inheritance`, a `conditional` flag, and `call_site_line`. The type's source comment also mentions `uses`, but neither PRISM version emits it.
+**Edges.** A `CallGraphEdge` has an `edge_type`, a `conditional` flag, and `call_site_line`. `call` is a resolved call and `inheritance` a base class. PRISM v2 also emits three inferred types for Go, each with the line of the call or send it came from:
+
+- `async`: a send on a struct-field channel to a same-package function receiving from a field of that name.
+- `dispatch`: a call on an interface method to the same-named method of each project type implementing the interface (by method names; at most 6 implementers, test types included).
+- `inferred`: a call on a receiver of unknown type (an untyped package variable, a call result) to the project's only concrete method of that name, when the name is distinctive (six or more characters with an inner capital or an underscore). A receiver whose type is known, the method's own receiver, or an imported package's value never gets one.
+
+`called_by` and `call_count_estimate` count only `call` edges. The type's source comment also mentions `uses`, but neither PRISM version emits it.
 
 **Tags.** `Function::tags` holds short labels from the parser, such as `entry-point` and `nested`. The `nested` tag marks a function declared inside another function's body, and the call-graph code and the indices both treat such functions specially.
 

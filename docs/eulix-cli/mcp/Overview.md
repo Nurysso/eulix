@@ -99,7 +99,8 @@ The package README says cold queries on an analyzed repository should complete i
 
 - [Server And Tools](Server-And-Tools.md): the protocol surface.
 - [Retrieval Cascade](Retrieval-Cascade.md): how a question is answered.
-- [Agent Improvements](Agent-Improvements.md): what the agent benchmarks found and a plan to cut tokens and cost for agents.
+- [Agent Improvements](Agent-Improvements.md): the shipped changes (items A–M) that made the server pay off for agents, with benchmark evidence.
+- [Cutting agent cost](Agent-Cost-Savings.md): the later cost-focused round (items N–S), its data and decisions.
 - [Agent Benchmark](../../Architecture/Agent-Benchmark.md): Claude Code with and without Eulix on bifrost and three other repos, every run and its limits.
 - [query Overview](../query/Overview.md): the router the MCP server wraps.
 - [Retrieval Overview](../query/retrieval/Overview.md): the engine underneath.

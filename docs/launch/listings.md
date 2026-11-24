@@ -21,7 +21,8 @@ Don't quote a token-savings figure until it stands up. See [`bench/results/agent
 ## 1. Official MCP Registry
 
 - **Where:** https://registry.modelcontextprotocol.io (publishing is by CLI only; a PR with a server.json does **not** list you).
-- **File:** [`server.json`](../../server.json) in the repo root, valid against the registry's schema (2025-12-11). Name `io.github.nurysso/eulix`. It lists the npm package (`npx eulix mcp`) and the PyPI package (`uvx eulix mcp`).
+<!-- TODO: once server.json is added at the repo root, restore the link: [server.json](../../server.json) -->
+- **File:** `server.json` in the repo root, valid against the registry's schema (2025-12-11). Name `io.github.nurysso/eulix`. It lists the npm package (`npx eulix mcp`) and the PyPI package (`uvx eulix mcp`).
 - **Ownership markers:** already in place: `"mcpName": "io.github.nurysso/eulix"` in `packaging/npm/package.json`, and `<!-- mcp-name: io.github.nurysso/eulix -->` in `packaging/pypi/README.md`.
 
 **Steps**
