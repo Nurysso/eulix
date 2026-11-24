@@ -414,7 +414,7 @@ impl FileWalker {
             .iter()
             .map(|f| {
                 (
-                    f.rel.to_string_lossy().to_string(),
+                    slash_path(&f.rel),
                     format!("{:016x}", f.meta_hash),
                     f.size,
                     f.mod_time,
@@ -474,6 +474,18 @@ impl FileWalker {
         fs::write(&tmp, compressed).context("failed to write checksum file")?;
         fs::rename(&tmp, &path).context("failed to replace checksum file")?;
         remove_stale_baselines(write_dir, Some(name))
+    }
+}
+
+/// `rel` with `/` separators, so a baseline is the same on every platform
+/// (eulix-cli keys files by `filepath.ToSlash`). Only Windows converts: on Unix
+/// `\` is a legal file-name character.
+fn slash_path(rel: &Path) -> String {
+    let s = rel.to_string_lossy();
+    if cfg!(windows) {
+        s.replace('\\', "/")
+    } else {
+        s.into_owned()
     }
 }
 
