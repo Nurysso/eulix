@@ -446,6 +446,40 @@ pub struct GoInfo {
     pub type_kind: Option<GoTypeKind>,
     pub is_pointer_receiver: bool, // for method entries: with receiver *T ?
     pub has_embedded_types: bool,  // struct embeds another type
+    /// Sends on a struct-field channel: `pq.queue <- msg` → field "queue".
+    /// With `chan_recvs`, these let the call graph link a sender to the
+    /// goroutine that receives (an inferred "async" edge).
+    #[serde(default)]
+    pub chan_sends: Vec<ChanOp>,
+    /// Receives from a struct-field channel: `<-pq.queue`,
+    /// `for msg := range pq.queue`, `case m := <-pq.queue:`.
+    #[serde(default)]
+    pub chan_recvs: Vec<ChanOp>,
+    /// Locals declared without a type from a call: `p := b.getPipe()`,
+    /// `p, err := newPipe()`. The call graph types them from the callee's
+    /// declared result, so `p.Run()` resolves.
+    #[serde(default)]
+    pub local_calls: Vec<LocalCall>,
+}
+
+/// A local declared from the result of a call, without a type: `name` is
+/// the `index`-th result of `receiver.callee(...)` (`receiver` is empty for a
+/// bare call).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalCall {
+    pub name: String,
+    pub receiver: Option<String>,
+    pub callee: String,
+    pub index: usize,
+}
+
+/// One send or receive on a channel reached through a field (`x.field`).
+/// Channels in local variables are left out: their names (`ch`, `done`)
+/// say nothing across functions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChanOp {
+    pub field: String,
+    pub line: usize,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
