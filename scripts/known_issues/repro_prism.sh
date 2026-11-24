@@ -13,6 +13,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 PARSER=${1:-$ROOT/eulix-parser/target/release/eulix_parser}
 WORK=${2:-$ROOT/script-test-dump/repro_prism}
+PY=${PYTHON:-python3}  # needs the flatbuffers package (bench/requirements.txt)
 mkdir -p "$WORK"
 FX="$WORK/fixture"
 rm -rf "$FX" "$WORK/out-v1" "$WORK/out-v2"
@@ -101,9 +102,11 @@ GO
 for v in 2 1; do
   "$PARSER" -r "$FX" -o "$WORK/out-v$v/kb.json" -p "$v" -t 2 >/dev/null 2>&1
   echo "=================== PRISM v$v edges (from -> to)"
-  python3 - "$WORK/out-v$v/kb_call_graph.json" <<'PY'
-import json, sys
-g = json.load(open(sys.argv[1]))
+  "$PY" - "$ROOT" "$WORK/out-v$v/kb_call_graph.fb" <<'PY'
+import sys
+sys.path.insert(0, f"{sys.argv[1]}/bench/lib")
+import kbfb
+g = kbfb.load_call_graph(sys.argv[2])
 for f, t, ty in sorted((e["from"], e["to"], e["edge_type"]) for e in g["edges"]):
     print(f"{ty:11} {f}  ->  {t}")
 print(len(g["nodes"]), "nodes,", len(g["edges"]), "edges")

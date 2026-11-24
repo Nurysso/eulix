@@ -47,6 +47,7 @@ Anything fixed is not listed here as an open problem. Fixed items are kept for t
 | [CLI, MCP And TUI](CLI-MCP-And-TUI.md)        | The command line, the chat screens, the MCP server and the model client. |
 | [LSP](LSP.md)                                 | The `eulix-lsp` language server: rename, URIs, indexing cost and memory. |
 | [Fixed Issues](Fixed-Issues.md)               | Resolved problems and the tests that guard them.                         |
+| [Open — Re-verified](Open-Reverified.md)      | A fresh re-run of the repro scripts, recording which issues still happen. |
 
 ## Summary of open items
 

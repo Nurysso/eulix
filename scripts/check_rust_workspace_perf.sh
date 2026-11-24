@@ -14,6 +14,7 @@ CRATES=${2:-80}
 MODULES=${3:-160}
 HERE=$(cd "$(dirname "$0")" && pwd)
 DUMP=$ROOT/script-test-dump/rust_workspace_perf
+PY=${PYTHON:-python3}  # needs the flatbuffers package (bench/requirements.txt)
 REPO=$DUMP/dummy-workspace
 OUT=$DUMP/out-workspace
 
@@ -39,10 +40,12 @@ start=$(date +%s.%N)
 "$PARSER" --root "$REPO" --output "$OUT/kb.json" --prism 2 >/dev/null
 end=$(date +%s.%N)
 
-python3 - "$OUT" "$start" "$end" "$CRATES" "$MODULES" <<'EOF'
-import json, sys
-out, start, end, crates, modules = sys.argv[1:]
-edges = json.load(open(f"{out}/kb_call_graph.json"))["edges"]
+"$PY" - "$ROOT" "$OUT" "$start" "$end" "$CRATES" "$MODULES" <<'EOF'
+import sys
+sys.path.insert(0, f"{sys.argv[1]}/bench/lib")
+import kbfb
+out, start, end, crates, modules = sys.argv[2:]
+edges = kbfb.load_call_graph(f"{out}/kb_call_graph.fb")["edges"]
 print(f"{crates} crates x {modules} modules: {float(end) - float(start):.2f}s, {len(edges)} edges")
 EOF
 echo "outputs in $OUT"

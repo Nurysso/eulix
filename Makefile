@@ -90,6 +90,7 @@ endif
         eval-mcp kb-diff kb-field-usage kb-id-name-check vec-stats \
         bench-run bench-compare bench-list bench-clean bench-test \
         bench-callgraph bench-callgraph-micro bench-callgraph-test \
+        scripts-all bench-all \
         install install-cli install-parser install-lsp install-viz
 
 all: help
@@ -341,6 +342,7 @@ scripts-help:
 	@echo "  make kb-id-name-check     ARGS=path/to/kb.json (default .eulix/kb.json)"
 	@echo "  make vec-stats            ARGS=path/to/embeddings.bin"
 	@echo "  make script SCRIPT=name.py ARGS='...'   run any file in scripts/"
+	@echo "  make scripts-all          every script that runs without arguments, on .eulix/"
 	@echo ""
 	@echo "Version benchmark (bench/, state in ~/.Eulix/bench; docs/Architecture/Benchmarking.md):"
 	@echo "  make bench-compare A=v0.8.3 B=HEAD [ARGS='--corpus eulix --groups retrieval']"
@@ -348,6 +350,7 @@ scripts-help:
 	@echo "  make bench-list                     what has been measured"
 	@echo "  make bench-clean ARGS='--work'      free disk space"
 	@echo "  make bench-test                     harness unit tests"
+	@echo "  make bench-all [REV=HEAD]           unit tests, call-graph accuracy, bench-run (not bench/agent)"
 	@echo ""
 	@echo "Call-graph accuracy (bench/callgraph/, state in ~/.Eulix/bench/callgraph):"
 	@echo "  make bench-callgraph [ARGS='--lang go,java --prism 2']   score PRISM against language tooling"
@@ -358,16 +361,16 @@ parser-release:
 	cd $(PARSER_DIR) && cargo build --release
 
 repro-prism: parser-release
-	$(RUN_IN_CALLER) bash $(KI_DIR)/repro_prism.sh "$(PARSER_BIN)" $(ARGS)
+	$(RUN_IN_CALLER) PYTHON=$(PYTHON) bash $(KI_DIR)/repro_prism.sh "$(PARSER_BIN)" $(ARGS)
 
 check-tsx:
 	$(RUN_IN_CALLER) bash $(KI_DIR)/check_tsx.sh $(ARGS)
 
 perf-rust-workspace: parser-release
-	$(RUN_IN_CALLER) bash $(KI_DIR)/perf_rust_workspace.sh "$(PARSER_BIN)" $(ARGS)
+	$(RUN_IN_CALLER) PYTHON=$(PYTHON) bash $(KI_DIR)/perf_rust_workspace.sh "$(PARSER_BIN)" $(ARGS)
 
 check-prism-v2: parser-release
-	$(RUN_IN_CALLER) bash $(SCRIPTS_DIR)/check_prism_v2_methods.sh "$(PARSER_BIN)"
+	$(RUN_IN_CALLER) PYTHON=$(PYTHON) bash $(SCRIPTS_DIR)/check_prism_v2_methods.sh "$(PARSER_BIN)"
 
 repro-all: repro-prism check-tsx check-prism-v2 perf-rust-workspace
 
@@ -394,9 +397,28 @@ kb-id-name-check:
 vec-stats:
 	$(RUN_IN_CALLER) $(PYTHON) $(SCRIPTS_DIR)/vec_stats.py $(ARGS)
 
-# Version benchmark. System python3 (3.11+), not $(PYTHON): that is eulix's own
-# venv, and the harness needs only the standard library.
-BENCH := python3 $(ROOT_DIR)/bench/eulix_bench.py
+# Every script that runs without arguments, against this repo's .eulix/ and the
+# release parser. Left out: eval_mcp.py and retrival_eval.py (retrieval evals,
+# slow), kb_diff.py (needs two files), parser_perf.sh (needs repos),
+# alignment_go_walk.sh (interactive) and fix_changelog_typos.bak.py (edits files).
+FB_JSON_OUT := $(ROOT_DIR)/script-test-dump/check_fb_json
+# check_fb_json.py needs flatc on PATH: schema-check downloads it to this cache dir.
+
+scripts-all: repro-all schema-check kb-field-usage kb-id-name-check vec-stats
+	$(PYTHON) $(SCRIPTS_DIR)/call_graph_id_patterns.py
+	$(PYTHON) $(KI_DIR)/cross_language_edges.py
+	$(PYTHON) $(KI_DIR)/method_edge_coverage.py
+	$(PYTHON) $(SCRIPTS_DIR)/check_embed_padding.py
+	$(PYTHON) $(SCRIPTS_DIR)/check_embed_rocm.py
+	rm -rf $(FB_JSON_OUT) && mkdir -p $(FB_JSON_OUT)
+	$(PARSER_BIN) -r $(ROOT_DIR) -o $(FB_JSON_OUT)/kb.json -t 4 -p 2 --emit-json
+	PATH="$${XDG_CACHE_HOME:-$$HOME/.cache}/eulix/flatc-25.12.19:$$PATH" \
+	    $(PYTHON) $(SCRIPTS_DIR)/check_fb_json.py $(FB_JSON_OUT)
+
+# The bench harness needs the flatbuffers runtime (bench/requirements.txt), which
+# eulix's venv already has. BENCH_PYTHON=python3 overrides it.
+BENCH_PYTHON ?= $(PYTHON)
+BENCH := $(BENCH_PYTHON) $(ROOT_DIR)/bench/eulix_bench.py
 
 bench-run:
 	$(RUN_IN_CALLER) $(BENCH) run $(or $(REV),HEAD) $(ARGS)
@@ -412,9 +434,9 @@ bench-clean:
 	$(RUN_IN_CALLER) $(BENCH) clean $(ARGS)
 
 bench-test:
-	python3 -m unittest discover -s $(ROOT_DIR)/bench/tests
+	$(BENCH_PYTHON) -m unittest discover -s $(ROOT_DIR)/bench/tests
 
-CALLGRAPH := python3 $(ROOT_DIR)/bench/callgraph/cg_eval.py
+CALLGRAPH := $(BENCH_PYTHON) $(ROOT_DIR)/bench/callgraph/cg_eval.py
 
 bench-callgraph: parser-release
 	$(RUN_IN_CALLER) $(CALLGRAPH) $(ARGS)
@@ -423,7 +445,11 @@ bench-callgraph-micro: parser-release
 	$(RUN_IN_CALLER) $(CALLGRAPH) --set micro $(ARGS)
 
 bench-callgraph-test:
-	python3 -m unittest discover -s $(ROOT_DIR)/bench/callgraph/tests
+	$(BENCH_PYTHON) -m unittest discover -s $(ROOT_DIR)/bench/callgraph/tests
+
+# Everything in bench/ except bench/agent: unit tests, call-graph accuracy, and
+# one measured version (REV, default HEAD; results cached by commit).
+bench-all: bench-test bench-callgraph-test bench-callgraph bench-run
 
 # Generic runner: make script SCRIPT=known_issues/cross_language_edges.py ARGS=kb_call_graph.fb
 script:

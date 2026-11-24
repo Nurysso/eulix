@@ -7,6 +7,7 @@ runs against whichever engine eulix.toml selects.
 Usage: python3 scripts/eval_mcp.py [out.json]   (default: .eulix/eval/<engine>_baseline.json)
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -83,7 +84,9 @@ def run(query):
          "params": {"name": "query_without_cot", "arguments": {"query": query}}},
     ]
     with tempfile.TemporaryFile("w+") as err:
+        # query_without_cot is listed only with EULIX_MCP_LEGACY_TOOLS=1.
         p = subprocess.Popen([BIN, "mcp", "--repo", ROOT], cwd=ROOT, text=True,
+                             env={**os.environ, "EULIX_MCP_LEGACY_TOOLS": "1"},
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err)
         p.stdin.write("".join(json.dumps(m) + "\n" for m in msgs))
         p.stdin.flush()
