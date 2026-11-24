@@ -1,8 +1,8 @@
 # Copyright 2025-2026 Dawood K. (Nurysso)
 # SPDX-License-Identifier: Apache-2.0
-"""Read eulix_parser's FlatBuffers outputs with the standard library alone.
+"""Read eulix_parser's FlatBuffers outputs.
 
-Uses the vendored pure-Python runtime (bench/vendor/flatbuffers) and the code
+Uses the `flatbuffers` runtime pinned in bench/requirements.txt and the code
 generated from schema/*.fbs (eulix-embed/fb). Readers return plain dicts
 with the same keys the old JSON files had, so code written for the JSON
 outputs (and hashes over them) work on both formats. scripts/ imports this
@@ -17,11 +17,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 FORMAT_VERSION = 1  # libeulix/src/fb_io.rs FORMAT_VERSION
 
-for p in (ROOT / "bench" / "vendor", ROOT / "eulix-embed"):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
+try:
+    import flatbuffers  # noqa: F401
+except ModuleNotFoundError:
+    raise ModuleNotFoundError(
+        "flatbuffers is not installed; run: pip install -r bench/requirements.txt"
+    ) from None
+
+if str(ROOT / "eulix-embed") not in sys.path:
+    sys.path.insert(0, str(ROOT / "eulix-embed"))
 
 from fb.CallGraph import CallGraph  # noqa: E402
+from fb.Indices import Indices  # noqa: E402
 
 
 def _s(b) -> str:
@@ -129,4 +136,21 @@ def load_call_graph(path) -> dict:
         out["tags"] = tags
     if cats:
         out["file_categories"] = cats
+    return out
+
+
+INDEX_KEYS = ("functions_by_name", "functions_calling", "functions_by_tag", "types_by_name", "files_by_category")
+
+
+def load_index(path) -> dict:
+    """kb_index.fb as the old JSON shape: each index a dict of key -> list of strings."""
+    ix = _open(path, Indices, b"EUIX", "index")
+    out = {}
+    for key in INDEX_KEYS:
+        name = "".join(w.capitalize() for w in key.split("_"))
+        n, get = getattr(ix, name + "Length")(), getattr(ix, name)
+        out[key] = {}
+        for i in range(n):
+            e = get(i)
+            out[key][_s(e.Key())] = [_s(e.Values(j)) for j in range(e.ValuesLength())]
     return out

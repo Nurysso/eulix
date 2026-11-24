@@ -1,0 +1,3 @@
+# The bench harness and scripts/ need only this. Keep it equal to FLATC_VERSION
+# in scripts/gen_flatbuffers.sh and to eulix-embed/requiremenents/requirements.base.txt.
+flatbuffers==25.12.19

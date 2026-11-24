@@ -42,8 +42,11 @@ class Server:
         self.stderr_path = stderr_path
         self._err = open(stderr_path, "w")
         self.t0 = time.monotonic()
+        # query_without_cot is listed only with EULIX_MCP_LEGACY_TOOLS=1 since
+        # 2026-11-24; older releases list it always and ignore the variable.
+        env = {**sandbox.env, "EULIX_MCP_LEGACY_TOOLS": "1"}
         self.p = subprocess.Popen(sandbox.cmd("mcp", "--repo", repo, "--timeout", "2h"), cwd=repo,
-                                  env=sandbox.env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=self._err, start_new_session=True)
         self._buf = b""
         self._id = 0
