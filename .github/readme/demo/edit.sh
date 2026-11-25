@@ -17,25 +17,23 @@ out="$scratch/out"
 tmp="$scratch/edit"
 rm -rf "$tmp" && mkdir -p "$tmp" "$out"
 
-# Eulix dark palette (themes/eulix-dark.json).
-BG=1a2030 FG=e7e9ee DIM=8b93a7 VIOLET=a78bfa TEAL=5eead4
-BAR=64        # caption bar above the terminal, px
+# Palette, captions and INSTALL come from demo.env.
+BAR=$CAPTION_BAR
 XFADE=0.3     # crossfade between segments, s
 FONT="$(fc-match -f '%{file}' "$DEMO_FONT")"
 FONT_BOLD="$(fc-match -f '%{file}' "$DEMO_FONT:style=Bold")"
-INSTALL='bash <(curl -fsSL https://raw.githubusercontent.com/Nurysso/eulix/main/install.sh)'
 
 # Segments in order. Fields: run dir | step | caption | head s | tail s |
 # target s for the sped-up middle (0 = play at 1x). The head and tail play at
 # 1x; the middle keeps every k-th frame so it lasts about the target, and
 # shows a "k×" badge.
-teaser_head="$(awk -v n=${#Q_AGENT} 'BEGIN { printf "%.2f", (800 + n * 40 + 600 + 500) / 1000 }')"
+teaser_head="$(typed_head_s "$Q_AGENT")"
 SEGMENTS=(
-  "scene1-init-dark|1|Set up eulix in a repo|0|0|0"
-  "scene2-analyze-dark|2|Index it: parse, call graph, embeddings|1.8|3|16"
-  "scene3-query-dark|3|Ask from the CLI: ranked, token-budgeted context|0|0|0"
-  "scene4-register-dark|4|Your agent asks eulix over MCP|0|0|0"
-  "teaser-dark|4|Your agent asks eulix over MCP|$teaser_head|3|14"
+  "scene1-init-dark|1|$CAP_1|0|0|0"
+  "scene2-analyze-dark|2|$CAP_2|1.8|3|16"
+  "scene3-query-dark|3|$CAP_3|0|0|0"
+  "scene4-register-dark|4|$CAP_4|0|0|0"
+  "teaser-dark|4|$CAP_4|$teaser_head|3|14"
 )
 
 size="$(magick "$scratch/scene1-init-dark/composed/f00001.png" -format '%wx%h' info:)"
@@ -87,7 +85,7 @@ done
 VIZ="${VIZ_DARK:-$here/viz/vizeulize-dark.mp4}"
 if [[ -f "$VIZ" ]]; then
   printf '5 ·' > "$tmp/step_viz.txt"
-  printf '%s' 'See the call graph in your browser: eulix vizeulize' > "$tmp/caption_viz.txt"
+  printf '%s' "$CAP_5" > "$tmp/caption_viz.txt"
   ih=$(( H - BAR ))
   vf="fps=50,scale=$W:$ih:force_original_aspect_ratio=decrease:force_divisible_by=2"
   vf+=",pad=$W:$ih:(ow-iw)/2:(oh-ih)/2:color=0x$BG,setsar=1,pad=iw:ih+$BAR:0:$BAR:color=0x$BG"
@@ -107,8 +105,8 @@ card() {  # <out.png> then magick draw args
   magick -size "${W}x${H}" "xc:#$BG" "$@" "$dst"
 }
 card "$tmp/title.png" \
-  -gravity center -font "$FONT_BOLD" -fill "#$FG" -pointsize 72 -annotate +0-60 'Eulix' \
-  -font "$FONT" -fill "#$TEAL" -pointsize 30 -annotate +0+20 'ranked context for coding agents, over MCP' \
+  -gravity center -font "$FONT_BOLD" -fill "#$FG" -pointsize 72 -annotate +0-60 "$TITLE" \
+  -font "$FONT" -fill "#$TEAL" -pointsize 30 -annotate +0+20 "$TAGLINE" \
   -fill "#$DIM" -pointsize 20 -annotate +0+90 "Recorded on Flask $FLASK_TAG · waits sped up and labelled"
 card "$tmp/end.png" \
   -gravity center -font "$FONT" -fill "#$DIM" -pointsize 22 -annotate +0-90 'Install' \

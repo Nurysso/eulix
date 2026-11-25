@@ -65,23 +65,39 @@ It needs `vhs` (0.12 or later) with `ttyd`, `ffmpeg`, ImageMagick 7, the JetBrai
 
 | File | What it does |
 | --- | --- |
-| `demo.env` | The Flask release, the two questions asked on camera and the font. |
+| `demo.env` | The Flask release, the two questions asked on camera, the font, and the video's palette, step captions, title and install line. |
 | `stage.sh` | Clones Flask at that release into the work folder and, unless `--no-mcp`, registers eulix in its `.mcp.json`. |
 | `settings.tape`, `scene*.tape`, `teaser.tape` | The VHS scripts. Setup steps run inside `Hide` blocks. |
 | `claude.zsh` | Starts Claude Code without personal plugins, hooks or claude.ai connectors, in the default permission mode, with eulix as its only MCP server. |
 | `themes/` | Terminal colors from the README palette, dark and light. |
-| `record.sh` | Runs the tapes, speeds up the loop's wait and labels it, and encodes the WebP files (2 MB each at most). |
+| `record.sh` | Runs the tapes, speeds up the loop's wait and labels it, and encodes the WebP files (2 MB each at most). `raw` and `export` write the uncut clips for a video editor (see below). |
 | `edit.sh` | Builds the video: captions, labelled speed-ups, title and end cards, crossfades. |
 | `sidebyside.sh`, `sidebyside.tape` | The 30-second side-by-side clip: one task from the agent benchmark, asked without Eulix (left) and with Eulix (right). See below. |
 
-**Side-by-side clip.** `sidebyside.sh <task-id> bench/results/agent/<run-id> [scratch] [dark|light]` copies the benchmark's prepared repos for that task (run `python3 bench/agent/agent_bench.py prepare` first). It records the task's prompt in Claude Code once without Eulix and once with Eulix registered and the benchmark's hint in `CLAUDE.md`. The two takes go side by side, sped up by the same labelled factor to fit 30 s, as `.github/readme/sidebyside-<scheme>.gif` and `.mp4`. The caption under each half is that task's median input tokens, cost and tool calls from the given run, so the clip shows only measured numbers. One task is not the average: the README text next to the clip must name the task and link the full results.
+**Side-by-side clip.** `sidebyside.sh <task-id> bench/results/agent/<run-id> [scratch] [dark|light]` copies the benchmark's prepared repos for that task (run `python3 bench/agent/agent_bench.py prepare` first). It records the task's prompt in Claude Code once without Eulix and once with Eulix registered and the benchmark's hint in `CLAUDE.md`. The two takes go side by side, sped up by the same labelled factor to fit 30 s, as `.github/readme/sidebyside-<scheme>.gif` and `.mp4`. The caption under each half is that task's median input tokens, cost and tool calls from the given run, so the clip shows only measured numbers; its font shrinks (17 px down to 11) until the longer caption fits. One task is not the average: the README text next to the clip must name the task and link the full results. `--reuse` rebuilds the clip from the takes already in the scratch folder without asking Claude again, `--raw` also exports the two halves for a video editor, and `EULIX_SIDEBYSIDE_OUT=<path without extension>` writes the clip somewhere other than `.github/readme/`.
+
+**Editing by hand.** `edit.sh` builds the walkthrough in one go. To cut it in a video editor such as Kdenlive instead, export the takes uncut:
+
+```
+.github/readme/demo/record.sh raw          # record the scenes and the dark Claude take, then export
+.github/readme/demo/record.sh export       # export the takes already recorded (asks Claude nothing)
+.github/readme/demo/sidebyside.sh --raw [--reuse] <task-id> bench/results/agent/<run-id>
+```
+
+`record.sh walkthrough` and `all` export as well. Everything lands in `/tmp/eulix-demo/raw` (`EULIX_RAW_DIR` overrides it for both scripts):
+
+- `01-init.mp4` … `04b-agent.mp4`: each scene at normal speed, 50 fps, H.264 4:4:4 so coloured text stays sharp. No captions, badges or speed-ups. `05-vizeulize.mp4` (with its `.steps.json`) is copied from `viz/`. `06-sidebyside-plain.mp4` and `06-sidebyside-eulix.mp4` are the two halves.
+- `graphics/`: `caption-1.png` … `caption-6.png` (the caption bar for each step, as wide as the terminal clips), `title.png`, `end.png`, `badge-<k>x.png` speed badges with a transparent background, and `stats-plain.png` / `stats-eulix.png`, the benchmark numbers for under each half.
+- `clips.tsv`: per clip its length, step and caption, the stretch worth speeding up (`speed_up_from_s` to `speed_up_to_s`: indexing and the Claude waits), the Claude Code version the take ran on, and warnings.
+
+Two checks run on every Claude take: if Claude Code's usage banner ("You've used N% of your weekly limit …") was on screen, the script warns and `clips.tsv` records it, so you can record again later or mask it; and when the Claude takes in one export ran on different Claude Code versions (their banners would disagree), the script says so. Record all the Claude takes in one sitting to keep them on one version. Export the video at 30 fps with no audio track and keep it under GitHub's 10 MB attachment limit.
 
 Why it looks the way it does:
 
 - **Flask, pinned.** Most viewers know Flask and can judge the answers; a fixed release keeps re-recordings comparable. The questions were chosen because eulix answers them well on this release. Questions about a bare Python method name (for example "who calls `full_dispatch_request`") currently retrieve the `Flask` class summary instead of the method ([RET-13](Known-Issues/Retrieval-And-Query.md#ret-13-a-question-naming-a-python-method-gets-the-class-not-the-method)), so avoid them until that is fixed.
 - **One Claude take per color scheme.** The walkthrough reuses the dark loop's take, so a full run asks Claude two questions.
 - **Speed-ups are labelled.** Waits play faster with a "k×" badge, and the programs' own timings (`analyze` prints how long it took) stay on screen, because the README makes speed claims.
-- **Claude's startup is off camera.** The trust prompt prints the full folder path and Claude Code's footer can show account usage. Check the sampled frames for anything personal before publishing.
+- **Claude's startup is off camera.** The trust prompt prints the full folder path and Claude Code's footer can show account usage. The scripts warn about the usage banner, but check the frames for anything personal before publishing.
 - **Captions, no audio.** GitHub plays attached videos muted.
 - **README palette and JetBrains Mono**, dark and light, so the loop follows the reader's GitHub theme. The video is dark only.
 
